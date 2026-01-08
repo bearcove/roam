@@ -1,123 +1,156 @@
-# Handoff: Connection Type and Tx/Rx Facet Implementation
+# Handoff: Poke-based `call` with `roam::channel`
 
-## Status: Streaming Dispatch Implemented (codegen approach) ✅
+## Status: Codegen Updated, Driver Work Remaining
 
-The core streaming RPC infrastructure works end-to-end using codegen-time type knowledge.
+**Completed**:
+- `ReceiverSlot` and `SenderSlot` wrappers with `#[facet(opaque)]` for Poke reflection
+- `roam::channel<T>()` function creates unbound `(Tx<T>, Rx<T>)` pairs
+- `StreamRegistry` simplified - no longer stores outgoing receivers (driver will own them)
+- Codegen fixed to use correct Tx/Rx semantics (NO INVERSION)
+- All 11 spec tests passing
 
-**Next step**: Implement the Poke-based `call` method for cleaner client DX.
+**Remaining**:
+- Driver needs `FuturesUnordered` to poll outgoing receivers and send as Data messages
+- Client-side Poke-based `call` implementation
+
+## Key Insight: Tx/Rx Semantics (Critical)
+
+The function signature is both what the client calls AND what the server implements.
+**NO INVERSION** at any point:
+
+- `Rx<T>` in schema = server **receives** from client (client sends)
+- `Tx<T>` in schema = server **sends** to client (client receives)
+
+```rust
+// Schema: sum(numbers: Rx<i32>) -> i64
+// Server receives i32s from client
+
+// Client side:
+let (tx, rx) = roam::channel::<i32>();
+let fut = client.sum(rx);  // pass rx (receiver goes to server)
+tx.send(1).await;          // keep tx to send values
+drop(tx);
+let sum = fut.await?;
+
+// Server side:
+async fn sum(&self, mut numbers: Rx<i32>) -> Result<i64, _> {
+    while let Some(n) = numbers.recv().await? { ... }
+}
+```
 
 ## Completed Work
 
-### 1. Tx/Rx Facet Implementation ✅
+### 1. ReceiverSlot/SenderSlot Wrappers
 
-Updated `roam-session/src/lib.rs` with derive-based Tx/Rx:
+In `roam-session/src/lib.rs`:
 
 ```rust
 #[derive(Facet)]
-#[facet(proxy = u64)]
+#[facet(opaque)]
+pub struct ReceiverSlot {
+    inner: Option<mpsc::Receiver<Vec<u8>>>,
+}
+
+impl ReceiverSlot {
+    pub fn new(rx: mpsc::Receiver<Vec<u8>>) -> Self { Self { inner: Some(rx) } }
+    pub fn empty() -> Self { Self { inner: None } }
+    pub fn take(&mut self) -> Option<mpsc::Receiver<Vec<u8>>> { self.inner.take() }
+}
+```
+
+The `#[facet(opaque)]` allows Poke to access `&mut ReceiverSlot` directly.
+
+### 2. Rx<T> and Tx<T> Updated
+
+```rust
+pub struct Rx<T: 'static> {
+    pub stream_id: StreamId,
+    pub receiver: ReceiverSlot,  // pokeable!
+    _marker: PhantomData<T>,
+}
+
 pub struct Tx<T: 'static> {
-    pub stream_id: StreamId,  // public, pokeable!
-    #[facet(opaque)]
-    sender: OutgoingSender,
-    #[facet(opaque)]
+    pub stream_id: StreamId,
+    pub sender: SenderSlot,  // pokeable!
     _marker: PhantomData<T>,
 }
 ```
 
-Key properties:
-- `stream_id` is pokeable (Connection can walk args and set stream IDs)
-- Serializes as just a `u64` on the wire (JSON: `42`, Postcard: `[42]`)
-- Type parameter `T` exposed for codegen introspection
-- Opaque fields can still be accessed/replaced via Poke - just can't see inside them
-
-### 2. Streaming Dispatch Code Generation ✅
-
-Server-side streaming dispatch works via generated code in `roam-codegen/src/targets/rust.rs`.
-
-### 3. End-to-End Streaming Tests ✅
-
-Tests in `codegen-test-consumer/src/lib.rs` verify full streaming flow.
-
----
-
-## Next: Poke-based Client `call` with `roam::channel`
-
-### Desired DX
+### 3. `roam::channel<T>()` Function
 
 ```rust
-// sum(numbers: Rx<i32>) -> i64
-// Schema says Rx<i32> = server receives i32s from caller
-
-let (tx, rx) = roam::channel::<i32>();
-
-let fut = client.sum(rx);  // pass rx to the call, keep tx
-
-// Use tx to send numbers to the server
-tx.send(1).await;
-tx.send(2).await;
-tx.send(3).await;
-drop(tx);  // signals end of stream
-
-let sum = fut.await?;  // returns 6
-```
-
-### Key Insight: Channel Semantics (like regular mpsc)
-
-This matches standard channel conventions - just like `tokio::sync::mpsc`:
-- `(tx, rx) = channel()` → tx sends, rx receives
-- If caller wants to **send** data: pass `rx`, keep `tx`
-- If caller wants to **receive** data: pass `tx`, keep `rx`
-
-When schema says `Rx<T>` (caller sends to callee):
-- User creates `(tx, rx) = roam::channel::<T>()`
-- User **keeps** `tx` (the sender) to send data
-- User **passes** `rx` (the receiver) to the call
-- Connection takes the `mpsc::Receiver` from `rx`, registers it as outgoing stream
-
-When schema says `Tx<T>` (callee sends to caller):
-- User creates `(tx, rx) = roam::channel::<T>()`
-- User **keeps** `rx` (the receiver) to receive data
-- User **passes** `tx` (the sender) to the call
-- Connection takes the sender, callee will use it to send back data
-
-### Internal Channel Type
-
-The mpsc channel is `Sender<Vec<u8>>` / `Receiver<Vec<u8>>`:
-
-```rust
-pub fn channel<T>() -> (Tx<T>, Rx<T>) {
+pub fn channel<T: 'static>() -> (Tx<T>, Rx<T>) {
     let (sender, receiver) = mpsc::channel::<Vec<u8>>(64);
     (
-        Tx { stream_id: 0, sender: Some(sender), _marker: PhantomData },
-        Rx { stream_id: 0, receiver: Some(receiver), _marker: PhantomData },
+        Tx::unbound(sender),
+        Rx::unbound(receiver),
     )
 }
 ```
 
-The `T` type parameter is only used at the public API boundary for ser/deser:
+Creates unbound pairs with `stream_id: 0`. The connection binds them when `call` is invoked.
+
+### 4. StreamRegistry Simplified
+
+Removed:
+- `outgoing: HashMap<StreamId, mpsc::Receiver<Vec<u8>>>`
+- `outgoing_notify: Arc<Notify>`
+- `poll_outgoing()` method
+- `OutgoingPoll` enum
+
+The driver will now own outgoing receivers in `FuturesUnordered` instead of routing through the registry.
+
+### 5. Codegen Updated
+
+In `roam-codegen/src/targets/rust.rs`:
+
+Server dispatch creates channels and registers with registry:
+```rust
+// For Rx<T> args (server receives from client):
+let (tx, rx) = mpsc::channel::<Vec<u8>>(64);
+registry.register_incoming(stream_id, tx);  // route incoming Data to tx
+let arg = Rx::<T>::new(stream_id, rx);      // handler uses rx
+
+// For Tx<T> args (server sends to client):
+let (tx, rx) = mpsc::channel::<Vec<u8>>(64);
+registry.register_outgoing_credit(stream_id);  // credit tracking only
+let arg = Tx::<T>::new(stream_id, tx);         // handler uses tx
+// rx goes to driver for sending as Data messages
+```
+
+## Next Steps
+
+### 1. Driver FuturesUnordered for Outgoing
+
+The driver needs to poll `mpsc::Receiver<Vec<u8>>` channels and send Data messages:
 
 ```rust
-impl<T: Facet<'static>> Tx<T> {
-    pub async fn send(&self, value: T) -> Result<(), TxError> {
-        let bytes = facet_postcard::to_vec(&value)?;
-        self.sender.as_ref().ok_or(TxError::Taken)?.send(bytes).await?;
-        Ok(())
-    }
+// In driver.rs
+struct OutgoingStream {
+    stream_id: StreamId,
+    receiver: mpsc::Receiver<Vec<u8>>,
 }
 
-impl<T: Facet<'static>> Rx<T> {
-    pub async fn recv(&mut self) -> Result<Option<T>, RxError> {
-        match self.receiver.as_mut().ok_or(RxError::Taken)?.recv().await {
-            Some(bytes) => Ok(Some(facet_postcard::from_slice(&bytes)?)),
-            None => Ok(None),
-        }
+// Add to Driver state:
+outgoing_streams: FuturesUnordered<OutgoingStreamFuture>,
+
+// In run loop:
+select! {
+    // ... existing arms ...
+    
+    Some(data) = outgoing_streams.next() => {
+        // Send Data message for this stream
+        self.send(Message::Data { stream_id, payload: data }).await?;
     }
 }
 ```
 
-The connection driver only deals with `Vec<u8>` - doesn't need to know `T`.
+Need to figure out:
+- How codegen passes the `rx` from `Tx<T>` args to the driver
+- Credit flow for outgoing streams
+- End-of-stream signaling
 
-### Poke-based `call` Implementation
+### 2. Client-side Poke-based `call`
 
 ```rust
 impl ConnectionHandle {
@@ -126,103 +159,49 @@ impl ConnectionHandle {
         method_id: u64,
         args: &mut T,
     ) -> Result<Vec<u8>, CallError> {
-        // Walk args with Poke, find Rx fields, bind them
-        let poke = Poke::new(args);
-        self.walk_and_bind_streams(poke)?;
+        // Walk args with Poke, find Rx fields, take receivers, bind stream IDs
+        self.walk_and_bind_streams(Poke::new(args))?;
         
-        // Serialize (Rx becomes just stream_id via proxy)
-        let payload = facet_postcard::to_vec(args).map_err(CallError::Encode)?;
-        
+        let payload = facet_postcard::to_vec(args)?;
         self.call_raw(method_id, payload).await
     }
     
     fn walk_and_bind_streams(&self, poke: Poke<'_, '_>) -> Result<(), BindError> {
-        let shape = poke.shape();
-        
-        if is_rx_shape(shape) {
+        if is_rx_shape(poke.shape()) {
             let mut ps = poke.into_struct()?;
-            
-            // Allocate stream_id
             let stream_id = self.allocate_stream_id();
-            
-            // Poke stream_id into the Rx
             ps.field_by_name("stream_id")?.set(stream_id)?;
             
-            // Take the mpsc::Receiver out of the Rx
-            let mut receiver_poke = ps.field_by_name("receiver")?;
-            let receiver: Option<mpsc::Receiver<Vec<u8>>> = receiver_poke.get_mut()?.take();
-            
-            // Register with stream registry (connection will drain and send over wire)
-            if let Some(recv) = receiver {
+            let slot = ps.field_by_name("receiver")?.get_mut::<ReceiverSlot>()?;
+            if let Some(recv) = slot.take() {
+                // Pass to driver somehow
                 self.register_outgoing_stream(stream_id, recv);
             }
-            
-            return Ok(());
         }
-        
-        // Recurse into struct fields, enums, tuples, etc.
-        if let Ok(mut ps) = poke.into_struct() {
-            for i in 0..ps.field_count() {
-                self.walk_and_bind_streams(ps.field(i)?)?;
-            }
-        }
-        // ... handle other types
-        
-        Ok(())
+        // Recurse into struct fields...
     }
 }
 ```
-
-### Changes Needed
-
-1. **`roam::channel<T>()` function** - creates unbound `(Tx<T>, Rx<T>)` pair with `stream_id: 0`
-
-2. **Make sender/receiver fields `Option`** - so we can `.take()` them:
-   ```rust
-   pub struct Tx<T: 'static> {
-       pub stream_id: StreamId,
-       #[facet(opaque)]
-       sender: Option<mpsc::Sender<Vec<u8>>>,
-       #[facet(opaque)]
-       _marker: PhantomData<T>,
-   }
-   ```
-
-3. **Implement Poke-based walk** in `ConnectionHandle::call`
-
-4. **Update driver** to handle the taken receivers (drain mpsc, send as Data messages)
-
-### TODO: `streaming.data.invalid`
-
-Since serialization/deserialization happens in `Tx::send` / `Rx::recv` (not in the connection driver), we need a mechanism to report invalid data errors back through the protocol. This is deferred for now.
-
----
 
 ## Key Files
 
 | File | What |
 |------|------|
-| `rust/roam-session/src/lib.rs` | Tx/Rx with derive, ConnectionHandle, StreamRegistry |
-| `rust/roam-stream/src/driver.rs` | Driver that handles I/O loop |
-| `rust/roam-codegen/src/targets/rust.rs` | Rust client/server codegen with streaming support |
-| `rust/codegen-test-consumer/src/lib.rs` | Tests including streaming roundtrips |
+| `rust/roam-session/src/lib.rs` | Tx/Rx, ReceiverSlot/SenderSlot, StreamRegistry |
+| `rust/roam-stream/src/driver.rs` | Driver I/O loop - needs FuturesUnordered |
+| `rust/roam-codegen/src/targets/rust.rs` | Rust codegen with streaming dispatch |
+| `rust/roam/src/lib.rs` | Re-exports including `channel()` |
 
 ## Commands
 
 ```bash
-# Build
+# Build and test
 cargo build --workspace
+cargo nextest run --workspace
 
-# Test
-cargo test --workspace
-
-# Test streaming specifically
-cargo test -p codegen-test-consumer streaming
+# Spec tests (cross-language)
+cargo nextest run -p spec-tests
 
 # Check specific crate
 cargo check -p roam-session
 ```
-
-## Branch
-
-`tx-rx-rename` - pushed to origin

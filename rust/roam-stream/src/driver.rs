@@ -10,8 +10,8 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use roam_session::{
-    CallError, ConnectionHandle, HandleCommand, Role, ServiceDispatcher, StreamError,
-    StreamRegistry,
+    CallError, ConnectionHandle, HandleCommand, OutgoingStreamMessage, Role, ServiceDispatcher,
+    StreamError, StreamRegistry,
 };
 use roam_wire::{Hello, Message};
 use tokio::sync::{mpsc, oneshot};
@@ -52,6 +52,9 @@ pub struct Driver<T, D> {
     /// Channel for receiving completed streaming handler results.
     streaming_results_tx: mpsc::Sender<StreamingResult>,
     streaming_results_rx: mpsc::Receiver<StreamingResult>,
+
+    /// Channel for receiving outgoing stream messages (Data/Close) from spawned tasks.
+    outgoing_stream_rx: mpsc::Receiver<OutgoingStreamMessage>,
 }
 
 impl<T, D> Driver<T, D>
@@ -60,6 +63,9 @@ where
     D: ServiceDispatcher,
 {
     /// Create a new driver with the given transport, dispatcher, and parameters.
+    ///
+    /// The `outgoing_stream_tx` is used to create the server-side stream registry.
+    /// The `outgoing_stream_rx` is polled in the driver loop to send Data/Close messages.
     pub fn new(
         io: T,
         dispatcher: D,
@@ -67,6 +73,8 @@ where
         negotiated: Negotiated,
         handle: ConnectionHandle,
         command_rx: mpsc::Receiver<HandleCommand>,
+        outgoing_stream_tx: mpsc::Sender<OutgoingStreamMessage>,
+        outgoing_stream_rx: mpsc::Receiver<OutgoingStreamMessage>,
     ) -> Self {
         let (streaming_results_tx, streaming_results_rx) = mpsc::channel(64);
         let initial_credit = negotiated.initial_credit;
@@ -77,19 +85,19 @@ where
             negotiated,
             handle,
             command_rx,
-            server_stream_registry: StreamRegistry::new_with_credit(initial_credit),
+            server_stream_registry: StreamRegistry::new_with_credit(
+                initial_credit,
+                outgoing_stream_tx,
+            ),
             pending_responses: HashMap::new(),
             in_flight_server_requests: std::collections::HashSet::new(),
             streaming_results_tx,
             streaming_results_rx,
+            outgoing_stream_rx,
         }
     }
 
     /// Run the driver until the connection closes.
-    ///
-    /// TODO: Add FuturesUnordered for outgoing stream receivers.
-    /// When ConnectionHandle::call binds streams, it should return taken receivers
-    /// that get added to a FuturesUnordered here for polling.
     pub async fn run(mut self) -> Result<(), ConnectionError> {
         loop {
             tokio::select! {
@@ -98,6 +106,11 @@ where
                 // Handle completed streaming handlers (server-side)
                 Some((request_id, result)) = self.streaming_results_rx.recv() => {
                     self.handle_streaming_result(request_id, result).await?;
+                }
+
+                // Handle outgoing stream messages (Data/Close from spawned tasks)
+                Some(msg) = self.outgoing_stream_rx.recv() => {
+                    self.handle_outgoing_stream_message(msg).await?;
                 }
 
                 // Handle commands from ConnectionHandle (client-side outgoing calls)
@@ -113,12 +126,23 @@ where
                         Err(e) => return Err(e),
                     }
                 }
-
-                // TODO: Poll FuturesUnordered for outgoing stream data
-                // When a receiver yields data, send it as a Data message
-                // When a receiver is exhausted, send a Close message
             }
         }
+    }
+
+    /// Handle an outgoing stream message from a spawned task.
+    async fn handle_outgoing_stream_message(
+        &mut self,
+        msg: OutgoingStreamMessage,
+    ) -> Result<(), ConnectionError> {
+        let wire_msg = match msg {
+            OutgoingStreamMessage::Data { stream_id, payload } => {
+                Message::Data { stream_id, payload }
+            }
+            OutgoingStreamMessage::Close { stream_id } => Message::Close { stream_id },
+        };
+        self.io.send(&wire_msg).await?;
+        Ok(())
     }
 
     /// Handle a completed streaming handler result.
@@ -464,7 +488,13 @@ where
     };
 
     let (command_tx, command_rx) = mpsc::channel(64);
-    let handle = ConnectionHandle::new(command_tx, Role::Acceptor, negotiated.initial_credit);
+    let (outgoing_stream_tx, outgoing_stream_rx) = mpsc::channel(64);
+    let handle = ConnectionHandle::new(
+        command_tx,
+        Role::Acceptor,
+        negotiated.initial_credit,
+        outgoing_stream_tx.clone(),
+    );
 
     let driver = Driver::new(
         io,
@@ -473,6 +503,8 @@ where
         negotiated,
         handle.clone(),
         command_rx,
+        outgoing_stream_tx,
+        outgoing_stream_rx,
     );
 
     Ok((handle, driver))
@@ -529,7 +561,13 @@ where
     };
 
     let (command_tx, command_rx) = mpsc::channel(64);
-    let handle = ConnectionHandle::new(command_tx, Role::Initiator, negotiated.initial_credit);
+    let (outgoing_stream_tx, outgoing_stream_rx) = mpsc::channel(64);
+    let handle = ConnectionHandle::new(
+        command_tx,
+        Role::Initiator,
+        negotiated.initial_credit,
+        outgoing_stream_tx.clone(),
+    );
 
     let driver = Driver::new(
         io,
@@ -538,6 +576,8 @@ where
         negotiated,
         handle.clone(),
         command_rx,
+        outgoing_stream_tx,
+        outgoing_stream_rx,
     );
 
     Ok((handle, driver))

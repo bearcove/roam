@@ -457,11 +457,25 @@ pub fn channel<T: 'static>() -> (Tx<T>, Rx<T>) {
 
 use std::collections::{HashMap, HashSet};
 
+/// Message to send on the wire (for outgoing stream data).
+///
+/// Used by spawned tasks to send Data/Close messages back to the driver.
+#[derive(Debug)]
+pub enum OutgoingStreamMessage {
+    /// Send a Data message on a stream.
+    Data {
+        stream_id: StreamId,
+        payload: Vec<u8>,
+    },
+    /// Send a Close message to end a stream.
+    Close { stream_id: StreamId },
+}
+
 /// Registry of active streams for a connection.
 ///
 /// Handles incoming streams (Data from wire → `Rx<T>` / `Tx<T>` handles).
-/// Outgoing streams (Rx passed to calls) are NOT stored here - the driver
-/// owns those receivers directly in a `FuturesUnordered`.
+/// For outgoing streams (server `Tx<T>` args), spawned tasks drain receivers
+/// and send Data/Close messages via `outgoing_tx`.
 ///
 /// r[impl streaming.unknown] - Unknown stream IDs cause Goodbye.
 pub struct StreamRegistry {
@@ -493,29 +507,47 @@ pub struct StreamRegistry {
     /// Initial credit to grant new streams.
     /// r[impl flow.stream.initial-credit] - Each stream starts with this credit.
     initial_credit: u32,
+
+    /// Channel for spawned tasks to send outgoing stream messages (Data/Close).
+    /// The driver owns the receiving end and sends these on the wire.
+    outgoing_tx: mpsc::Sender<OutgoingStreamMessage>,
 }
 
 impl StreamRegistry {
-    /// Create a new empty registry with the given initial credit.
+    /// Create a new registry with the given initial credit and outgoing message channel.
+    ///
+    /// The `outgoing_tx` is used by spawned tasks to send Data/Close messages
+    /// back to the driver for transmission on the wire.
     ///
     /// r[impl flow.stream.initial-credit] - Each stream starts with this credit.
-    pub fn new_with_credit(initial_credit: u32) -> Self {
+    pub fn new_with_credit(
+        initial_credit: u32,
+        outgoing_tx: mpsc::Sender<OutgoingStreamMessage>,
+    ) -> Self {
         Self {
             incoming: HashMap::new(),
             closed: HashSet::new(),
             incoming_credit: HashMap::new(),
             outgoing_credit: HashMap::new(),
             initial_credit,
+            outgoing_tx,
         }
     }
 
-    /// Create a new empty registry with default infinite credit.
+    /// Create a new registry with default infinite credit.
     ///
     /// r[impl flow.stream.infinite-credit] - Implementations MAY use very large credit.
     /// r[impl flow.stream.zero-credit] - With infinite credit, zero-credit never occurs.
     /// This disables backpressure but simplifies implementation.
-    pub fn new() -> Self {
-        Self::new_with_credit(u32::MAX)
+    pub fn new(outgoing_tx: mpsc::Sender<OutgoingStreamMessage>) -> Self {
+        Self::new_with_credit(u32::MAX, outgoing_tx)
+    }
+
+    /// Get a clone of the outgoing message sender.
+    ///
+    /// Used by codegen to spawn tasks that drain `Tx` receivers and send Data/Close.
+    pub fn outgoing_tx(&self) -> mpsc::Sender<OutgoingStreamMessage> {
+        self.outgoing_tx.clone()
     }
 
     /// Register an incoming stream.
@@ -676,12 +708,6 @@ impl StreamRegistry {
     /// Returns None if stream is not registered.
     pub fn incoming_credit(&self, stream_id: StreamId) -> Option<u32> {
         self.incoming_credit.get(&stream_id).copied()
-    }
-}
-
-impl Default for StreamRegistry {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -961,9 +987,14 @@ pub struct ConnectionHandle {
 }
 
 impl ConnectionHandle {
-    /// Create a new handle with the given command channel and role.
-    pub fn new(command_tx: mpsc::Sender<HandleCommand>, role: Role, initial_credit: u32) -> Self {
-        let stream_registry = StreamRegistry::new_with_credit(initial_credit);
+    /// Create a new handle with the given command channel, role, and outgoing stream sender.
+    pub fn new(
+        command_tx: mpsc::Sender<HandleCommand>,
+        role: Role,
+        initial_credit: u32,
+        outgoing_stream_tx: mpsc::Sender<OutgoingStreamMessage>,
+    ) -> Self {
+        let stream_registry = StreamRegistry::new_with_credit(initial_credit, outgoing_stream_tx);
         Self {
             shared: Arc::new(HandleShared {
                 command_tx,
