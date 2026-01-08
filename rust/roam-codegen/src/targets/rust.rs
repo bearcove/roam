@@ -11,6 +11,54 @@ use roam_schema::{
     classify_variant, is_bytes, is_rx, is_tx,
 };
 
+/// Extract the Ok and Err types from a Result<T, E> shape.
+/// Returns (ok_type, Some(err_type)) for Result, or (shape, None) for non-Result types.
+fn extract_result_types(shape: &'static Shape) -> (&'static Shape, Option<&'static Shape>) {
+    if let ShapeKind::Enum(EnumInfo {
+        name: None,
+        variants,
+    }) = classify_shape(shape)
+    {
+        if variants.len() == 2 {
+            let ok_variant = variants.iter().find(|v| v.name == "Ok");
+            let err_variant = variants.iter().find(|v| v.name == "Err");
+
+            if let (Some(ok_v), Some(err_v)) = (ok_variant, err_variant) {
+                if let (
+                    VariantKind::Newtype { inner: ok_ty },
+                    VariantKind::Newtype { inner: err_ty },
+                ) = (classify_variant(ok_v), classify_variant(err_v))
+                {
+                    return (ok_ty, Some(err_ty));
+                }
+            }
+        }
+    }
+    (shape, None)
+}
+
+/// Format the return type for caller trait methods.
+/// Returns CallResult<T, E> where E is the user error type (or Never for infallible methods).
+fn format_caller_return_type(return_shape: &'static Shape) -> String {
+    let (ok_ty, err_ty) = extract_result_types(return_shape);
+    let ok_type_str = rust_type_client_return(ok_ty);
+    let err_type_str = err_ty
+        .map(|e| rust_type_base(e))
+        .unwrap_or_else(|| "Never".to_string());
+    format!("CallResult<{ok_type_str}, {err_type_str}>")
+}
+
+/// Format the return type for handler trait methods.
+/// Returns Result<T, RoamError<E>> where E is the user error type (or Never for infallible methods).
+fn format_handler_return_type(return_shape: &'static Shape) -> String {
+    let (ok_ty, err_ty) = extract_result_types(return_shape);
+    let ok_type_str = rust_type_server_return(ok_ty);
+    let err_type_str = err_ty
+        .map(|e| rust_type_base(e))
+        .unwrap_or_else(|| "Never".to_string());
+    format!("Result<{ok_type_str}, RoamError<{err_type_str}>>")
+}
+
 use crate::render::hex_u64;
 
 /// Options for Rust code generation.
@@ -127,12 +175,8 @@ impl<'a> RustGenerator<'a> {
             };
 
             // Return type - client perspective uses types as-is
-            let return_type = rust_type_client_return(method.return_type);
-            let full_return = if is_streaming {
-                format!("CallResult<{return_type}>")
-            } else {
-                format!("CallResult<{return_type}>")
-            };
+            // CallResult<T, E> wraps the response in RoamError handling
+            let full_return = format_caller_return_type(method.return_type);
 
             let fn_def = trait_def.new_fn(&method_name);
             fn_def.arg_ref_self();
@@ -183,8 +227,8 @@ impl<'a> RustGenerator<'a> {
             };
 
             // Return type - server perspective INVERTS Tx/Rx
-            let return_type = rust_type_server_return(method.return_type);
-            let full_return = format!("Result<{return_type}, RoamError>");
+            // Handler returns Result<T, RoamError<E>> where E is the user error type
+            let full_return = format_handler_return_type(method.return_type);
 
             let fn_def = trait_def.new_fn(&method_name);
             fn_def.set_async(true);
@@ -259,6 +303,84 @@ impl<'a> RustGenerator<'a> {
         for method in &self.service.methods {
             generate_dispatch_method_fn(impl_block, method, self.options);
         }
+
+        // Generate ServiceDispatcher trait implementation
+        self.generate_service_dispatcher_impl(&dispatcher_name, &handler_trait);
+    }
+
+    fn generate_service_dispatcher_impl(&mut self, dispatcher_name: &str, handler_trait: &str) {
+        // Generate is_streaming method body
+        let mut is_streaming_arms = Vec::new();
+        for method in &self.service.methods {
+            let method_name = method.method_name.to_snake_case();
+            let const_name = method_name.to_uppercase();
+            let is_streaming =
+                method.args.iter().any(|a| is_stream(a.ty)) || is_stream(method.return_type);
+            is_streaming_arms.push(format!(
+                "            method_id::{const_name} => {is_streaming},"
+            ));
+        }
+        let is_streaming_match = is_streaming_arms.join("\n");
+
+        // Generate dispatch_unary arms
+        let mut dispatch_unary_arms = Vec::new();
+        for method in &self.service.methods {
+            let method_name = method.method_name.to_snake_case();
+            let const_name = method_name.to_uppercase();
+            let is_streaming =
+                method.args.iter().any(|a| is_stream(a.ty)) || is_stream(method.return_type);
+            if !is_streaming {
+                dispatch_unary_arms.push(format!(
+                    "                method_id::{const_name} => self.dispatch_{method_name}(payload).await,"
+                ));
+            }
+        }
+        dispatch_unary_arms
+            .push("                _ => Err(\"unknown method\".to_string()),".to_string());
+        let dispatch_unary_match = dispatch_unary_arms.join("\n");
+
+        // Generate the impl block as raw code (codegen crate doesn't support impl Trait for Type<G> well)
+        self.scope.raw(format!(
+            r#"
+    impl<H> ::roam::session::ServiceDispatcher for {dispatcher_name}<H>
+    where
+        H: {handler_trait} + 'static,
+    {{
+        fn is_streaming(&self, method_id: u64) -> bool {{
+            match method_id {{
+{is_streaming_match}
+                _ => false,
+            }}
+        }}
+
+        fn dispatch_unary(
+            &self,
+            method_id: u64,
+            payload: &[u8],
+        ) -> impl std::future::Future<Output = Result<Vec<u8>, String>> + Send {{
+            let payload = payload.to_vec();
+            async move {{
+                match method_id {{
+{dispatch_unary_match}
+                }}
+            }}
+        }}
+
+        fn dispatch_streaming(
+            &self,
+            method_id: u64,
+            _payload: Vec<u8>,
+            _registry: &mut ::roam::session::StreamRegistry,
+        ) -> std::pin::Pin<
+            Box<dyn std::future::Future<Output = Result<Vec<u8>, String>> + Send + 'static>,
+        > {{
+            // TODO: Implement streaming dispatch
+            Box::pin(async move {{
+                Err(format!("streaming not yet implemented for method {{}}", method_id))
+            }})
+        }}
+    }}"#
+        ));
     }
 }
 
@@ -325,8 +447,9 @@ fn generate_dispatch_unary(
     generate_encode_expr(dispatch_fn, "result", method.return_type, "        ");
     dispatch_fn.line("        out");
     dispatch_fn.line("    }");
-    dispatch_fn.line("    Err(e) => {");
-    dispatch_fn.line("        vec![1] // Error marker - TODO: encode error");
+    dispatch_fn.line("    Err(_e) => {");
+    dispatch_fn.line("        // Encode RoamError - for now just return error marker");
+    dispatch_fn.line("        vec![1, 1] // Result::Err, RoamError::UnknownMethod placeholder");
     dispatch_fn.line("    }");
     dispatch_fn.line("}");
 }

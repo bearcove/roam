@@ -27,9 +27,29 @@ We're working on GitHub issue #2: removing the custom `TypeDetail` type system i
 
 All codegen targets now use `&'static Shape` instead of `TypeDetail`, `classify_shape()` instead of `match ty { TypeDetail::X => ... }`, and `classify_variant()` instead of `VariantPayload`.
 
+### 3. Verification
+
+```bash
+cargo check -p roam-codegen --lib  # ✅ Passes with no errors or warnings
+```
+
 ## What Needs To Be Done
 
-### 1. **PRIORITY: Remove roam-reflect** (`rust/roam-reflect/`)
+### 1. **Update facet dependency**
+
+PR https://github.com/facet-rs/facet/pull/1715 was just merged! This adds `fully_qualified_type_path()` to `Shape`, which gives you the full module path for types (e.g., `my_crate::my_module::MyStruct` instead of just `MyStruct`).
+
+**Run:**
+```bash
+cargo update -p facet
+```
+
+**Then update Rust codegen** to use fully qualified paths:
+- In `rust/roam-codegen/src/targets/rust.rs`, the `rust_type_base()` function currently uses `shape.type_identifier` for named types
+- Consider using `shape.fully_qualified_type_path()` instead for more precise type references
+- This would allow removing the `super::` prefix hack for named types
+
+### 2. **Remove roam-reflect** (`rust/roam-reflect/`)
 
 The `roam-reflect` crate converts `Shape` → `TypeDetail`. Since we no longer use `TypeDetail`, this crate is now unnecessary.
 
@@ -39,7 +59,7 @@ The `roam-reflect` crate converts `Shape` → `TypeDetail`. Since we no longer u
 3. Delete the `rust/roam-reflect/` directory
 4. Remove from workspace `Cargo.toml`
 
-### 2. **Update roam-macros** (`rust/roam-macros/src/lib.rs`)
+### 3. **Update roam-macros** (`rust/roam-macros/src/lib.rs`)
 
 The macro currently generates code that calls `roam::reflect::type_detail::<T>()` to get `TypeDetail`. This needs to change to use `<T as Facet>::SHAPE` directly.
 
@@ -59,12 +79,6 @@ The macro currently generates code that calls `roam::reflect::type_detail::<T>()
 - `arg.type_info` → `arg.ty` (ArgDetail field renamed)
 - `method.return_type` is already `&'static Shape` in the new schema
 - Remove the `unwrap_or_else` since `SHAPE` is a const, not a `Result`
-
-### 3. **Update roam-schema types** (if needed)
-
-Verify that `MethodDetail` and `ArgDetail` in `roam-schema` use `&'static Shape`:
-- `ArgDetail.ty: &'static Shape` ✅ (already done)
-- `MethodDetail.return_type: &'static Shape` ✅ (already done)
 
 ### 4. **Run full workspace build**
 
@@ -111,7 +125,7 @@ VariantKind::Tuple { fields }
 VariantKind::Struct { fields }
 ```
 
-### facet_core types
+### facet_core types (after cargo update)
 
 ```rust
 // Access struct fields
@@ -123,6 +137,9 @@ field.shape()       // &'static Shape
 enum_type.variants  // &[Variant]
 variant.name        // &str
 variant.data        // StructType (use .kind and .fields)
+
+// NEW from PR #1715 - fully qualified type paths
+shape.fully_qualified_type_path()  // e.g., "my_crate::MyStruct"
 ```
 
 ## Current Branch
@@ -132,6 +149,9 @@ variant.data        // StructType (use .kind and .fields)
 ## Commands
 
 ```bash
+# Update facet to get PR #1715 changes
+cargo update -p facet
+
 # Check if codegen compiles
 cargo check -p roam-codegen --lib
 
@@ -167,3 +187,18 @@ For each codegen file, the pattern was:
    - `field.type_info` → `field.shape()`
 
 5. **Update tests:** Use `<T as Facet>::SHAPE` to get Shape for test types
+
+## Notes on Rust Codegen
+
+The Rust codegen (`rust.rs`) currently uses `super::TypeName` for named struct/enum types because the generated code lives inside a module. With `fully_qualified_type_path()` from PR #1715, we could potentially:
+
+1. Use absolute paths like `::my_crate::MyStruct` instead of relative `super::MyStruct`
+2. This would make the generated code more robust to refactoring
+3. Consider updating `rust_type_base()` to use this once facet is updated
+
+Current approach in `rust_type_base()`:
+```rust
+ShapeKind::Struct(StructInfo { name: Some(name), .. }) => {
+    format!("super::{name}")  // Could become shape.fully_qualified_type_path()
+}
+```

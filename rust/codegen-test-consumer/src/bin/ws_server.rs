@@ -2,7 +2,9 @@
 //!
 //! Serves the Calculator service over WebSocket on port 9000.
 
-use codegen_test_consumer::calculator::{CalculatorDispatcher, CalculatorHandler};
+use codegen_test_consumer::calculator::{
+    CalculatorDispatcher, CalculatorHandler, Never, RoamError,
+};
 use roam::session::{Rx, Tx};
 use roam_stream::Hello;
 use roam_websocket::{WsTransport, ws_accept};
@@ -13,52 +15,28 @@ use tokio_tungstenite::accept_async;
 #[derive(Clone)]
 struct Calculator;
 
-#[allow(clippy::manual_async_fn)]
 impl CalculatorHandler for Calculator {
-    fn add(
-        &self,
-        a: i32,
-        b: i32,
-    ) -> impl std::future::Future<Output = Result<i32, Box<dyn std::error::Error + Send + Sync>>> + Send
-    {
-        async move { Ok(a + b) }
+    async fn add(&self, a: i32, b: i32) -> Result<i32, RoamError<Never>> {
+        Ok(a + b)
     }
 
-    fn multiply(
-        &self,
-        a: i32,
-        b: i32,
-    ) -> impl std::future::Future<Output = Result<i32, Box<dyn std::error::Error + Send + Sync>>> + Send
-    {
-        async move { Ok(a * b) }
+    async fn multiply(&self, a: i32, b: i32) -> Result<i32, RoamError<Never>> {
+        Ok(a * b)
     }
 
-    fn sum_stream(
-        &self,
-        mut numbers: Rx<i32>,
-    ) -> impl std::future::Future<Output = Result<i64, Box<dyn std::error::Error + Send + Sync>>> + Send
-    {
-        async move {
-            let mut sum: i64 = 0;
-            while let Some(n) = numbers.recv().await? {
-                sum += n as i64;
-            }
-            Ok(sum)
+    async fn sum_stream(&self, mut numbers: Rx<i32>) -> Result<i64, RoamError<Never>> {
+        let mut sum: i64 = 0;
+        while let Some(n) = numbers.recv().await.ok().flatten() {
+            sum += n as i64;
         }
+        Ok(sum)
     }
 
-    fn range(
-        &self,
-        count: u32,
-        output: Tx<u32>,
-    ) -> impl std::future::Future<Output = Result<(), Box<dyn std::error::Error + Send + Sync>>> + Send
-    {
-        async move {
-            for i in 0..count {
-                output.send(&i).await?;
-            }
-            Ok(())
+    async fn range(&self, count: u32, output: Tx<u32>) -> Result<(), RoamError<Never>> {
+        for i in 0..count {
+            let _ = output.send(&i).await;
         }
+        Ok(())
     }
 }
 

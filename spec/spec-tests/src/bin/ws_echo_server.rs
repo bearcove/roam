@@ -6,9 +6,13 @@ use roam::session::{Rx, Tx};
 use roam_stream::{Hello, RoutedDispatcher};
 use roam_websocket::{WsTransport, ws_accept};
 use spec_proto::{Canvas, Color, Message, Person, Point, Rectangle, Shape};
+use spec_tests::complex::{ComplexHandler, Never as ComplexNever, RoamError as ComplexRoamError};
+use spec_tests::echo::{EchoHandler, Never as EchoNever, RoamError as EchoRoamError};
+use spec_tests::streaming::{
+    Never as StreamingNever, RoamError as StreamingRoamError, StreamingHandler,
+};
 use spec_tests::{complex, echo, streaming};
 use std::env;
-use std::future::Future;
 use tokio::net::TcpListener;
 use tokio_tungstenite::accept_async;
 
@@ -27,20 +31,13 @@ const STREAMING_METHODS: &[u64] = &[
 #[derive(Clone)]
 struct EchoService;
 
-#[allow(clippy::manual_async_fn)]
-impl echo::EchoHandler for EchoService {
-    fn echo(
-        &self,
-        message: String,
-    ) -> impl Future<Output = Result<String, Box<dyn std::error::Error + Send + Sync>>> + Send {
-        async move { Ok(message) }
+impl EchoHandler for EchoService {
+    async fn echo(&self, message: String) -> Result<String, EchoRoamError<EchoNever>> {
+        Ok(message)
     }
 
-    fn reverse(
-        &self,
-        message: String,
-    ) -> impl Future<Output = Result<String, Box<dyn std::error::Error + Send + Sync>>> + Send {
-        async move { Ok(message.chars().rev().collect()) }
+    async fn reverse(&self, message: String) -> Result<String, EchoRoamError<EchoNever>> {
+        Ok(message.chars().rev().collect())
     }
 }
 
@@ -48,112 +45,82 @@ impl echo::EchoHandler for EchoService {
 #[derive(Clone)]
 struct ComplexService;
 
-#[allow(clippy::manual_async_fn)]
-impl complex::ComplexHandler for ComplexService {
-    fn echo_point(
-        &self,
-        point: Point,
-    ) -> impl Future<Output = Result<Point, Box<dyn std::error::Error + Send + Sync>>> + Send {
-        async move { Ok(point) }
+impl ComplexHandler for ComplexService {
+    async fn echo_point(&self, point: Point) -> Result<Point, ComplexRoamError<ComplexNever>> {
+        Ok(point)
     }
 
-    fn create_person(
+    async fn create_person(
         &self,
         name: String,
         age: u8,
         email: Option<String>,
-    ) -> impl Future<Output = Result<Person, Box<dyn std::error::Error + Send + Sync>>> + Send {
-        async move { Ok(Person { name, age, email }) }
+    ) -> Result<Person, ComplexRoamError<ComplexNever>> {
+        Ok(Person { name, age, email })
     }
 
-    fn rectangle_area(
-        &self,
-        rect: Rectangle,
-    ) -> impl Future<Output = Result<f64, Box<dyn std::error::Error + Send + Sync>>> + Send {
-        async move {
-            let width = (rect.bottom_right.x - rect.top_left.x).abs() as f64;
-            let height = (rect.bottom_right.y - rect.top_left.y).abs() as f64;
-            Ok(width * height)
-        }
+    async fn rectangle_area(&self, rect: Rectangle) -> Result<f64, ComplexRoamError<ComplexNever>> {
+        let width = (rect.bottom_right.x - rect.top_left.x).abs() as f64;
+        let height = (rect.bottom_right.y - rect.top_left.y).abs() as f64;
+        Ok(width * height)
     }
 
-    fn parse_color(
+    async fn parse_color(
         &self,
         name: String,
-    ) -> impl Future<Output = Result<Option<Color>, Box<dyn std::error::Error + Send + Sync>>> + Send
-    {
-        async move {
-            match name.to_lowercase().as_str() {
-                "red" => Ok(Some(Color::Red)),
-                "green" => Ok(Some(Color::Green)),
-                "blue" => Ok(Some(Color::Blue)),
-                _ => Ok(None),
-            }
+    ) -> Result<Option<Color>, ComplexRoamError<ComplexNever>> {
+        match name.to_lowercase().as_str() {
+            "red" => Ok(Some(Color::Red)),
+            "green" => Ok(Some(Color::Green)),
+            "blue" => Ok(Some(Color::Blue)),
+            _ => Ok(None),
         }
     }
 
-    fn shape_area(
-        &self,
-        shape: Shape,
-    ) -> impl Future<Output = Result<f64, Box<dyn std::error::Error + Send + Sync>>> + Send {
-        async move {
-            let area = match shape {
-                Shape::Circle { radius } => std::f64::consts::PI * radius * radius,
-                Shape::Rectangle { width, height } => width * height,
-                Shape::Point => 0.0,
-            };
-            Ok(area)
-        }
+    async fn shape_area(&self, shape: Shape) -> Result<f64, ComplexRoamError<ComplexNever>> {
+        let area = match shape {
+            Shape::Circle { radius } => std::f64::consts::PI * radius * radius,
+            Shape::Rectangle { width, height } => width * height,
+            Shape::Point => 0.0,
+        };
+        Ok(area)
     }
 
-    fn create_canvas(
+    async fn create_canvas(
         &self,
         name: String,
         shapes: Vec<Shape>,
         background: Color,
-    ) -> impl Future<Output = Result<Canvas, Box<dyn std::error::Error + Send + Sync>>> + Send {
-        async move {
-            Ok(Canvas {
-                name,
-                shapes,
-                background,
-            })
-        }
+    ) -> Result<Canvas, ComplexRoamError<ComplexNever>> {
+        Ok(Canvas {
+            name,
+            shapes,
+            background,
+        })
     }
 
-    fn process_message(
+    async fn process_message(
         &self,
         msg: Message,
-    ) -> impl Future<Output = Result<Message, Box<dyn std::error::Error + Send + Sync>>> + Send
-    {
-        async move {
-            // Echo back the message with some processing
-            match msg {
-                Message::Text(text) => Ok(Message::Text(format!("Processed: {}", text))),
-                Message::Number(n) => Ok(Message::Number(n * 2)),
-                Message::Data(data) => Ok(Message::Data(data.into_iter().rev().collect())),
-            }
+    ) -> Result<Message, ComplexRoamError<ComplexNever>> {
+        match msg {
+            Message::Text(text) => Ok(Message::Text(format!("Processed: {}", text))),
+            Message::Number(n) => Ok(Message::Number(n * 2)),
+            Message::Data(data) => Ok(Message::Data(data.into_iter().rev().collect())),
         }
     }
 
-    fn get_points(
-        &self,
-        count: u32,
-    ) -> impl Future<Output = Result<Vec<Point>, Box<dyn std::error::Error + Send + Sync>>> + Send
-    {
-        async move {
-            Ok((0..count as i32)
-                .map(|i| Point { x: i, y: i * 2 })
-                .collect())
-        }
+    async fn get_points(&self, count: u32) -> Result<Vec<Point>, ComplexRoamError<ComplexNever>> {
+        Ok((0..count as i32)
+            .map(|i| Point { x: i, y: i * 2 })
+            .collect())
     }
 
-    fn swap_pair(
+    async fn swap_pair(
         &self,
         pair: (i32, String),
-    ) -> impl Future<Output = Result<(String, i32), Box<dyn std::error::Error + Send + Sync>>> + Send
-    {
-        async move { Ok((pair.1, pair.0)) }
+    ) -> Result<(String, i32), ComplexRoamError<ComplexNever>> {
+        Ok((pair.1, pair.0))
     }
 }
 
@@ -161,66 +128,53 @@ impl complex::ComplexHandler for ComplexService {
 #[derive(Clone)]
 struct StreamingService;
 
-#[allow(clippy::manual_async_fn)]
-impl streaming::StreamingHandler for StreamingService {
-    fn sum(
-        &self,
-        mut numbers: Rx<i32>,
-    ) -> impl Future<Output = Result<i64, Box<dyn std::error::Error + Send + Sync>>> + Send {
-        async move {
-            let mut total: i64 = 0;
-            while let Some(n) = numbers.recv().await? {
-                total += n as i64;
-            }
-            Ok(total)
+impl StreamingHandler for StreamingService {
+    async fn sum(&self, mut numbers: Rx<i32>) -> Result<i64, StreamingRoamError<StreamingNever>> {
+        let mut total: i64 = 0;
+        while let Some(n) = numbers.recv().await.ok().flatten() {
+            total += n as i64;
         }
+        Ok(total)
     }
 
-    fn range(
+    async fn range(
         &self,
         count: u32,
         output: Tx<u32>,
-    ) -> impl Future<Output = Result<(), Box<dyn std::error::Error + Send + Sync>>> + Send {
-        async move {
-            for i in 0..count {
-                output.send(&i).await?;
-            }
-            Ok(())
+    ) -> Result<(), StreamingRoamError<StreamingNever>> {
+        for i in 0..count {
+            let _ = output.send(&i).await;
         }
+        Ok(())
     }
 
-    fn pipe(
+    async fn pipe(
         &self,
         mut input: Rx<String>,
         output: Tx<String>,
-    ) -> impl Future<Output = Result<(), Box<dyn std::error::Error + Send + Sync>>> + Send {
-        async move {
-            while let Some(s) = input.recv().await? {
-                output.send(&s).await?;
-            }
-            Ok(())
+    ) -> Result<(), StreamingRoamError<StreamingNever>> {
+        while let Some(s) = input.recv().await.ok().flatten() {
+            let _ = output.send(&s).await;
         }
+        Ok(())
     }
 
-    fn stats(
+    async fn stats(
         &self,
         mut numbers: Rx<i32>,
-    ) -> impl Future<Output = Result<(i64, u64, f64), Box<dyn std::error::Error + Send + Sync>>> + Send
-    {
-        async move {
-            let mut sum: i64 = 0;
-            let mut count: u64 = 0;
-            while let Some(n) = numbers.recv().await? {
-                sum += n as i64;
-                count += 1;
-            }
-            let avg = if count > 0 {
-                sum as f64 / count as f64
-            } else {
-                0.0
-            };
-            Ok((sum, count, avg))
+    ) -> Result<(i64, u64, f64), StreamingRoamError<StreamingNever>> {
+        let mut sum: i64 = 0;
+        let mut count: u64 = 0;
+        while let Some(n) = numbers.recv().await.ok().flatten() {
+            sum += n as i64;
+            count += 1;
         }
+        let avg = if count > 0 {
+            sum as f64 / count as f64
+        } else {
+            0.0
+        };
+        Ok((sum, count, avg))
     }
 }
 

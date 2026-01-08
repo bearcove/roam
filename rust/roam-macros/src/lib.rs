@@ -301,33 +301,25 @@ fn generate_method_details(parsed: &ServiceTrait, roam: &TokenStream2) -> Vec<To
                 .args()
                 .map(|arg| {
                     let arg_name = arg.name();
-                    let type_detail = type_detail_expr(
-                        &arg.ty,
-                        &format!("{}.{} argument `{}`", service_name, method_name, arg_name),
-                        roam,
-                    );
+                    let shape = shape_expr(&arg.ty, roam);
                     quote! {
                         #roam::schema::ArgDetail {
                             name: #arg_name.into(),
-                            type_info: #type_detail,
+                            ty: #shape,
                         }
                     }
                 })
                 .collect();
 
             let return_type = m.return_type();
-            let return_type_detail = type_detail_expr(
-                &return_type,
-                &format!("{}.{} return type", service_name, method_name),
-                roam,
-            );
+            let return_type_shape = shape_expr(&return_type, roam);
 
             quote! {
                 #roam::schema::MethodDetail {
                     service_name: #service_name.into(),
                     method_name: #method_name.into(),
                     args: vec![#(#arg_exprs),*],
-                    return_type: #return_type_detail,
+                    return_type: #return_type_shape,
                     doc: #method_doc,
                 }
             }
@@ -335,18 +327,10 @@ fn generate_method_details(parsed: &ServiceTrait, roam: &TokenStream2) -> Vec<To
         .collect()
 }
 
-fn type_detail_expr(ty: &Type, context: &str, roam: &TokenStream2) -> TokenStream2 {
+fn shape_expr(ty: &Type, roam: &TokenStream2) -> TokenStream2 {
     let ty_tokens = ty.to_token_stream();
-    let ty_s = ty_tokens.to_string();
     quote! {
-        #roam::reflect::type_detail::<#ty_tokens>().unwrap_or_else(|e| {
-            panic!(
-                "failed to compute roam TypeDetail for {} (type: `{}`): {}",
-                #context,
-                #ty_s,
-                e,
-            )
-        })
+        <#ty_tokens as #roam::facet::Facet>::SHAPE
     }
 }
 
@@ -397,7 +381,7 @@ fn generate_method_ids_init(
         #(let mut #vars: ::core::option::Option<u64> = None;)*
         for m in &svc.methods {
             let id = #roam::hash::method_id_from_detail(m);
-            match m.method_name.as_str() {
+            match m.method_name.as_ref() {
                 #(#init_arms)*
                 _ => {}
             }

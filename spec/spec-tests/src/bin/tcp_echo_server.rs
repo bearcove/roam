@@ -6,11 +6,10 @@
 use cobs::{decode_vec as cobs_decode_vec, encode_vec as cobs_encode_vec};
 use roam::facet::Facet;
 use roam_wire::{Hello, Message};
-use spec_tests::complex::ComplexHandler;
-use spec_tests::echo::EchoHandler;
+use spec_tests::complex::{ComplexHandler, Never as ComplexNever, RoamError as ComplexRoamError};
+use spec_tests::echo::{EchoHandler, Never as EchoNever, RoamError as EchoRoamError};
 use spec_tests::{complex, echo};
 use std::env;
-use std::future::Future;
 use std::io::ErrorKind;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -19,140 +18,111 @@ use tokio::net::{TcpListener, TcpStream};
 #[derive(Clone)]
 struct EchoService;
 
-#[allow(clippy::manual_async_fn)]
 impl echo::EchoHandler for EchoService {
-    fn echo(
-        &self,
-        message: String,
-    ) -> impl Future<Output = Result<String, Box<dyn std::error::Error + Send + Sync>>> + Send {
-        async move { Ok(message) }
+    async fn echo(&self, message: String) -> Result<String, EchoRoamError<EchoNever>> {
+        Ok(message)
     }
 
-    fn reverse(
-        &self,
-        message: String,
-    ) -> impl Future<Output = Result<String, Box<dyn std::error::Error + Send + Sync>>> + Send {
-        async move { Ok(message.chars().rev().collect()) }
+    async fn reverse(&self, message: String) -> Result<String, EchoRoamError<EchoNever>> {
+        Ok(message.chars().rev().collect())
     }
 }
 
 #[derive(Clone)]
 struct ComplexService;
 
-#[allow(clippy::manual_async_fn)]
 impl complex::ComplexHandler for ComplexService {
-    fn echo_point(
+    async fn echo_point(
         &self,
         point: spec_proto::Point,
-    ) -> impl Future<Output = Result<spec_proto::Point, Box<dyn std::error::Error + Send + Sync>>> + Send
-    {
-        async move { Ok(point) }
+    ) -> Result<spec_proto::Point, ComplexRoamError<ComplexNever>> {
+        Ok(point)
     }
 
-    fn create_person(
+    async fn create_person(
         &self,
         name: String,
         age: u8,
         email: Option<String>,
-    ) -> impl Future<Output = Result<spec_proto::Person, Box<dyn std::error::Error + Send + Sync>>> + Send
-    {
-        async move { Ok(spec_proto::Person { name, age, email }) }
+    ) -> Result<spec_proto::Person, ComplexRoamError<ComplexNever>> {
+        Ok(spec_proto::Person { name, age, email })
     }
 
-    fn rectangle_area(
+    async fn rectangle_area(
         &self,
         rect: spec_proto::Rectangle,
-    ) -> impl Future<Output = Result<f64, Box<dyn std::error::Error + Send + Sync>>> + Send {
-        async move {
-            let width = (rect.bottom_right.x - rect.top_left.x).abs() as f64;
-            let height = (rect.bottom_right.y - rect.top_left.y).abs() as f64;
-            Ok(width * height)
-        }
+    ) -> Result<f64, ComplexRoamError<ComplexNever>> {
+        let width = (rect.bottom_right.x - rect.top_left.x).abs() as f64;
+        let height = (rect.bottom_right.y - rect.top_left.y).abs() as f64;
+        Ok(width * height)
     }
 
-    fn parse_color(
+    async fn parse_color(
         &self,
         name: String,
-    ) -> impl Future<
-        Output = Result<Option<spec_proto::Color>, Box<dyn std::error::Error + Send + Sync>>,
-    > + Send {
-        async move {
-            match name.to_lowercase().as_str() {
-                "red" => Ok(Some(spec_proto::Color::Red)),
-                "green" => Ok(Some(spec_proto::Color::Green)),
-                "blue" => Ok(Some(spec_proto::Color::Blue)),
-                _ => Ok(None),
-            }
+    ) -> Result<Option<spec_proto::Color>, ComplexRoamError<ComplexNever>> {
+        match name.to_lowercase().as_str() {
+            "red" => Ok(Some(spec_proto::Color::Red)),
+            "green" => Ok(Some(spec_proto::Color::Green)),
+            "blue" => Ok(Some(spec_proto::Color::Blue)),
+            _ => Ok(None),
         }
     }
 
-    fn shape_area(
+    async fn shape_area(
         &self,
         shape: spec_proto::Shape,
-    ) -> impl Future<Output = Result<f64, Box<dyn std::error::Error + Send + Sync>>> + Send {
-        async move {
-            let area = match shape {
-                spec_proto::Shape::Circle { radius } => std::f64::consts::PI * radius * radius,
-                spec_proto::Shape::Rectangle { width, height } => width * height,
-                spec_proto::Shape::Point => 0.0,
-            };
-            Ok(area)
-        }
+    ) -> Result<f64, ComplexRoamError<ComplexNever>> {
+        let area = match shape {
+            spec_proto::Shape::Circle { radius } => std::f64::consts::PI * radius * radius,
+            spec_proto::Shape::Rectangle { width, height } => width * height,
+            spec_proto::Shape::Point => 0.0,
+        };
+        Ok(area)
     }
 
-    fn create_canvas(
+    async fn create_canvas(
         &self,
         name: String,
         shapes: Vec<spec_proto::Shape>,
         background: spec_proto::Color,
-    ) -> impl Future<Output = Result<spec_proto::Canvas, Box<dyn std::error::Error + Send + Sync>>> + Send
-    {
-        async move {
-            Ok(spec_proto::Canvas {
-                name,
-                shapes,
-                background,
-            })
-        }
+    ) -> Result<spec_proto::Canvas, ComplexRoamError<ComplexNever>> {
+        Ok(spec_proto::Canvas {
+            name,
+            shapes,
+            background,
+        })
     }
 
-    fn process_message(
+    async fn process_message(
         &self,
         msg: spec_proto::Message,
-    ) -> impl Future<Output = Result<spec_proto::Message, Box<dyn std::error::Error + Send + Sync>>> + Send
-    {
-        async move {
-            match msg {
-                spec_proto::Message::Text(text) => {
-                    Ok(spec_proto::Message::Text(format!("Processed: {}", text)))
-                }
-                spec_proto::Message::Number(n) => Ok(spec_proto::Message::Number(n * 2)),
-                spec_proto::Message::Data(data) => {
-                    Ok(spec_proto::Message::Data(data.into_iter().rev().collect()))
-                }
+    ) -> Result<spec_proto::Message, ComplexRoamError<ComplexNever>> {
+        match msg {
+            spec_proto::Message::Text(text) => {
+                Ok(spec_proto::Message::Text(format!("Processed: {}", text)))
+            }
+            spec_proto::Message::Number(n) => Ok(spec_proto::Message::Number(n * 2)),
+            spec_proto::Message::Data(data) => {
+                Ok(spec_proto::Message::Data(data.into_iter().rev().collect()))
             }
         }
     }
 
-    fn get_points(
+    async fn get_points(
         &self,
         count: u32,
-    ) -> impl Future<
-        Output = Result<Vec<spec_proto::Point>, Box<dyn std::error::Error + Send + Sync>>,
-    > + Send {
-        async move {
-            Ok((0..count as i32)
-                .map(|i| spec_proto::Point { x: i, y: i * 2 })
-                .collect())
-        }
+    ) -> Result<Vec<spec_proto::Point>, ComplexRoamError<ComplexNever>> {
+        Ok((0..count as i32)
+            .map(|i| spec_proto::Point { x: i, y: i * 2 })
+            .collect())
     }
 
-    fn swap_pair(
+    async fn swap_pair(
         &self,
         pair: (i32, String),
-    ) -> impl Future<Output = Result<(String, i32), Box<dyn std::error::Error + Send + Sync>>> + Send
-    {
-        async move { Ok((pair.1, pair.0)) }
+    ) -> Result<(String, i32), ComplexRoamError<ComplexNever>> {
+        Ok((pair.1, pair.0))
     }
 }
 
@@ -262,22 +232,24 @@ fn encode_ok<T: Facet<'static>>(value: &T) -> Result<Vec<u8>, Box<dyn std::error
     Ok(result)
 }
 
-/// Encode Result::Err(RoamError::User(msg))
-fn encode_user_error(msg: &str) -> Vec<u8> {
-    let mut result = vec![0x01]; // Result::Err variant
-    result.push(0x00); // RoamError::User variant
-    // Encode string: varint length + bytes
-    let msg_bytes = msg.as_bytes();
-    let len = msg_bytes.len();
-    // Simple varint encoding for length
-    if len < 128 {
-        result.push(len as u8);
-    } else {
-        result.push((len & 0x7f) as u8 | 0x80);
-        result.push((len >> 7) as u8);
+/// Encode Result::Err(RoamError) for RoamError<Never>
+/// Since Never is uninhabited, only protocol errors are possible
+fn encode_roam_error<E>(err: &roam::session::RoamError<E>) -> Vec<u8> {
+    match err {
+        roam::session::RoamError::User(_) => {
+            // Never is uninhabited, so this branch is unreachable for RoamError<Never>
+            unreachable!("RoamError<Never> cannot have User variant")
+        }
+        roam::session::RoamError::UnknownMethod => {
+            vec![0x01, 0x01] // Result::Err, RoamError::UnknownMethod
+        }
+        roam::session::RoamError::InvalidPayload => {
+            vec![0x01, 0x02] // Result::Err, RoamError::InvalidPayload
+        }
+        roam::session::RoamError::Cancelled => {
+            vec![0x01, 0x03] // Result::Err, RoamError::Cancelled
+        }
     }
-    result.extend_from_slice(msg_bytes);
-    result
 }
 
 /// Encode Result::Err(RoamError::UnknownMethod)
@@ -297,14 +269,14 @@ async fn dispatch_method(
         let args: (String,) = facet_postcard::from_slice(payload)?;
         return match service.echo(args.0).await {
             Ok(v) => encode_ok(&v),
-            Err(e) => Ok(encode_user_error(&e.to_string())),
+            Err(e) => Ok(encode_roam_error(&e)),
         };
     }
     if method_id == echo::method_id::REVERSE {
         let args: (String,) = facet_postcard::from_slice(payload)?;
         return match service.reverse(args.0).await {
             Ok(v) => encode_ok(&v),
-            Err(e) => Ok(encode_user_error(&e.to_string())),
+            Err(e) => Ok(encode_roam_error(&e)),
         };
     }
 
@@ -313,49 +285,49 @@ async fn dispatch_method(
         let args: (spec_proto::Point,) = facet_postcard::from_slice(payload)?;
         return match complex_service.echo_point(args.0).await {
             Ok(v) => encode_ok(&v),
-            Err(e) => Ok(encode_user_error(&e.to_string())),
+            Err(e) => Ok(encode_roam_error(&e)),
         };
     }
     if method_id == complex::method_id::CREATE_PERSON {
         let args: (String, u8, Option<String>) = facet_postcard::from_slice(payload)?;
         return match complex_service.create_person(args.0, args.1, args.2).await {
             Ok(v) => encode_ok(&v),
-            Err(e) => Ok(encode_user_error(&e.to_string())),
+            Err(e) => Ok(encode_roam_error(&e)),
         };
     }
     if method_id == complex::method_id::RECTANGLE_AREA {
         let args: (spec_proto::Rectangle,) = facet_postcard::from_slice(payload)?;
         return match complex_service.rectangle_area(args.0).await {
             Ok(v) => encode_ok(&v),
-            Err(e) => Ok(encode_user_error(&e.to_string())),
+            Err(e) => Ok(encode_roam_error(&e)),
         };
     }
     if method_id == complex::method_id::PARSE_COLOR {
         let args: (String,) = facet_postcard::from_slice(payload)?;
         return match complex_service.parse_color(args.0).await {
             Ok(v) => encode_ok(&v),
-            Err(e) => Ok(encode_user_error(&e.to_string())),
+            Err(e) => Ok(encode_roam_error(&e)),
         };
     }
     if method_id == complex::method_id::SHAPE_AREA {
         let args: (spec_proto::Shape,) = facet_postcard::from_slice(payload)?;
         return match complex_service.shape_area(args.0).await {
             Ok(v) => encode_ok(&v),
-            Err(e) => Ok(encode_user_error(&e.to_string())),
+            Err(e) => Ok(encode_roam_error(&e)),
         };
     }
     if method_id == complex::method_id::GET_POINTS {
         let args: (u32,) = facet_postcard::from_slice(payload)?;
         return match complex_service.get_points(args.0).await {
             Ok(v) => encode_ok(&v),
-            Err(e) => Ok(encode_user_error(&e.to_string())),
+            Err(e) => Ok(encode_roam_error(&e)),
         };
     }
     if method_id == complex::method_id::SWAP_PAIR {
         let args: ((i32, String),) = facet_postcard::from_slice(payload)?;
         return match complex_service.swap_pair(args.0).await {
             Ok(v) => encode_ok(&v),
-            Err(e) => Ok(encode_user_error(&e.to_string())),
+            Err(e) => Ok(encode_roam_error(&e)),
         };
     }
 

@@ -110,26 +110,34 @@ pub enum MismatchExplanation {
 // Helper functions for working with Shape
 // ============================================================================
 
-/// Check if a shape has a specific roam attribute.
+// TODO(facet): Replace these string comparisons with `decl_id` comparison once
+// facet supports declaration IDs. Declaration IDs would allow comparing generic
+// types like `Tx<i32>` and `Tx<String>` as "the same type declaration" without
+// string matching. See: https://github.com/facet-rs/facet/issues/XXXX
+//
+// For now, we use `fully_qualified_type_path()` which returns paths like
+// "roam_session::Tx<i32>" - we check if it starts with "roam_session::Tx<".
+// See also: https://github.com/facet-rs/facet/issues/1716
+
+/// Returns the fully qualified type path, e.g. "std::collections::HashMap<K, V>".
 ///
-/// Roam uses facet attributes to mark special types:
-/// - `#[facet(roam = "tx")]` for caller→callee streams
-/// - `#[facet(roam = "rx")]` for callee→caller streams
-pub fn has_roam_attr(shape: &Shape, value: &str) -> bool {
-    shape
-        .attributes
-        .iter()
-        .any(|attr| attr.ns == Some("roam") && attr.key == value)
+/// Combines module_path and type_identifier. For types without a module_path
+/// (primitives), returns just the type_identifier.
+pub fn fully_qualified_type_path(shape: &Shape) -> std::borrow::Cow<'static, str> {
+    match shape.module_path {
+        Some(module) => std::borrow::Cow::Owned(format!("{}::{}", module, shape.type_identifier)),
+        None => std::borrow::Cow::Borrowed(shape.type_identifier),
+    }
 }
 
 /// Check if a shape represents a Tx (caller→callee) stream.
 pub fn is_tx(shape: &Shape) -> bool {
-    has_roam_attr(shape, "tx")
+    shape.module_path == Some("roam_session") && shape.type_identifier == "Tx"
 }
 
 /// Check if a shape represents an Rx (callee→caller) stream.
 pub fn is_rx(shape: &Shape) -> bool {
-    has_roam_attr(shape, "rx")
+    shape.module_path == Some("roam_session") && shape.type_identifier == "Rx"
 }
 
 /// Check if a shape represents any streaming type (Tx or Rx).

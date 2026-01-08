@@ -15,22 +15,13 @@ include!(concat!(env!("OUT_DIR"), "/generated.rs"));
 #[derive(Clone)]
 struct EchoService;
 
-#[allow(clippy::manual_async_fn)]
 impl echo::EchoHandler for EchoService {
-    fn echo(
-        &self,
-        message: String,
-    ) -> impl std::future::Future<Output = Result<String, Box<dyn std::error::Error + Send + Sync>>> + Send
-    {
-        async move { Ok(message) }
+    async fn echo(&self, message: String) -> Result<String, echo::RoamError<echo::Never>> {
+        Ok(message)
     }
 
-    fn reverse(
-        &self,
-        message: String,
-    ) -> impl std::future::Future<Output = Result<String, Box<dyn std::error::Error + Send + Sync>>> + Send
-    {
-        async move { Ok(message.chars().rev().collect()) }
+    async fn reverse(&self, message: String) -> Result<String, echo::RoamError<echo::Never>> {
+        Ok(message.chars().rev().collect())
     }
 }
 

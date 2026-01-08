@@ -9,7 +9,9 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use facet::{Attr, Def, Facet, Shape, ShapeBuilder, Type, TypeParam, UserType};
+use facet::{
+    Def, Facet, Shape, ShapeBuilder, Type, TypeParam, UserType, Variance, VarianceDep, VarianceDesc,
+};
 use tokio::sync::{Notify, mpsc};
 
 pub use roam_frame::{Frame, MsgDesc, OwnedMessage, Payload};
@@ -141,9 +143,6 @@ impl OutgoingSender {
 /// r[impl streaming.lifecycle.speculative] - Early Data may be wasted on error.
 ///
 /// When dropped, a Close message is sent automatically.
-///
-/// This type implements `Facet` manually with the `roam::tx` attribute marker
-/// so that `roam_reflect::type_detail` recognizes it and generates `TypeDetail::Tx`.
 pub struct Tx<T: Facet<'static>> {
     /// The unique stream ID for this stream.
     stream_id: StreamId,
@@ -153,31 +152,24 @@ pub struct Tx<T: Facet<'static>> {
     _marker: PhantomData<fn(T)>,
 }
 
-/// Static marker for the roam::tx attribute.
-static TX_MARKER: () = ();
-
-/// Static marker for the roam::rx attribute.
-static RX_MARKER: () = ();
-
-/// Static attribute array for roam::tx marker.
-static ROAM_TX_ATTRS: [Attr; 1] = [Attr::new(Some("roam"), "tx", &TX_MARKER)];
-
-/// Static attribute array for roam::rx marker.
-static ROAM_RX_ATTRS: [Attr; 1] = [Attr::new(Some("roam"), "rx", &RX_MARKER)];
-
-// SAFETY: Tx<T> is a handle type that doesn't expose T directly in its shape.
-// The roam::tx attribute marks it for special handling by roam_reflect.
+// SAFETY: Tx<T> is a handle type. We manually implement Facet to:
+// 1. Avoid requiring OutgoingSender to implement Facet
+// 2. Properly expose T as a type parameter for codegen introspection
 #[allow(unsafe_code)]
 unsafe impl<T: Facet<'static>> Facet<'static> for Tx<T> {
     const SHAPE: &'static Shape = &const {
         ShapeBuilder::for_sized::<Tx<T>>("Tx")
+            .module_path("roam_session")
             .ty(Type::User(UserType::Opaque))
             .def(Def::Scalar)
             .type_params(&[TypeParam {
                 name: "T",
                 shape: T::SHAPE,
             }])
-            .attributes(&ROAM_TX_ATTRS)
+            .variance(VarianceDesc {
+                base: Variance::Bivariant,
+                deps: &const { [VarianceDep::covariant(T::SHAPE)] },
+            })
             .build()
     };
 }
@@ -241,9 +233,6 @@ impl std::error::Error for TxError {}
 /// r[impl streaming.caller-pov] - From caller's perspective, Rx means "I receive".
 /// r[impl streaming.type] - Serializes as u64 stream ID on wire.
 /// r[impl streaming.holder-semantics] - The holder receives from this stream.
-///
-/// This type implements `Facet` manually with the `roam::rx` attribute marker
-/// so that `roam_reflect::type_detail` recognizes it and generates `TypeDetail::Rx`.
 pub struct Rx<T: Facet<'static>> {
     /// The unique stream ID for this stream.
     stream_id: StreamId,
@@ -253,19 +242,24 @@ pub struct Rx<T: Facet<'static>> {
     _marker: PhantomData<fn() -> T>,
 }
 
-// SAFETY: Rx<T> is a handle type that doesn't expose T directly in its shape.
-// The roam::rx attribute marks it for special handling by roam_reflect.
+// SAFETY: Rx<T> is a handle type. We manually implement Facet to:
+// 1. Avoid requiring mpsc::Receiver to implement Facet
+// 2. Properly expose T as a type parameter for codegen introspection
 #[allow(unsafe_code)]
 unsafe impl<T: Facet<'static>> Facet<'static> for Rx<T> {
     const SHAPE: &'static Shape = &const {
         ShapeBuilder::for_sized::<Rx<T>>("Rx")
+            .module_path("roam_session")
             .ty(Type::User(UserType::Opaque))
             .def(Def::Scalar)
             .type_params(&[TypeParam {
                 name: "T",
                 shape: T::SHAPE,
             }])
-            .attributes(&ROAM_RX_ATTRS)
+            .variance(VarianceDesc {
+                base: Variance::Bivariant,
+                deps: &const { [VarianceDep::covariant(T::SHAPE)] },
+            })
             .build()
     };
 }
@@ -995,5 +989,58 @@ mod tests {
 
         // Stream no longer registered
         assert!(!registry.contains(42));
+    }
+
+    #[test]
+    fn tx_rx_shape_metadata() {
+        use facet::Facet;
+
+        let tx_shape = <Tx<i32> as Facet>::SHAPE;
+        let rx_shape = <Rx<i32> as Facet>::SHAPE;
+
+        eprintln!("Tx<i32> type_identifier: {:?}", tx_shape.type_identifier);
+        eprintln!("Tx<i32> module_path: {:?}", tx_shape.module_path);
+        eprintln!(
+            "Tx<i32> type_params: {:?}",
+            tx_shape
+                .type_params
+                .iter()
+                .map(|p| p.name)
+                .collect::<Vec<_>>()
+        );
+
+        eprintln!("Rx<i32> type_identifier: {:?}", rx_shape.type_identifier);
+        eprintln!("Rx<i32> module_path: {:?}", rx_shape.module_path);
+        eprintln!(
+            "Rx<i32> type_params: {:?}",
+            rx_shape
+                .type_params
+                .iter()
+                .map(|p| p.name)
+                .collect::<Vec<_>>()
+        );
+
+        // Verify we can identify Tx/Rx by their fully qualified path
+        let tx_fqp = match tx_shape.module_path {
+            Some(m) => format!("{}::{}", m, tx_shape.type_identifier),
+            None => tx_shape.type_identifier.to_string(),
+        };
+        let rx_fqp = match rx_shape.module_path {
+            Some(m) => format!("{}::{}", m, rx_shape.type_identifier),
+            None => rx_shape.type_identifier.to_string(),
+        };
+
+        eprintln!("Tx<i32> fully qualified: {}", tx_fqp);
+        eprintln!("Rx<i32> fully qualified: {}", rx_fqp);
+
+        // Verify module_path and type_identifier are set correctly
+        assert_eq!(tx_shape.module_path, Some("roam_session"));
+        assert_eq!(tx_shape.type_identifier, "Tx");
+        assert_eq!(rx_shape.module_path, Some("roam_session"));
+        assert_eq!(rx_shape.type_identifier, "Rx");
+
+        // Verify type_params are populated
+        assert_eq!(tx_shape.type_params.len(), 1);
+        assert_eq!(rx_shape.type_params.len(), 1);
     }
 }

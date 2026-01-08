@@ -32,9 +32,6 @@ pub use roam_schema as schema;
 // Re-export hash utilities
 pub use roam_hash as hash;
 
-// Re-export reflection utilities
-pub use roam_reflect as reflect;
-
 // Re-export facet for derive macros in service types
 pub use facet;
 
