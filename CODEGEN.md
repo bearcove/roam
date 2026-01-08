@@ -58,6 +58,44 @@ let result: CallResult<i32, Never> = facet_postcard::from_slice(&payload).unwrap
 - It allocates stream IDs and **pokes them into** the `stream_id` field
 - Then it serializes - Tx/Rx become just `u64` on the wire via `#[facet(proxy = u64)]`
 
+## Implementation Status
+
+### ✅ Completed
+
+**Tx/Rx Facet Implementation** (`roam-session`):
+- `Tx<T>` and `Rx<T>` now use `#[derive(Facet)]` with `#[facet(proxy = u64)]`
+- `stream_id` field is public and pokeable
+- `sender`/`receiver` fields use `#[facet(opaque)]`
+- `TryFrom<&Tx<T>> for u64` and `TryFrom<u64> for Tx<T>` for serialization
+- Type parameter `T` is exposed for codegen introspection
+- All existing tests pass
+
+**ConnectionHandle** (`roam-session`):
+- `ConnectionHandle` - cloneable handle for making outgoing calls
+- `call_raw(method_id, payload)` - make raw RPC call with pre-serialized payload
+- `new_tx<T>()` / `new_rx<T>()` - allocate streams
+- Stream registry integration for routing stream data
+- `HandleCommand` enum for communication with driver
+- `CallError` error type
+
+### 🚧 In Progress
+
+**Connection type** - single symmetric type for client AND server:
+- Need `call_raw(method_id, poke)` that accepts `Poke` instead of pre-serialized payload
+- Walk args with Poke to find Tx/Rx and bind stream IDs
+- Serialize via facet after binding
+
+### 📋 TODO
+
+**Generated client code** using Connection:
+```rust
+// Goal: This should just work
+let client = CalculatorClient::new(conn);
+let result = client.add(2, 3).await?;
+```
+
+**Update tests** to use new API instead of manual message construction
+
 ## Overview
 
 All language targets (including Rust) generate their client/server code through `roam-codegen` running in a `build.rs` script. The proc-macro (`roam-macros`) is **metadata-only** — it parses the trait syntax and emits a single `service_detail()` function.

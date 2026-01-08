@@ -151,7 +151,7 @@ impl OutgoingSender {
 /// - `T` is exposed as a type parameter for codegen introspection
 #[derive(Facet)]
 #[facet(proxy = u64)]
-pub struct Tx<T> {
+pub struct Tx<T: 'static> {
     /// The unique stream ID for this stream.
     /// Public so Connection can poke it when binding streams.
     pub stream_id: StreamId,
@@ -190,7 +190,7 @@ impl<T: 'static> TryFrom<u64> for Tx<T> {
     }
 }
 
-impl<T: Facet<'static>> Tx<T> {
+impl<T: 'static> Tx<T> {
     /// Create a new Tx stream with the given sender.
     pub fn new(sender: OutgoingSender) -> Self {
         Self {
@@ -208,7 +208,10 @@ impl<T: Facet<'static>> Tx<T> {
     /// Send a value on this stream.
     ///
     /// r[impl streaming.data] - Data messages carry serialized values.
-    pub async fn send(&self, value: &T) -> Result<(), TxError> {
+    pub async fn send(&self, value: &T) -> Result<(), TxError>
+    where
+        T: Facet<'static>,
+    {
         let bytes = facet_postcard::to_vec(value).map_err(TxError::Serialize)?;
         self.sender
             .send_data(bytes)
@@ -217,7 +220,7 @@ impl<T: Facet<'static>> Tx<T> {
     }
 }
 
-impl<T: Facet<'static>> Drop for Tx<T> {
+impl<T: 'static> Drop for Tx<T> {
     /// r[impl streaming.lifecycle.caller-closes-pushes] - Send Close when Tx is dropped.
     fn drop(&mut self) {
         self.sender.send_close();
@@ -258,7 +261,7 @@ impl std::error::Error for TxError {}
 /// - `T` is exposed as a type parameter for codegen introspection
 #[derive(Facet)]
 #[facet(proxy = u64)]
-pub struct Rx<T> {
+pub struct Rx<T: 'static> {
     /// The unique stream ID for this stream.
     /// Public so Connection can poke it when binding streams.
     pub stream_id: StreamId,
@@ -295,7 +298,7 @@ impl<T: 'static> TryFrom<u64> for Rx<T> {
     }
 }
 
-impl<T: Facet<'static>> Rx<T> {
+impl<T: 'static> Rx<T> {
     /// Create a new Rx stream with the given ID and receiver channel.
     pub fn new(stream_id: StreamId, rx: mpsc::Receiver<Vec<u8>>) -> Self {
         Self {
@@ -318,7 +321,10 @@ impl<T: Facet<'static>> Rx<T> {
     ///
     /// r[impl streaming.data] - Deserialize Data message payloads.
     /// r[impl streaming.data.invalid] - Caller must send Goodbye on deserialize error.
-    pub async fn recv(&mut self) -> Result<Option<T>, RxError> {
+    pub async fn recv(&mut self) -> Result<Option<T>, RxError>
+    where
+        T: Facet<'static>,
+    {
         match self.rx.recv().await {
             Some(bytes) => {
                 let value = facet_postcard::from_slice(&bytes).map_err(RxError::Deserialize)?;
@@ -830,6 +836,206 @@ pub enum RoamError<E> {
 
 pub type CallResult<T, E> = ::core::result::Result<T, RoamError<E>>;
 pub type BorrowedCallResult<T, E> = OwnedMessage<CallResult<T, E>>;
+
+// ============================================================================
+// Connection Handle (Client-side API)
+// ============================================================================
+
+/// Error from making an outgoing call.
+#[derive(Debug)]
+pub enum CallError {
+    /// Failed to serialize request payload.
+    Encode(facet_postcard::SerializeError),
+    /// Failed to deserialize response payload.
+    Decode(facet_postcard::DeserializeError<facet_postcard::PostcardError>),
+    /// Connection was closed before response arrived.
+    ConnectionClosed,
+    /// The driver task has stopped.
+    DriverGone,
+}
+
+impl std::fmt::Display for CallError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CallError::Encode(e) => write!(f, "encode error: {e}"),
+            CallError::Decode(e) => write!(f, "decode error: {e}"),
+            CallError::ConnectionClosed => write!(f, "connection closed"),
+            CallError::DriverGone => write!(f, "driver task stopped"),
+        }
+    }
+}
+
+impl std::error::Error for CallError {}
+
+/// Command sent from ConnectionHandle to the Driver.
+#[derive(Debug)]
+pub enum HandleCommand {
+    /// Send a request and expect a response.
+    Call {
+        request_id: u64,
+        method_id: u64,
+        metadata: Vec<(String, roam_wire::MetadataValue)>,
+        payload: Vec<u8>,
+        response_tx: tokio::sync::oneshot::Sender<Result<Vec<u8>, CallError>>,
+    },
+}
+
+/// Shared state between ConnectionHandle and Driver.
+struct HandleShared {
+    /// Channel to send commands to the driver.
+    command_tx: mpsc::Sender<HandleCommand>,
+    /// Request ID generator.
+    request_ids: RequestIdGenerator,
+    /// Stream ID allocator.
+    stream_ids: StreamIdAllocator,
+    /// Stream registry for creating Tx/Rx handles.
+    /// Protected by a mutex since handles may create streams concurrently.
+    stream_registry: std::sync::Mutex<StreamRegistry>,
+    /// Notify for outgoing stream data.
+    outgoing_notify: Arc<Notify>,
+}
+
+/// Handle for making outgoing RPC calls.
+///
+/// This is the client-side API. It can be cloned and used from multiple tasks.
+/// The actual I/O is driven by the [`Driver`] future which must be spawned.
+///
+/// # Example
+///
+/// ```ignore
+/// let (handle, driver) = establish_connection(transport, dispatcher).await?;
+/// tokio::spawn(driver);
+///
+/// // Use handle to make calls
+/// let response = handle.call_raw(method_id, payload).await?;
+/// ```
+#[derive(Clone)]
+pub struct ConnectionHandle {
+    shared: Arc<HandleShared>,
+}
+
+impl ConnectionHandle {
+    /// Create a new handle with the given command channel and role.
+    pub fn new(command_tx: mpsc::Sender<HandleCommand>, role: Role, initial_credit: u32) -> Self {
+        let stream_registry = StreamRegistry::new_with_credit(initial_credit);
+        let outgoing_notify = stream_registry.outgoing_notify();
+        Self {
+            shared: Arc::new(HandleShared {
+                command_tx,
+                request_ids: RequestIdGenerator::new(),
+                stream_ids: StreamIdAllocator::new(role),
+                stream_registry: std::sync::Mutex::new(stream_registry),
+                outgoing_notify,
+            }),
+        }
+    }
+
+    /// Make a raw RPC call with pre-serialized payload.
+    ///
+    /// Returns the raw response payload bytes.
+    pub async fn call_raw(&self, method_id: u64, payload: Vec<u8>) -> Result<Vec<u8>, CallError> {
+        let request_id = self.shared.request_ids.next();
+        let (response_tx, response_rx) = tokio::sync::oneshot::channel();
+
+        let cmd = HandleCommand::Call {
+            request_id,
+            method_id,
+            metadata: Vec::new(),
+            payload,
+            response_tx,
+        };
+
+        self.shared
+            .command_tx
+            .send(cmd)
+            .await
+            .map_err(|_| CallError::DriverGone)?;
+
+        response_rx.await.map_err(|_| CallError::DriverGone)?
+    }
+
+    /// Allocate a new outgoing stream (caller → callee).
+    ///
+    /// Returns a `Tx<T>` that can be passed as an argument to a call.
+    pub fn new_tx<T: 'static>(&self) -> Tx<T> {
+        let stream_id = self.shared.stream_ids.next();
+        let sender = self
+            .shared
+            .stream_registry
+            .lock()
+            .unwrap()
+            .register_outgoing(stream_id);
+        Tx::new(sender)
+    }
+
+    /// Allocate a new incoming stream (callee → caller).
+    ///
+    /// Returns an `Rx<T>` that can be passed as an argument to a call.
+    pub fn new_rx<T: 'static>(&self) -> Rx<T> {
+        let stream_id = self.shared.stream_ids.next();
+        let rx = self
+            .shared
+            .stream_registry
+            .lock()
+            .unwrap()
+            .register_incoming(stream_id);
+        Rx::new(stream_id, rx)
+    }
+
+    /// Get the outgoing notify handle for the driver to wait on.
+    pub fn outgoing_notify(&self) -> Arc<Notify> {
+        self.shared.outgoing_notify.clone()
+    }
+
+    /// Poll outgoing stream data.
+    ///
+    /// Called by the driver to get pending Data/Close messages.
+    pub fn poll_outgoing(&self) -> OutgoingPoll {
+        self.shared.stream_registry.lock().unwrap().poll_outgoing()
+    }
+
+    /// Route incoming stream data to the appropriate Rx.
+    pub async fn route_data(
+        &self,
+        stream_id: StreamId,
+        payload: Vec<u8>,
+    ) -> Result<(), StreamError> {
+        self.shared
+            .stream_registry
+            .lock()
+            .unwrap()
+            .route_data(stream_id, payload)
+            .await
+    }
+
+    /// Close an incoming stream.
+    pub fn close_stream(&self, stream_id: StreamId) {
+        self.shared.stream_registry.lock().unwrap().close(stream_id);
+    }
+
+    /// Reset a stream.
+    pub fn reset_stream(&self, stream_id: StreamId) {
+        self.shared.stream_registry.lock().unwrap().reset(stream_id);
+    }
+
+    /// Check if a stream exists.
+    pub fn contains_stream(&self, stream_id: StreamId) -> bool {
+        self.shared
+            .stream_registry
+            .lock()
+            .unwrap()
+            .contains(stream_id)
+    }
+
+    /// Receive credit for an outgoing stream.
+    pub fn receive_credit(&self, stream_id: StreamId, bytes: u32) {
+        self.shared
+            .stream_registry
+            .lock()
+            .unwrap()
+            .receive_credit(stream_id, bytes);
+    }
+}
 
 #[derive(Debug)]
 pub enum ClientError<TransportError> {
