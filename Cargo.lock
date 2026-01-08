@@ -1398,6 +1398,9 @@ name = "roam-hash"
 version = "0.5.0"
 dependencies = [
  "blake3",
+ "facet",
+ "facet-core",
+ "heck",
  "roam-schema",
 ]
 
@@ -1427,6 +1430,7 @@ name = "roam-schema"
 version = "0.5.0"
 dependencies = [
  "facet",
+ "facet-core",
 ]
 
 [[package]]
