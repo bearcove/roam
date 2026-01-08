@@ -8,10 +8,9 @@
 use std::time::Duration;
 
 use facet::Facet;
-use roam_hash::method_id_from_detail;
-use roam_schema::{ArgDetail, MethodDetail};
 use roam_wire::{Hello, Message, MetadataValue};
 use spec_tests::harness::{accept_subject, our_hello, run_async};
+use spec_tests::testbed::method_id;
 
 // TODO: Remove this shim once facet implements `Facet` for `core::convert::Infallible`
 #[derive(Debug, Clone, PartialEq, Eq, Facet)]
@@ -24,21 +23,6 @@ enum RoamError<E> {
     UnknownMethod = 1,
     InvalidPayload = 2,
     Cancelled = 3,
-}
-
-fn testbed_method_id(
-    method_name: &str,
-    args: Vec<ArgDetail>,
-    return_type: &'static facet::Shape,
-) -> u64 {
-    let detail = MethodDetail {
-        service_name: "Testbed".into(),
-        method_name: String::from(method_name).into(),
-        args,
-        return_type,
-        doc: None,
-    };
-    method_id_from_detail(&detail)
 }
 
 fn metadata_empty() -> Vec<(String, MetadataValue)> {
@@ -75,15 +59,7 @@ fn streaming_sum_client_to_server() {
         hello_exchange(&mut io).await?;
 
         // Get the method ID for `sum(numbers: Rx<i32>) -> i64`
-        // Rx<i32> serializes as u64 on the wire (stream ID)
-        let method_id = testbed_method_id(
-            "sum",
-            vec![ArgDetail {
-                name: "numbers".into(),
-                ty: <u64 as Facet>::SHAPE, // Rx<i32> is proxy'd to u64
-            }],
-            <i64 as Facet>::SHAPE,
-        );
+        let method_id = method_id::SUM;
 
         // Allocate stream ID (odd = initiator)
         let stream_id: u64 = 1;
@@ -168,21 +144,7 @@ fn streaming_generate_server_to_client() {
         hello_exchange(&mut io).await?;
 
         // Get the method ID for `generate(count: u32, output: Tx<i32>)`
-        // Tx<i32> serializes as u64 on the wire (stream ID)
-        let method_id = testbed_method_id(
-            "generate",
-            vec![
-                ArgDetail {
-                    name: "count".into(),
-                    ty: <u32 as Facet>::SHAPE,
-                },
-                ArgDetail {
-                    name: "output".into(),
-                    ty: <u64 as Facet>::SHAPE, // Tx<i32> is proxy'd to u64
-                },
-            ],
-            <() as Facet>::SHAPE,
-        );
+        let method_id = method_id::GENERATE;
 
         // Allocate stream ID (odd = initiator)
         let stream_id: u64 = 1;
@@ -265,20 +227,7 @@ fn streaming_transform_bidirectional() {
         hello_exchange(&mut io).await?;
 
         // Get the method ID for `transform(input: Rx<String>, output: Tx<String>)`
-        let method_id = testbed_method_id(
-            "transform",
-            vec![
-                ArgDetail {
-                    name: "input".into(),
-                    ty: <u64 as Facet>::SHAPE, // Rx<String> is proxy'd to u64
-                },
-                ArgDetail {
-                    name: "output".into(),
-                    ty: <u64 as Facet>::SHAPE, // Tx<String> is proxy'd to u64
-                },
-            ],
-            <() as Facet>::SHAPE,
-        );
+        let method_id = method_id::TRANSFORM;
 
         // Allocate stream IDs (odd = initiator)
         let input_stream_id: u64 = 1;

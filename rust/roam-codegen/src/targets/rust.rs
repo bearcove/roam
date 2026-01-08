@@ -33,18 +33,7 @@ fn extract_result_types(shape: &'static Shape) -> (&'static Shape, Option<&'stat
     (shape, None)
 }
 
-/// Format the return type for caller trait methods.
-/// Returns CallResult<T, E> where E is the user error type (or Never for infallible methods).
-fn format_caller_return_type(return_shape: &'static Shape) -> String {
-    let (ok_ty, err_ty) = extract_result_types(return_shape);
-    let ok_type_str = rust_type_client_return(ok_ty);
-    let err_type_str = err_ty
-        .map(rust_type_base)
-        .unwrap_or_else(|| "Never".to_string());
-    format!("CallResult<{ok_type_str}, {err_type_str}>")
-}
-
-/// Format the return type for handler trait methods.
+/// Format the return type for service trait methods.
 /// Returns Result<T, RoamError<E>> where E is the user error type (or Never for infallible methods).
 fn format_handler_return_type(return_shape: &'static Shape) -> String {
     let (ok_ty, err_ty) = extract_result_types(return_shape);
@@ -244,11 +233,8 @@ impl<'a> RustGenerator<'a> {
         // Generate method IDs
         self.generate_method_ids();
 
-        // Generate caller trait (for making calls)
-        self.generate_caller_trait();
-
-        // Generate handler trait and dispatcher (for handling calls)
-        self.generate_handler_trait();
+        // Generate service trait and dispatcher
+        self.generate_service_trait();
         self.generate_dispatcher();
 
         // Close module
@@ -274,10 +260,12 @@ impl<'a> RustGenerator<'a> {
         self.scope.raw("    }");
     }
 
-    fn generate_caller_trait(&mut self) {
-        let trait_name = format!("{}Caller", self.service.name.to_upper_camel_case());
+    fn generate_service_trait(&mut self) {
+        // Just use the service name as the trait name
+        let trait_name = self.service.name.to_upper_camel_case();
         let trait_def = self.scope.new_trait(&trait_name);
         trait_def.vis("pub");
+        trait_def.bound("Self", "Send + Sync");
 
         if let Some(doc) = &self.service.doc {
             trait_def.doc(doc);
@@ -285,86 +273,15 @@ impl<'a> RustGenerator<'a> {
 
         for method in &self.service.methods {
             let method_name = method.method_name.to_snake_case();
-            let _is_streaming =
-                method.args.iter().any(|a| is_stream(a.ty)) || is_stream(method.return_type);
 
-            // Build argument list - client perspective uses types as-is
-            let args: Vec<String> = method
-                .args
-                .iter()
-                .map(|arg| {
-                    let arg_name = arg.name.to_snake_case();
-                    let arg_type = rust_type_client_arg(arg.ty);
-                    format!("{arg_name}: {arg_type}")
-                })
-                .collect();
-
-            let _args_str = if args.is_empty() {
-                "&self".to_string()
-            } else {
-                format!("&self, {}", args.join(", "))
-            };
-
-            // Return type - client perspective uses types as-is
-            // CallResult<T, E> wraps the response in RoamError handling
-            let full_return = format_caller_return_type(method.return_type);
-
-            let fn_def = trait_def.new_fn(&method_name);
-            fn_def.arg_ref_self();
-            for arg in &method.args {
-                let arg_name = arg.name.to_snake_case();
-                let arg_type = rust_type_client_arg(arg.ty);
-                fn_def.arg(&arg_name, &arg_type);
-            }
-            fn_def.ret(format!("impl std::future::Future<Output = {full_return}>"));
-
-            if let Some(doc) = &method.doc {
-                fn_def.doc(doc.as_ref());
-            }
-        }
-    }
-
-    fn generate_handler_trait(&mut self) {
-        let trait_name = format!("{}Handler", self.service.name.to_upper_camel_case());
-        let trait_def = self.scope.new_trait(&trait_name);
-        trait_def.vis("pub");
-        trait_def.bound("Self", "Send + Sync");
-
-        // Add service doc with "Handler for:" prefix
-        if let Some(doc) = &self.service.doc {
-            trait_def.doc(&format!("Handler for: {doc}"));
-        }
-
-        for method in &self.service.methods {
-            let method_name = method.method_name.to_snake_case();
-            let _is_streaming =
-                method.args.iter().any(|a| is_stream(a.ty)) || is_stream(method.return_type);
-
-            // Build argument list - server perspective INVERTS Tx/Rx
-            let args: Vec<String> = method
-                .args
-                .iter()
-                .map(|arg| {
-                    let arg_name = arg.name.to_snake_case();
-                    let arg_type = rust_type_server_arg(arg.ty);
-                    format!("{arg_name}: {arg_type}")
-                })
-                .collect();
-
-            let _args_str = if args.is_empty() {
-                "&self".to_string()
-            } else {
-                format!("&self, {}", args.join(", "))
-            };
-
-            // Return type - server perspective INVERTS Tx/Rx
-            // Handler returns Result<T, RoamError<E>> where E is the user error type
+            // Return type
             let full_return = format_handler_return_type(method.return_type);
 
             let fn_def = trait_def.new_fn(&method_name);
             fn_def.arg_ref_self();
             for arg in &method.args {
                 let arg_name = arg.name.to_snake_case();
+                // No inversion - types are used as-is
                 let arg_type = rust_type_server_arg(arg.ty);
                 fn_def.arg(&arg_name, &arg_type);
             }
@@ -381,7 +298,8 @@ impl<'a> RustGenerator<'a> {
     fn generate_dispatcher(&mut self) {
         let service_name = self.service.name.to_upper_camel_case();
         let dispatcher_name = format!("{service_name}Dispatcher");
-        let handler_trait = format!("{service_name}Handler");
+        // The trait is just named after the service (e.g., "Testbed" not "TestbedHandler")
+        let service_trait = service_name.clone();
 
         // Generate the dispatcher struct
         self.scope.raw(format!(
@@ -393,7 +311,7 @@ impl<'a> RustGenerator<'a> {
         impl_block.generic("H");
         impl_block
             .target_generic("H")
-            .bound("H", format!("{handler_trait} + 'static"));
+            .bound("H", format!("{service_trait} + 'static"));
 
         // Constructor
         let new_fn = impl_block.new_fn("new");
@@ -451,10 +369,10 @@ impl<'a> RustGenerator<'a> {
         }
 
         // Generate ServiceDispatcher trait implementation
-        self.generate_service_dispatcher_impl(&dispatcher_name, &handler_trait);
+        self.generate_service_dispatcher_impl(&dispatcher_name, &service_trait);
     }
 
-    fn generate_service_dispatcher_impl(&mut self, dispatcher_name: &str, handler_trait: &str) {
+    fn generate_service_dispatcher_impl(&mut self, dispatcher_name: &str, service_trait: &str) {
         // Check if any method is streaming - if so, we need Clone bound
         let has_streaming = self
             .service
@@ -506,7 +424,7 @@ impl<'a> RustGenerator<'a> {
             r#"
     impl<H> ::roam::session::ServiceDispatcher for {dispatcher_name}<H>
     where
-        H: {handler_trait} + 'static{clone_bound},
+        H: {service_trait} + 'static{clone_bound},
     {{
         fn is_streaming(&self, method_id: u64) -> bool {{
             match method_id {{
@@ -765,28 +683,7 @@ fn is_stream(shape: &'static Shape) -> bool {
     is_tx(shape) || is_rx(shape)
 }
 
-/// Convert Shape to Rust type string for client arguments.
-/// Schema types are from CALLER's perspective (per spec r[streaming.caller-pov]).
-/// Caller uses types as-is: Tx = caller sends, Rx = caller receives.
-fn rust_type_client_arg(shape: &'static Shape) -> String {
-    match classify_shape(shape) {
-        ShapeKind::Tx { inner } => format!("Tx<{}>", rust_type_base(inner)),
-        ShapeKind::Rx { inner } => format!("Rx<{}>", rust_type_base(inner)),
-        _ => rust_type_base(shape),
-    }
-}
-
-/// Convert Shape to Rust type string for client returns.
-/// Schema types are from CALLER's perspective - no transformation needed.
-fn rust_type_client_return(shape: &'static Shape) -> String {
-    match classify_shape(shape) {
-        ShapeKind::Tx { inner } => format!("Tx<{}>", rust_type_base(inner)),
-        ShapeKind::Rx { inner } => format!("Rx<{}>", rust_type_base(inner)),
-        _ => rust_type_base(shape),
-    }
-}
-
-/// Convert Shape to Rust type string for server/handler arguments.
+/// Convert Shape to Rust type string for service trait arguments.
 /// No inversion needed - Tx/Rx describe what the holder does:
 /// - Tx<T>: holder sends data
 /// - Rx<T>: holder receives data
@@ -798,7 +695,7 @@ fn rust_type_server_arg(shape: &'static Shape) -> String {
     }
 }
 
-/// Convert Shape to Rust type string for server/handler returns.
+/// Convert Shape to Rust type string for service trait returns.
 /// No inversion needed - same as args.
 fn rust_type_server_return(shape: &'static Shape) -> String {
     match classify_shape(shape) {
@@ -1254,8 +1151,8 @@ mod tests {
         let service = sample_service();
         let code = generate_service(&service);
 
-        assert!(code.contains("pub trait CalculatorCaller"));
-        assert!(code.contains("pub trait CalculatorHandler"));
+        // Service trait is named after the service (not CallerCaller/Handler)
+        assert!(code.contains("pub trait Calculator"));
         assert!(code.contains("CalculatorDispatcher"));
         assert!(code.contains("fn add("));
         assert!(code.contains("pub mod method_id"));
@@ -1280,9 +1177,5 @@ mod tests {
 
         // Verify doc comments are present (exact format depends on codegen library)
         assert!(code.contains("First line"), "Service doc should be present");
-        assert!(
-            code.contains("Handler for:"),
-            "Handler doc should have prefix"
-        );
     }
 }
