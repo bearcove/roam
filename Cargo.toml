@@ -69,9 +69,5 @@ static_assertions = "1.1.0"
 # Test utilities
 ctor = "0.4"
 
-[workspace.metadata.cargo-shear]
-# `roam` is used by generated code via include!() macro - cargo-shear can't see it
-ignored = ["roam"]
-
 [profile.release]
 debug = 1

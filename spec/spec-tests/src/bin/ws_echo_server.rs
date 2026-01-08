@@ -1,23 +1,29 @@
 //! WebSocket server for browser testing.
 //!
-//! Serves Echo and Complex services over WebSocket for cross-language testing.
+//! Serves Testbed, Complex, and Streaming services over WebSocket for cross-language testing.
 
 use roam::session::{Rx, Tx};
 use roam_stream::{Hello, RoutedDispatcher};
 use roam_websocket::{WsTransport, ws_accept};
 use spec_proto::{Canvas, Color, Message, Person, Point, Rectangle, Shape};
 use spec_tests::complex::{ComplexHandler, Never as ComplexNever, RoamError as ComplexRoamError};
-use spec_tests::echo::{EchoHandler, Never as EchoNever, RoamError as EchoRoamError};
 use spec_tests::streaming::{
     Never as StreamingNever, RoamError as StreamingRoamError, StreamingHandler,
 };
-use spec_tests::{complex, echo, streaming};
+use spec_tests::testbed::{Never as TestbedNever, RoamError as TestbedRoamError, TestbedHandler};
+use spec_tests::{complex, streaming, testbed};
 use std::env;
 use tokio::net::TcpListener;
 use tokio_tungstenite::accept_async;
 
-// Echo method IDs (from generated code)
-const ECHO_METHODS: &[u64] = &[echo::method_id::ECHO, echo::method_id::REVERSE];
+// Testbed method IDs (from generated code)
+const TESTBED_METHODS: &[u64] = &[
+    testbed::method_id::ECHO,
+    testbed::method_id::REVERSE,
+    testbed::method_id::SUM,
+    testbed::method_id::GENERATE,
+    testbed::method_id::TRANSFORM,
+];
 
 // Streaming method IDs (all streaming methods are handled by StreamingDispatcher)
 const STREAMING_METHODS: &[u64] = &[
@@ -27,17 +33,47 @@ const STREAMING_METHODS: &[u64] = &[
     streaming::method_id::STATS,
 ];
 
-// Service implementation using generated EchoHandler trait
+// Service implementation using generated TestbedHandler trait
 #[derive(Clone)]
-struct EchoService;
+struct TestbedService;
 
-impl EchoHandler for EchoService {
-    async fn echo(&self, message: String) -> Result<String, EchoRoamError<EchoNever>> {
+impl TestbedHandler for TestbedService {
+    async fn echo(&self, message: String) -> Result<String, TestbedRoamError<TestbedNever>> {
         Ok(message)
     }
 
-    async fn reverse(&self, message: String) -> Result<String, EchoRoamError<EchoNever>> {
+    async fn reverse(&self, message: String) -> Result<String, TestbedRoamError<TestbedNever>> {
         Ok(message.chars().rev().collect())
+    }
+
+    async fn sum(&self, mut numbers: Rx<i32>) -> Result<i64, TestbedRoamError<TestbedNever>> {
+        let mut total: i64 = 0;
+        while let Some(n) = numbers.recv().await.ok().flatten() {
+            total += n as i64;
+        }
+        Ok(total)
+    }
+
+    async fn generate(
+        &self,
+        count: u32,
+        output: Tx<i32>,
+    ) -> Result<(), TestbedRoamError<TestbedNever>> {
+        for i in 0..count as i32 {
+            let _ = output.send(&i).await;
+        }
+        Ok(())
+    }
+
+    async fn transform(
+        &self,
+        mut input: Rx<String>,
+        output: Tx<String>,
+    ) -> Result<(), TestbedRoamError<TestbedNever>> {
+        while let Some(s) = input.recv().await.ok().flatten() {
+            let _ = output.send(&s).await;
+        }
+        Ok(())
     }
 }
 
@@ -217,17 +253,17 @@ async fn main() {
         let hello = hello.clone();
 
         tokio::spawn(async move {
-            // Combine Echo, Complex, and Streaming dispatchers using nested RoutedDispatcher
-            let echo_dispatcher = echo::EchoDispatcher::new(EchoService);
+            // Combine Testbed, Complex, and Streaming dispatchers using nested RoutedDispatcher
+            let testbed_dispatcher = testbed::TestbedDispatcher::new(TestbedService);
             let complex_dispatcher = complex::ComplexDispatcher::new(ComplexService);
             let streaming_dispatcher = streaming::StreamingDispatcher::new(StreamingService);
 
-            // First combine Echo and Complex
-            let echo_complex =
-                RoutedDispatcher::new(echo_dispatcher, complex_dispatcher, ECHO_METHODS);
+            // First combine Testbed and Complex
+            let testbed_complex =
+                RoutedDispatcher::new(testbed_dispatcher, complex_dispatcher, TESTBED_METHODS);
             // Then add Streaming
             let dispatcher =
-                RoutedDispatcher::new(streaming_dispatcher, echo_complex, STREAMING_METHODS);
+                RoutedDispatcher::new(streaming_dispatcher, testbed_complex, STREAMING_METHODS);
 
             match ws_accept(transport, hello).await {
                 Ok(mut conn) => {

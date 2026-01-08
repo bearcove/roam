@@ -272,12 +272,7 @@ fn generate_caller_interface(service: &ServiceDetail) -> String {
 
         let ret_type = go_type_client_return(method.return_type);
 
-        if has_streaming {
-            out.push_str(&format!(
-                "\t{method_name}(ctx context.Context, {}) error\n",
-                args.join(", ")
-            ));
-        } else if ret_type == "()" {
+        if has_streaming || ret_type == "()" {
             out.push_str(&format!(
                 "\t{method_name}(ctx context.Context, {}) error\n",
                 args.join(", ")
@@ -327,12 +322,7 @@ fn generate_handler_interface(service: &ServiceDetail) -> String {
 
         let ret_type = go_type_server_return(method.return_type);
 
-        if has_streaming {
-            out.push_str(&format!(
-                "\t{method_name}(ctx context.Context, {}) error\n",
-                args.join(", ")
-            ));
-        } else if ret_type == "()" {
+        if has_streaming || ret_type == "()" {
             out.push_str(&format!(
                 "\t{method_name}(ctx context.Context, {}) error\n",
                 args.join(", ")
@@ -466,9 +456,7 @@ fn generate_dispatcher_impl(service: &ServiceDetail) -> String {
     out.push_str("}\n\n");
 
     // Dispatch method
-    out.push_str(&format!(
-        "// Dispatch routes a method call to the appropriate handler method\n"
-    ));
+    out.push_str("// Dispatch routes a method call to the appropriate handler method\n");
     out.push_str(&format!(
         "func (d *{dispatcher_name}) Dispatch(ctx context.Context, methodID uint64, payload []byte) ([]byte, error) {{\n"
     ));
@@ -714,7 +702,7 @@ fn go_type_client_return(shape: &'static Shape) -> String {
         ShapeKind::Tx { inner } => format!("chan<- {}", go_type_base(inner)),
         ShapeKind::Rx { inner } => format!("<-chan {}", go_type_base(inner)),
         ShapeKind::Scalar(ScalarType::Unit) => "()".into(),
-        ShapeKind::Tuple { elements } if elements.is_empty() => "()".into(),
+        ShapeKind::Tuple { elements: [] } => "()".into(),
         _ => go_type_base(shape),
     }
 }
@@ -740,7 +728,7 @@ fn go_type_server_return(shape: &'static Shape) -> String {
         ShapeKind::Tx { inner } => format!("<-chan {}", go_type_base(inner)),
         ShapeKind::Rx { inner } => format!("chan<- {}", go_type_base(inner)),
         ShapeKind::Scalar(ScalarType::Unit) => "()".into(),
-        ShapeKind::Tuple { elements } if elements.is_empty() => "()".into(),
+        ShapeKind::Tuple { elements: [] } => "()".into(),
         _ => go_type_base(shape),
     }
 }
@@ -837,9 +825,7 @@ fn generate_decode_stmt(shape: &'static Shape, var_name: &str, offset_var: &str)
                 "\t{var_name}, err = readString(payload, &{offset_var})\n\tif err != nil {{ return nil, err }}\n"
             )
         }
-        ShapeKind::Scalar(ScalarType::Unit) => {
-            format!("\t// Unit type - no decoding needed\n")
-        }
+        ShapeKind::Scalar(ScalarType::Unit) => "\t// Unit type - no decoding needed\n".to_string(),
         ShapeKind::List { .. } if is_bytes(shape) => {
             format!(
                 "\t{var_name}, err = readBytes(payload, &{offset_var})\n\tif err != nil {{ return nil, err }}\n"

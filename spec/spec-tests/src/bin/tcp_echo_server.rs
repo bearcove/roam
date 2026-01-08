@@ -1,14 +1,14 @@
-//! TCP Echo server for cross-language testing.
+//! TCP server for cross-language testing.
 //!
-//! Listens on a TCP port and handles Echo service requests.
+//! Listens on a TCP port and handles Testbed and Complex service requests.
 //! Used to test clients in other languages against a Rust server.
 
 use cobs::{decode_vec as cobs_decode_vec, encode_vec as cobs_encode_vec};
 use roam::facet::Facet;
 use roam_wire::{Hello, Message};
 use spec_tests::complex::{ComplexHandler, Never as ComplexNever, RoamError as ComplexRoamError};
-use spec_tests::echo::{EchoHandler, Never as EchoNever, RoamError as EchoRoamError};
-use spec_tests::{complex, echo};
+use spec_tests::testbed::{Never as TestbedNever, RoamError as TestbedRoamError, TestbedHandler};
+use spec_tests::{complex, testbed};
 use std::env;
 use std::io::ErrorKind;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -16,22 +16,46 @@ use tokio::net::{TcpListener, TcpStream};
 
 // Service implementation
 #[derive(Clone)]
-struct EchoService;
+struct TestbedService;
 
-impl echo::EchoHandler for EchoService {
-    async fn echo(&self, message: String) -> Result<String, EchoRoamError<EchoNever>> {
+impl TestbedHandler for TestbedService {
+    async fn echo(&self, message: String) -> Result<String, TestbedRoamError<TestbedNever>> {
         Ok(message)
     }
 
-    async fn reverse(&self, message: String) -> Result<String, EchoRoamError<EchoNever>> {
+    async fn reverse(&self, message: String) -> Result<String, TestbedRoamError<TestbedNever>> {
         Ok(message.chars().rev().collect())
+    }
+
+    // Streaming methods - not yet supported in TCP server (unary only)
+    async fn sum(
+        &self,
+        _numbers: roam::session::Rx<i32>,
+    ) -> Result<i64, TestbedRoamError<TestbedNever>> {
+        Ok(0)
+    }
+
+    async fn generate(
+        &self,
+        _count: u32,
+        _output: roam::session::Tx<i32>,
+    ) -> Result<(), TestbedRoamError<TestbedNever>> {
+        Ok(())
+    }
+
+    async fn transform(
+        &self,
+        _input: roam::session::Rx<String>,
+        _output: roam::session::Tx<String>,
+    ) -> Result<(), TestbedRoamError<TestbedNever>> {
+        Ok(())
     }
 }
 
 #[derive(Clone)]
 struct ComplexService;
 
-impl complex::ComplexHandler for ComplexService {
+impl ComplexHandler for ComplexService {
     async fn echo_point(
         &self,
         point: spec_proto::Point,
@@ -232,7 +256,7 @@ fn encode_ok<T: Facet<'static>>(value: &T) -> Result<Vec<u8>, Box<dyn std::error
     Ok(result)
 }
 
-/// Encode Result::Err(RoamError) for RoamError<Never>
+/// Encode `Result::Err(RoamError)` for `RoamError<Never>`
 /// Since Never is uninhabited, only protocol errors are possible
 fn encode_roam_error<E>(err: &roam::session::RoamError<E>) -> Vec<u8> {
     match err {
@@ -261,18 +285,18 @@ async fn dispatch_method(
     method_id: u64,
     payload: &[u8],
 ) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
-    let service = EchoService;
+    let service = TestbedService;
     let complex_service = ComplexService;
 
-    // Echo methods
-    if method_id == echo::method_id::ECHO {
+    // Testbed methods (unary only)
+    if method_id == testbed::method_id::ECHO {
         let args: (String,) = facet_postcard::from_slice(payload)?;
         return match service.echo(args.0).await {
             Ok(v) => encode_ok(&v),
             Err(e) => Ok(encode_roam_error(&e)),
         };
     }
-    if method_id == echo::method_id::REVERSE {
+    if method_id == testbed::method_id::REVERSE {
         let args: (String,) = facet_postcard::from_slice(payload)?;
         return match service.reverse(args.0).await {
             Ok(v) => encode_ok(&v),
@@ -341,7 +365,7 @@ async fn main() {
     let addr = format!("127.0.0.1:{}", port);
 
     let listener = TcpListener::bind(&addr).await.unwrap();
-    eprintln!("TCP Echo server listening on {}", addr);
+    eprintln!("TCP server listening on {}", addr);
 
     // Print port on stdout for test harness
     println!("{}", port);

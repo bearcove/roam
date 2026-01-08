@@ -1412,7 +1412,6 @@ dependencies = [
  "datatest-stable",
  "insta",
  "proc-macro2",
- "quote",
  "unsynn",
 ]
 

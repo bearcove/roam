@@ -462,11 +462,11 @@ fn generate_client_impl(service: &ServiceDetail) -> String {
             .join(", ");
 
         // Return type
-        let ret_ty = ts_type_client_return(&method.return_type);
+        let ret_ty = ts_type_client_return(method.return_type);
 
         // Check if we can generate encoding/decoding for this method
         let can_encode_args = method.args.iter().all(|a| is_fully_supported(a.ty));
-        let can_decode_return = is_fully_supported(&method.return_type);
+        let can_decode_return = is_fully_supported(method.return_type);
 
         if let Some(doc) = &method.doc {
             out.push_str(&format!("  /** {} */\n", doc));
@@ -509,7 +509,7 @@ fn generate_client_impl(service: &ServiceDetail) -> String {
             out.push_str("    const buf = response;\n");
             out.push_str("    let offset = decodeRpcResult(buf, 0);\n");
             // For client returns, use client-aware decode (inverts streaming types)
-            let decode_stmt = generate_decode_stmt_client(&method.return_type, "result", "offset");
+            let decode_stmt = generate_decode_stmt_client(method.return_type, "result", "offset");
             out.push_str(&format!("    {decode_stmt}\n"));
             out.push_str("    return result;\n");
         } else {
@@ -552,7 +552,7 @@ fn generate_handler_interface(service: &ServiceDetail) -> String {
             .collect::<Vec<_>>()
             .join(", ");
         // Handler returns
-        let ret_ty = ts_type_server_return(&method.return_type);
+        let ret_ty = ts_type_server_return(method.return_type);
 
         out.push_str(&format!(
             "  {method_name}({args}): Promise<{ret_ty}> | {ret_ty};\n"
@@ -577,7 +577,7 @@ fn generate_handler_interface(service: &ServiceDetail) -> String {
 
         // Check if we can fully implement this method
         let can_decode_args = method.args.iter().all(|a| is_fully_supported(a.ty));
-        let can_encode_return = is_fully_supported(&method.return_type);
+        let can_encode_return = is_fully_supported(method.return_type);
 
         if can_decode_args && can_encode_return {
             // Decode all arguments (using server context for proper Tx/Rx inversion)
@@ -606,7 +606,7 @@ fn generate_handler_interface(service: &ServiceDetail) -> String {
             ));
 
             // Encode response
-            let encode_expr = generate_encode_expr(&method.return_type, "result");
+            let encode_expr = generate_encode_expr(method.return_type, "result");
             out.push_str(&format!("      return encodeResultOk({encode_expr});\n"));
         } else {
             // Streaming or unsupported - return error
@@ -786,9 +786,9 @@ fn generate_encode_expr(shape: &'static Shape, expr: &str) -> String {
         }
         ShapeKind::Pointer { pointee } => generate_encode_expr(pointee, expr),
         ShapeKind::Result { .. } => {
-            format!("/* Result type encoding not yet implemented */ new Uint8Array(0)")
+            "/* Result type encoding not yet implemented */ new Uint8Array(0)".to_string()
         }
-        ShapeKind::Opaque => format!("/* unsupported type */ new Uint8Array(0)"),
+        ShapeKind::Opaque => "/* unsupported type */ new Uint8Array(0)".to_string(),
     }
 }
 
@@ -812,7 +812,7 @@ fn encode_scalar_expr(scalar: ScalarType, expr: &str) -> String {
             format!("encodeString({expr})")
         }
         ScalarType::Unit => "new Uint8Array(0)".into(),
-        _ => format!("/* unsupported scalar */ new Uint8Array(0)"),
+        _ => "/* unsupported scalar */ new Uint8Array(0)".to_string(),
     }
 }
 
@@ -1126,7 +1126,7 @@ fn generate_decode_fn(shape: &'static Shape, _var_hint: &str) -> String {
             let c_fn = generate_decode_fn(elements[2].shape, "c");
             format!("(buf, off) => decodeTuple3(buf, off, {a_fn}, {b_fn}, {c_fn})")
         }
-        ShapeKind::Tuple { elements } if elements.is_empty() => {
+        ShapeKind::Tuple { elements: [] } => {
             "(buf, off) => ({ value: undefined, next: off })".into()
         }
         ShapeKind::Struct(StructInfo { fields, kind, .. }) => {

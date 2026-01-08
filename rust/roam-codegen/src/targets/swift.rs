@@ -177,7 +177,7 @@ fn generate_named_types(named_types: &[(String, &'static Shape)]) -> String {
                     let field_type = swift_type_base(field.shape());
                     out.push_str(&format!("    public var {field_name}: {field_type}\n"));
                 }
-                out.push_str("\n");
+                out.push('\n');
                 // Generate init
                 if !fields.is_empty() {
                     let params: Vec<String> = fields
@@ -285,12 +285,7 @@ fn generate_caller_protocol(service: &ServiceDetail) -> String {
         let has_streaming =
             method.args.iter().any(|a| is_stream(a.ty)) || is_stream(method.return_type);
 
-        if has_streaming {
-            out.push_str(&format!(
-                "    func {method_name}({}) async throws\n",
-                args.join(", ")
-            ));
-        } else if ret_type == "Void" {
+        if has_streaming || ret_type == "Void" {
             out.push_str(&format!(
                 "    func {method_name}({}) async throws\n",
                 args.join(", ")
@@ -341,12 +336,7 @@ fn generate_handler_protocol(service: &ServiceDetail) -> String {
         let has_streaming =
             method.args.iter().any(|a| is_stream(a.ty)) || is_stream(method.return_type);
 
-        if has_streaming {
-            out.push_str(&format!(
-                "    func {method_name}({}) async throws\n",
-                args.join(", ")
-            ));
-        } else if ret_type == "Void" {
+        if has_streaming || ret_type == "Void" {
             out.push_str(&format!(
                 "    func {method_name}({}) async throws\n",
                 args.join(", ")
@@ -685,18 +675,17 @@ fn swift_type_base(shape: &'static Shape) -> String {
                 let ok_variant = variants.iter().find(|v| v.name == "Ok");
                 let err_variant = variants.iter().find(|v| v.name == "Err");
 
-                if let (Some(ok_v), Some(err_v)) = (ok_variant, err_variant) {
-                    if let (
+                if let (Some(ok_v), Some(err_v)) = (ok_variant, err_variant)
+                    && let (
                         VariantKind::Newtype { inner: ok_ty },
                         VariantKind::Newtype { inner: err_ty },
                     ) = (classify_variant(ok_v), classify_variant(err_v))
-                    {
-                        return format!(
-                            "Result<{}, {}>",
-                            swift_type_base(ok_ty),
-                            swift_type_base(err_ty)
-                        );
-                    }
+                {
+                    return format!(
+                        "Result<{}, {}>",
+                        swift_type_base(ok_ty),
+                        swift_type_base(err_ty)
+                    );
                 }
             }
             // Anonymous enum - fallback to Any
@@ -728,7 +717,7 @@ fn swift_type_client_return(shape: &'static Shape) -> String {
         ShapeKind::Tx { inner } => format!("Tx<{}>", swift_type_base(inner)),
         ShapeKind::Rx { inner } => format!("Rx<{}>", swift_type_base(inner)),
         ShapeKind::Scalar(ScalarType::Unit) => "Void".into(),
-        ShapeKind::Tuple { elements } if elements.is_empty() => "Void".into(),
+        ShapeKind::Tuple { elements: [] } => "Void".into(),
         _ => swift_type_base(shape),
     }
 }
@@ -754,7 +743,7 @@ fn swift_type_server_return(shape: &'static Shape) -> String {
         ShapeKind::Tx { inner } => format!("Rx<{}>", swift_type_base(inner)),
         ShapeKind::Rx { inner } => format!("Tx<{}>", swift_type_base(inner)),
         ShapeKind::Scalar(ScalarType::Unit) => "Void".into(),
-        ShapeKind::Tuple { elements } if elements.is_empty() => "Void".into(),
+        ShapeKind::Tuple { elements: [] } => "Void".into(),
         _ => swift_type_base(shape),
     }
 }

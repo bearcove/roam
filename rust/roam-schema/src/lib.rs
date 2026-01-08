@@ -393,7 +393,7 @@ pub fn classify_variant(variant: &facet_core::Variant) -> VariantKind<'_> {
     }
 }
 
-/// Check if a shape represents bytes (Vec<u8> or &[u8]).
+/// Check if a shape represents bytes (`Vec<u8>` or `&[u8]`).
 pub fn is_bytes(shape: &Shape) -> bool {
     match shape.def {
         Def::List(list_def) => matches!(list_def.t().scalar_type(), Some(ScalarType::U8)),

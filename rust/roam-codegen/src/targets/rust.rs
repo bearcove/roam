@@ -18,20 +18,16 @@ fn extract_result_types(shape: &'static Shape) -> (&'static Shape, Option<&'stat
         name: None,
         variants,
     }) = classify_shape(shape)
+        && variants.len() == 2
     {
-        if variants.len() == 2 {
-            let ok_variant = variants.iter().find(|v| v.name == "Ok");
-            let err_variant = variants.iter().find(|v| v.name == "Err");
+        let ok_variant = variants.iter().find(|v| v.name == "Ok");
+        let err_variant = variants.iter().find(|v| v.name == "Err");
 
-            if let (Some(ok_v), Some(err_v)) = (ok_variant, err_variant) {
-                if let (
-                    VariantKind::Newtype { inner: ok_ty },
-                    VariantKind::Newtype { inner: err_ty },
-                ) = (classify_variant(ok_v), classify_variant(err_v))
-                {
-                    return (ok_ty, Some(err_ty));
-                }
-            }
+        if let (Some(ok_v), Some(err_v)) = (ok_variant, err_variant)
+            && let (VariantKind::Newtype { inner: ok_ty }, VariantKind::Newtype { inner: err_ty }) =
+                (classify_variant(ok_v), classify_variant(err_v))
+        {
+            return (ok_ty, Some(err_ty));
         }
     }
     (shape, None)
@@ -43,7 +39,7 @@ fn format_caller_return_type(return_shape: &'static Shape) -> String {
     let (ok_ty, err_ty) = extract_result_types(return_shape);
     let ok_type_str = rust_type_client_return(ok_ty);
     let err_type_str = err_ty
-        .map(|e| rust_type_base(e))
+        .map(rust_type_base)
         .unwrap_or_else(|| "Never".to_string());
     format!("CallResult<{ok_type_str}, {err_type_str}>")
 }
@@ -54,7 +50,7 @@ fn format_handler_return_type(return_shape: &'static Shape) -> String {
     let (ok_ty, err_ty) = extract_result_types(return_shape);
     let ok_type_str = rust_type_server_return(ok_ty);
     let err_type_str = err_ty
-        .map(|e| rust_type_base(e))
+        .map(rust_type_base)
         .unwrap_or_else(|| "Never".to_string());
     format!("Result<{ok_type_str}, RoamError<{err_type_str}>>")
 }
@@ -336,8 +332,12 @@ impl<'a> RustGenerator<'a> {
                 ));
             }
         }
-        dispatch_unary_arms
-            .push("                _ => Err(\"unknown method\".to_string()),".to_string());
+        // Unknown method returns encoded Result::Err(RoamError::UnknownMethod)
+        // RoamError::UnknownMethod = 1, so payload is [1, 1] (Result::Err variant, UnknownMethod variant)
+        dispatch_unary_arms.push(
+            "                _ => Ok(vec![1, 1]), // Result::Err(RoamError::UnknownMethod)"
+                .to_string(),
+        );
         let dispatch_unary_match = dispatch_unary_arms.join("\n");
 
         // Generate the impl block as raw code (codegen crate doesn't support impl Trait for Type<G> well)
@@ -431,8 +431,12 @@ fn generate_dispatch_unary(
         let tuple_pattern = arg_names.join(", ");
         let tuple_type = arg_types.join(", ");
         dispatch_fn.line(format!(
-            "let ({tuple_pattern}) = facet_postcard::from_slice::<({tuple_type})>(payload).expect(\"decode args\");"
+            "let ({tuple_pattern}) = match facet_postcard::from_slice::<({tuple_type})>(payload) {{"
         ));
+        dispatch_fn.line("    Ok(args) => args,");
+        dispatch_fn
+            .line("    Err(_) => return vec![1, 2], // Result::Err, RoamError::InvalidPayload");
+        dispatch_fn.line("};");
     }
 
     // Call handler
@@ -629,18 +633,17 @@ fn rust_type_base(shape: &'static Shape) -> String {
                 let ok_variant = variants.iter().find(|v| v.name == "Ok");
                 let err_variant = variants.iter().find(|v| v.name == "Err");
 
-                if let (Some(ok_v), Some(err_v)) = (ok_variant, err_variant) {
-                    if let (
+                if let (Some(ok_v), Some(err_v)) = (ok_variant, err_variant)
+                    && let (
                         VariantKind::Newtype { inner: ok_ty },
                         VariantKind::Newtype { inner: err_ty },
                     ) = (classify_variant(ok_v), classify_variant(err_v))
-                    {
-                        return format!(
-                            "::std::result::Result<{}, {}>",
-                            rust_type_base(ok_ty),
-                            rust_type_base(err_ty)
-                        );
-                    }
+                {
+                    return format!(
+                        "::std::result::Result<{}, {}>",
+                        rust_type_base(ok_ty),
+                        rust_type_base(err_ty)
+                    );
                 }
             }
             // Other anonymous enum - represent structure (shouldn't happen in practice)
@@ -848,6 +851,7 @@ mod tests {
 
         #[derive(Facet)]
         #[repr(u8)]
+        #[allow(dead_code)]
         enum MyEnum {
             A,
             B(i32),

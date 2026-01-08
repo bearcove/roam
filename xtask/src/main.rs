@@ -235,10 +235,10 @@ fn codegen_swift(workspace_root: &std::path::Path) -> Result<(), Box<dyn std::er
     let out_dir = workspace_root.join("swift").join("generated");
     std::fs::create_dir_all(&out_dir)?;
 
-    let echo = spec_proto::echo_service_detail();
-    let swift = roam_codegen::targets::swift::generate_service(&echo);
+    let testbed = spec_proto::testbed_service_detail();
+    let swift = roam_codegen::targets::swift::generate_service(&testbed);
 
-    let out_path = out_dir.join("Echo.swift");
+    let out_path = out_dir.join("Testbed.swift");
     std::fs::write(&out_path, swift)?;
     println!("Wrote {}", out_path.display());
 
@@ -249,10 +249,10 @@ fn codegen_go(workspace_root: &std::path::Path) -> Result<(), Box<dyn std::error
     let out_dir = workspace_root.join("go").join("generated");
     std::fs::create_dir_all(&out_dir)?;
 
-    let echo = spec_proto::echo_service_detail();
-    let go = roam_codegen::targets::go::generate_service(&echo);
+    let testbed = spec_proto::testbed_service_detail();
+    let go = roam_codegen::targets::go::generate_service(&testbed);
 
-    let out_path = out_dir.join("echo.go");
+    let out_path = out_dir.join("testbed.go");
     std::fs::write(&out_path, go)?;
     println!("Wrote {}", out_path.display());
 
@@ -263,10 +263,10 @@ fn codegen_java(workspace_root: &std::path::Path) -> Result<(), Box<dyn std::err
     let out_dir = workspace_root.join("java").join("generated");
     std::fs::create_dir_all(&out_dir)?;
 
-    let echo = spec_proto::echo_service_detail();
-    let java = roam_codegen::targets::java::generate_service(&echo);
+    let testbed = spec_proto::testbed_service_detail();
+    let java = roam_codegen::targets::java::generate_service(&testbed);
 
-    let out_path = out_dir.join("Echo.java");
+    let out_path = out_dir.join("Testbed.java");
     std::fs::write(&out_path, java)?;
     println!("Wrote {}", out_path.display());
 
@@ -277,10 +277,10 @@ fn codegen_python(workspace_root: &std::path::Path) -> Result<(), Box<dyn std::e
     let out_dir = workspace_root.join("python").join("generated");
     std::fs::create_dir_all(&out_dir)?;
 
-    let echo = spec_proto::echo_service_detail();
-    let python = roam_codegen::targets::python::generate_service(&echo);
+    let testbed = spec_proto::testbed_service_detail();
+    let python = roam_codegen::targets::python::generate_service(&testbed);
 
-    let out_path = out_dir.join("echo.py");
+    let out_path = out_dir.join("testbed.py");
     std::fs::write(&out_path, python)?;
     println!("Wrote {}", out_path.display());
 

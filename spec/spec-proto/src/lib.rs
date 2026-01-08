@@ -4,14 +4,39 @@ use facet::Facet;
 use roam::service;
 use roam::session::{Rx, Tx};
 
-/// Simple echo service for conformance testing.
+/// Testbed service for conformance testing.
+///
+/// Combines unary and streaming methods for comprehensive testing.
 #[service]
-pub trait Echo {
+pub trait Testbed {
+    // ========================================================================
+    // Unary methods
+    // ========================================================================
+
     /// Echoes the message back.
     async fn echo(&self, message: String) -> String;
 
     /// Returns the message reversed.
     async fn reverse(&self, message: String) -> String;
+
+    // ========================================================================
+    // Streaming methods
+    // ========================================================================
+
+    /// Client pushes numbers, server returns their sum.
+    ///
+    /// Tests: client→server streaming (`Tx<T>` argument, scalar return).
+    async fn sum(&self, numbers: Tx<i32>) -> i64;
+
+    /// Server streams numbers back to client.
+    ///
+    /// Tests: server→client streaming (scalar argument, `Rx<T>` output).
+    async fn generate(&self, count: u32, output: Rx<i32>);
+
+    /// Bidirectional: client sends strings, server echoes each back.
+    ///
+    /// Tests: bidirectional streaming (`Tx<T>` + `Rx<T>`).
+    async fn transform(&self, input: Tx<String>, output: Rx<String>);
 }
 
 // ============================================================================
@@ -141,7 +166,7 @@ pub trait Complex {
 
 pub fn all_services() -> Vec<roam::schema::ServiceDetail> {
     vec![
-        echo_service_detail(),
+        testbed_service_detail(),
         streaming_service_detail(),
         complex_service_detail(),
     ]
