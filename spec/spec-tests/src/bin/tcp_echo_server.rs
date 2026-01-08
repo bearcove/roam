@@ -28,25 +28,25 @@ impl TestbedHandler for TestbedService {
     }
 
     // Streaming methods - not yet supported in TCP server (unary only)
-    async fn sum(
-        &self,
-        _numbers: roam::session::Rx<i32>,
-    ) -> Result<i64, TestbedRoamError<TestbedNever>> {
+    // Schema types match handler signatures directly:
+    // - Rx<T>: server receives from client
+    // - Tx<T>: server sends to client
+    async fn sum(&self, _numbers: roam::Rx<i32>) -> Result<i64, TestbedRoamError<TestbedNever>> {
         Ok(0)
     }
 
     async fn generate(
         &self,
         _count: u32,
-        _output: roam::session::Tx<i32>,
+        _output: roam::Tx<i32>,
     ) -> Result<(), TestbedRoamError<TestbedNever>> {
         Ok(())
     }
 
     async fn transform(
         &self,
-        _input: roam::session::Rx<String>,
-        _output: roam::session::Tx<String>,
+        _input: roam::Rx<String>,
+        _output: roam::Tx<String>,
     ) -> Result<(), TestbedRoamError<TestbedNever>> {
         Ok(())
     }

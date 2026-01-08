@@ -139,35 +139,48 @@ impl<'a> RustGenerator<'a> {
                 arm_body.push_str("                };\n");
             }
 
-            // Register streams and create handles
+            // Create channels for streaming args and register with registry
+            // No inversion: handler signature matches schema exactly
+            // - Rx<T>: server receives from client
+            // - Tx<T>: server sends to client
             for arg in &method.args {
                 let arg_name = arg.name.to_snake_case();
-                if is_tx(arg.ty) {
-                    // Caller's Tx -> Handler's Rx (incoming stream)
+                if is_rx(arg.ty) {
+                    // Rx<T> = server receives from client
+                    // Create channel, register tx for incoming data routing, give handler Rx
                     let inner_type = if let Some(inner) = arg.ty.type_params.first() {
                         rust_type_base(inner.shape)
                     } else {
                         "()".to_string()
                     };
                     arm_body.push_str(&format!(
-                        "                let {arg_name}_rx = registry.register_incoming({arg_name});\n"
+                        "                let ({arg_name}_tx, {arg_name}_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(64);\n"
+                    ));
+                    arm_body.push_str(&format!(
+                        "                registry.register_incoming({arg_name}, {arg_name}_tx);\n"
                     ));
                     arm_body.push_str(&format!(
                         "                let {arg_name} = Rx::<{inner_type}>::new({arg_name}, {arg_name}_rx);\n"
                     ));
-                } else if is_rx(arg.ty) {
-                    // Caller's Rx -> Handler's Tx (outgoing stream)
+                } else if is_tx(arg.ty) {
+                    // Tx<T> = server sends to client
+                    // Create channel, give handler Tx, need to drain rx and send as Data
+                    // TODO: The rx needs to be returned to driver for FuturesUnordered polling
                     let inner_type = if let Some(inner) = arg.ty.type_params.first() {
                         rust_type_base(inner.shape)
                     } else {
                         "()".to_string()
                     };
                     arm_body.push_str(&format!(
-                        "                let {arg_name}_sender = registry.register_outgoing({arg_name});\n"
+                        "                let ({arg_name}_tx, _{arg_name}_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(64);\n"
                     ));
                     arm_body.push_str(&format!(
-                        "                let {arg_name} = Tx::<{inner_type}>::new({arg_name}_sender);\n"
+                        "                registry.register_outgoing_credit({arg_name});\n"
                     ));
+                    arm_body.push_str(&format!(
+                        "                let {arg_name} = Tx::<{inner_type}>::new({arg_name}, {arg_name}_tx);\n"
+                    ));
+                    // TODO: Need to return _{arg_name}_rx to the driver for polling
                 }
             }
 
@@ -659,39 +672,46 @@ fn generate_dispatch_streaming(
         dispatch_fn.line("};");
     }
 
-    // Register streams and create handles
-    // Schema perspective: Tx = caller sends, Rx = caller receives
-    // Handler perspective (inverted): caller's Tx becomes handler's Rx, caller's Rx becomes handler's Tx
+    // Create channels for streaming args and register with registry
+    // No inversion: handler signature matches schema exactly
+    // - Rx<T>: server receives from client
+    // - Tx<T>: server sends to client
     for (i, arg) in method.args.iter().enumerate() {
         let arg_name = arg.name.to_snake_case();
-        if is_tx(arg.ty) {
-            // Caller's Tx (sends to us) -> Handler's Rx (receives from caller)
-            // Register as incoming stream
+        if is_rx(arg.ty) {
+            // Rx<T> = server receives from client
+            // Create channel, register tx for incoming data routing, give handler Rx
             let inner_type = if let Some(inner) = arg.ty.type_params.first() {
                 rust_type_base(inner.shape)
             } else {
                 "()".to_string()
             };
             dispatch_fn.line(format!(
-                "let {arg_name}_rx = registry.register_incoming({arg_name});"
+                "let ({arg_name}_tx, {arg_name}_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(64);"
+            ));
+            dispatch_fn.line(format!(
+                "registry.register_incoming({arg_name}, {arg_name}_tx);"
             ));
             dispatch_fn.line(format!(
                 "let {arg_name} = Rx::<{inner_type}>::new({arg_name}, {arg_name}_rx);"
             ));
-        } else if is_rx(arg.ty) {
-            // Caller's Rx (receives from us) -> Handler's Tx (sends to caller)
-            // Register as outgoing stream
+        } else if is_tx(arg.ty) {
+            // Tx<T> = server sends to client
+            // Create channel, give handler Tx, need to drain rx and send as Data
+            // TODO: The rx needs to be returned to driver for FuturesUnordered polling
             let inner_type = if let Some(inner) = arg.ty.type_params.first() {
                 rust_type_base(inner.shape)
             } else {
                 "()".to_string()
             };
             dispatch_fn.line(format!(
-                "let {arg_name}_sender = registry.register_outgoing({arg_name});"
+                "let ({arg_name}_tx, _{arg_name}_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(64);"
             ));
+            dispatch_fn.line(format!("registry.register_outgoing_credit({arg_name});"));
             dispatch_fn.line(format!(
-                "let {arg_name} = Tx::<{inner_type}>::new({arg_name}_sender);"
+                "let {arg_name} = Tx::<{inner_type}>::new({arg_name}, {arg_name}_tx);"
             ));
+            // TODO: Need to return _{arg_name}_rx to the driver for polling
         }
         // Non-stream args are already decoded with correct types
         let _ = i; // suppress unused warning
@@ -767,23 +787,23 @@ fn rust_type_client_return(shape: &'static Shape) -> String {
 }
 
 /// Convert Shape to Rust type string for server/handler arguments.
-/// Schema types are from caller's perspective, so we INVERT for handler.
-/// Caller's Tx (sends) becomes handler's Rx (receives).
-/// Caller's Rx (receives) becomes handler's Tx (sends).
+/// No inversion needed - Tx/Rx describe what the holder does:
+/// - Tx<T>: holder sends data
+/// - Rx<T>: holder receives data
 fn rust_type_server_arg(shape: &'static Shape) -> String {
     match classify_shape(shape) {
-        ShapeKind::Tx { inner } => format!("Rx<{}>", rust_type_base(inner)),
-        ShapeKind::Rx { inner } => format!("Tx<{}>", rust_type_base(inner)),
+        ShapeKind::Tx { inner } => format!("Tx<{}>", rust_type_base(inner)),
+        ShapeKind::Rx { inner } => format!("Rx<{}>", rust_type_base(inner)),
         _ => rust_type_base(shape),
     }
 }
 
 /// Convert Shape to Rust type string for server/handler returns.
-/// Schema types are from caller's perspective, so we INVERT for handler.
+/// No inversion needed - same as args.
 fn rust_type_server_return(shape: &'static Shape) -> String {
     match classify_shape(shape) {
-        ShapeKind::Tx { inner } => format!("Rx<{}>", rust_type_base(inner)),
-        ShapeKind::Rx { inner } => format!("Tx<{}>", rust_type_base(inner)),
+        ShapeKind::Tx { inner } => format!("Tx<{}>", rust_type_base(inner)),
+        ShapeKind::Rx { inner } => format!("Rx<{}>", rust_type_base(inner)),
         _ => rust_type_base(shape),
     }
 }
