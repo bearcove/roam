@@ -285,48 +285,21 @@ where
                     return Err(self.goodbye(rule_id).await);
                 }
 
-                // Dispatch to service - use streaming dispatch if method has Tx/Rx args
-                if dispatcher.is_streaming(method_id) {
-                    // For streaming methods, we need to continue processing messages
-                    // (Data, Close) while the handler runs. The handler reads from
-                    // Rx<T> which is backed by an mpsc channel that we route to.
-                    //
-                    // dispatch_streaming registers streams synchronously, then returns
-                    // a future. We spawn that future as a task so the message loop
-                    // can continue processing Data messages.
-                    let handler_fut = dispatcher.dispatch_streaming(
-                        method_id,
-                        payload,
-                        &mut self.stream_registry,
-                    );
+                // Dispatch to service
+                // dispatch() registers streams synchronously, then returns a future.
+                // We spawn that future as a task so the message loop can continue
+                // processing Data messages for streaming methods.
+                let handler_fut =
+                    dispatcher.dispatch(method_id, payload, &mut self.stream_registry);
 
-                    // Spawn the handler as a task that sends its result to our channel
-                    let results_tx = self.streaming_results_tx.clone();
-                    tokio::spawn(async move {
-                        let result = handler_fut.await;
-                        // Send result to the connection's run loop
-                        // Ignore send error if connection closed
-                        let _ = results_tx.send((request_id, result)).await;
-                    });
-                } else {
-                    let response_payload = dispatcher
-                        .dispatch_unary(method_id, &payload)
-                        .await
-                        .map_err(ConnectionError::Dispatch)?;
-
-                    // r[impl core.call] - Callee sends Response for caller's Request.
-                    // r[impl core.call.request-id] - Response has same request_id.
-                    // r[impl unary.complete] - Send Response with matching request_id.
-                    // r[impl unary.lifecycle.single-response] - Exactly one Response per Request.
-                    // r[impl unary.request-id.in-flight] - Request no longer in-flight after Response.
-                    let resp = Message::Response {
-                        request_id,
-                        metadata: Vec::new(),
-                        payload: response_payload,
-                    };
-                    self.io.send(&resp).await?;
-                    self.in_flight_requests.remove(&request_id);
-                }
+                // Spawn the handler as a task that sends its result to our channel
+                let results_tx = self.streaming_results_tx.clone();
+                tokio::spawn(async move {
+                    let result = handler_fut.await;
+                    // Send result to the connection's run loop
+                    // Ignore send error if connection closed
+                    let _ = results_tx.send((request_id, result)).await;
+                });
             }
             Message::Response { request_id, .. } => {
                 // Server doesn't expect Response messages (it sends them, not receives them).

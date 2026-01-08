@@ -298,33 +298,15 @@ where
             return Err(self.goodbye("flow.unary.payload-limit").await);
         }
 
-        // Dispatch
-        if self.dispatcher.is_streaming(method_id) {
-            let handler_fut = self.dispatcher.dispatch_streaming(
-                method_id,
-                payload,
-                &mut self.server_stream_registry,
-            );
-            let results_tx = self.streaming_results_tx.clone();
-            tokio::spawn(async move {
-                let result = handler_fut.await;
-                let _ = results_tx.send((request_id, result)).await;
-            });
-        } else {
-            let response_payload = self
-                .dispatcher
-                .dispatch_unary(method_id, &payload)
-                .await
-                .map_err(ConnectionError::Dispatch)?;
-
-            let resp = Message::Response {
-                request_id,
-                metadata: Vec::new(),
-                payload: response_payload,
-            };
-            self.io.send(&resp).await?;
-            self.in_flight_server_requests.remove(&request_id);
-        }
+        // Dispatch - always spawn as a task so message loop can continue
+        let handler_fut =
+            self.dispatcher
+                .dispatch(method_id, payload, &mut self.server_stream_registry);
+        let results_tx = self.streaming_results_tx.clone();
+        tokio::spawn(async move {
+            let result = handler_fut.await;
+            let _ = results_tx.send((request_id, result)).await;
+        });
         Ok(())
     }
 

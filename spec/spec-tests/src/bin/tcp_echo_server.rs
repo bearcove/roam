@@ -7,7 +7,7 @@ use cobs::{decode_vec as cobs_decode_vec, encode_vec as cobs_encode_vec};
 use roam::facet::Facet;
 use roam_wire::{Hello, Message};
 use spec_tests::testbed;
-use spec_tests::testbed::{Never, RoamError, TestbedHandler};
+use spec_tests::testbed::{Never, RoamError, Testbed};
 use std::env;
 use std::io::ErrorKind;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -17,7 +17,7 @@ use tokio::net::{TcpListener, TcpStream};
 #[derive(Clone)]
 struct TestbedService;
 
-impl TestbedHandler for TestbedService {
+impl Testbed for TestbedService {
     async fn echo(&self, message: String) -> Result<String, RoamError<Never>> {
         Ok(message)
     }

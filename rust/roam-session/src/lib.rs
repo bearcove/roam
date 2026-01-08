@@ -758,43 +758,24 @@ impl Default for RequestIdGenerator {
 // ============================================================================
 
 /// Trait for dispatching requests to a service.
+///
+/// The dispatcher handles both unary and streaming methods uniformly.
+/// Stream binding is done via reflection (Poke) on the deserialized args.
 pub trait ServiceDispatcher: Send + Sync {
-    /// Check if a method uses streaming (Tx/Rx arguments).
-    ///
-    /// Returns true if the method has any streaming arguments that require
-    /// channel setup before dispatch.
-    fn is_streaming(&self, method_id: u64) -> bool;
-
-    /// Dispatch a unary request and return the response payload.
+    /// Dispatch a request and return the response payload.
     ///
     /// The dispatcher is responsible for:
     /// - Looking up the method by method_id
     /// - Deserializing arguments from payload
+    /// - Binding any Tx/Rx streams via the registry
     /// - Calling the service method
     /// - Serializing the response
-    fn dispatch_unary(
-        &self,
-        method_id: u64,
-        payload: &[u8],
-    ) -> impl std::future::Future<Output = Result<Vec<u8>, String>> + Send;
-
-    /// Dispatch a streaming request and return the response payload.
-    ///
-    /// For streaming methods, the dispatcher must:
-    /// - Decode stream IDs from the payload
-    /// - Register streams with the registry (incoming for Tx args, outgoing for Rx args)
-    /// - Create Tx/Rx handles from the registry
-    /// - Call the handler method with those handles
-    /// - Serialize the response
     ///
     /// Returns a boxed future with `'static` lifetime so it can be spawned.
     /// Implementations should clone their service into the future to achieve this.
     ///
-    /// Takes ownership of the payload to avoid copies - the caller already owns it from
-    /// the decoded message frame.
-    ///
     /// r[impl streaming.allocation.caller] - Stream IDs are decoded from payload (caller allocated).
-    fn dispatch_streaming(
+    fn dispatch(
         &self,
         method_id: u64,
         payload: Vec<u8>,
@@ -832,31 +813,7 @@ where
     A: ServiceDispatcher,
     B: ServiceDispatcher,
 {
-    fn is_streaming(&self, method_id: u64) -> bool {
-        if self.first_methods.contains(&method_id) {
-            self.first.is_streaming(method_id)
-        } else {
-            self.second.is_streaming(method_id)
-        }
-    }
-
-    fn dispatch_unary(
-        &self,
-        method_id: u64,
-        payload: &[u8],
-    ) -> impl std::future::Future<Output = Result<Vec<u8>, String>> + Send {
-        let first_methods = self.first_methods;
-        let payload = payload.to_vec();
-        async move {
-            if first_methods.contains(&method_id) {
-                self.first.dispatch_unary(method_id, &payload).await
-            } else {
-                self.second.dispatch_unary(method_id, &payload).await
-            }
-        }
-    }
-
-    fn dispatch_streaming(
+    fn dispatch(
         &self,
         method_id: u64,
         payload: Vec<u8>,
@@ -865,9 +822,9 @@ where
         Box<dyn std::future::Future<Output = Result<Vec<u8>, String>> + Send + 'static>,
     > {
         if self.first_methods.contains(&method_id) {
-            self.first.dispatch_streaming(method_id, payload, registry)
+            self.first.dispatch(method_id, payload, registry)
         } else {
-            self.second.dispatch_streaming(method_id, payload, registry)
+            self.second.dispatch(method_id, payload, registry)
         }
     }
 }

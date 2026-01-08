@@ -9,14 +9,14 @@ use roam_stream::Server;
 // Re-export types from spec_proto for use in generated code
 pub use spec_proto::{Canvas, Color, Message, Person, Point, Rectangle, Shape};
 
-// Include generated code (testbed::TestbedHandler, testbed::TestbedDispatcher, etc.)
+// Include generated code (testbed::Testbed, testbed::TestbedDispatcher, etc.)
 include!(concat!(env!("OUT_DIR"), "/generated.rs"));
 
-// Service implementation using generated TestbedHandler trait
+// Service implementation using generated Testbed trait
 #[derive(Clone)]
 struct TestbedService;
 
-impl testbed::TestbedHandler for TestbedService {
+impl testbed::Testbed for TestbedService {
     // ========================================================================
     // Unary methods
     // ========================================================================

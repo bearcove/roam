@@ -6,16 +6,16 @@ use roam::session::{Rx, Tx};
 use roam_stream::Hello;
 use roam_websocket::{WsTransport, ws_accept};
 use spec_proto::{Canvas, Color, Message, Person, Point, Rectangle, Shape};
-use spec_tests::testbed::{Never, RoamError, TestbedDispatcher, TestbedHandler};
+use spec_tests::testbed::{Never, RoamError, Testbed, TestbedDispatcher};
 use std::env;
 use tokio::net::TcpListener;
 use tokio_tungstenite::accept_async;
 
-// Service implementation using generated TestbedHandler trait
+// Service implementation using generated Testbed trait
 #[derive(Clone)]
 struct TestbedService;
 
-impl TestbedHandler for TestbedService {
+impl Testbed for TestbedService {
     async fn echo(&self, message: String) -> Result<String, RoamError<Never>> {
         Ok(message)
     }
