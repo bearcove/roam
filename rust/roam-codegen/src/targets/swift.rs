@@ -5,8 +5,12 @@
 
 use std::collections::HashSet;
 
+use facet_core::{ScalarType, Shape};
 use heck::{ToLowerCamelCase, ToUpperCamelCase};
-use roam_schema::{FieldDetail, MethodDetail, ServiceDetail, TypeDetail, VariantPayload};
+use roam_schema::{
+    EnumInfo, MethodDetail, ServiceDetail, ShapeKind, StructInfo, VariantKind, classify_shape,
+    classify_variant, is_bytes, is_rx, is_tx,
+};
 
 use crate::render::{fq_name, hex_u64};
 
@@ -86,141 +90,151 @@ pub fn generate_service(service: &ServiceDetail) -> String {
 // ============================================================================
 
 /// Collect all named types (structs and enums with a name) from a service.
-fn collect_named_types(service: &ServiceDetail) -> Vec<(String, TypeDetail)> {
-    let mut seen = HashSet::new();
+fn collect_named_types(service: &ServiceDetail) -> Vec<(String, &'static Shape)> {
+    let mut seen: HashSet<String> = HashSet::new();
     let mut types = Vec::new();
 
-    fn visit(ty: &TypeDetail, seen: &mut HashSet<String>, types: &mut Vec<(String, TypeDetail)>) {
-        match ty {
-            TypeDetail::Struct {
+    fn visit(
+        shape: &'static Shape,
+        seen: &mut HashSet<String>,
+        types: &mut Vec<(String, &'static Shape)>,
+    ) {
+        match classify_shape(shape) {
+            ShapeKind::Struct(StructInfo {
                 name: Some(name),
                 fields,
-            } => {
+                ..
+            }) => {
                 if !seen.contains(name) {
-                    seen.insert(name.clone());
+                    seen.insert(name.to_string());
                     // Visit nested types first (dependencies before dependents)
                     for field in fields {
-                        visit(&field.type_info, seen, types);
+                        visit(field.shape(), seen, types);
                     }
-                    types.push((name.clone(), ty.clone()));
+                    types.push((name.to_string(), shape));
                 }
             }
-            TypeDetail::Enum {
+            ShapeKind::Enum(EnumInfo {
                 name: Some(name),
                 variants,
-            } => {
+            }) => {
                 if !seen.contains(name) {
-                    seen.insert(name.clone());
+                    seen.insert(name.to_string());
                     // Visit nested types in variants
                     for variant in variants {
-                        match &variant.payload {
-                            VariantPayload::Newtype(inner) => visit(inner, seen, types),
-                            VariantPayload::Struct(fields) => {
+                        match classify_variant(variant) {
+                            VariantKind::Newtype { inner } => visit(inner, seen, types),
+                            VariantKind::Struct { fields } | VariantKind::Tuple { fields } => {
                                 for field in fields {
-                                    visit(&field.type_info, seen, types);
+                                    visit(field.shape(), seen, types);
                                 }
                             }
-                            VariantPayload::Unit => {}
+                            VariantKind::Unit => {}
                         }
                     }
-                    types.push((name.clone(), ty.clone()));
+                    types.push((name.to_string(), shape));
                 }
             }
-            TypeDetail::List(inner) => visit(inner, seen, types),
-            TypeDetail::Option(inner) => visit(inner, seen, types),
-            TypeDetail::Array { element, .. } => visit(element, seen, types),
-            TypeDetail::Map { key, value } => {
+            ShapeKind::List { element } => visit(element, seen, types),
+            ShapeKind::Option { inner } => visit(inner, seen, types),
+            ShapeKind::Array { element, .. } => visit(element, seen, types),
+            ShapeKind::Map { key, value } => {
                 visit(key, seen, types);
                 visit(value, seen, types);
             }
-            TypeDetail::Set(inner) => visit(inner, seen, types),
-            TypeDetail::Tuple(items) => {
-                for item in items {
-                    visit(item, seen, types);
+            ShapeKind::Set { element } => visit(element, seen, types),
+            ShapeKind::Tuple { elements } => {
+                for param in elements {
+                    visit(param.shape, seen, types);
                 }
             }
-            TypeDetail::Tx(inner) | TypeDetail::Rx(inner) => visit(inner, seen, types),
+            ShapeKind::Tx { inner } | ShapeKind::Rx { inner } => visit(inner, seen, types),
+            ShapeKind::Pointer { pointee } => visit(pointee, seen, types),
             _ => {}
         }
     }
 
     for method in &service.methods {
         for arg in &method.args {
-            visit(&arg.type_info, &mut seen, &mut types);
+            visit(arg.ty, &mut seen, &mut types);
         }
-        visit(&method.return_type, &mut seen, &mut types);
+        visit(method.return_type, &mut seen, &mut types);
     }
 
     types
 }
 
 /// Generate Swift type definitions for all named types.
-fn generate_named_types(named_types: &[(String, TypeDetail)]) -> String {
+fn generate_named_types(named_types: &[(String, &'static Shape)]) -> String {
     let mut out = String::new();
 
-    for (name, ty) in named_types {
-        match ty {
-            TypeDetail::Struct { fields, .. } => {
-                out.push_str(&format!(
-                    "public struct {name}: Codable, Equatable, Sendable {{\n"
-                ));
+    for (name, shape) in named_types {
+        match classify_shape(shape) {
+            ShapeKind::Struct(StructInfo { fields, .. }) => {
+                out.push_str(&format!("public struct {name}: Codable, Sendable {{\n"));
                 for field in fields {
                     let field_name = field.name.to_lower_camel_case();
-                    let field_type = swift_type_base(&field.type_info);
+                    let field_type = swift_type_base(field.shape());
                     out.push_str(&format!("    public var {field_name}: {field_type}\n"));
                 }
-                out.push('\n');
-                // Generate memberwise initializer
-                out.push_str("    public init(");
-                let init_params: Vec<String> = fields
-                    .iter()
-                    .map(|f| {
-                        format!(
-                            "{}: {}",
-                            f.name.to_lower_camel_case(),
-                            swift_type_base(&f.type_info)
-                        )
-                    })
-                    .collect();
-                out.push_str(&init_params.join(", "));
-                out.push_str(") {\n");
-                for field in fields {
-                    let field_name = field.name.to_lower_camel_case();
-                    out.push_str(&format!("        self.{field_name} = {field_name}\n"));
+                out.push_str("\n");
+                // Generate init
+                if !fields.is_empty() {
+                    let params: Vec<String> = fields
+                        .iter()
+                        .map(|f| {
+                            format!(
+                                "{}: {}",
+                                f.name.to_lower_camel_case(),
+                                swift_type_base(f.shape())
+                            )
+                        })
+                        .collect();
+                    out.push_str(&format!("    public init({}) {{\n", params.join(", ")));
+                    for field in fields {
+                        let field_name = field.name.to_lower_camel_case();
+                        out.push_str(&format!("        self.{field_name} = {field_name}\n"));
+                    }
+                    out.push_str("    }\n");
                 }
-                out.push_str("    }\n");
                 out.push_str("}\n\n");
             }
-            TypeDetail::Enum { variants, .. } => {
-                out.push_str(&format!(
-                    "public enum {name}: Codable, Equatable, Sendable {{\n"
-                ));
+            ShapeKind::Enum(EnumInfo { variants, .. }) => {
+                out.push_str(&format!("public enum {name}: Codable, Sendable {{\n"));
                 for variant in variants {
                     let variant_name = variant.name.to_lower_camel_case();
-                    match &variant.payload {
-                        VariantPayload::Unit => {
+                    match classify_variant(variant) {
+                        VariantKind::Unit => {
                             out.push_str(&format!("    case {variant_name}\n"));
                         }
-                        VariantPayload::Newtype(inner) => {
+                        VariantKind::Newtype { inner } => {
                             out.push_str(&format!(
                                 "    case {variant_name}({})\n",
                                 swift_type_base(inner)
                             ));
                         }
-                        VariantPayload::Struct(fields) => {
-                            let field_strs: Vec<String> = fields
+                        VariantKind::Tuple { fields } => {
+                            let types: Vec<String> =
+                                fields.iter().map(|f| swift_type_base(f.shape())).collect();
+                            out.push_str(&format!(
+                                "    case {variant_name}({})\n",
+                                types.join(", ")
+                            ));
+                        }
+                        VariantKind::Struct { fields } => {
+                            let params: Vec<String> = fields
                                 .iter()
                                 .map(|f| {
                                     format!(
                                         "{}: {}",
                                         f.name.to_lower_camel_case(),
-                                        swift_type_base(&f.type_info)
+                                        swift_type_base(f.shape())
                                     )
                                 })
                                 .collect();
                             out.push_str(&format!(
                                 "    case {variant_name}({})\n",
-                                field_strs.join(", ")
+                                params.join(", ")
                             ));
                         }
                     }
@@ -235,13 +249,10 @@ fn generate_named_types(named_types: &[(String, TypeDetail)]) -> String {
 }
 
 // ============================================================================
-// Caller Protocol (Client Interface)
+// Protocol Generation
 // ============================================================================
 
 /// Generate caller protocol (for making calls to the service).
-///
-/// r[impl streaming.caller-pov] - Schema types are from caller's perspective.
-/// Caller uses Tx to send, Rx to receive.
 fn generate_caller_protocol(service: &ServiceDetail) -> String {
     let mut out = String::new();
     let service_name = service.name.to_upper_camel_case();
@@ -253,27 +264,99 @@ fn generate_caller_protocol(service: &ServiceDetail) -> String {
 
     for method in &service.methods {
         let method_name = method.method_name.to_lower_camel_case();
-        // Caller args: Tx stays Tx (caller sends), Rx stays Rx (caller receives)
-        let args = method
+
+        if let Some(doc) = &method.doc {
+            out.push_str(&format!("    /// {doc}\n"));
+        }
+
+        let args: Vec<String> = method
             .args
             .iter()
             .map(|a| {
                 format!(
                     "{}: {}",
                     a.name.to_lower_camel_case(),
-                    swift_type_client_arg(&a.type_info)
+                    swift_type_client_arg(a.ty)
                 )
             })
-            .collect::<Vec<_>>()
-            .join(", ");
-        let ret_ty = swift_type_client_return(&method.return_type);
+            .collect();
+
+        let ret_type = swift_type_client_return(method.return_type);
+        let has_streaming =
+            method.args.iter().any(|a| is_stream(a.ty)) || is_stream(method.return_type);
+
+        if has_streaming {
+            out.push_str(&format!(
+                "    func {method_name}({}) async throws\n",
+                args.join(", ")
+            ));
+        } else if ret_type == "Void" {
+            out.push_str(&format!(
+                "    func {method_name}({}) async throws\n",
+                args.join(", ")
+            ));
+        } else {
+            out.push_str(&format!(
+                "    func {method_name}({}) async throws -> {ret_type}\n",
+                args.join(", ")
+            ));
+        }
+    }
+
+    out.push_str("}\n\n");
+    out
+}
+
+/// Generate handler protocol (for handling incoming calls).
+fn generate_handler_protocol(service: &ServiceDetail) -> String {
+    let mut out = String::new();
+    let service_name = service.name.to_upper_camel_case();
+
+    if let Some(doc) = &service.doc {
+        out.push_str(&format!("/// Handler for: {doc}\n"));
+    }
+    out.push_str(&format!("public protocol {service_name}Handler {{\n"));
+
+    for method in &service.methods {
+        let method_name = method.method_name.to_lower_camel_case();
 
         if let Some(doc) = &method.doc {
             out.push_str(&format!("    /// {doc}\n"));
         }
-        out.push_str(&format!(
-            "    func {method_name}({args}) async throws -> {ret_ty}\n"
-        ));
+
+        // Server perspective - invert Tx/Rx
+        let args: Vec<String> = method
+            .args
+            .iter()
+            .map(|a| {
+                format!(
+                    "{}: {}",
+                    a.name.to_lower_camel_case(),
+                    swift_type_server_arg(a.ty)
+                )
+            })
+            .collect();
+
+        let ret_type = swift_type_server_return(method.return_type);
+        let has_streaming =
+            method.args.iter().any(|a| is_stream(a.ty)) || is_stream(method.return_type);
+
+        if has_streaming {
+            out.push_str(&format!(
+                "    func {method_name}({}) async throws\n",
+                args.join(", ")
+            ));
+        } else if ret_type == "Void" {
+            out.push_str(&format!(
+                "    func {method_name}({}) async throws\n",
+                args.join(", ")
+            ));
+        } else {
+            out.push_str(&format!(
+                "    func {method_name}({}) async throws -> {ret_type}\n",
+                args.join(", ")
+            ));
+        }
     }
 
     out.push_str("}\n\n");
@@ -285,154 +368,68 @@ fn generate_caller_protocol(service: &ServiceDetail) -> String {
 // ============================================================================
 
 /// Generate client implementation (for making calls to the service).
-///
-/// r[impl codegen.swift.client] - Generate client class with method implementations.
 fn generate_client_impl(service: &ServiceDetail) -> String {
     let mut out = String::new();
     let service_name = service.name.to_upper_camel_case();
 
-    out.push_str(&format!("/// Client implementation for {service_name}\n"));
     out.push_str(&format!(
-        "public class {service_name}Client<T: UnaryCaller>: {service_name}Caller {{\n"
+        "public final class {service_name}Client: {service_name}Caller {{\n"
     ));
-    out.push_str("    private let caller: T\n\n");
-    out.push_str("    public init(caller: T) {\n");
-    out.push_str("        self.caller = caller\n");
+    out.push_str("    private let connection: RoamConnection\n\n");
+    out.push_str("    public init(connection: RoamConnection) {\n");
+    out.push_str("        self.connection = connection\n");
     out.push_str("    }\n\n");
 
     for method in &service.methods {
         let method_name = method.method_name.to_lower_camel_case();
-        let id = crate::method_id(method);
+        let method_id_name = method.method_name.to_lower_camel_case();
 
-        // Check if method uses streaming
-        let has_streaming =
-            method.args.iter().any(|a| is_stream(&a.type_info)) || is_stream(&method.return_type);
-
-        // Build args list
-        let args = method
+        let args: Vec<String> = method
             .args
             .iter()
             .map(|a| {
                 format!(
                     "{}: {}",
                     a.name.to_lower_camel_case(),
-                    swift_type_client_arg(&a.type_info)
+                    swift_type_client_arg(a.ty)
                 )
             })
-            .collect::<Vec<_>>()
-            .join(", ");
+            .collect();
 
-        let ret_ty = swift_type_client_return(&method.return_type);
-
-        if let Some(doc) = &method.doc {
-            out.push_str(&format!("    /// {doc}\n"));
-        }
-        out.push_str(&format!(
-            "    public func {method_name}({args}) async throws -> {ret_ty} {{\n"
-        ));
+        let ret_type = swift_type_client_return(method.return_type);
+        let has_streaming =
+            method.args.iter().any(|a| is_stream(a.ty)) || is_stream(method.return_type);
 
         if has_streaming {
-            // Streaming methods need special handling
-            out.push_str("        // TODO: Streaming methods require connection-level support\n");
-            out.push_str(
-                "        fatalError(\"Streaming methods not yet implemented in Swift client\")\n",
-            );
-        } else {
-            // Unary method - encode args, call, decode response
-            out.push_str("        var payload: [UInt8] = []\n");
-
-            // Encode each argument
-            for arg in &method.args {
-                let arg_name = arg.name.to_lower_camel_case();
-                let encode_expr = generate_encode_expr(&arg.type_info, &arg_name);
-                out.push_str(&format!(
-                    "        payload.append(contentsOf: {encode_expr})\n"
-                ));
-            }
-
             out.push_str(&format!(
-                "        let response = try await caller.callUnary(methodId: {}, payload: Data(payload))\n",
-                hex_u64(id)
+                "    public func {method_name}({}) async throws {{\n",
+                args.join(", ")
             ));
-            out.push_str("        var offset = 0\n");
-            out.push_str("        // Decode Result<T, RoamError<E>>\n");
-            out.push_str(
-                "        let resultTag = try decodeVarint(from: response, offset: &offset)\n",
-            );
-            out.push_str("        if resultTag == 0 {\n");
-            out.push_str("            // Ok variant\n");
-
-            // Decode the success value
-            let decode_stmt = generate_decode_stmt(&method.return_type, "result", "offset");
-            out.push_str(&format!("            {decode_stmt}\n"));
-            out.push_str("            return result\n");
-
-            out.push_str("        } else {\n");
-            out.push_str("            // Err variant - decode RoamError\n");
-            out.push_str(
-                "            let errorTag = try decodeVarint(from: response, offset: &offset)\n",
-            );
-            out.push_str("            switch errorTag {\n");
-            out.push_str("            case 0: throw RoamError.userError\n");
-            out.push_str("            case 1: throw RoamError.unknownMethod\n");
-            out.push_str("            case 2: throw RoamError.invalidPayload\n");
-            out.push_str("            case 3: throw RoamError.cancelled\n");
-            out.push_str(
-                "            default: throw RoamError.decodeError(\"unknown error variant\")\n",
-            );
-            out.push_str("            }\n");
-            out.push_str("        }\n");
+            out.push_str("        // TODO: Implement streaming call\n");
+            out.push_str("        throw RoamError.notImplemented\n");
+            out.push_str("    }\n\n");
+        } else if ret_type == "Void" {
+            out.push_str(&format!(
+                "    public func {method_name}({}) async throws {{\n",
+                args.join(", ")
+            ));
+            out.push_str(&generate_encode_args(&method.args));
+            out.push_str(&format!(
+                "        _ = try await connection.call(methodId: {service_name}MethodId.{method_id_name}, payload: payload)\n"
+            ));
+            out.push_str("    }\n\n");
+        } else {
+            out.push_str(&format!(
+                "    public func {method_name}({}) async throws -> {ret_type} {{\n",
+                args.join(", ")
+            ));
+            out.push_str(&generate_encode_args(&method.args));
+            out.push_str(&format!(
+                "        let response = try await connection.call(methodId: {service_name}MethodId.{method_id_name}, payload: payload)\n"
+            ));
+            out.push_str(&generate_decode_return(method.return_type, &ret_type));
+            out.push_str("    }\n\n");
         }
-
-        out.push_str("    }\n\n");
-    }
-
-    out.push_str("}\n\n");
-    out
-}
-
-// ============================================================================
-// Handler Protocol (Server Interface)
-// ============================================================================
-
-/// Generate handler protocol (for handling incoming calls).
-///
-/// r[impl streaming.caller-pov] - Schema is from caller's perspective, handler inverts.
-/// Handler's Tx becomes Rx (receives), handler's Rx becomes Tx (sends).
-fn generate_handler_protocol(service: &ServiceDetail) -> String {
-    let mut out = String::new();
-    let service_name = service.name.to_upper_camel_case();
-
-    out.push_str(&format!("/// Handler protocol for {service_name}\n"));
-    out.push_str("/// \n");
-    out.push_str("/// Implement this protocol to handle incoming RPC calls.\n");
-    out.push_str("/// Note: Streaming types are inverted from the schema definition\n");
-    out.push_str("/// per r[streaming.caller-pov].\n");
-    out.push_str(&format!(
-        "public protocol {service_name}Handler: Sendable {{\n"
-    ));
-
-    for method in &service.methods {
-        let method_name = method.method_name.to_lower_camel_case();
-        // Handler args: Tx becomes Rx (receives), Rx becomes Tx (sends)
-        // r[impl streaming.caller-pov]
-        let args = method
-            .args
-            .iter()
-            .map(|a| {
-                format!(
-                    "{}: {}",
-                    a.name.to_lower_camel_case(),
-                    swift_type_server_arg(&a.type_info)
-                )
-            })
-            .collect::<Vec<_>>()
-            .join(", ");
-        let ret_ty = swift_type_server_return(&method.return_type);
-
-        out.push_str(&format!(
-            "    func {method_name}({args}) async throws -> {ret_ty}\n"
-        ));
     }
 
     out.push_str("}\n\n");
@@ -448,116 +445,153 @@ fn generate_dispatcher(service: &ServiceDetail) -> String {
     let mut out = String::new();
     let service_name = service.name.to_upper_camel_case();
 
-    out.push_str(&format!("/// Dispatcher for {service_name} service.\n"));
+    out.push_str(&format!("public final class {service_name}Dispatcher {{\n"));
     out.push_str(&format!(
-        "public class {service_name}Dispatcher<H: {service_name}Handler> {{\n"
+        "    private let handler: {service_name}Handler\n\n"
     ));
-    out.push_str("    private let handler: H\n\n");
-    out.push_str("    public init(handler: H) {\n");
+    out.push_str(&format!(
+        "    public init(handler: {service_name}Handler) {{\n"
+    ));
     out.push_str("        self.handler = handler\n");
     out.push_str("    }\n\n");
 
-    // Check if any streaming methods exist
-    let has_streaming = service
-        .methods
-        .iter()
-        .any(|m| m.args.iter().any(|a| is_stream(&a.type_info)) || is_stream(&m.return_type));
-
-    // Generate is_streaming method
-    out.push_str("    /// Check if a method uses streaming.\n");
-    out.push_str("    public func isStreaming(methodId: UInt64) -> Bool {\n");
-    if has_streaming {
-        let streaming_ids: Vec<String> = service
-            .methods
-            .iter()
-            .filter(|m| m.args.iter().any(|a| is_stream(&a.type_info)) || is_stream(&m.return_type))
-            .map(|m| hex_u64(crate::method_id(m)))
-            .collect();
-        out.push_str("        switch methodId {\n");
-        for id in &streaming_ids {
-            out.push_str(&format!("        case {id}: return true\n"));
-        }
-        out.push_str("        default: return false\n");
-        out.push_str("        }\n");
-    } else {
-        out.push_str("        _ = methodId\n");
-        out.push_str("        return false\n");
-    }
-    out.push_str("    }\n\n");
-
-    // Generate dispatchUnary method
-    out.push_str("    /// Dispatch a unary RPC call.\n");
-    out.push_str("    /// \n");
-    out.push_str("    /// r[impl unary.dispatch] - Dispatch based on method ID.\n");
     out.push_str(
-        "    public func dispatchUnary(methodId: UInt64, payload: Data) async -> Data {\n",
+        "    public func dispatch(methodId: UInt64, payload: Data) async throws -> Data {\n",
     );
     out.push_str("        switch methodId {\n");
 
     for method in &service.methods {
-        // Skip streaming methods in unary dispatch
-        let method_has_streaming =
-            method.args.iter().any(|a| is_stream(&a.type_info)) || is_stream(&method.return_type);
-        if method_has_streaming {
-            continue;
-        }
-
         let method_name = method.method_name.to_lower_camel_case();
-        let id = crate::method_id(method);
+        let method_id_name = method.method_name.to_lower_camel_case();
 
-        out.push_str(&format!("        case {}:\n", hex_u64(id)));
-        out.push_str("            do {\n");
-        out.push_str("                var offset = 0\n");
-
-        // Decode arguments
-        for arg in &method.args {
-            let arg_name = arg.name.to_lower_camel_case();
-            let decode_stmt = generate_decode_stmt(&arg.type_info, &arg_name, "offset");
-            out.push_str(&format!("                {decode_stmt}\n"));
-        }
-
-        // Call handler
-        let args_list = method
-            .args
-            .iter()
-            .map(|a| {
-                let name = a.name.to_lower_camel_case();
-                format!("{name}: {name}")
-            })
-            .collect::<Vec<_>>()
-            .join(", ");
-
-        if method.return_type == TypeDetail::Unit {
-            out.push_str(&format!(
-                "                try await handler.{method_name}({args_list})\n"
-            ));
-            out.push_str("                return Data(encodeResultOk((), encoder: { _ in [] }))\n");
-        } else {
-            out.push_str(&format!(
-                "                let result = try await handler.{method_name}({args_list})\n"
-            ));
-            // Encode result
-            let encode_fn = generate_encode_closure(&method.return_type);
-            out.push_str(&format!(
-                "                return Data(encodeResultOk(result, encoder: {encode_fn}))\n"
-            ));
-        }
-
-        out.push_str("            } catch {\n");
-        out.push_str("                // r[impl unary.error.invalid-payload]\n");
-        out.push_str("                return Data(encodeInvalidPayloadError())\n");
-        out.push_str("            }\n");
+        out.push_str(&format!(
+            "        case {service_name}MethodId.{method_id_name}:\n"
+        ));
+        out.push_str(&format!(
+            "            return try await dispatch{method_name}(payload: payload)\n"
+        ));
     }
 
-    // Default case for unknown methods
     out.push_str("        default:\n");
-    out.push_str("            // r[impl unary.error.unknown-method]\n");
-    out.push_str("            return Data(encodeUnknownMethodError())\n");
+    out.push_str("            throw RoamError.unknownMethod\n");
     out.push_str("        }\n");
-    out.push_str("    }\n");
+    out.push_str("    }\n\n");
+
+    // Generate individual dispatch methods
+    for method in &service.methods {
+        let method_name = method.method_name.to_lower_camel_case();
+        let has_streaming =
+            method.args.iter().any(|a| is_stream(a.ty)) || is_stream(method.return_type);
+
+        out.push_str(&format!(
+            "    private func dispatch{method_name}(payload: Data) async throws -> Data {{\n"
+        ));
+
+        if has_streaming {
+            out.push_str("        // TODO: Implement streaming dispatch\n");
+            out.push_str("        throw RoamError.notImplemented\n");
+        } else {
+            // Decode arguments
+            out.push_str(&generate_decode_args(&method.args));
+
+            // Call handler
+            let arg_names: Vec<String> = method
+                .args
+                .iter()
+                .map(|a| {
+                    format!(
+                        "{}: {}",
+                        a.name.to_lower_camel_case(),
+                        a.name.to_lower_camel_case()
+                    )
+                })
+                .collect();
+
+            let ret_type = swift_type_server_return(method.return_type);
+
+            if ret_type == "Void" {
+                out.push_str(&format!(
+                    "        try await handler.{method_name}({})\n",
+                    arg_names.join(", ")
+                ));
+                out.push_str("        return Data()\n");
+            } else {
+                out.push_str(&format!(
+                    "        let result = try await handler.{method_name}({})\n",
+                    arg_names.join(", ")
+                ));
+                out.push_str(&generate_encode_return(method.return_type));
+            }
+        }
+
+        out.push_str("    }\n\n");
+    }
 
     out.push_str("}\n");
+    out
+}
 
+// ============================================================================
+// Code Generation Helpers
+// ============================================================================
+
+/// Generate code to encode method arguments.
+fn generate_encode_args(args: &[roam_schema::ArgDetail]) -> String {
+    let mut out = String::new();
+
+    if args.is_empty() {
+        out.push_str("        let payload = Data()\n");
+        return out;
+    }
+
+    out.push_str("        var encoder = RoamEncoder()\n");
+    for arg in args {
+        let arg_name = arg.name.to_lower_camel_case();
+        out.push_str(&format!("        try encoder.encode({arg_name})\n"));
+    }
+    out.push_str("        let payload = encoder.data\n");
+
+    out
+}
+
+/// Generate code to decode method arguments.
+fn generate_decode_args(args: &[roam_schema::ArgDetail]) -> String {
+    let mut out = String::new();
+
+    if args.is_empty() {
+        out.push_str("        // No arguments to decode\n");
+        return out;
+    }
+
+    out.push_str("        var decoder = RoamDecoder(data: payload)\n");
+    for arg in args {
+        let arg_name = arg.name.to_lower_camel_case();
+        let arg_type = swift_type_server_arg(arg.ty);
+        out.push_str(&format!(
+            "        let {arg_name}: {arg_type} = try decoder.decode()\n"
+        ));
+    }
+
+    out
+}
+
+/// Generate code to decode return value.
+fn generate_decode_return(_shape: &'static Shape, swift_type: &str) -> String {
+    let mut out = String::new();
+    out.push_str("        var decoder = RoamDecoder(data: response)\n");
+    out.push_str(&format!(
+        "        let result: {swift_type} = try decoder.decode()\n"
+    ));
+    out.push_str("        return result\n");
+    out
+}
+
+/// Generate code to encode return value.
+fn generate_encode_return(_shape: &'static Shape) -> String {
+    let mut out = String::new();
+    out.push_str("        var encoder = RoamEncoder()\n");
+    out.push_str("        try encoder.encode(result)\n");
+    out.push_str("        return encoder.data\n");
     out
 }
 
@@ -565,563 +599,201 @@ fn generate_dispatcher(service: &ServiceDetail) -> String {
 // Type Conversion Functions
 // ============================================================================
 
-/// Check if a type is a stream (Tx or Rx).
-fn is_stream(ty: &TypeDetail) -> bool {
-    matches!(ty, TypeDetail::Tx(_) | TypeDetail::Rx(_))
+/// Check if a shape is a stream (Tx or Rx).
+fn is_stream(shape: &'static Shape) -> bool {
+    is_tx(shape) || is_rx(shape)
 }
 
-/// Convert TypeDetail to base Swift type (non-streaming, non-perspective-aware).
-fn swift_type_base(ty: &TypeDetail) -> String {
-    match ty {
-        TypeDetail::Bool => "Bool".into(),
-        TypeDetail::U8 => "UInt8".into(),
-        TypeDetail::U16 => "UInt16".into(),
-        TypeDetail::U32 => "UInt32".into(),
-        TypeDetail::U64 => "UInt64".into(),
-        TypeDetail::U128 => "UInt128".into(),
-        TypeDetail::I8 => "Int8".into(),
-        TypeDetail::I16 => "Int16".into(),
-        TypeDetail::I32 => "Int32".into(),
-        TypeDetail::I64 => "Int64".into(),
-        TypeDetail::I128 => "Int128".into(),
-        TypeDetail::F32 => "Float".into(),
-        TypeDetail::F64 => "Double".into(),
-        TypeDetail::Char => "Character".into(),
-        TypeDetail::String => "String".into(),
-        TypeDetail::Unit => "Void".into(),
-        TypeDetail::Bytes => "Data".into(),
-        TypeDetail::List(inner) => format!("[{}]", swift_type_base(inner)),
-        TypeDetail::Option(inner) => format!("{}?", swift_type_base(inner)),
-        TypeDetail::Array { element, len } => {
+/// Convert ScalarType to Swift type string.
+fn swift_scalar_type(scalar: ScalarType) -> String {
+    match scalar {
+        ScalarType::Bool => "Bool".into(),
+        ScalarType::U8 => "UInt8".into(),
+        ScalarType::U16 => "UInt16".into(),
+        ScalarType::U32 => "UInt32".into(),
+        ScalarType::U64 => "UInt64".into(),
+        ScalarType::U128 => "UInt128".into(),
+        ScalarType::USize => "UInt".into(),
+        ScalarType::I8 => "Int8".into(),
+        ScalarType::I16 => "Int16".into(),
+        ScalarType::I32 => "Int32".into(),
+        ScalarType::I64 => "Int64".into(),
+        ScalarType::I128 => "Int128".into(),
+        ScalarType::ISize => "Int".into(),
+        ScalarType::F32 => "Float".into(),
+        ScalarType::F64 => "Double".into(),
+        ScalarType::Char => "Character".into(),
+        ScalarType::Str | ScalarType::CowStr | ScalarType::String => "String".into(),
+        ScalarType::Unit => "Void".into(),
+        _ => "Any".into(),
+    }
+}
+
+/// Convert Shape to base Swift type (non-streaming, non-perspective-aware).
+fn swift_type_base(shape: &'static Shape) -> String {
+    // Check for bytes first
+    if is_bytes(shape) {
+        return "Data".into();
+    }
+
+    match classify_shape(shape) {
+        ShapeKind::Scalar(scalar) => swift_scalar_type(scalar),
+        ShapeKind::List { element } => format!("[{}]", swift_type_base(element)),
+        ShapeKind::Slice { element } => format!("[{}]", swift_type_base(element)),
+        ShapeKind::Option { inner } => format!("{}?", swift_type_base(inner)),
+        ShapeKind::Array { element, len } => {
             // Swift doesn't have fixed-size arrays, use regular array
             format!("[{}] /* size: {} */", swift_type_base(element), len)
         }
-        TypeDetail::Map { key, value } => {
+        ShapeKind::Map { key, value } => {
             format!("[{}: {}]", swift_type_base(key), swift_type_base(value))
         }
-        TypeDetail::Set(inner) => format!("Set<{}>", swift_type_base(inner)),
-        TypeDetail::Tuple(items) => {
-            let inner = items
+        ShapeKind::Set { element } => format!("Set<{}>", swift_type_base(element)),
+        ShapeKind::Tuple { elements } => {
+            let inner = elements
                 .iter()
-                .map(swift_type_base)
+                .map(|p| swift_type_base(p.shape))
                 .collect::<Vec<_>>()
                 .join(", ");
             format!("({inner})")
         }
-        TypeDetail::Tx(inner) => format!("Tx<{}>", swift_type_base(inner)),
-        TypeDetail::Rx(inner) => format!("Rx<{}>", swift_type_base(inner)),
-        TypeDetail::Struct {
+        ShapeKind::Tx { inner } => format!("Tx<{}>", swift_type_base(inner)),
+        ShapeKind::Rx { inner } => format!("Rx<{}>", swift_type_base(inner)),
+        ShapeKind::Struct(StructInfo {
             name: Some(name), ..
-        } => name.clone(),
-        TypeDetail::Struct { name: None, fields } => {
+        }) => name.to_string(),
+        ShapeKind::Struct(StructInfo {
+            name: None, fields, ..
+        }) => {
             // Anonymous struct - use tuple
             let inner = fields
                 .iter()
-                .map(|f| swift_type_base(&f.type_info))
+                .map(|f| swift_type_base(f.shape()))
                 .collect::<Vec<_>>()
                 .join(", ");
             format!("({inner})")
         }
-        TypeDetail::Enum {
+        ShapeKind::Enum(EnumInfo {
             name: Some(name), ..
-        } => name.clone(),
-        TypeDetail::Enum {
+        }) => name.to_string(),
+        ShapeKind::Enum(EnumInfo {
             name: None,
             variants,
-        } => {
+        }) => {
             // Check for Result pattern
             if variants.len() == 2 {
                 let ok_variant = variants.iter().find(|v| v.name == "Ok");
                 let err_variant = variants.iter().find(|v| v.name == "Err");
-                if let (
-                    Some(roam_schema::VariantDetail {
-                        payload: VariantPayload::Newtype(ok_ty),
-                        ..
-                    }),
-                    Some(roam_schema::VariantDetail {
-                        payload: VariantPayload::Newtype(err_ty),
-                        ..
-                    }),
-                ) = (ok_variant, err_variant)
-                {
-                    return format!(
-                        "Result<{}, {}>",
-                        swift_type_base(ok_ty),
-                        swift_type_base(err_ty)
-                    );
+
+                if let (Some(ok_v), Some(err_v)) = (ok_variant, err_variant) {
+                    if let (
+                        VariantKind::Newtype { inner: ok_ty },
+                        VariantKind::Newtype { inner: err_ty },
+                    ) = (classify_variant(ok_v), classify_variant(err_v))
+                    {
+                        return format!(
+                            "Result<{}, {}>",
+                            swift_type_base(ok_ty),
+                            swift_type_base(err_ty)
+                        );
+                    }
                 }
             }
             // Anonymous enum - fallback to Any
             "Any /* anonymous enum */".into()
         }
+        ShapeKind::Pointer { pointee } => swift_type_base(pointee),
+        ShapeKind::Opaque => "Any".into(),
     }
 }
 
-/// Convert TypeDetail to Swift type for client arguments.
+/// Convert Shape to Swift type for client arguments.
 /// Schema types are from CALLER's perspective (per spec r[streaming.caller-pov]).
 /// Caller uses types as-is: Tx = caller sends, Rx = caller receives.
-fn swift_type_client_arg(ty: &TypeDetail) -> String {
-    match ty {
-        TypeDetail::Tx(inner) => format!("Tx<{}>", swift_type_base(inner)),
-        TypeDetail::Rx(inner) => format!("Rx<{}>", swift_type_base(inner)),
-        _ => swift_type_base(ty),
+fn swift_type_client_arg(shape: &'static Shape) -> String {
+    match classify_shape(shape) {
+        ShapeKind::Tx { inner } => format!("Tx<{}>", swift_type_base(inner)),
+        ShapeKind::Rx { inner } => format!("Rx<{}>", swift_type_base(inner)),
+        _ => swift_type_base(shape),
     }
 }
 
-/// Convert TypeDetail to Swift type for client returns.
+/// Convert Shape to Swift type for client returns.
 /// Schema types are from CALLER's perspective - no transformation needed.
-fn swift_type_client_return(ty: &TypeDetail) -> String {
-    match ty {
-        TypeDetail::Tx(inner) => format!("Tx<{}>", swift_type_base(inner)),
-        TypeDetail::Rx(inner) => format!("Rx<{}>", swift_type_base(inner)),
-        _ => swift_type_base(ty),
+fn swift_type_client_return(shape: &'static Shape) -> String {
+    match classify_shape(shape) {
+        ShapeKind::Tx { inner } => format!("Tx<{}>", swift_type_base(inner)),
+        ShapeKind::Rx { inner } => format!("Rx<{}>", swift_type_base(inner)),
+        ShapeKind::Scalar(ScalarType::Unit) => "Void".into(),
+        ShapeKind::Tuple { elements } if elements.is_empty() => "Void".into(),
+        _ => swift_type_base(shape),
     }
 }
 
-/// Convert TypeDetail to Swift type for server/handler arguments.
+/// Convert Shape to Swift type for server/handler arguments.
 /// Schema types are from caller's perspective, so we INVERT for handler.
 /// Caller's Tx (sends) becomes handler's Rx (receives).
 /// Caller's Rx (receives) becomes handler's Tx (sends).
 ///
 /// r[impl streaming.caller-pov] - Schema is from caller's perspective, server inverts.
-fn swift_type_server_arg(ty: &TypeDetail) -> String {
-    match ty {
-        TypeDetail::Tx(inner) => format!("Rx<{}>", swift_type_base(inner)),
-        TypeDetail::Rx(inner) => format!("Tx<{}>", swift_type_base(inner)),
-        _ => swift_type_base(ty),
+fn swift_type_server_arg(shape: &'static Shape) -> String {
+    match classify_shape(shape) {
+        ShapeKind::Tx { inner } => format!("Rx<{}>", swift_type_base(inner)),
+        ShapeKind::Rx { inner } => format!("Tx<{}>", swift_type_base(inner)),
+        _ => swift_type_base(shape),
     }
 }
 
-/// Convert TypeDetail to Swift type for server/handler returns.
+/// Convert Shape to Swift type for server/handler returns.
 /// Schema types are from caller's perspective, so we INVERT for handler.
-fn swift_type_server_return(ty: &TypeDetail) -> String {
-    match ty {
-        TypeDetail::Tx(inner) => format!("Rx<{}>", swift_type_base(inner)),
-        TypeDetail::Rx(inner) => format!("Tx<{}>", swift_type_base(inner)),
-        _ => swift_type_base(ty),
+fn swift_type_server_return(shape: &'static Shape) -> String {
+    match classify_shape(shape) {
+        ShapeKind::Tx { inner } => format!("Rx<{}>", swift_type_base(inner)),
+        ShapeKind::Rx { inner } => format!("Tx<{}>", swift_type_base(inner)),
+        ShapeKind::Scalar(ScalarType::Unit) => "Void".into(),
+        ShapeKind::Tuple { elements } if elements.is_empty() => "Void".into(),
+        _ => swift_type_base(shape),
     }
-}
-
-// ============================================================================
-// Encoding/Decoding Code Generation
-// ============================================================================
-
-/// Generate a Swift expression that encodes a value of the given type.
-fn generate_encode_expr(ty: &TypeDetail, expr: &str) -> String {
-    match ty {
-        TypeDetail::Bool => format!("encodeBool({expr})"),
-        TypeDetail::U8 => format!("encodeU8({expr})"),
-        TypeDetail::I8 => format!("encodeI8({expr})"),
-        TypeDetail::U16 => format!("encodeU16({expr})"),
-        TypeDetail::I16 => format!("encodeI16({expr})"),
-        TypeDetail::U32 => format!("encodeU32({expr})"),
-        TypeDetail::I32 => format!("encodeI32({expr})"),
-        TypeDetail::U64 => format!("encodeVarint({expr})"),
-        TypeDetail::I64 => format!("encodeI64({expr})"),
-        TypeDetail::U128 => format!("encodeU128({expr})"),
-        TypeDetail::I128 => format!("encodeI128({expr})"),
-        TypeDetail::F32 => format!("encodeF32({expr})"),
-        TypeDetail::F64 => format!("encodeF64({expr})"),
-        TypeDetail::Char => format!("encodeString(String({expr}))"),
-        TypeDetail::String => format!("encodeString({expr})"),
-        TypeDetail::Unit => "[]".into(),
-        TypeDetail::Bytes => format!("encodeBytes(Array({expr}))"),
-        TypeDetail::List(inner) => {
-            let item_encode = generate_encode_expr(inner, "$0");
-            format!("encodeVec({expr}, encoder: {{ {item_encode} }})")
-        }
-        TypeDetail::Option(inner) => {
-            let inner_encode = generate_encode_expr(inner, "$0");
-            format!("encodeOption({expr}, encoder: {{ {inner_encode} }})")
-        }
-        TypeDetail::Tuple(items) if items.len() == 2 => {
-            let a_enc = generate_encode_expr(&items[0], &format!("{expr}.0"));
-            let b_enc = generate_encode_expr(&items[1], &format!("{expr}.1"));
-            format!("{a_enc} + {b_enc}")
-        }
-        TypeDetail::Tuple(items) => {
-            let parts: Vec<String> = items
-                .iter()
-                .enumerate()
-                .map(|(i, t)| generate_encode_expr(t, &format!("{expr}.{i}")))
-                .collect();
-            parts.join(" + ")
-        }
-        TypeDetail::Struct { fields, .. } => {
-            if fields.is_empty() {
-                "[]".into()
-            } else {
-                let parts: Vec<String> = fields
-                    .iter()
-                    .map(|f| {
-                        generate_encode_expr(
-                            &f.type_info,
-                            &format!("{expr}.{}", f.name.to_lower_camel_case()),
-                        )
-                    })
-                    .collect();
-                parts.join(" + ")
-            }
-        }
-        TypeDetail::Enum { variants, .. } => {
-            // Generate switch on enum case
-            let mut cases = String::new();
-            for (i, v) in variants.iter().enumerate() {
-                let variant_name = v.name.to_lower_camel_case();
-                match &v.payload {
-                    VariantPayload::Unit => {
-                        cases.push_str(&format!(
-                            "case .{variant_name}: return encodeVarint({i})\n            "
-                        ));
-                    }
-                    VariantPayload::Newtype(inner) => {
-                        let inner_enc = generate_encode_expr(inner, "value");
-                        cases.push_str(&format!(
-                            "case .{variant_name}(let value): return encodeVarint({i}) + {inner_enc}\n            "
-                        ));
-                    }
-                    VariantPayload::Struct(fields) => {
-                        let bindings: Vec<String> = fields
-                            .iter()
-                            .map(|f| format!("let {}", f.name.to_lower_camel_case()))
-                            .collect();
-                        let field_encs: Vec<String> = fields
-                            .iter()
-                            .map(|f| {
-                                generate_encode_expr(&f.type_info, &f.name.to_lower_camel_case())
-                            })
-                            .collect();
-                        cases.push_str(&format!(
-                            "case .{variant_name}({}): return encodeVarint({i}) + {}\n            ",
-                            bindings.join(", "),
-                            field_encs.join(" + ")
-                        ));
-                    }
-                }
-            }
-            format!("{{ switch {expr} {{\n            {cases}}} }}()")
-        }
-        TypeDetail::Map { key, value } => {
-            let k_enc = generate_encode_expr(key, "$0.key");
-            let v_enc = generate_encode_expr(value, "$0.value");
-            format!("encodeVec(Array({expr}), encoder: {{ {k_enc} + {v_enc} }})")
-        }
-        TypeDetail::Set(inner) => {
-            let item_encode = generate_encode_expr(inner, "$0");
-            format!("encodeVec(Array({expr}), encoder: {{ {item_encode} }})")
-        }
-        TypeDetail::Array { element, .. } => {
-            let item_encode = generate_encode_expr(element, "$0");
-            format!("encodeVec({expr}, encoder: {{ {item_encode} }})")
-        }
-        TypeDetail::Tx(_) | TypeDetail::Rx(_) => {
-            // Streaming types encode as stream ID (u64)
-            // r[impl streaming.type]
-            format!("encodeVarint({expr}.streamId)")
-        }
-    }
-}
-
-/// Generate a Swift closure expression for encoding a value.
-fn generate_encode_closure(ty: &TypeDetail) -> String {
-    match ty {
-        TypeDetail::Unit => "{ _ in [] }".into(),
-        TypeDetail::String => "encodeString".into(),
-        TypeDetail::Bytes => "{ encodeBytes(Array($0)) }".into(),
-        TypeDetail::Bool => "encodeBool".into(),
-        TypeDetail::U8 => "encodeU8".into(),
-        TypeDetail::I8 => "encodeI8".into(),
-        TypeDetail::U16 => "encodeU16".into(),
-        TypeDetail::I16 => "encodeI16".into(),
-        TypeDetail::U32 => "encodeU32".into(),
-        TypeDetail::I32 => "encodeI32".into(),
-        TypeDetail::U64 => "encodeVarint".into(),
-        TypeDetail::I64 => "encodeI64".into(),
-        _ => {
-            let encode_expr = generate_encode_expr(ty, "$0");
-            format!("{{ {encode_expr} }}")
-        }
-    }
-}
-
-/// Generate Swift code that decodes a value from a Data buffer.
-fn generate_decode_stmt(ty: &TypeDetail, var_name: &str, offset_var: &str) -> String {
-    match ty {
-        TypeDetail::Bool => {
-            format!("let {var_name} = try decodeBool(from: payload, offset: &{offset_var})")
-        }
-        TypeDetail::U8 => {
-            format!("let {var_name} = try decodeU8(from: payload, offset: &{offset_var})")
-        }
-        TypeDetail::I8 => {
-            format!("let {var_name} = try decodeI8(from: payload, offset: &{offset_var})")
-        }
-        TypeDetail::U16 => {
-            format!("let {var_name} = try decodeU16(from: payload, offset: &{offset_var})")
-        }
-        TypeDetail::I16 => {
-            format!("let {var_name} = try decodeI16(from: payload, offset: &{offset_var})")
-        }
-        TypeDetail::U32 => {
-            format!("let {var_name} = try decodeU32(from: payload, offset: &{offset_var})")
-        }
-        TypeDetail::I32 => {
-            format!("let {var_name} = try decodeI32(from: payload, offset: &{offset_var})")
-        }
-        TypeDetail::U64 => {
-            format!("let {var_name} = try decodeVarint(from: payload, offset: &{offset_var})")
-        }
-        TypeDetail::I64 => {
-            format!("let {var_name} = try decodeI64(from: payload, offset: &{offset_var})")
-        }
-        TypeDetail::U128 => {
-            format!("let {var_name} = try decodeU128(from: payload, offset: &{offset_var})")
-        }
-        TypeDetail::I128 => {
-            format!("let {var_name} = try decodeI128(from: payload, offset: &{offset_var})")
-        }
-        TypeDetail::F32 => {
-            format!("let {var_name} = try decodeF32(from: payload, offset: &{offset_var})")
-        }
-        TypeDetail::F64 => {
-            format!("let {var_name} = try decodeF64(from: payload, offset: &{offset_var})")
-        }
-        TypeDetail::Char => format!(
-            "let {var_name} = Character(try decodeString(from: payload, offset: &{offset_var}))"
-        ),
-        TypeDetail::String => {
-            format!("let {var_name} = try decodeString(from: payload, offset: &{offset_var})")
-        }
-        TypeDetail::Unit => format!("let {var_name}: Void = ()"),
-        TypeDetail::Bytes => {
-            format!("let {var_name} = try decodeBytes(from: payload, offset: &{offset_var})")
-        }
-        TypeDetail::List(inner) => {
-            let inner_decode = generate_decode_closure(inner);
-            format!(
-                "let {var_name} = try decodeVec(from: payload, offset: &{offset_var}, decoder: {inner_decode})"
-            )
-        }
-        TypeDetail::Option(inner) => {
-            let inner_decode = generate_decode_closure(inner);
-            format!(
-                "let {var_name} = try decodeOption(from: payload, offset: &{offset_var}, decoder: {inner_decode})"
-            )
-        }
-        TypeDetail::Tuple(items) if items.len() == 2 => {
-            let a_decode = generate_decode_closure(&items[0]);
-            let b_decode = generate_decode_closure(&items[1]);
-            format!(
-                "let {var_name} = try decodeTuple2(from: payload, offset: &{offset_var}, decoderA: {a_decode}, decoderB: {b_decode})"
-            )
-        }
-        TypeDetail::Struct { fields, .. } => generate_struct_decode(fields, var_name, offset_var),
-        TypeDetail::Enum { variants, .. } => {
-            generate_enum_decode(variants, var_name, offset_var, ty)
-        }
-        TypeDetail::Map { key, value } => {
-            let k_decode = generate_decode_closure(key);
-            let v_decode = generate_decode_closure(value);
-            format!(
-                "let {var_name} = Dictionary(uniqueKeysWithValues: try decodeVec(from: payload, offset: &{offset_var}, decoder: {{ data, off in (try {k_decode}(data, &off), try {v_decode}(data, &off)) }}))"
-            )
-        }
-        TypeDetail::Set(inner) => {
-            let inner_decode = generate_decode_closure(inner);
-            format!(
-                "let {var_name} = Set(try decodeVec(from: payload, offset: &{offset_var}, decoder: {inner_decode}))"
-            )
-        }
-        TypeDetail::Array { element, .. } => {
-            let inner_decode = generate_decode_closure(element);
-            format!(
-                "let {var_name} = try decodeVec(from: payload, offset: &{offset_var}, decoder: {inner_decode})"
-            )
-        }
-        TypeDetail::Tx(_) | TypeDetail::Rx(_) => {
-            // Streaming types decode as stream ID (u64)
-            // r[impl streaming.type]
-            format!(
-                "let {var_name}_id = try decodeVarint(from: payload, offset: &{offset_var}); let {var_name} = StreamId({var_name}_id)"
-            )
-        }
-        _ => {
-            format!("let {var_name} = try decode(from: payload, offset: &{offset_var}) /* TODO */")
-        }
-    }
-}
-
-/// Generate a Swift closure for decoding a value.
-fn generate_decode_closure(ty: &TypeDetail) -> String {
-    match ty {
-        TypeDetail::Bool => "decodeBool".into(),
-        TypeDetail::U8 => "decodeU8".into(),
-        TypeDetail::I8 => "decodeI8".into(),
-        TypeDetail::U16 => "decodeU16".into(),
-        TypeDetail::I16 => "decodeI16".into(),
-        TypeDetail::U32 => "decodeU32".into(),
-        TypeDetail::I32 => "decodeI32".into(),
-        TypeDetail::U64 => "decodeVarint".into(),
-        TypeDetail::I64 => "decodeI64".into(),
-        TypeDetail::String => "decodeString".into(),
-        TypeDetail::Bytes => "decodeBytes".into(),
-        TypeDetail::List(inner) => {
-            let inner_decode = generate_decode_closure(inner);
-            format!(
-                "{{ data, off in try decodeVec(from: data, offset: &off, decoder: {inner_decode}) }}"
-            )
-        }
-        TypeDetail::Option(inner) => {
-            let inner_decode = generate_decode_closure(inner);
-            format!(
-                "{{ data, off in try decodeOption(from: data, offset: &off, decoder: {inner_decode}) }}"
-            )
-        }
-        _ => "{ data, off in try decode(from: data, offset: &off) /* TODO */ }".into(),
-    }
-}
-
-/// Generate struct decoding code.
-fn generate_struct_decode(fields: &[FieldDetail], var_name: &str, offset_var: &str) -> String {
-    let mut code = String::new();
-    for (i, field) in fields.iter().enumerate() {
-        let field_var = format!("{var_name}_f{i}");
-        code.push_str(&generate_decode_stmt(
-            &field.type_info,
-            &field_var,
-            offset_var,
-        ));
-        code.push_str("; ");
-    }
-    code.push_str(&format!("let {var_name} = ("));
-    for (i, field) in fields.iter().enumerate() {
-        if i > 0 {
-            code.push_str(", ");
-        }
-        code.push_str(&format!(
-            "{}: {var_name}_f{i}",
-            field.name.to_lower_camel_case()
-        ));
-    }
-    code.push(')');
-    code
-}
-
-/// Generate enum decoding code.
-fn generate_enum_decode(
-    variants: &[roam_schema::VariantDetail],
-    var_name: &str,
-    offset_var: &str,
-    ty: &TypeDetail,
-) -> String {
-    let type_name = swift_type_base(ty);
-    let mut code = format!(
-        "let {var_name}_tag = try decodeVarint(from: payload, offset: &{offset_var}); let {var_name}: {type_name} = switch {var_name}_tag {{ "
-    );
-    for (i, v) in variants.iter().enumerate() {
-        let variant_name = v.name.to_lower_camel_case();
-        code.push_str(&format!("case {i}: "));
-        match &v.payload {
-            VariantPayload::Unit => {
-                code.push_str(&format!(".{variant_name} "));
-            }
-            VariantPayload::Newtype(inner) => {
-                let inner_decode = generate_decode_closure(inner);
-                code.push_str(&format!(
-                    "{{ let v = try {inner_decode}(payload, &{offset_var}); return .{variant_name}(v) }}() "
-                ));
-            }
-            VariantPayload::Struct(fields) => {
-                code.push_str("{ ");
-                for (j, f) in fields.iter().enumerate() {
-                    let f_decode = generate_decode_closure(&f.type_info);
-                    code.push_str(&format!(
-                        "let f{j} = try {f_decode}(payload, &{offset_var}); "
-                    ));
-                }
-                code.push_str(&format!("return .{variant_name}("));
-                for (j, f) in fields.iter().enumerate() {
-                    if j > 0 {
-                        code.push_str(", ");
-                    }
-                    code.push_str(&format!("{}: f{j}", f.name.to_lower_camel_case()));
-                }
-                code.push_str(") }() ");
-            }
-        }
-    }
-    code.push_str(&format!(
-        "default: throw RoamError.decodeError(\"unknown enum variant: \\({var_name}_tag)\") }}"
-    ));
-    code
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use roam_schema::{ArgDetail, MethodDetail, ServiceDetail, TypeDetail};
+    use facet::Facet;
+    use roam_schema::{ArgDetail, MethodDetail, ServiceDetail};
+    use std::borrow::Cow;
 
     #[test]
     fn test_swift_type_base_primitives() {
-        assert_eq!(swift_type_base(&TypeDetail::Bool), "Bool");
-        assert_eq!(swift_type_base(&TypeDetail::U32), "UInt32");
-        assert_eq!(swift_type_base(&TypeDetail::I64), "Int64");
-        assert_eq!(swift_type_base(&TypeDetail::F32), "Float");
-        assert_eq!(swift_type_base(&TypeDetail::F64), "Double");
-        assert_eq!(swift_type_base(&TypeDetail::String), "String");
-        assert_eq!(swift_type_base(&TypeDetail::Bytes), "Data");
-        assert_eq!(swift_type_base(&TypeDetail::Unit), "Void");
+        assert_eq!(swift_type_base(<bool as Facet>::SHAPE), "Bool");
+        assert_eq!(swift_type_base(<u32 as Facet>::SHAPE), "UInt32");
+        assert_eq!(swift_type_base(<i64 as Facet>::SHAPE), "Int64");
+        assert_eq!(swift_type_base(<f32 as Facet>::SHAPE), "Float");
+        assert_eq!(swift_type_base(<f64 as Facet>::SHAPE), "Double");
+        assert_eq!(swift_type_base(<String as Facet>::SHAPE), "String");
+        assert_eq!(swift_type_base(<Vec<u8> as Facet>::SHAPE), "Data");
+        assert_eq!(swift_type_base(<() as Facet>::SHAPE), "Void");
     }
 
     #[test]
     fn test_swift_type_base_containers() {
-        let vec_ty = TypeDetail::List(Box::new(TypeDetail::I32));
-        assert_eq!(swift_type_base(&vec_ty), "[Int32]");
-
-        let opt_ty = TypeDetail::Option(Box::new(TypeDetail::String));
-        assert_eq!(swift_type_base(&opt_ty), "String?");
-
-        let map_ty = TypeDetail::Map {
-            key: Box::new(TypeDetail::String),
-            value: Box::new(TypeDetail::I32),
-        };
-        assert_eq!(swift_type_base(&map_ty), "[String: Int32]");
-    }
-
-    #[test]
-    fn test_swift_type_streaming_client() {
-        // Client uses Tx to send, Rx to receive (no inversion)
-        let push_ty = TypeDetail::Tx(Box::new(TypeDetail::String));
-        assert_eq!(swift_type_client_arg(&push_ty), "Tx<String>");
-
-        let rx_ty = TypeDetail::Rx(Box::new(TypeDetail::U32));
-        assert_eq!(swift_type_client_arg(&rx_ty), "Rx<UInt32>");
-    }
-
-    #[test]
-    fn test_swift_type_streaming_server() {
-        // Server inverts: Tx becomes Rx (receives), Rx becomes Tx (sends)
-        // r[impl streaming.caller-pov]
-        let push_ty = TypeDetail::Tx(Box::new(TypeDetail::String));
-        assert_eq!(swift_type_server_arg(&push_ty), "Rx<String>");
-
-        let rx_ty = TypeDetail::Rx(Box::new(TypeDetail::U32));
-        assert_eq!(swift_type_server_arg(&rx_ty), "Tx<UInt32>");
+        assert_eq!(swift_type_base(<Vec<i32> as Facet>::SHAPE), "[Int32]");
+        assert_eq!(swift_type_base(<Option<String> as Facet>::SHAPE), "String?");
     }
 
     fn sample_service() -> ServiceDetail {
         ServiceDetail {
-            name: "Echo".into(),
-            doc: Some("Simple echo service".into()),
+            name: Cow::Borrowed("Echo"),
+            doc: Some(Cow::Borrowed("Simple echo service")),
             methods: vec![MethodDetail {
-                service_name: "Echo".into(),
-                method_name: "echo".into(),
+                service_name: Cow::Borrowed("Echo"),
+                method_name: Cow::Borrowed("echo"),
                 args: vec![ArgDetail {
-                    name: "message".into(),
-                    type_info: TypeDetail::String,
+                    name: Cow::Borrowed("message"),
+                    ty: <String as Facet>::SHAPE,
                 }],
-                return_type: TypeDetail::String,
-                doc: Some("Echo back the message".into()),
+                return_type: <String as Facet>::SHAPE,
+                doc: Some(Cow::Borrowed("Echo back the message")),
             }],
         }
     }
@@ -1131,39 +803,10 @@ mod tests {
         let service = sample_service();
         let code = generate_service(&service);
 
-        assert!(code.contains("public protocol EchoCaller"));
-        assert!(code.contains("public protocol EchoHandler"));
-        assert!(code.contains("public class EchoClient"));
-        assert!(code.contains("public class EchoDispatcher"));
+        assert!(code.contains("protocol EchoCaller"));
+        assert!(code.contains("protocol EchoHandler"));
+        assert!(code.contains("EchoClient"));
+        assert!(code.contains("EchoDispatcher"));
         assert!(code.contains("EchoMethodId"));
-    }
-
-    #[test]
-    fn test_streaming_service_handler_inverts() {
-        let service = ServiceDetail {
-            name: "Stream".into(),
-            doc: None,
-            methods: vec![MethodDetail {
-                service_name: "Stream".into(),
-                method_name: "upload".into(),
-                args: vec![ArgDetail {
-                    name: "data".into(),
-                    type_info: TypeDetail::Tx(Box::new(TypeDetail::Bytes)),
-                }],
-                return_type: TypeDetail::U64,
-                doc: None,
-            }],
-        };
-
-        let code = generate_service(&service);
-
-        // Caller uses Push (sends data)
-        assert!(code.contains("Tx<Data>"), "Caller should have Tx<Data>");
-
-        // Handler uses Rx (receives data) - inverted
-        assert!(
-            code.contains("Rx<Data>"),
-            "Handler should have Rx<Data> (inverted)"
-        );
     }
 }

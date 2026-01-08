@@ -14,68 +14,65 @@ We're working on GitHub issue #2: removing the custom `TypeDetail` type system i
 - **`roam-hash`**: Fully migrated to use `Shape`, `ScalarType`, and the facet-core API.
 - **`roam-codegen/render.rs`**: Switched from custom `kebab()` to `heck::ToKebabCase`.
 
-### 2. Codegen Targets - Partial Progress
+### 2. Codegen Targets ✅ COMPLETE
 
 | Target     | Status | Notes |
 |------------|--------|-------|
 | TypeScript | ✅ Done | Fully migrated |
 | Java       | ✅ Done | Fully migrated |
 | Python     | ✅ Done | Fully migrated |
-| **Rust**   | ❌ TODO | **PRIORITY** - Start here |
-| Go         | ❌ TODO | |
-| Swift      | ❌ TODO | |
+| **Rust**   | ✅ Done | Fully migrated |
+| Go         | ✅ Done | Fully migrated |
+| Swift      | ✅ Done | Fully migrated |
+
+All codegen targets now use `&'static Shape` instead of `TypeDetail`, `classify_shape()` instead of `match ty { TypeDetail::X => ... }`, and `classify_variant()` instead of `VariantPayload`.
 
 ## What Needs To Be Done
 
-### 1. **PRIORITY: Rust Codegen** (`rust/roam-codegen/src/targets/rust.rs`)
+### 1. **PRIORITY: Remove roam-reflect** (`rust/roam-reflect/`)
 
-This is the most important target since it's the primary language for roam.
+The `roam-reflect` crate converts `Shape` → `TypeDetail`. Since we no longer use `TypeDetail`, this crate is now unnecessary.
 
-**Current errors:**
+**Steps:**
+1. Remove `roam-reflect` from `rust/roam/Cargo.toml` dependencies
+2. Remove `pub use roam_reflect as reflect;` from `rust/roam/src/lib.rs`
+3. Delete the `rust/roam-reflect/` directory
+4. Remove from workspace `Cargo.toml`
+
+### 2. **Update roam-macros** (`rust/roam-macros/src/lib.rs`)
+
+The macro currently generates code that calls `roam::reflect::type_detail::<T>()` to get `TypeDetail`. This needs to change to use `<T as Facet>::SHAPE` directly.
+
+**Current code in `generate_method_details()`:**
+```rust
+#roam::reflect::type_detail::<#ty_tokens>().unwrap_or_else(|e| {
+    panic!("Failed to get type_detail for {}: {e}", stringify!(#ty_tokens))
+})
 ```
-error[E0432]: unresolved imports `roam_schema::TypeDetail`, `roam_schema::VariantDetail`, `roam_schema::VariantPayload`
+
+**Should become:**
+```rust
+<#ty_tokens as ::facet::Facet>::SHAPE
 ```
 
-**Pattern to follow** (from TypeScript migration):
+**Key changes:**
+- `arg.type_info` → `arg.ty` (ArgDetail field renamed)
+- `method.return_type` is already `&'static Shape` in the new schema
+- Remove the `unwrap_or_else` since `SHAPE` is a const, not a `Result`
 
-1. Update imports:
-   ```rust
-   use facet_core::{ScalarType, Shape, StructKind};
-   use roam_schema::{
-       EnumInfo, MethodDetail, ServiceDetail, ShapeKind, StructInfo, VariantKind,
-       classify_shape, classify_variant, is_bytes, is_rx, is_tx,
-   };
-   ```
+### 3. **Update roam-schema types** (if needed)
 
-2. Change function signatures from `&TypeDetail` to `&'static Shape`
+Verify that `MethodDetail` and `ArgDetail` in `roam-schema` use `&'static Shape`:
+- `ArgDetail.ty: &'static Shape` ✅ (already done)
+- `MethodDetail.return_type: &'static Shape` ✅ (already done)
 
-3. Replace `match ty { TypeDetail::X => ... }` with `match classify_shape(shape) { ShapeKind::X => ... }`
+### 4. **Run full workspace build**
 
-4. Replace `match &v.payload { VariantPayload::X => ... }` with `match classify_variant(v) { VariantKind::X => ... }`
-
-5. Replace `arg.type_info` with `arg.ty` and `method.return_type` stays the same (it's already `&'static Shape`)
-
-**Key functions to update:**
-- `rust_type()` - convert Shape to Rust type string
-- `generate_encode_expr()` / `generate_decode_stmt()` - codec generation
-- `collect_named_types()` - collect structs/enums for type definitions
-- Any function using `TypeDetail`, `VariantDetail`, or `VariantPayload`
-
-### 2. Go Codegen (`rust/roam-codegen/src/targets/go.rs`)
-
-Same pattern as Rust. ~1554 lines.
-
-### 3. Swift Codegen (`rust/roam-codegen/src/targets/swift.rs`)
-
-Same pattern. ~1169 lines. Also uses `FieldDetail` which is now gone - use `facet_core::Field` directly.
-
-### 4. Clean up `roam-reflect`
-
-After codegen is done, `roam-reflect` can likely be deleted or significantly simplified since it was converting `Shape` → `TypeDetail`.
-
-### 5. Update `roam-macros`
-
-Change from emitting `type_detail::<T>()` to `<T as Facet>::SHAPE`. Look at `generate_method_details()` in `rust/roam-macros/src/lib.rs`.
+After completing the above:
+```bash
+cargo build --workspace
+cargo test --workspace
+```
 
 ## Key Types Reference
 
@@ -135,12 +132,38 @@ variant.data        // StructType (use .kind and .fields)
 ## Commands
 
 ```bash
-# Check if Rust codegen compiles
-cargo build -p roam-codegen 2>&1 | head -50
+# Check if codegen compiles
+cargo check -p roam-codegen --lib
 
-# Run tests after fixing
-cargo test -p roam-codegen
+# Run codegen tests (currently blocked by roam-reflect)
+cargo test -p roam-codegen --lib
 
-# Full workspace check
+# Full workspace check (after roam-reflect removal)
 cargo build --workspace
+cargo test --workspace
 ```
+
+## Migration Pattern Used
+
+For each codegen file, the pattern was:
+
+1. **Update imports:**
+   ```rust
+   use facet_core::{ScalarType, Shape};
+   use roam_schema::{
+       EnumInfo, MethodDetail, ServiceDetail, ShapeKind, StructInfo, VariantKind,
+       classify_shape, classify_variant, is_bytes, is_rx, is_tx,
+   };
+   ```
+
+2. **Change function signatures:** `&TypeDetail` → `&'static Shape`
+
+3. **Replace type matching:**
+   - `match ty { TypeDetail::X => ... }` → `match classify_shape(shape) { ShapeKind::X => ... }`
+   - `match &v.payload { VariantPayload::X => ... }` → `match classify_variant(v) { VariantKind::X => ... }`
+
+4. **Update field access:**
+   - `arg.type_info` → `arg.ty`
+   - `field.type_info` → `field.shape()`
+
+5. **Update tests:** Use `<T as Facet>::SHAPE` to get Shape for test types
