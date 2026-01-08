@@ -9,9 +9,8 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use facet::{
-    Def, Facet, Shape, ShapeBuilder, Type, TypeParam, UserType, Variance, VarianceDep, VarianceDesc,
-};
+use facet::Facet;
+use std::convert::Infallible;
 use tokio::sync::{Notify, mpsc};
 
 pub use roam_frame::{Frame, MsgDesc, OwnedMessage, Payload};
@@ -143,35 +142,52 @@ impl OutgoingSender {
 /// r[impl streaming.lifecycle.speculative] - Early Data may be wasted on error.
 ///
 /// When dropped, a Close message is sent automatically.
-pub struct Tx<T: Facet<'static>> {
+///
+/// # Facet Implementation
+///
+/// Uses `#[facet(proxy = u64)]` so that:
+/// - `stream_id` is pokeable (Connection can walk args and set stream IDs)
+/// - Serializes as just a `u64` on the wire
+/// - `T` is exposed as a type parameter for codegen introspection
+#[derive(Facet)]
+#[facet(proxy = u64)]
+pub struct Tx<T> {
     /// The unique stream ID for this stream.
-    stream_id: StreamId,
+    /// Public so Connection can poke it when binding streams.
+    pub stream_id: StreamId,
     /// Channel sender for outgoing data.
+    #[facet(opaque)]
     sender: OutgoingSender,
     /// Phantom data for the element type.
-    _marker: PhantomData<fn(T)>,
+    #[facet(opaque)]
+    _marker: PhantomData<T>,
 }
 
-// SAFETY: Tx<T> is a handle type. We manually implement Facet to:
-// 1. Avoid requiring OutgoingSender to implement Facet
-// 2. Properly expose T as a type parameter for codegen introspection
-#[allow(unsafe_code)]
-unsafe impl<T: Facet<'static>> Facet<'static> for Tx<T> {
-    const SHAPE: &'static Shape = &const {
-        ShapeBuilder::for_sized::<Tx<T>>("Tx")
-            .module_path("roam_session")
-            .ty(Type::User(UserType::Opaque))
-            .def(Def::Scalar)
-            .type_params(&[TypeParam {
-                name: "T",
-                shape: T::SHAPE,
-            }])
-            .variance(VarianceDesc {
-                base: Variance::Bivariant,
-                deps: &const { [VarianceDep::covariant(T::SHAPE)] },
-            })
-            .build()
-    };
+/// Serialization: &Tx<T> -> u64 (extracts stream_id)
+impl<T: 'static> TryFrom<&Tx<T>> for u64 {
+    type Error = Infallible;
+    fn try_from(tx: &Tx<T>) -> Result<Self, Self::Error> {
+        Ok(tx.stream_id)
+    }
+}
+
+/// Deserialization: u64 -> Tx<T> (creates a "hollow" Tx)
+///
+/// The sender is a placeholder - the real sender gets set up by Connection
+/// after deserialization when it binds the stream.
+impl<T: 'static> TryFrom<u64> for Tx<T> {
+    type Error = Infallible;
+    fn try_from(stream_id: u64) -> Result<Self, Self::Error> {
+        // Create a placeholder channel - Connection will replace this
+        let (tx, _rx) = mpsc::channel(1);
+        let notify = Arc::new(Notify::new());
+        let sender = OutgoingSender::new(stream_id, tx, notify);
+        Ok(Tx {
+            stream_id,
+            sender,
+            _marker: PhantomData,
+        })
+    }
 }
 
 impl<T: Facet<'static>> Tx<T> {
@@ -233,35 +249,50 @@ impl std::error::Error for TxError {}
 /// r[impl streaming.caller-pov] - From caller's perspective, Rx means "I receive".
 /// r[impl streaming.type] - Serializes as u64 stream ID on wire.
 /// r[impl streaming.holder-semantics] - The holder receives from this stream.
-pub struct Rx<T: Facet<'static>> {
+///
+/// # Facet Implementation
+///
+/// Uses `#[facet(proxy = u64)]` so that:
+/// - `stream_id` is pokeable (Connection can walk args and set stream IDs)
+/// - Serializes as just a `u64` on the wire
+/// - `T` is exposed as a type parameter for codegen introspection
+#[derive(Facet)]
+#[facet(proxy = u64)]
+pub struct Rx<T> {
     /// The unique stream ID for this stream.
-    stream_id: StreamId,
+    /// Public so Connection can poke it when binding streams.
+    pub stream_id: StreamId,
     /// Channel receiver for incoming data.
+    #[facet(opaque)]
     rx: mpsc::Receiver<Vec<u8>>,
     /// Phantom data for the element type.
-    _marker: PhantomData<fn() -> T>,
+    #[facet(opaque)]
+    _marker: PhantomData<T>,
 }
 
-// SAFETY: Rx<T> is a handle type. We manually implement Facet to:
-// 1. Avoid requiring mpsc::Receiver to implement Facet
-// 2. Properly expose T as a type parameter for codegen introspection
-#[allow(unsafe_code)]
-unsafe impl<T: Facet<'static>> Facet<'static> for Rx<T> {
-    const SHAPE: &'static Shape = &const {
-        ShapeBuilder::for_sized::<Rx<T>>("Rx")
-            .module_path("roam_session")
-            .ty(Type::User(UserType::Opaque))
-            .def(Def::Scalar)
-            .type_params(&[TypeParam {
-                name: "T",
-                shape: T::SHAPE,
-            }])
-            .variance(VarianceDesc {
-                base: Variance::Bivariant,
-                deps: &const { [VarianceDep::covariant(T::SHAPE)] },
-            })
-            .build()
-    };
+/// Serialization: &Rx<T> -> u64 (extracts stream_id)
+impl<T: 'static> TryFrom<&Rx<T>> for u64 {
+    type Error = Infallible;
+    fn try_from(rx: &Rx<T>) -> Result<Self, Self::Error> {
+        Ok(rx.stream_id)
+    }
+}
+
+/// Deserialization: u64 -> Rx<T> (creates a "hollow" Rx)
+///
+/// The receiver is a placeholder - the real receiver gets set up by Connection
+/// after deserialization when it binds the stream.
+impl<T: 'static> TryFrom<u64> for Rx<T> {
+    type Error = Infallible;
+    fn try_from(stream_id: u64) -> Result<Self, Self::Error> {
+        // Create a placeholder channel - Connection will replace this
+        let (_tx, rx) = mpsc::channel(1);
+        Ok(Rx {
+            stream_id,
+            rx,
+            _marker: PhantomData,
+        })
+    }
 }
 
 impl<T: Facet<'static>> Rx<T> {

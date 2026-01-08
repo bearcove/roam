@@ -2,6 +2,62 @@
 
 This document describes the architecture for generating Rust client/server code from roam service definitions.
 
+## The Big Picture
+
+**Goal**: A single `Connection` type that handles everything, so using roam services is as simple as:
+
+```rust
+// Client side - with generated code
+let conn = Connection::connect(&addr).await?;
+let client = CalculatorClient::new(conn);
+
+let result = client.add(2, 3).await?;  // Just works!
+
+// Streaming
+let (tx, rx) = roam::channel::<i32>();
+let result_fut = client.sum_stream(tx);
+tx.send(&1).await?;
+tx.send(&2).await?;
+drop(tx);
+let sum: i64 = result_fut.await?;
+```
+
+```rust
+// Server side - with generated code
+let conn = Connection::accept(&listener).await?;
+let dispatcher = CalculatorDispatcher::new(MyHandler);
+conn.run(&dispatcher).await?;
+```
+
+**Current state** (what we're replacing): Manual message construction, serialization, request ID tracking:
+
+```rust
+// This is painful and error-prone!
+let payload = facet_postcard::to_vec(&(2i32, 3i32)).unwrap();
+conn.io().send(&Message::Request {
+    request_id: 1,  // manual tracking
+    method_id: method_id::ADD,
+    metadata: vec![],
+    payload,
+}).await.unwrap();
+
+let resp = conn.io().recv_timeout(...).await.unwrap().unwrap();
+let result: CallResult<i32, Never> = facet_postcard::from_slice(&payload).unwrap();
+```
+
+**The `Connection` type orchestrates**:
+1. **Request/response multiplexing** - track in-flight calls, route responses
+2. **Request ID allocation** - automatic, no manual tracking
+3. **Stream ID allocation and binding** - walk args with `Poke`, find `Tx<T>`/`Rx<T>`, set their `stream_id` fields
+4. **Serialization** - uses facet (Tx/Rx serialize as `u64` via proxy)
+5. **Symmetric design** - same type works for client AND server
+
+**Why Tx/Rx need special Facet treatment** (see experiments below):
+- `Connection::call_raw(method_id, poke)` receives a `Poke` to the arguments
+- It walks the arg structure, finds any `Tx<T>`/`Rx<T>` handles
+- It allocates stream IDs and **pokes them into** the `stream_id` field
+- Then it serializes - Tx/Rx become just `u64` on the wire via `#[facet(proxy = u64)]`
+
 ## Overview
 
 All language targets (including Rust) generate their client/server code through `roam-codegen` running in a `build.rs` script. The proc-macro (`roam-macros`) is **metadata-only** — it parses the trait syntax and emits a single `service_detail()` function.
@@ -449,6 +505,248 @@ The macro should be ~50 lines after this, down from ~600.
 | `Shape` | Complete type introspection |
 | `<T as Facet>::SHAPE` | Access shape for any `Facet` type |
 | `shape.fully_qualified_type_path()` | Full module path for types |
+
+## Tx/Rx Facet Implementation
+
+This section documents experiments run in `rust/facet-experiments/` to figure out how to implement `Tx<T>` and `Rx<T>` so they work with `Connection::call_raw`.
+
+### Requirements
+
+For `Connection` to work its magic, `Tx<T>` and `Rx<T>` must:
+- Have a **pokeable `stream_id: u64` field** - so Connection can walk args and set stream IDs
+- **Expose `T` as a type parameter** - so codegen knows the element type
+- **Serialize as just `u64`** - via `#[facet(proxy = u64)]`
+- Have **opaque fields** for sender/receiver channels - they don't implement Facet
+
+### Experiment Results (rust/facet-experiments/)
+
+**Experiment 1: Fully opaque struct (`#[facet(opaque)]` on struct)**
+
+```rust
+#[derive(Facet)]
+#[facet(opaque)]
+pub struct FullyOpaque<T: 'static> {
+    pub stream_id: u64,
+    sender: mpsc::Sender<Vec<u8>>,
+    _marker: PhantomData<fn(T)>,
+}
+```
+
+Results:
+- `type_params: []` — T is NOT exposed
+- `ty: User(Opaque)` — not a struct
+- Cannot convert to `PokeStruct` — no field access at all
+- ❌ **Not usable** for Tx/Rx
+
+**Experiment 2: Partial opaque (`#[facet(opaque)]` only on non-Facet fields)**
+
+```rust
+#[derive(Facet)]
+pub struct PartiallyOpaque<T: 'static> {
+    pub stream_id: u64,
+    #[facet(opaque)]
+    sender: mpsc::Sender<Vec<u8>>,
+    #[facet(opaque)]
+    _marker: PhantomData<fn(T)>,
+}
+```
+
+Results:
+- `type_params: ["T"]` — T IS exposed!
+- Has 3 fields visible in shape
+- CAN convert to `PokeStruct`
+- CAN poke `stream_id` field and set it (verified: 0 → 42)
+- Opaque fields accessible as `Poke` but inner structure hidden
+- ✅ **This is what we need**
+
+**Experiment 3: Container-level proxy for serialization**
+
+Tx/Rx should serialize as just a `u64` (the stream ID), not the full struct. We use `#[facet(proxy = TxProxy)]` at the container level.
+
+```rust
+/// The proxy type - a transparent newtype over u64
+#[derive(Facet, Clone, PartialEq)]
+#[facet(transparent)]
+pub struct TxProxy(pub u64);
+
+/// Tx stream handle - serializes as just a u64 via TxProxy
+#[derive(Facet)]
+#[facet(proxy = TxProxy)]
+pub struct Tx<T: 'static> {
+    pub stream_id: u64,
+    #[facet(opaque)]
+    sender: mpsc::Sender<Vec<u8>>,
+    #[facet(opaque)]
+    _marker: PhantomData<T>,
+}
+
+// For SERIALIZATION: &Tx<T> -> TxProxy
+impl<T: 'static> TryFrom<&Tx<T>> for TxProxy {
+    type Error = std::convert::Infallible;
+    fn try_from(tx: &Tx<T>) -> Result<Self, Self::Error> {
+        Ok(TxProxy(tx.stream_id))
+    }
+}
+
+// For DESERIALIZATION: TxProxy -> Tx<T>
+// Creates a "hollow" Tx - the real sender gets injected by Connection after deserialization
+impl<T: 'static> TryFrom<TxProxy> for Tx<T> {
+    type Error = std::convert::Infallible;
+    fn try_from(proxy: TxProxy) -> Result<Self, Self::Error> {
+        let (sender, _rx) = mpsc::channel(1); // placeholder
+        Ok(Tx {
+            stream_id: proxy.0,
+            sender,
+            _marker: PhantomData,
+        })
+    }
+}
+```
+
+Results:
+```
+=== Tx<i32> ===
+type_identifier: Tx
+module_path: Some("facet_experiments")
+type_params: ["T"]
+proxy: TxProxy (container-level)
+fields (3):
+  - stream_id: u64 (shape: u64)
+  - sender: Opaque (shape: Opaque)
+  - _marker: Opaque (shape: Opaque)
+
+### Testing Poke on Tx ###
+Initial stream_id: 0
+✅ Successfully poked stream_id = 42
+Final stream_id: 42
+
+### Testing JSON Roundtrip ###
+Original stream_id: 42
+Serialized JSON: 42
+Deserialized stream_id: 42
+✅ JSON roundtrip successful!
+
+### Testing Postcard Roundtrip ###
+Original stream_id: 42
+Serialized bytes: [42] (1 bytes)
+Deserialized stream_id: 42
+✅ Postcard roundtrip successful!
+
+### Testing Tx embedded in a struct ###
+Original: request_id=100, data_stream.stream_id=42
+JSON: {"request_id":100,"data_stream":42}
+✅ JSON roundtrip: request_id=100, data_stream.stream_id=42
+Postcard bytes: [100, 42] (2 bytes)
+✅ Postcard roundtrip: request_id=100, data_stream.stream_id=42
+```
+
+Key findings:
+- ✅ **Container-level proxy works** - `Tx<i32>` shows `proxy: TxProxy (container-level)`
+- ✅ **Can still poke `stream_id`** - Connection can walk args and set stream IDs
+- ✅ **JSON serializes as bare `42`** - not the full struct
+- ✅ **Postcard serializes as `[42]`** - single varint byte
+- ✅ **Works when embedded** - `{"request_id":100,"data_stream":42}`
+- ✅ **Type params preserved** - `["T"]` exposed for codegen introspection
+
+### Direct `proxy = u64` is simplest
+
+Tested `#[facet(proxy = u64)]` directly (no newtype needed):
+
+```rust
+#[derive(Facet)]
+#[facet(proxy = u64)]
+pub struct Tx<T: 'static> {
+    pub stream_id: u64,
+    #[facet(opaque)]
+    sender: mpsc::Sender<Vec<u8>>,
+    #[facet(opaque)]
+    _marker: PhantomData<T>,
+}
+
+// For SERIALIZATION: &Tx<T> -> u64
+impl<T: 'static> TryFrom<&Tx<T>> for u64 {
+    type Error = std::convert::Infallible;
+    fn try_from(tx: &Tx<T>) -> Result<Self, Self::Error> {
+        Ok(tx.stream_id)
+    }
+}
+
+// For DESERIALIZATION: u64 -> Tx<T>
+impl<T: 'static> TryFrom<u64> for Tx<T> {
+    type Error = std::convert::Infallible;
+    fn try_from(stream_id: u64) -> Result<Self, Self::Error> {
+        let (sender, _rx) = mpsc::channel(1); // placeholder
+        Ok(Tx {
+            stream_id,
+            sender,
+            _marker: PhantomData,
+        })
+    }
+}
+```
+
+Results:
+```
+=== Tx2<i32> (direct u64 proxy) ===
+type_identifier: Tx2
+module_path: Some("facet_experiments")
+type_params: ["T"]
+proxy: u64 (container-level)
+fields (3):
+  - stream_id: u64 (shape: u64)
+  - sender: Opaque (shape: Opaque)
+  - _marker: Opaque (shape: Opaque)
+
+### Testing Poke on Tx2 (direct u64 proxy) ###
+Initial stream_id: 0
+✅ Successfully poked stream_id = 42
+Final stream_id: 42
+
+### Testing JSON Roundtrip (Tx2 with direct u64 proxy) ###
+Original stream_id: 42
+Serialized JSON: 42
+Deserialized stream_id: 42
+✅ JSON roundtrip successful!
+```
+
+**Conclusion**: `#[facet(proxy = u64)]` is simpler than the newtype approach. No need for `TxProxy`/`RxProxy` types. Both approaches work identically.
+
+### Final Recommended Tx/Rx Implementation
+
+```rust
+/// Tx<T> - caller sends to callee
+#[derive(Facet)]
+#[facet(proxy = u64)]
+pub struct Tx<T: 'static> {
+    pub stream_id: u64,
+    #[facet(opaque)]
+    sender: OutgoingSender,
+    #[facet(opaque)]
+    _marker: PhantomData<T>,
+}
+
+/// Rx<T> - caller receives from callee  
+#[derive(Facet)]
+#[facet(proxy = u64)]
+pub struct Rx<T: 'static> {
+    pub stream_id: u64,
+    #[facet(opaque)]
+    receiver: mpsc::Receiver<Vec<u8>>,
+    #[facet(opaque)]
+    _marker: PhantomData<T>,
+}
+
+// TryFrom<&Tx<T>> for u64 - serialization
+// TryFrom<u64> for Tx<T> - deserialization (creates placeholder sender)
+// Same pattern for Rx<T>
+```
+
+This gives us:
+- ✅ `type_params: ["T"]` exposed for codegen
+- ✅ `stream_id` pokeable (Connection can set it)
+- ✅ Serializes as bare `u64` (JSON: `42`, Postcard: `[42]`)
+- ✅ Opaque fields don't need Facet impl
+- ✅ Works when embedded in structs
 
 ## Open Questions
 

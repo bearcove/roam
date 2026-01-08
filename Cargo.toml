@@ -23,6 +23,8 @@ members = [
     "spec/spec-proto",
     "spec/spec-tests",
     "xtask",
+    # Experiments
+    "rust/facet-experiments",
 ]
 exclude = ["fuzz"]
 
