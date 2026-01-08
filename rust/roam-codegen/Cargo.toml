@@ -19,4 +19,5 @@ roam-hash = { path = "../roam-hash" }
 roam-schema = { path = "../roam-schema" }
 
 [dev-dependencies]
+facet.workspace = true
 roam = { path = "../roam" }

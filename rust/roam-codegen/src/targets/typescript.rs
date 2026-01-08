@@ -234,6 +234,13 @@ fn ts_type_base_named(shape: &'static Shape) -> String {
         ShapeKind::Scalar(scalar) => ts_scalar_type(scalar),
         ShapeKind::Slice { element } => format!("{}[]", ts_type_base_named(element)),
         ShapeKind::Pointer { pointee } => ts_type_base_named(pointee),
+        ShapeKind::Result { ok, err } => {
+            format!(
+                "{{ ok: true; value: {} }} | {{ ok: false; error: {} }}",
+                ts_type_base_named(ok),
+                ts_type_base_named(err)
+            )
+        }
         ShapeKind::Opaque => "unknown".into(),
     }
 }
@@ -778,6 +785,9 @@ fn generate_encode_expr(shape: &'static Shape, expr: &str) -> String {
             format!("encodeU64({expr}.streamId)")
         }
         ShapeKind::Pointer { pointee } => generate_encode_expr(pointee, expr),
+        ShapeKind::Result { .. } => {
+            format!("/* Result type encoding not yet implemented */ new Uint8Array(0)")
+        }
         ShapeKind::Opaque => format!("/* unsupported type */ new Uint8Array(0)"),
     }
 }
@@ -1027,6 +1037,9 @@ fn generate_decode_stmt(shape: &'static Shape, var_name: &str, offset_var: &str)
             )
         }
         ShapeKind::Pointer { pointee } => generate_decode_stmt(pointee, var_name, offset_var),
+        ShapeKind::Result { .. } => {
+            format!("const {var_name} = undefined; /* Result type decoding not yet implemented */")
+        }
         ShapeKind::Opaque => format!("const {var_name} = undefined; /* unsupported type */"),
     }
 }
@@ -1245,6 +1258,7 @@ fn is_fully_supported(shape: &'static Shape) -> bool {
         }
         ShapeKind::Pointer { pointee } => is_fully_supported(pointee),
         ShapeKind::Scalar(_) => true,
+        ShapeKind::Result { .. } => false,
         ShapeKind::Opaque => false,
     }
 }

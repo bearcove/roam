@@ -684,6 +684,14 @@ fn go_type_base(shape: &'static Shape) -> String {
         }) => name.to_string(),
         ShapeKind::Enum(EnumInfo { name: None, .. }) => "interface{}".into(),
         ShapeKind::Pointer { pointee } => go_type_base(pointee),
+        ShapeKind::Result { ok, err } => {
+            // Go doesn't have a native Result type, use a tuple-like struct or interface
+            format!(
+                "struct {{ Ok {}; Err {} }}",
+                go_type_base(ok),
+                go_type_base(err)
+            )
+        }
         ShapeKind::Opaque => "interface{}".into(),
     }
 }

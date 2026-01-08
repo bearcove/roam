@@ -154,7 +154,7 @@ impl<'a> RustGenerator<'a> {
 
         for method in &self.service.methods {
             let method_name = method.method_name.to_snake_case();
-            let is_streaming =
+            let _is_streaming =
                 method.args.iter().any(|a| is_stream(a.ty)) || is_stream(method.return_type);
 
             // Build argument list - client perspective uses types as-is
@@ -231,14 +231,15 @@ impl<'a> RustGenerator<'a> {
             let full_return = format_handler_return_type(method.return_type);
 
             let fn_def = trait_def.new_fn(&method_name);
-            fn_def.set_async(true);
             fn_def.arg_ref_self();
             for arg in &method.args {
                 let arg_name = arg.name.to_snake_case();
                 let arg_type = rust_type_server_arg(arg.ty);
                 fn_def.arg(&arg_name, &arg_type);
             }
-            fn_def.ret(&full_return);
+            fn_def.ret(format!(
+                "impl std::future::Future<Output = {full_return}> + Send"
+            ));
 
             if let Some(doc) = &method.doc {
                 fn_def.doc(doc.as_ref());
@@ -331,7 +332,7 @@ impl<'a> RustGenerator<'a> {
                 method.args.iter().any(|a| is_stream(a.ty)) || is_stream(method.return_type);
             if !is_streaming {
                 dispatch_unary_arms.push(format!(
-                    "                method_id::{const_name} => self.dispatch_{method_name}(payload).await,"
+                    "                method_id::{const_name} => Ok(self.dispatch_{method_name}(&payload).await),"
                 ));
             }
         }
@@ -416,17 +417,22 @@ fn generate_dispatch_unary(
 ) {
     let method_name = method.method_name.to_snake_case();
 
-    // Decode arguments
+    // Decode arguments - payload is encoded as a tuple of all args
     if method.args.is_empty() {
         dispatch_fn.line("// No arguments to decode");
     } else {
-        dispatch_fn.line("// Decode arguments");
-        dispatch_fn.line("let mut cursor = payload;");
-
-        for arg in &method.args {
-            let arg_name = arg.name.to_snake_case();
-            generate_decode_stmt(dispatch_fn, &arg_name, arg.ty);
-        }
+        dispatch_fn.line("// Decode arguments (encoded as tuple)");
+        let arg_names: Vec<String> = method.args.iter().map(|a| a.name.to_snake_case()).collect();
+        let arg_types: Vec<String> = method
+            .args
+            .iter()
+            .map(|a| rust_type_server_arg(a.ty))
+            .collect();
+        let tuple_pattern = arg_names.join(", ");
+        let tuple_type = arg_types.join(", ");
+        dispatch_fn.line(format!(
+            "let ({tuple_pattern}) = facet_postcard::from_slice::<({tuple_type})>(payload).expect(\"decode args\");"
+        ));
     }
 
     // Call handler
@@ -465,15 +471,6 @@ fn generate_dispatch_streaming(
     dispatch_fn.line("// Streaming dispatch - requires stream setup");
     dispatch_fn.line("// TODO: Implement streaming dispatch");
     dispatch_fn.line("vec![1] // Error - streaming not yet implemented");
-}
-
-/// Generate decode statement for a type.
-fn generate_decode_stmt(func: &mut codegen::Function, var_name: &str, _shape: &'static Shape) {
-    // Use postcard for decoding
-    func.line(format!(
-        "let ({var_name}, rest) = facet_postcard::from_slice(cursor).expect(\"decode {var_name}\");"
-    ));
-    func.line("cursor = rest;");
 }
 
 /// Generate encode expression for a type.
@@ -615,6 +612,13 @@ fn rust_type_base(shape: &'static Shape) -> String {
         }) => {
             // Named enum - prefix with super:: to access from within service module
             format!("super::{name}")
+        }
+        ShapeKind::Result { ok, err } => {
+            format!(
+                "::std::result::Result<{}, {}>",
+                rust_type_base(ok),
+                rust_type_base(err)
+            )
         }
         ShapeKind::Enum(EnumInfo {
             name: None,
@@ -843,6 +847,7 @@ mod tests {
         }
 
         #[derive(Facet)]
+        #[repr(u8)]
         enum MyEnum {
             A,
             B(i32),
@@ -928,6 +933,7 @@ mod tests {
         }
 
         #[derive(Facet)]
+        #[repr(u8)]
         enum Status {
             Active,
             Inactive,

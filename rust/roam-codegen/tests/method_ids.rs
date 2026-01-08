@@ -1,4 +1,5 @@
-use roam::schema::{ArgDetail, MethodDetail, TypeDetail};
+use facet::Facet;
+use roam::schema::{ArgDetail, MethodDetail};
 use roam::service;
 use roam_codegen::targets;
 
@@ -21,14 +22,14 @@ fn fixture_methods() -> Vec<MethodDetail> {
             args: vec![
                 ArgDetail {
                     name: "context_id".into(),
-                    type_info: TypeDetail::U64,
+                    ty: <u64 as Facet>::SHAPE,
                 },
                 ArgDetail {
                     name: "name".into(),
-                    type_info: TypeDetail::String,
+                    ty: <String as Facet>::SHAPE,
                 },
             ],
-            return_type: TypeDetail::Bytes,
+            return_type: <Vec<u8> as Facet>::SHAPE,
             doc: None,
         },
         MethodDetail {
@@ -36,9 +37,9 @@ fn fixture_methods() -> Vec<MethodDetail> {
             method_name: "loadTemplate".into(), // should normalize to same kebab as load_template
             args: vec![ArgDetail {
                 name: "id".into(),
-                type_info: TypeDetail::U64,
+                ty: <u64 as Facet>::SHAPE,
             }],
-            return_type: TypeDetail::Unit,
+            return_type: <() as Facet>::SHAPE,
             doc: None,
         },
     ]
@@ -170,8 +171,8 @@ fn go_service_generation() {
     let out = targets::go::generate_service(&service);
 
     // Should contain method ID constants
-    assert!(out.contains("EchoMethodEcho"));
-    assert!(out.contains("EchoMethodReverse"));
+    assert!(out.contains("MethodIDEcho"));
+    assert!(out.contains("MethodIDReverse"));
 
     // Should contain caller interface
     assert!(out.contains("type EchoCaller interface"));
@@ -180,9 +181,6 @@ fn go_service_generation() {
     // Should contain handler
     assert!(out.contains("type EchoHandler interface"));
     assert!(out.contains("NewEchoDispatcher"));
-
-    // Print for inspection
-    println!("{}", out);
 }
 
 #[test]

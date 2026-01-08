@@ -213,6 +213,9 @@ fn py_type(shape: &'static Shape) -> String {
         }
         ShapeKind::Enum(_) => "object".into(),
         ShapeKind::Pointer { pointee } => py_type(pointee),
+        ShapeKind::Result { ok, err } => {
+            format!("Result[{}, {}]", py_type(ok), py_type(err))
+        }
         ShapeKind::Opaque => "object".into(),
     }
 }

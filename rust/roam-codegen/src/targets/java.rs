@@ -231,6 +231,9 @@ fn java_type(shape: &'static Shape) -> String {
         ShapeKind::Struct(_) => "Object".into(), // Anonymous struct
         ShapeKind::Enum(_) => "Object".into(),   // Anonymous enum
         ShapeKind::Pointer { pointee } => java_type(pointee),
+        ShapeKind::Result { ok, err } => {
+            format!("Result<{}, {}>", java_type(ok), java_type(err))
+        }
         ShapeKind::Opaque => "Object".into(),
     }
 }

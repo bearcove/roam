@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use facet::Facet;
 use roam_hash::method_id_from_detail;
-use roam_schema::{ArgDetail, MethodDetail, TypeDetail};
+use roam_schema::{ArgDetail, MethodDetail};
 use roam_wire::{Hello, Message, MetadataValue};
 use spec_tests::harness::{accept_subject, our_hello, run_async};
 
@@ -23,12 +23,12 @@ enum RoamError<E> {
 fn echo_method_id(method_name: &str) -> u64 {
     let detail = MethodDetail {
         service_name: "Echo".into(),
-        method_name: method_name.into(),
+        method_name: String::from(method_name).into(),
         args: vec![ArgDetail {
             name: "message".into(),
-            type_info: TypeDetail::String,
+            ty: <String as Facet>::SHAPE,
         }],
-        return_type: TypeDetail::String,
+        return_type: <String as Facet>::SHAPE,
         doc: None,
     };
     method_id_from_detail(&detail)
@@ -48,7 +48,7 @@ fn ensure_expected_ids() {
     let ids = svc
         .methods
         .iter()
-        .map(|m| (m.method_name.as_str(), method_id_from_detail(m)))
+        .map(|m| (m.method_name.as_ref(), method_id_from_detail(m)))
         .collect::<std::collections::BTreeMap<_, _>>();
     assert_eq!(ids.get("echo").copied(), Some(echo_method_id("echo")));
     assert_eq!(ids.get("reverse").copied(), Some(echo_method_id("reverse")));

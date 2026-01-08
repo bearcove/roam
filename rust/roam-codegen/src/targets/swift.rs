@@ -703,6 +703,9 @@ fn swift_type_base(shape: &'static Shape) -> String {
             "Any /* anonymous enum */".into()
         }
         ShapeKind::Pointer { pointee } => swift_type_base(pointee),
+        ShapeKind::Result { ok, err } => {
+            format!("Result<{}, {}>", swift_type_base(ok), swift_type_base(err))
+        }
         ShapeKind::Opaque => "Any".into(),
     }
 }

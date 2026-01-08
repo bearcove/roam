@@ -204,6 +204,11 @@ pub enum ShapeKind<'a> {
     Rx { inner: &'static Shape },
     /// Smart pointer (Box, Arc, etc.) - transparent
     Pointer { pointee: &'static Shape },
+    /// Result type
+    Result {
+        ok: &'static Shape,
+        err: &'static Shape,
+    },
     /// Unknown/opaque type
     Opaque,
 }
@@ -284,6 +289,12 @@ pub fn classify_shape(shape: &'static Shape) -> ShapeKind<'static> {
         Def::Set(set_def) => {
             return ShapeKind::Set {
                 element: set_def.t(),
+            };
+        }
+        Def::Result(result_def) => {
+            return ShapeKind::Result {
+                ok: result_def.t(),
+                err: result_def.e(),
             };
         }
         Def::Pointer(ptr_def) => {
