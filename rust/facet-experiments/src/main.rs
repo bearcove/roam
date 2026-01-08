@@ -363,7 +363,7 @@ fn test_tx_in_struct() {
 // Experiment C: Wrapper for Option<Receiver> that implements Facet
 // ============================================================================
 
-/// A wrapper around Option<mpsc::Receiver<Vec<u8>>> that implements Facet.
+/// A wrapper around `Option<mpsc::Receiver<Vec<u8>>>` that implements Facet.
 /// This allows Poke::get_mut() to work, enabling .take() via reflection.
 #[derive(Facet)]
 #[facet(opaque)] // Still opaque for serialization (shouldn't be serialized)
