@@ -15,7 +15,7 @@ Rust traits *are* the schema. Implementations for other languages (Swift,
 TypeScript, etc.) are generated from Rust definitions.
 
 This means:
-- The Rust Implementation Specification [RUST-SPEC] is essential
+- The Rust Implementation Specification[^RUST-SPEC] is essential
 - Other implementations use Rust tooling for code generation
 - Fully independent implementations are a non-goal
 
@@ -43,7 +43,7 @@ pub trait TemplateHost {
 
 All types that occur as arguments or in return position must implement
 [Facet](https://facet.rs), so that they might be serialized and deserialized
-with facet-postcard (see [POSTCARD]).
+with facet-postcard (see [^POSTCARD]).
 
 Bindings for other languages (Swift, TypeScript) are generated using
 a Rust codegen package which is linked together with the "proto" crate to
@@ -235,7 +235,7 @@ Transports may have different topologies:
 - **Peer-to-peer** (TCP, WebSocket, QUIC): Two peers, either can call.
 - **Hub** (SHM Hub): One host, multiple peers. Routing is required.
 
-The shared memory transport [SHM-SPEC] specifies its topology separately.
+The shared memory transport[^SHM-SPEC] specifies its topology separately.
 
 ---
 
@@ -281,7 +281,7 @@ that accidental collisions between legitimately different methods won't happen
 in practice.
 
 The exact algorithm for computing method IDs is defined in the
-[RUST-SPEC]. Other language
+[^RUST-SPEC]. Other language
 implementations receive pre-computed method IDs from code generation.
 
 ## Schema Evolution
@@ -370,17 +370,17 @@ Request {
     request_id: u64,
     method_id: u64,
     metadata: Vec<(String, MetadataValue)>,
-    payload: Vec<u8>,  // [POSTCARD]-encoded arguments
+    payload: Vec<u8>,  // [^POSTCARD]-encoded arguments
 }
 ```
 
 > r[unary.request.payload-encoding]
 >
-> The payload MUST be the [POSTCARD] encoding of a tuple containing all
+> The payload MUST be the [^POSTCARD] encoding of a tuple containing all
 > method arguments in declaration order.
 
 For example, a method `fn add(a: i32, b: i32) -> i64` with arguments `(3, 5)`
-would have a payload that is the [POSTCARD] encoding of the tuple `(3i32, 5i32)`.
+would have a payload that is the [^POSTCARD] encoding of the tuple `(3i32, 5i32)`.
 
 ## Completing a Call
 
@@ -395,7 +395,7 @@ A Response contains:
 Response {
     request_id: u64,
     metadata: Vec<(String, MetadataValue)>,
-    payload: Vec<u8>,  // [POSTCARD]-encoded Result<T, RoamError<E>>
+    payload: Vec<u8>,  // [^POSTCARD]-encoded Result<T, RoamError<E>>
 }
 ```
 
@@ -406,7 +406,7 @@ Where `T` is the method's success type and `E` is the method's error type
 
 > r[unary.response.encoding]
 >
-> The response payload MUST be the [POSTCARD] encoding of `Result<T, RoamError<E>>`,
+> The response payload MUST be the [^POSTCARD] encoding of `Result<T, RoamError<E>>`,
 > where `T` and `E` come from the method signature.
 
 For a method declared as:
@@ -490,7 +490,7 @@ Metadata is application-defined. Common uses include:
 > r[unary.error.roam-error]
 >
 > `RoamError<E>` distinguishes application errors from protocol errors.
-> The variant order defines wire discriminants ([POSTCARD] varint encoding):
+> The variant order defines wire discriminants ([^POSTCARD] varint encoding):
 
 | Discriminant | Variant | Payload | Meaning |
 |--------------|---------|---------|---------|
@@ -769,7 +769,7 @@ Caller (initiator)                         Callee (acceptor)
 
 > r[channeling.data]
 >
-> The sending peer sends Data messages containing [POSTCARD]-encoded values
+> The sending peer sends Data messages containing [^POSTCARD]-encoded values
 > of the channel's element type `T`. Each Data message contains exactly
 > one value.
 
@@ -862,10 +862,10 @@ roam uses credit-based flow control for channels on all transports.
 > r[flow.channel.byte-accounting]
 >
 > Credits are measured in bytes. The byte count for a channel element is
-> the length of its [POSTCARD] encoding — the same bytes that appear in
+> the length of its [^POSTCARD] encoding — the same bytes that appear in
 > `Data.payload`, or on multi-stream transports, the bytes written to the
-> dedicated transport stream before [COBS] framing. Framing overhead
-> ([COBS], transport headers) is NOT counted.
+> dedicated transport stream before [^COBS] framing. Framing overhead
+> ([^COBS], transport headers) is NOT counted.
 
 ### Initial Credit
 
@@ -998,7 +998,7 @@ enum Message {
 }
 ```
 
-Messages are [POSTCARD]-encoded. The enum discriminant identifies the message
+Messages are [^POSTCARD]-encoded. The enum discriminant identifies the message
 type, and each variant contains only the fields it needs.
 
 > r[message.unknown-variant]
@@ -1009,8 +1009,8 @@ type, and each variant contains only the fields it needs.
 
 > r[message.decode-error]
 >
-> If a peer cannot decode a received message (invalid [POSTCARD] encoding,
-> [COBS] framing error, or malformed fields), it MUST send a Goodbye
+> If a peer cannot decode a received message (invalid [^POSTCARD] encoding,
+> [^COBS] framing error, or malformed fields), it MUST send a Goodbye
 > message (reason: `message.decode-error`) and close the connection.
 
 ## Message Types
@@ -1101,7 +1101,7 @@ Different transports require different handling:
 |------|---------|---------|---------|
 | Message | WebSocket | Transport provides | All in one |
 | Multi-stream | QUIC | Per stream | Can map to transport streams |
-| Byte stream | TCP | [COBS] | All in one |
+| Byte stream | TCP | [^COBS] | All in one |
 
 ## Message Transports
 
@@ -1110,7 +1110,7 @@ Message transports (like WebSocket) deliver discrete messages.
 > r[transport.message.one-to-one]
 >
 > Each transport message MUST contain exactly one roam message,
-> [POSTCARD]-encoded. Fragmentation and reassembly are not supported.
+> [^POSTCARD]-encoded. Fragmentation and reassembly are not supported.
 
 > r[transport.message.binary]
 >
@@ -1137,7 +1137,7 @@ Byte stream transports (like TCP) provide a single ordered byte stream.
 
 > r[transport.bytestream.cobs]
 >
-> Messages MUST be framed using [COBS]. Each message MUST be followed by
+> Messages MUST be framed using [^COBS]. Each message MUST be followed by
 > a 0x00 delimiter byte.
 > 
 > ```
@@ -1342,14 +1342,10 @@ the connection can continue serving other channels.
 
 # References
 
-- **[POSTCARD]** Postcard Wire Format Specification  
-  <https://postcard.jamesmunns.com/wire-format>
+[^POSTCARD]: Postcard Wire Format Specification - <https://postcard.jamesmunns.com/wire-format>
 
-- **[RUST-SPEC]** roam Rust Implementation Specification  
-  <@/rust-spec/_index.md>
+[^RUST-SPEC]: roam Rust Implementation Specification - <@/rust-spec/_index.md>
 
-- **[SHM-SPEC]** roam Shared Memory Transport Specification  
-  <@/shm-spec/_index.md>
+[^SHM-SPEC]: roam Shared Memory Transport Specification - <@/shm-spec/_index.md>
 
-- **[COBS]** Consistent Overhead Byte Stuffing  
-  <https://en.wikipedia.org/wiki/Consistent_Overhead_Byte_Stuffing>
+[^COBS]: Consistent Overhead Byte Stuffing - <https://en.wikipedia.org/wiki/Consistent_Overhead_Byte_Stuffing>
