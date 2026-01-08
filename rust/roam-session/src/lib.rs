@@ -206,6 +206,18 @@ impl<T: 'static> Tx<T> {
         }
     }
 
+    /// Create an unbound Tx with a sender but stream_id 0.
+    ///
+    /// Used by `roam::channel()` to create a pair before binding.
+    /// The Tx keeps its sender - only the paired Rx gets its receiver taken.
+    pub(crate) fn unbound(sender: mpsc::Sender<OutgoingMessage>, notify: Arc<Notify>) -> Self {
+        Self {
+            stream_id: 0,
+            sender: OutgoingSender::new(0, sender, notify),
+            _marker: PhantomData,
+        }
+    }
+
     /// Get the stream ID.
     pub fn stream_id(&self) -> StreamId {
         self.stream_id
@@ -253,6 +265,49 @@ impl std::fmt::Display for TxError {
 
 impl std::error::Error for TxError {}
 
+// ============================================================================
+// ReceiverSlot - Wrapper for Option<Receiver> that implements Facet
+// ============================================================================
+
+/// A wrapper around `Option<mpsc::Receiver<Vec<u8>>>` that implements Facet.
+///
+/// This allows `Poke::get_mut::<ReceiverSlot>()` to work, enabling `.take()`
+/// via reflection. Used by `ConnectionHandle::call` to extract receivers from
+/// `Rx<T>` arguments and register them with the stream registry.
+#[derive(Facet)]
+#[facet(opaque)]
+pub struct ReceiverSlot {
+    /// The optional receiver. Public within crate for `Rx::recv()` access.
+    pub(crate) inner: Option<mpsc::Receiver<Vec<u8>>>,
+}
+
+impl ReceiverSlot {
+    /// Create a slot containing a receiver.
+    pub fn new(rx: mpsc::Receiver<Vec<u8>>) -> Self {
+        Self { inner: Some(rx) }
+    }
+
+    /// Create an empty slot.
+    pub fn empty() -> Self {
+        Self { inner: None }
+    }
+
+    /// Take the receiver out of the slot, leaving it empty.
+    pub fn take(&mut self) -> Option<mpsc::Receiver<Vec<u8>>> {
+        self.inner.take()
+    }
+
+    /// Check if the slot contains a receiver.
+    pub fn is_some(&self) -> bool {
+        self.inner.is_some()
+    }
+
+    /// Check if the slot is empty.
+    pub fn is_none(&self) -> bool {
+        self.inner.is_none()
+    }
+}
+
 /// Rx stream handle - caller receives data from callee.
 ///
 /// r[impl streaming.caller-pov] - From caller's perspective, Rx means "I receive".
@@ -265,6 +320,10 @@ impl std::error::Error for TxError {}
 /// - `stream_id` is pokeable (Connection can walk args and set stream IDs)
 /// - Serializes as just a `u64` on the wire
 /// - `T` is exposed as a type parameter for codegen introspection
+///
+/// The `receiver` field uses `ReceiverSlot` wrapper so that `ConnectionHandle::call`
+/// can use `Poke::get_mut::<ReceiverSlot>()` to `.take()` the receiver and register
+/// it with the stream registry.
 #[derive(Facet)]
 #[facet(proxy = u64)]
 pub struct Rx<T: 'static> {
@@ -272,8 +331,8 @@ pub struct Rx<T: 'static> {
     /// Public so Connection can poke it when binding streams.
     pub stream_id: StreamId,
     /// Channel receiver for incoming data.
-    #[facet(opaque)]
-    rx: mpsc::Receiver<Vec<u8>>,
+    /// Uses ReceiverSlot so it's pokeable (can .take() via Poke).
+    pub receiver: ReceiverSlot,
     /// Phantom data for the element type.
     #[facet(opaque)]
     _marker: PhantomData<T>,
@@ -300,11 +359,10 @@ impl<T: 'static> TryFrom<&Rx<T>> for u64 {
 impl<T: 'static> TryFrom<u64> for Rx<T> {
     type Error = Infallible;
     fn try_from(stream_id: u64) -> Result<Self, Self::Error> {
-        // Create a placeholder channel - Connection will replace this
-        let (_tx, rx) = mpsc::channel(1);
+        // Create a hollow Rx - no actual receiver, Connection will bind later
         Ok(Rx {
             stream_id,
-            rx,
+            receiver: ReceiverSlot::empty(),
             _marker: PhantomData,
         })
     }
@@ -315,7 +373,19 @@ impl<T: 'static> Rx<T> {
     pub fn new(stream_id: StreamId, rx: mpsc::Receiver<Vec<u8>>) -> Self {
         Self {
             stream_id,
-            rx,
+            receiver: ReceiverSlot::new(rx),
+            _marker: PhantomData,
+        }
+    }
+
+    /// Create an unbound Rx with a receiver but stream_id 0.
+    ///
+    /// Used by `roam::channel()` to create a pair before binding.
+    /// Connection will poke the stream_id when binding.
+    pub fn unbound(rx: mpsc::Receiver<Vec<u8>>) -> Self {
+        Self {
+            stream_id: 0,
+            receiver: ReceiverSlot::new(rx),
             _marker: PhantomData,
         }
     }
@@ -337,7 +407,8 @@ impl<T: 'static> Rx<T> {
     where
         T: Facet<'static>,
     {
-        match self.rx.recv().await {
+        let rx = self.receiver.inner.as_mut().ok_or(RxError::Taken)?;
+        match rx.recv().await {
             Some(bytes) => {
                 let value = facet_postcard::from_slice(&bytes).map_err(RxError::Deserialize)?;
                 Ok(Some(value))
@@ -352,12 +423,15 @@ impl<T: 'static> Rx<T> {
 pub enum RxError {
     /// Failed to deserialize the value.
     Deserialize(facet_postcard::DeserializeError<facet_postcard::PostcardError>),
+    /// The receiver was already taken (e.g., by ConnectionHandle::call).
+    Taken,
 }
 
 impl std::fmt::Display for RxError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             RxError::Deserialize(e) => write!(f, "deserialize error: {e}"),
+            RxError::Taken => write!(f, "receiver was taken"),
         }
     }
 }
