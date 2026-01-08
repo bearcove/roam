@@ -163,7 +163,10 @@ pub struct Tx<T: 'static> {
     _marker: PhantomData<T>,
 }
 
-/// Serialization: &Tx<T> -> u64 (extracts stream_id)
+/// Serialization: `&Tx<T>` -> u64 (extracts stream_id)
+///
+/// Uses TryFrom rather than From because facet's proxy mechanism requires TryFrom.
+#[allow(clippy::infallible_try_from)]
 impl<T: 'static> TryFrom<&Tx<T>> for u64 {
     type Error = Infallible;
     fn try_from(tx: &Tx<T>) -> Result<Self, Self::Error> {
@@ -171,10 +174,13 @@ impl<T: 'static> TryFrom<&Tx<T>> for u64 {
     }
 }
 
-/// Deserialization: u64 -> Tx<T> (creates a "hollow" Tx)
+/// Deserialization: u64 -> `Tx<T>` (creates a "hollow" Tx)
 ///
 /// The sender is a placeholder - the real sender gets set up by Connection
 /// after deserialization when it binds the stream.
+///
+/// Uses TryFrom rather than From because facet's proxy mechanism requires TryFrom.
+#[allow(clippy::infallible_try_from)]
 impl<T: 'static> TryFrom<u64> for Tx<T> {
     type Error = Infallible;
     fn try_from(stream_id: u64) -> Result<Self, Self::Error> {
@@ -273,7 +279,10 @@ pub struct Rx<T: 'static> {
     _marker: PhantomData<T>,
 }
 
-/// Serialization: &Rx<T> -> u64 (extracts stream_id)
+/// Serialization: `&Rx<T>` -> u64 (extracts stream_id)
+///
+/// Uses TryFrom rather than From because facet's proxy mechanism requires TryFrom.
+#[allow(clippy::infallible_try_from)]
 impl<T: 'static> TryFrom<&Rx<T>> for u64 {
     type Error = Infallible;
     fn try_from(rx: &Rx<T>) -> Result<Self, Self::Error> {
@@ -281,10 +290,13 @@ impl<T: 'static> TryFrom<&Rx<T>> for u64 {
     }
 }
 
-/// Deserialization: u64 -> Rx<T> (creates a "hollow" Rx)
+/// Deserialization: u64 -> `Rx<T>` (creates a "hollow" Rx)
 ///
 /// The receiver is a placeholder - the real receiver gets set up by Connection
 /// after deserialization when it binds the stream.
+///
+/// Uses TryFrom rather than From because facet's proxy mechanism requires TryFrom.
+#[allow(clippy::infallible_try_from)]
 impl<T: 'static> TryFrom<u64> for Rx<T> {
     type Error = Infallible;
     fn try_from(stream_id: u64) -> Result<Self, Self::Error> {
@@ -492,11 +504,14 @@ impl StreamRegistry {
     /// r[impl flow.stream.credit-overrun] - Reject if data exceeds remaining credit.
     /// r[impl flow.stream.credit-consume] - Deduct bytes from remaining credit.
     /// r[impl flow.stream.byte-accounting] - Credit measured in payload bytes.
-    pub async fn route_data(
+    ///
+    /// Returns a sender and payload if routing is allowed, or an error.
+    /// The actual send must be done by the caller to avoid holding locks across await.
+    pub fn prepare_route_data(
         &mut self,
         stream_id: StreamId,
         payload: Vec<u8>,
-    ) -> Result<(), StreamError> {
+    ) -> Result<(mpsc::Sender<Vec<u8>>, Vec<u8>), StreamError> {
         // Check for data-after-close
         if self.closed.contains(&stream_id) {
             return Err(StreamError::DataAfterClose);
@@ -516,12 +531,30 @@ impl StreamRegistry {
         // (e.g., Rx stream created by callee). In that case, skip credit check.
 
         if let Some(tx) = self.incoming.get(&stream_id) {
-            // If send fails, the Rx<T> was dropped - that's okay, just drop the data
-            let _ = tx.send(payload).await;
-            Ok(())
+            Ok((tx.clone(), payload))
         } else {
             Err(StreamError::Unknown)
         }
+    }
+
+    /// Route a Data message payload to the appropriate incoming stream.
+    ///
+    /// Returns Ok(()) if routed successfully, Err(StreamError) otherwise.
+    ///
+    /// r[impl streaming.data] - Data messages routed by stream_id.
+    /// r[impl streaming.data-after-close] - Reject data on closed streams.
+    /// r[impl flow.stream.credit-overrun] - Reject if data exceeds remaining credit.
+    /// r[impl flow.stream.credit-consume] - Deduct bytes from remaining credit.
+    /// r[impl flow.stream.byte-accounting] - Credit measured in payload bytes.
+    pub async fn route_data(
+        &mut self,
+        stream_id: StreamId,
+        payload: Vec<u8>,
+    ) -> Result<(), StreamError> {
+        let (tx, payload) = self.prepare_route_data(stream_id, payload)?;
+        // If send fails, the Rx<T> was dropped - that's okay, just drop the data
+        let _ = tx.send(payload).await;
+        Ok(())
     }
 
     /// Poll all outgoing streams for data to send.
@@ -844,14 +877,24 @@ pub type BorrowedCallResult<T, E> = OwnedMessage<CallResult<T, E>>;
 /// Error from making an outgoing call.
 #[derive(Debug)]
 pub enum CallError {
-    /// Failed to serialize request payload.
+    /// Failed to encode request payload.
     Encode(facet_postcard::SerializeError),
-    /// Failed to deserialize response payload.
+    /// Failed to decode response payload.
     Decode(facet_postcard::DeserializeError<facet_postcard::PostcardError>),
-    /// Connection was closed before response arrived.
+    /// Connection was closed before response.
     ConnectionClosed,
-    /// The driver task has stopped.
+    /// Driver task is gone.
     DriverGone,
+}
+
+impl CallError {
+    /// Decode a response payload into the expected type.
+    ///
+    /// This is a convenience method for the common pattern of deserializing
+    /// the response payload after a call.
+    pub fn decode_response<T: Facet<'static>>(payload: &[u8]) -> Result<T, CallError> {
+        facet_postcard::from_slice(payload).map_err(CallError::Decode)
+    }
 }
 
 impl std::fmt::Display for CallError {
@@ -898,7 +941,7 @@ struct HandleShared {
 /// Handle for making outgoing RPC calls.
 ///
 /// This is the client-side API. It can be cloned and used from multiple tasks.
-/// The actual I/O is driven by the [`Driver`] future which must be spawned.
+/// The actual I/O is driven by the `Driver` future which must be spawned.
 ///
 /// # Example
 ///
@@ -928,6 +971,32 @@ impl ConnectionHandle {
                 outgoing_notify,
             }),
         }
+    }
+
+    /// Make a typed RPC call with automatic serialization.
+    ///
+    /// Serializes the args using postcard, sends the request, and returns the raw
+    /// response payload bytes for the caller to deserialize.
+    ///
+    /// # Arguments
+    ///
+    /// * `method_id` - The method ID to call
+    /// * `args` - Arguments to serialize (typically a tuple of all method args)
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// // For a method add(a: i32, b: i32) -> i32
+    /// let response = handle.call(method_id::ADD, &(2i32, 3i32)).await?;
+    /// let result: CallResult<i32, Never> = facet_postcard::from_slice(&response)?;
+    /// ```
+    pub async fn call<T: Facet<'static>>(
+        &self,
+        method_id: u64,
+        args: &T,
+    ) -> Result<Vec<u8>, CallError> {
+        let payload = facet_postcard::to_vec(args).map_err(CallError::Encode)?;
+        self.call_raw(method_id, payload).await
     }
 
     /// Make a raw RPC call with pre-serialized payload.
@@ -1000,12 +1069,16 @@ impl ConnectionHandle {
         stream_id: StreamId,
         payload: Vec<u8>,
     ) -> Result<(), StreamError> {
-        self.shared
+        // Get the sender while holding the lock, then release before await
+        let (tx, payload) = self
+            .shared
             .stream_registry
             .lock()
             .unwrap()
-            .route_data(stream_id, payload)
-            .await
+            .prepare_route_data(stream_id, payload)?;
+        // Send without holding the lock
+        let _ = tx.send(payload).await;
+        Ok(())
     }
 
     /// Close an incoming stream.

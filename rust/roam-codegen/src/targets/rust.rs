@@ -85,6 +85,128 @@ impl<'a> RustGenerator<'a> {
         }
     }
 
+    /// Generate the body of dispatch_streaming for ServiceDispatcher impl.
+    ///
+    /// This generates match arms for each streaming method that:
+    /// 1. Decode stream IDs from payload
+    /// 2. Register streams with the registry
+    /// 3. Create Tx/Rx handles
+    /// 4. Clone handler into a 'static future
+    /// 5. Call the handler method
+    fn generate_dispatch_streaming_body(&self) -> String {
+        let mut arms = Vec::new();
+
+        for method in &self.service.methods {
+            let method_name = method.method_name.to_snake_case();
+            let const_name = method_name.to_uppercase();
+            let is_streaming =
+                method.args.iter().any(|a| is_stream(a.ty)) || is_stream(method.return_type);
+
+            if !is_streaming {
+                continue;
+            }
+
+            // Build wire tuple type (streams as u64)
+            let wire_arg_types: Vec<String> = method
+                .args
+                .iter()
+                .map(|arg| {
+                    if is_tx(arg.ty) || is_rx(arg.ty) {
+                        "u64".to_string()
+                    } else {
+                        rust_type_server_arg(arg.ty)
+                    }
+                })
+                .collect();
+
+            let arg_names: Vec<String> =
+                method.args.iter().map(|a| a.name.to_snake_case()).collect();
+
+            let mut arm_body = String::new();
+            arm_body.push_str(&format!("            method_id::{const_name} => {{\n"));
+
+            // Decode wire format
+            if method.args.is_empty() {
+                arm_body.push_str("                // No arguments to decode\n");
+            } else {
+                let tuple_pattern = arg_names.join(", ");
+                let tuple_type = wire_arg_types.join(", ");
+                arm_body.push_str(&format!(
+                    "                let ({tuple_pattern}) = match facet_postcard::from_slice::<({tuple_type})>(&payload) {{\n"
+                ));
+                arm_body.push_str("                    Ok(args) => args,\n");
+                arm_body.push_str("                    Err(_) => return Box::pin(async {{ Ok(vec![1, 2]) }}), // InvalidPayload\n");
+                arm_body.push_str("                };\n");
+            }
+
+            // Register streams and create handles
+            for arg in &method.args {
+                let arg_name = arg.name.to_snake_case();
+                if is_tx(arg.ty) {
+                    // Caller's Tx -> Handler's Rx (incoming stream)
+                    let inner_type = if let Some(inner) = arg.ty.type_params.first() {
+                        rust_type_base(inner.shape)
+                    } else {
+                        "()".to_string()
+                    };
+                    arm_body.push_str(&format!(
+                        "                let {arg_name}_rx = registry.register_incoming({arg_name});\n"
+                    ));
+                    arm_body.push_str(&format!(
+                        "                let {arg_name} = Rx::<{inner_type}>::new({arg_name}, {arg_name}_rx);\n"
+                    ));
+                } else if is_rx(arg.ty) {
+                    // Caller's Rx -> Handler's Tx (outgoing stream)
+                    let inner_type = if let Some(inner) = arg.ty.type_params.first() {
+                        rust_type_base(inner.shape)
+                    } else {
+                        "()".to_string()
+                    };
+                    arm_body.push_str(&format!(
+                        "                let {arg_name}_sender = registry.register_outgoing({arg_name});\n"
+                    ));
+                    arm_body.push_str(&format!(
+                        "                let {arg_name} = Tx::<{inner_type}>::new({arg_name}_sender);\n"
+                    ));
+                }
+            }
+
+            // Clone handler for 'static future
+            arm_body.push_str("                let handler = self.handler.clone();\n");
+
+            // Build handler call
+            let args_str = arg_names.join(", ");
+            arm_body.push_str("                Box::pin(async move {\n");
+            arm_body.push_str(&format!(
+                "                    match handler.{method_name}({args_str}).await {{\n"
+            ));
+            arm_body.push_str("                        Ok(result) => {\n");
+            arm_body.push_str("                            let mut out = vec![0u8];\n");
+            arm_body.push_str(
+                "                            out.extend(facet_postcard::to_vec(&result).map_err(|e| e.to_string())?);\n",
+            );
+            arm_body.push_str("                            Ok(out)\n");
+            arm_body.push_str("                        }\n");
+            arm_body.push_str("                        Err(_e) => Ok(vec![1, 1]),\n");
+            arm_body.push_str("                    }\n");
+            arm_body.push_str("                })\n");
+            arm_body.push_str("            }");
+
+            arms.push(arm_body);
+        }
+
+        // Add fallback for unknown streaming methods
+        arms.push(
+            "            _ => Box::pin(async move { Err(format!(\"unknown streaming method {}\", method_id)) })"
+                .to_string(),
+        );
+
+        format!(
+            "            match method_id {{\n{}\n            }}",
+            arms.join("\n")
+        )
+    }
+
     fn generate(mut self) -> String {
         // Header comment - only once per file (caller should only include once)
         self.scope.raw("// @generated by roam-codegen");
@@ -267,7 +389,7 @@ impl<'a> RustGenerator<'a> {
         new_fn.ret("Self");
         new_fn.line("Self { handler }");
 
-        // Dispatch method
+        // Dispatch method (only for unary methods - streaming uses ServiceDispatcher trait)
         let dispatch_fn = impl_block.new_fn("dispatch");
         dispatch_fn.vis("pub");
         dispatch_fn.set_async(true);
@@ -281,10 +403,19 @@ impl<'a> RustGenerator<'a> {
             let _id = crate::method_id(method);
             let method_name = method.method_name.to_snake_case();
             let const_name = method_name.to_uppercase();
+            let method_is_streaming =
+                method.args.iter().any(|a| is_stream(a.ty)) || is_stream(method.return_type);
 
-            dispatch_body.line(format!(
-                "method_id::{const_name} => self.dispatch_{method_name}(payload).await,"
-            ));
+            if method_is_streaming {
+                // Streaming methods must use ServiceDispatcher::dispatch_streaming
+                dispatch_body.line(format!(
+                    "method_id::{const_name} => vec![1, 1], // Streaming: use ServiceDispatcher"
+                ));
+            } else {
+                dispatch_body.line(format!(
+                    "method_id::{const_name} => self.dispatch_{method_name}(payload).await,"
+                ));
+            }
         }
         dispatch_body.line("_ => Self::unknown_method_response(method_id),");
         dispatch_fn.push_block(dispatch_body);
@@ -296,9 +427,14 @@ impl<'a> RustGenerator<'a> {
         unknown_fn.line("// Return error response for unknown method");
         unknown_fn.line("vec![1] // Error marker");
 
-        // Generate dispatch_<method> for each method
+        // Generate dispatch_<method> for each non-streaming method
+        // Streaming methods are handled by ServiceDispatcher::dispatch_streaming
         for method in &self.service.methods {
-            generate_dispatch_method_fn(impl_block, method, self.options);
+            let method_is_streaming =
+                method.args.iter().any(|a| is_stream(a.ty)) || is_stream(method.return_type);
+            if !method_is_streaming {
+                generate_dispatch_method_fn(impl_block, method, self.options);
+            }
         }
 
         // Generate ServiceDispatcher trait implementation
@@ -306,6 +442,13 @@ impl<'a> RustGenerator<'a> {
     }
 
     fn generate_service_dispatcher_impl(&mut self, dispatcher_name: &str, handler_trait: &str) {
+        // Check if any method is streaming - if so, we need Clone bound
+        let has_streaming = self
+            .service
+            .methods
+            .iter()
+            .any(|m| m.args.iter().any(|a| is_stream(a.ty)) || is_stream(m.return_type));
+
         // Generate is_streaming method body
         let mut is_streaming_arms = Vec::new();
         for method in &self.service.methods {
@@ -340,12 +483,17 @@ impl<'a> RustGenerator<'a> {
         );
         let dispatch_unary_match = dispatch_unary_arms.join("\n");
 
+        // Generate dispatch_streaming body
+        let dispatch_streaming_body = self.generate_dispatch_streaming_body();
+
         // Generate the impl block as raw code (codegen crate doesn't support impl Trait for Type<G> well)
+        // Add Clone bound if there are streaming methods (handler needs to be cloned into spawned future)
+        let clone_bound = if has_streaming { " + Clone" } else { "" };
         self.scope.raw(format!(
             r#"
     impl<H> ::roam::session::ServiceDispatcher for {dispatcher_name}<H>
     where
-        H: {handler_trait} + 'static,
+        H: {handler_trait} + 'static{clone_bound},
     {{
         fn is_streaming(&self, method_id: u64) -> bool {{
             match method_id {{
@@ -370,15 +518,12 @@ impl<'a> RustGenerator<'a> {
         fn dispatch_streaming(
             &self,
             method_id: u64,
-            _payload: Vec<u8>,
-            _registry: &mut ::roam::session::StreamRegistry,
+            payload: Vec<u8>,
+            registry: &mut ::roam::session::StreamRegistry,
         ) -> std::pin::Pin<
             Box<dyn std::future::Future<Output = Result<Vec<u8>, String>> + Send + 'static>,
         > {{
-            // TODO: Implement streaming dispatch
-            Box::pin(async move {{
-                Err(format!("streaming not yet implemented for method {{}}", method_id))
-            }})
+{dispatch_streaming_body}
         }}
     }}"#
         ));
@@ -465,16 +610,108 @@ fn generate_dispatch_unary(
 }
 
 /// Generate body for streaming method dispatch.
+///
+/// For streaming methods, we need to:
+/// 1. Decode stream IDs from the payload (streams serialize as u64)
+/// 2. Decode non-stream arguments
+/// 3. Register streams with the registry and create Tx/Rx handles
+/// 4. Call the handler with properly bound streams
 fn generate_dispatch_streaming(
     dispatch_fn: &mut codegen::Function,
     method: &MethodDetail,
     _options: &RustCodegenOptions,
 ) {
-    let _method_name = method.method_name.to_snake_case();
+    let method_name = method.method_name.to_snake_case();
 
-    dispatch_fn.line("// Streaming dispatch - requires stream setup");
-    dispatch_fn.line("// TODO: Implement streaming dispatch");
-    dispatch_fn.line("vec![1] // Error - streaming not yet implemented");
+    // For streaming dispatch, we need to change the signature to accept registry
+    // This function generates the internal dispatch method body
+    // The actual streaming dispatch happens through ServiceDispatcher::dispatch_streaming
+
+    // Build the tuple type for decoding - streams become u64 for wire format
+    let wire_arg_types: Vec<String> = method
+        .args
+        .iter()
+        .map(|arg| {
+            if is_tx(arg.ty) || is_rx(arg.ty) {
+                // On wire, streams are just u64 stream IDs
+                "u64".to_string()
+            } else {
+                rust_type_server_arg(arg.ty)
+            }
+        })
+        .collect();
+
+    let arg_names: Vec<String> = method.args.iter().map(|a| a.name.to_snake_case()).collect();
+
+    // Decode the wire format (streams as u64)
+    if method.args.is_empty() {
+        dispatch_fn.line("// No arguments to decode");
+    } else {
+        dispatch_fn.line("// Decode arguments (streams encoded as u64 stream IDs)");
+        let tuple_pattern = arg_names.join(", ");
+        let tuple_type = wire_arg_types.join(", ");
+        dispatch_fn.line(format!(
+            "let ({tuple_pattern}) = match facet_postcard::from_slice::<({tuple_type})>(payload) {{"
+        ));
+        dispatch_fn.line("    Ok(args) => args,");
+        dispatch_fn
+            .line("    Err(_) => return vec![1, 2], // Result::Err, RoamError::InvalidPayload");
+        dispatch_fn.line("};");
+    }
+
+    // Register streams and create handles
+    // Schema perspective: Tx = caller sends, Rx = caller receives
+    // Handler perspective (inverted): caller's Tx becomes handler's Rx, caller's Rx becomes handler's Tx
+    for (i, arg) in method.args.iter().enumerate() {
+        let arg_name = arg.name.to_snake_case();
+        if is_tx(arg.ty) {
+            // Caller's Tx (sends to us) -> Handler's Rx (receives from caller)
+            // Register as incoming stream
+            let inner_type = if let Some(inner) = arg.ty.type_params.first() {
+                rust_type_base(inner.shape)
+            } else {
+                "()".to_string()
+            };
+            dispatch_fn.line(format!(
+                "let {arg_name}_rx = registry.register_incoming({arg_name});"
+            ));
+            dispatch_fn.line(format!(
+                "let {arg_name} = Rx::<{inner_type}>::new({arg_name}, {arg_name}_rx);"
+            ));
+        } else if is_rx(arg.ty) {
+            // Caller's Rx (receives from us) -> Handler's Tx (sends to caller)
+            // Register as outgoing stream
+            let inner_type = if let Some(inner) = arg.ty.type_params.first() {
+                rust_type_base(inner.shape)
+            } else {
+                "()".to_string()
+            };
+            dispatch_fn.line(format!(
+                "let {arg_name}_sender = registry.register_outgoing({arg_name});"
+            ));
+            dispatch_fn.line(format!(
+                "let {arg_name} = Tx::<{inner_type}>::new({arg_name}_sender);"
+            ));
+        }
+        // Non-stream args are already decoded with correct types
+        let _ = i; // suppress unused warning
+    }
+
+    // Call handler
+    let args_str = arg_names.join(", ");
+    dispatch_fn.line(format!(
+        "match self.handler.{method_name}({args_str}).await {{"
+    ));
+    dispatch_fn.line("    Ok(result) => {");
+    dispatch_fn.line("        let mut out = vec![0u8]; // Success marker");
+    generate_encode_expr(dispatch_fn, "result", method.return_type, "        ");
+    dispatch_fn.line("        out");
+    dispatch_fn.line("    }");
+    dispatch_fn.line("    Err(_e) => {");
+    dispatch_fn.line("        // Encode RoamError - for now just return error marker");
+    dispatch_fn.line("        vec![1, 1] // Result::Err, RoamError::UnknownMethod placeholder");
+    dispatch_fn.line("    }");
+    dispatch_fn.line("}");
 }
 
 /// Generate encode expression for a type.

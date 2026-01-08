@@ -1,6 +1,6 @@
 //! Experiment: Testing container-level proxy for Tx/Rx serialization
 //!
-//! Goal: Tx<T> and Rx<T> should:
+//! Goal: `Tx<T>` and `Rx<T>` should:
 //! - Have pokeable `stream_id` field (for Connection to set it)
 //! - Have opaque fields for sender/receiver (they don't implement Facet)
 //! - Serialize as just a u64 via container-level proxy
@@ -36,6 +36,7 @@ pub struct Tx<T: 'static> {
 }
 
 // For SERIALIZATION: &Tx<T> -> TxProxy
+#[allow(clippy::infallible_try_from)]
 impl<T: 'static> TryFrom<&Tx<T>> for TxProxy {
     type Error = std::convert::Infallible;
     fn try_from(tx: &Tx<T>) -> Result<Self, Self::Error> {
@@ -44,6 +45,7 @@ impl<T: 'static> TryFrom<&Tx<T>> for TxProxy {
 }
 
 // For DESERIALIZATION: TxProxy -> Tx<T>
+#[allow(clippy::infallible_try_from)]
 impl<T: 'static> TryFrom<TxProxy> for Tx<T> {
     type Error = std::convert::Infallible;
     fn try_from(proxy: TxProxy) -> Result<Self, Self::Error> {
@@ -72,6 +74,7 @@ pub struct Tx2<T: 'static> {
 }
 
 // For SERIALIZATION: &Tx2<T> -> u64
+#[allow(clippy::infallible_try_from)]
 impl<T: 'static> TryFrom<&Tx2<T>> for u64 {
     type Error = std::convert::Infallible;
     fn try_from(tx: &Tx2<T>) -> Result<Self, Self::Error> {
@@ -80,6 +83,7 @@ impl<T: 'static> TryFrom<&Tx2<T>> for u64 {
 }
 
 // For DESERIALIZATION: u64 -> Tx2<T>
+#[allow(clippy::infallible_try_from)]
 impl<T: 'static> TryFrom<u64> for Tx2<T> {
     type Error = std::convert::Infallible;
     fn try_from(stream_id: u64) -> Result<Self, Self::Error> {

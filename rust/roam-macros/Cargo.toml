@@ -23,5 +23,4 @@ heck = "0.5"
 facet-cargo-toml.workspace = true
 
 [dev-dependencies]
-facet.workspace = true
 roam = { path = "../roam" }
