@@ -45,12 +45,12 @@ Tests in `codegen-test-consumer/src/lib.rs` verify full streaming flow.
 ### Desired DX
 
 ```rust
-// sum_stream(numbers: Tx<i32>) -> i64
-// Schema says Tx<i32> = caller sends i32s to callee
+// sum(numbers: Rx<i32>) -> i64
+// Schema says Rx<i32> = server receives i32s from caller
 
 let (tx, rx) = roam::channel::<i32>();
 
-let fut = client.sum_stream(rx);  // pass rx to the call, keep tx
+let fut = client.sum(rx);  // pass rx to the call, keep tx
 
 // Use tx to send numbers to the server
 tx.send(1).await;
@@ -61,17 +61,24 @@ drop(tx);  // signals end of stream
 let sum = fut.await?;  // returns 6
 ```
 
-### Key Insight: Channel Direction
+### Key Insight: Channel Semantics (like regular mpsc)
 
-When schema says `Tx<T>` (caller sends to callee):
+This matches standard channel conventions - just like `tokio::sync::mpsc`:
+- `(tx, rx) = channel()` → tx sends, rx receives
+- If caller wants to **send** data: pass `rx`, keep `tx`
+- If caller wants to **receive** data: pass `tx`, keep `rx`
+
+When schema says `Rx<T>` (caller sends to callee):
 - User creates `(tx, rx) = roam::channel::<T>()`
 - User **keeps** `tx` (the sender) to send data
 - User **passes** `rx` (the receiver) to the call
-- Connection takes the `mpsc::Receiver` from `rx`, drains it, sends as Data messages over wire
+- Connection takes the `mpsc::Receiver` from `rx`, registers it as outgoing stream
 
-The naming is from the **user's perspective**:
-- `tx` = "I transmit with this"
-- `rx` = "I pass this to receive on the other end"
+When schema says `Tx<T>` (callee sends to caller):
+- User creates `(tx, rx) = roam::channel::<T>()`
+- User **keeps** `rx` (the receiver) to receive data
+- User **passes** `tx` (the sender) to the call
+- Connection takes the sender, callee will use it to send back data
 
 ### Internal Channel Type
 

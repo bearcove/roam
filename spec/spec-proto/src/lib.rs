@@ -25,18 +25,21 @@ pub trait Testbed {
 
     /// Client pushes numbers, server returns their sum.
     ///
-    /// Tests: client→server streaming (`Tx<T>` argument, scalar return).
-    async fn sum(&self, numbers: Tx<i32>) -> i64;
+    /// Tests: client→server streaming (`Rx<T>` argument, scalar return).
+    /// Caller creates `(tx, rx) = channel()`, passes `rx`, keeps `tx` to send.
+    async fn sum(&self, numbers: Rx<i32>) -> i64;
 
     /// Server streams numbers back to client.
     ///
-    /// Tests: server→client streaming (scalar argument, `Rx<T>` output).
-    async fn generate(&self, count: u32, output: Rx<i32>);
+    /// Tests: server→client streaming (scalar argument, `Tx<T>` output).
+    /// Caller creates `(tx, rx) = channel()`, passes `tx`, keeps `rx` to receive.
+    async fn generate(&self, count: u32, output: Tx<i32>);
 
     /// Bidirectional: client sends strings, server echoes each back.
     ///
-    /// Tests: bidirectional streaming (`Tx<T>` + `Rx<T>`).
-    async fn transform(&self, input: Tx<String>, output: Rx<String>);
+    /// Tests: bidirectional streaming (`Rx<T>` input + `Tx<T>` output).
+    /// Caller creates two channels, passes receiving end for input, sending end for output.
+    async fn transform(&self, input: Rx<String>, output: Tx<String>);
 }
 
 // ============================================================================
@@ -104,31 +107,41 @@ pub enum Message {
 /// Streaming service for cross-language conformance testing.
 ///
 /// Tests Tx/Rx semantics, stream lifecycle, and bidirectional streaming.
-/// r[impl streaming.caller-pov] - Types are from caller's perspective.
+///
+/// # Channel semantics (like regular mpsc channels)
+///
+/// - `Rx<T>` in args: caller passes the receiving end, keeps the sending end to push data
+/// - `Tx<T>` in args: caller passes the sending end, keeps the receiving end to pull data
+///
+/// This matches standard channel conventions:
+/// - `(tx, rx) = channel()` → tx sends, rx receives
+/// - If caller wants to send: pass `rx`, keep `tx`
+/// - If caller wants to receive: pass `tx`, keep `rx`
 #[service]
 pub trait Streaming {
     /// Client pushes numbers, server returns their sum.
     ///
-    /// Tests: client-to-server streaming (`Tx<T>` → scalar return).
-    /// r[impl streaming.client-to-server] - Client sends stream, server returns scalar.
-    async fn sum(&self, numbers: Tx<i32>) -> i64;
+    /// Tests: client-to-server streaming (`Rx<T>` → scalar return).
+    /// Caller: `(tx, rx) = channel(); client.sum(rx); tx.send(...)`
+    async fn sum(&self, numbers: Rx<i32>) -> i64;
 
     /// Client sends a count, server streams that many numbers back.
     ///
-    /// Tests: server-to-client streaming (scalar → `Rx<T>` as output parameter).
-    /// r[impl streaming.server-to-client] - Client sends scalar, server returns stream.
-    async fn range(&self, count: u32, output: Rx<u32>);
+    /// Tests: server-to-client streaming (scalar → `Tx<T>` as output parameter).
+    /// Caller: `(tx, rx) = channel(); client.range(count, tx); rx.recv()`
+    async fn range(&self, count: u32, output: Tx<u32>);
 
     /// Client pushes strings, server echoes each back.
     ///
-    /// Tests: bidirectional streaming (`Tx<T>` ↔ `Rx<T>`).
-    /// r[impl streaming.bidirectional] - Both sides stream simultaneously.
-    async fn pipe(&self, input: Tx<String>, output: Rx<String>);
+    /// Tests: bidirectional streaming (`Rx<T>` input ↔ `Tx<T>` output).
+    /// Caller: creates two channels, passes rx for input (to send), tx for output (to receive)
+    async fn pipe(&self, input: Rx<String>, output: Tx<String>);
 
     /// Client pushes numbers, server returns (sum, count, average).
     ///
     /// Tests: aggregating a stream into a compound result.
-    async fn stats(&self, numbers: Tx<i32>) -> (i64, u64, f64);
+    /// Caller: `(tx, rx) = channel(); client.stats(rx); tx.send(...)`
+    async fn stats(&self, numbers: Rx<i32>) -> (i64, u64, f64);
 }
 
 /// Complex types service for testing struct/enum encoding.
