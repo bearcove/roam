@@ -1,5 +1,8 @@
+use facet_core::{ScalarType, Shape};
 use heck::{ToLowerCamelCase, ToUpperCamelCase};
-use roam_schema::{MethodDetail, ServiceDetail, TypeDetail};
+use roam_schema::{
+    EnumInfo, MethodDetail, ServiceDetail, ShapeKind, StructInfo, classify_shape, is_bytes,
+};
 
 use crate::render::{fq_name, hex_u64};
 
@@ -79,16 +82,10 @@ fn generate_client_interface(service: &ServiceDetail) -> String {
         let args = method
             .args
             .iter()
-            .map(|a| {
-                format!(
-                    "{} {}",
-                    java_type(&a.type_info),
-                    a.name.to_lower_camel_case()
-                )
-            })
+            .map(|a| format!("{} {}", java_type(a.ty), a.name.to_lower_camel_case()))
             .collect::<Vec<_>>()
             .join(", ");
-        let ret_ty = java_type(&method.return_type);
+        let ret_ty = java_type(method.return_type);
 
         if let Some(doc) = &method.doc {
             out.push_str(&format!("    /** {doc} */\n"));
@@ -114,16 +111,10 @@ fn generate_server_handler(service: &ServiceDetail) -> String {
         let args = method
             .args
             .iter()
-            .map(|a| {
-                format!(
-                    "{} {}",
-                    java_type(&a.type_info),
-                    a.name.to_lower_camel_case()
-                )
-            })
+            .map(|a| format!("{} {}", java_type(a.ty), a.name.to_lower_camel_case()))
             .collect::<Vec<_>>()
             .join(", ");
-        let ret_ty = java_type(&method.return_type);
+        let ret_ty = java_type(method.return_type);
 
         out.push_str(&format!(
             "    CompletableFuture<{ret_ty}> {method_name}({args});\n"
@@ -196,48 +187,68 @@ fn generate_server_handler(service: &ServiceDetail) -> String {
     out
 }
 
-fn java_type(ty: &TypeDetail) -> String {
-    match ty {
-        TypeDetail::Bool => "Boolean".into(),
-        TypeDetail::U8 | TypeDetail::I8 => "Byte".into(),
-        TypeDetail::U16 | TypeDetail::I16 => "Short".into(),
-        TypeDetail::U32 | TypeDetail::I32 => "Integer".into(),
-        TypeDetail::U64 | TypeDetail::I64 => "Long".into(),
-        TypeDetail::U128 | TypeDetail::I128 => "java.math.BigInteger".into(),
-        TypeDetail::F32 => "Float".into(),
-        TypeDetail::F64 => "Double".into(),
-        TypeDetail::Char => "Character".into(),
-        TypeDetail::String => "String".into(),
-        TypeDetail::Unit => "Void".into(),
-        TypeDetail::Bytes => "byte[]".into(),
-        TypeDetail::List(inner) => format!("java.util.List<{}>", java_type(inner)),
-        TypeDetail::Option(inner) => format!("java.util.Optional<{}>", java_type(inner)),
-        TypeDetail::Array { element, .. } => format!("{}[]", java_type(element)),
-        TypeDetail::Map { key, value } => {
+fn java_type(shape: &'static Shape) -> String {
+    // Check for bytes first
+    if is_bytes(shape) {
+        return "byte[]".into();
+    }
+
+    match classify_shape(shape) {
+        ShapeKind::Scalar(scalar) => java_scalar_type(scalar),
+        ShapeKind::List { element } => format!("java.util.List<{}>", java_type(element)),
+        ShapeKind::Option { inner } => format!("java.util.Optional<{}>", java_type(inner)),
+        ShapeKind::Array { element, .. } => format!("{}[]", java_type(element)),
+        ShapeKind::Slice { element } => format!("java.util.List<{}>", java_type(element)),
+        ShapeKind::Map { key, value } => {
             format!("java.util.Map<{}, {}>", java_type(key), java_type(value))
         }
-        TypeDetail::Set(inner) => format!("java.util.Set<{}>", java_type(inner)),
-        TypeDetail::Tuple(items) => {
+        ShapeKind::Set { element } => format!("java.util.Set<{}>", java_type(element)),
+        ShapeKind::Tuple { elements } => {
             // Java doesn't have tuples; would need a record or class
-            match items.len() {
+            match elements.len() {
                 2 => format!(
                     "java.util.Map.Entry<{}, {}>",
-                    java_type(&items[0]),
-                    java_type(&items[1])
+                    java_type(elements[0].shape),
+                    java_type(elements[1].shape)
                 ),
                 _ => "Object[]".into(),
             }
         }
-        // Push: caller sends data to callee
-        TypeDetail::Tx(inner) => {
+        // Tx: caller sends data to callee
+        ShapeKind::Tx { inner } => {
             format!("java.util.concurrent.Flow.Subscriber<{}>", java_type(inner))
         }
         // Rx: callee sends data to caller
-        TypeDetail::Rx(inner) => {
+        ShapeKind::Rx { inner } => {
             format!("java.util.concurrent.Flow.Publisher<{}>", java_type(inner))
         }
-        TypeDetail::Struct { .. } => "Object".into(), // Would need proper class generation
-        TypeDetail::Enum { .. } => "Object".into(),   // Would need proper enum generation
+        ShapeKind::Struct(StructInfo {
+            name: Some(name), ..
+        }) => name.to_string(),
+        ShapeKind::Enum(EnumInfo {
+            name: Some(name), ..
+        }) => name.to_string(),
+        ShapeKind::Struct(_) => "Object".into(), // Anonymous struct
+        ShapeKind::Enum(_) => "Object".into(),   // Anonymous enum
+        ShapeKind::Pointer { pointee } => java_type(pointee),
+        ShapeKind::Opaque => "Object".into(),
+    }
+}
+
+fn java_scalar_type(scalar: ScalarType) -> String {
+    match scalar {
+        ScalarType::Bool => "Boolean".into(),
+        ScalarType::U8 | ScalarType::I8 => "Byte".into(),
+        ScalarType::U16 | ScalarType::I16 => "Short".into(),
+        ScalarType::U32 | ScalarType::I32 => "Integer".into(),
+        ScalarType::U64 | ScalarType::I64 | ScalarType::USize | ScalarType::ISize => "Long".into(),
+        ScalarType::U128 | ScalarType::I128 => "java.math.BigInteger".into(),
+        ScalarType::F32 => "Float".into(),
+        ScalarType::F64 => "Double".into(),
+        ScalarType::Char => "Character".into(),
+        ScalarType::Str | ScalarType::String | ScalarType::CowStr => "String".into(),
+        ScalarType::Unit => "Void".into(),
+        _ => "Object".into(),
     }
 }
 

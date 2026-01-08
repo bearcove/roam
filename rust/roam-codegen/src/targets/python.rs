@@ -1,5 +1,8 @@
+use facet_core::{ScalarType, Shape};
 use heck::{ToSnakeCase, ToUpperCamelCase};
-use roam_schema::{MethodDetail, ServiceDetail, TypeDetail};
+use roam_schema::{
+    EnumInfo, MethodDetail, ServiceDetail, ShapeKind, StructInfo, classify_shape, is_bytes,
+};
 
 use crate::render::{fq_name, hex_u64};
 
@@ -63,10 +66,10 @@ fn generate_client_protocol(service: &ServiceDetail) -> String {
         let args = method
             .args
             .iter()
-            .map(|a| format!("{}: {}", a.name.to_snake_case(), py_type(&a.type_info)))
+            .map(|a| format!("{}: {}", a.name.to_snake_case(), py_type(a.ty)))
             .collect::<Vec<_>>()
             .join(", ");
-        let ret_ty = py_type(&method.return_type);
+        let ret_ty = py_type(method.return_type);
 
         if let Some(doc) = &method.doc {
             out.push_str(&format!(
@@ -96,10 +99,10 @@ fn generate_server_handler(service: &ServiceDetail) -> String {
         let args = method
             .args
             .iter()
-            .map(|a| format!("{}: {}", a.name.to_snake_case(), py_type(&a.type_info)))
+            .map(|a| format!("{}: {}", a.name.to_snake_case(), py_type(a.ty)))
             .collect::<Vec<_>>()
             .join(", ");
-        let ret_ty = py_type(&method.return_type);
+        let ret_ty = py_type(method.return_type);
 
         out.push_str("    @abstractmethod\n");
         out.push_str(&format!(
@@ -163,45 +166,78 @@ fn generate_server_handler(service: &ServiceDetail) -> String {
     out
 }
 
-fn py_type(ty: &TypeDetail) -> String {
-    match ty {
-        TypeDetail::Bool => "bool".into(),
-        TypeDetail::U8 | TypeDetail::U16 | TypeDetail::U32 | TypeDetail::U64 | TypeDetail::U128 => {
-            "int".into()
-        }
-        TypeDetail::I8 | TypeDetail::I16 | TypeDetail::I32 | TypeDetail::I64 | TypeDetail::I128 => {
-            "int".into()
-        }
-        TypeDetail::F32 | TypeDetail::F64 => "float".into(),
-        TypeDetail::Char | TypeDetail::String => "str".into(),
-        TypeDetail::Unit => "None".into(),
-        TypeDetail::Bytes => "bytes".into(),
-        TypeDetail::List(inner) => format!("list[{}]", py_type(inner)),
-        TypeDetail::Option(inner) => format!("{} | None", py_type(inner)),
-        TypeDetail::Array { element, .. } => format!("list[{}]", py_type(element)),
-        TypeDetail::Map { key, value } => format!("dict[{}, {}]", py_type(key), py_type(value)),
-        TypeDetail::Set(inner) => format!("set[{}]", py_type(inner)),
-        TypeDetail::Tuple(items) => {
-            let inner = items.iter().map(py_type).collect::<Vec<_>>().join(", ");
-            format!("tuple[{inner}]")
+fn py_type(shape: &'static Shape) -> String {
+    // Check for bytes first
+    if is_bytes(shape) {
+        return "bytes".into();
+    }
+
+    match classify_shape(shape) {
+        ShapeKind::Scalar(scalar) => py_scalar_type(scalar),
+        ShapeKind::List { element } => format!("list[{}]", py_type(element)),
+        ShapeKind::Option { inner } => format!("{} | None", py_type(inner)),
+        ShapeKind::Array { element, .. } => format!("list[{}]", py_type(element)),
+        ShapeKind::Slice { element } => format!("list[{}]", py_type(element)),
+        ShapeKind::Map { key, value } => format!("dict[{}, {}]", py_type(key), py_type(value)),
+        ShapeKind::Set { element } => format!("set[{}]", py_type(element)),
+        ShapeKind::Tuple { elements } => {
+            let inner = elements
+                .iter()
+                .map(|p| py_type(p.shape))
+                .collect::<Vec<_>>()
+                .join(", ");
+            if inner.is_empty() {
+                "tuple[()]".into()
+            } else {
+                format!("tuple[{inner}]")
+            }
         }
         // Tx: caller sends data to callee
-        TypeDetail::Tx(inner) => format!("AsyncGenerator[{}, None, None]", py_type(inner)),
+        ShapeKind::Tx { inner } => format!("AsyncGenerator[{}, None, None]", py_type(inner)),
         // Rx: callee sends data to caller
-        TypeDetail::Rx(inner) => format!("AsyncIterator[{}]", py_type(inner)),
-        TypeDetail::Struct { fields, .. } => {
+        ShapeKind::Rx { inner } => format!("AsyncIterator[{}]", py_type(inner)),
+        ShapeKind::Struct(StructInfo {
+            name: Some(name), ..
+        }) => name.to_string(),
+        ShapeKind::Enum(EnumInfo {
+            name: Some(name), ..
+        }) => name.to_string(),
+        ShapeKind::Struct(StructInfo { fields, .. }) => {
             // Use TypedDict for inline structs
             let inner = fields
                 .iter()
-                .map(|f| format!("\"{}\": {}", f.name, py_type(&f.type_info)))
+                .map(|f| format!("\"{}\": {}", f.name, py_type(f.shape())))
                 .collect::<Vec<_>>()
                 .join(", ");
             format!("dict[{{{inner}}}]")
         }
-        TypeDetail::Enum { .. } => {
-            // Enums would need proper class generation
-            "object".into()
+        ShapeKind::Enum(_) => "object".into(),
+        ShapeKind::Pointer { pointee } => py_type(pointee),
+        ShapeKind::Opaque => "object".into(),
+    }
+}
+
+fn py_scalar_type(scalar: ScalarType) -> String {
+    match scalar {
+        ScalarType::Bool => "bool".into(),
+        ScalarType::U8
+        | ScalarType::U16
+        | ScalarType::U32
+        | ScalarType::U64
+        | ScalarType::U128
+        | ScalarType::USize => "int".into(),
+        ScalarType::I8
+        | ScalarType::I16
+        | ScalarType::I32
+        | ScalarType::I64
+        | ScalarType::I128
+        | ScalarType::ISize => "int".into(),
+        ScalarType::F32 | ScalarType::F64 => "float".into(),
+        ScalarType::Char | ScalarType::Str | ScalarType::String | ScalarType::CowStr => {
+            "str".into()
         }
+        ScalarType::Unit => "None".into(),
+        _ => "object".into(),
     }
 }
 

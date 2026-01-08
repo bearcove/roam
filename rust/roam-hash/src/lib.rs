@@ -89,11 +89,11 @@ pub fn encode_shape(shape: &'static Shape, out: &mut Vec<u8>) {
 
     // Handle transparent wrappers - encode as inner type
     // Only if marked with #[repr(transparent)] or #[facet(transparent)]
-    if shape.is_transparent() {
-        if let Some(inner) = shape.inner {
-            encode_shape(inner, out);
-            return;
-        }
+    if shape.is_transparent()
+        && let Some(inner) = shape.inner
+    {
+        encode_shape(inner, out);
+        return;
     }
 
     // Try scalar types first - this handles primitives, String, etc.
