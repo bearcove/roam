@@ -22,8 +22,8 @@ pub use roam_session as session;
 
 // Re-export streaming types for user-facing API
 pub use roam_session::{
-    OutgoingMessage, OutgoingPoll, OutgoingSender, Role, Rx, RxError, StreamError, StreamId,
-    StreamIdAllocator, StreamRegistry, Tx, TxError,
+    OutgoingMessage, ReceiverSlot, Role, Rx, RxError, SenderSlot, StreamError, StreamId,
+    StreamIdAllocator, StreamRegistry, Tx, TxError, channel,
 };
 
 // Re-export schema types

@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use facet::Facet;
 use std::convert::Infallible;
-use tokio::sync::{Notify, mpsc};
+use tokio::sync::mpsc;
 
 pub use roam_frame::{Frame, MsgDesc, OwnedMessage, Payload};
 
@@ -622,7 +622,6 @@ impl StreamRegistry {
     /// r[impl streaming.reset.credit] - Outstanding credit is lost on reset.
     pub fn reset(&mut self, stream_id: StreamId) {
         self.incoming.remove(&stream_id);
-        self.outgoing.remove(&stream_id);
         self.incoming_credit.remove(&stream_id);
         self.outgoing_credit.remove(&stream_id);
         self.closed.insert(stream_id);
@@ -640,9 +639,9 @@ impl StreamRegistry {
         // If no entry, stream may be closed or unknown - ignore
     }
 
-    /// Check if a stream ID is registered (either incoming or outgoing).
+    /// Check if a stream ID is registered (either incoming or outgoing credit).
     pub fn contains(&self, stream_id: StreamId) -> bool {
-        self.incoming.contains_key(&stream_id) || self.outgoing.contains_key(&stream_id)
+        self.incoming.contains_key(&stream_id) || self.outgoing_credit.contains_key(&stream_id)
     }
 
     /// Check if a stream ID is registered as incoming.
@@ -650,9 +649,9 @@ impl StreamRegistry {
         self.incoming.contains_key(&stream_id)
     }
 
-    /// Check if a stream ID is registered as outgoing.
+    /// Check if a stream ID has outgoing credit registered.
     pub fn contains_outgoing(&self, stream_id: StreamId) -> bool {
-        self.outgoing.contains_key(&stream_id)
+        self.outgoing_credit.contains_key(&stream_id)
     }
 
     /// Check if a stream has been closed.
@@ -660,9 +659,9 @@ impl StreamRegistry {
         self.closed.contains(&stream_id)
     }
 
-    /// Get the number of active outgoing streams.
+    /// Get the number of active outgoing streams (by credit tracking).
     pub fn outgoing_count(&self) -> usize {
-        self.outgoing.len()
+        self.outgoing_credit.len()
     }
 
     /// Get remaining credit for an outgoing stream.
@@ -937,11 +936,9 @@ struct HandleShared {
     request_ids: RequestIdGenerator,
     /// Stream ID allocator.
     stream_ids: StreamIdAllocator,
-    /// Stream registry for creating Tx/Rx handles.
+    /// Stream registry for routing incoming data.
     /// Protected by a mutex since handles may create streams concurrently.
     stream_registry: std::sync::Mutex<StreamRegistry>,
-    /// Notify for outgoing stream data.
-    outgoing_notify: Arc<Notify>,
 }
 
 /// Handle for making outgoing RPC calls.
@@ -967,14 +964,12 @@ impl ConnectionHandle {
     /// Create a new handle with the given command channel and role.
     pub fn new(command_tx: mpsc::Sender<HandleCommand>, role: Role, initial_credit: u32) -> Self {
         let stream_registry = StreamRegistry::new_with_credit(initial_credit);
-        let outgoing_notify = stream_registry.outgoing_notify();
         Self {
             shared: Arc::new(HandleShared {
                 command_tx,
                 request_ids: RequestIdGenerator::new(),
                 stream_ids: StreamIdAllocator::new(role),
                 stream_registry: std::sync::Mutex::new(stream_registry),
-                outgoing_notify,
             }),
         }
     }
@@ -1029,44 +1024,33 @@ impl ConnectionHandle {
         response_rx.await.map_err(|_| CallError::DriverGone)?
     }
 
-    /// Allocate a new outgoing stream (caller → callee).
+    /// Allocate a stream ID for an outgoing stream.
     ///
-    /// Returns a `Tx<T>` that can be passed as an argument to a call.
-    pub fn new_tx<T: 'static>(&self) -> Tx<T> {
-        let stream_id = self.shared.stream_ids.next();
-        let sender = self
-            .shared
+    /// Used internally when binding streams during call().
+    pub fn alloc_stream_id(&self) -> StreamId {
+        self.shared.stream_ids.next()
+    }
+
+    /// Register an incoming stream (we receive data from peer).
+    ///
+    /// Used when schema has `Tx<T>` (callee sends to caller) - we receive that data.
+    pub fn register_incoming(&self, stream_id: StreamId, tx: mpsc::Sender<Vec<u8>>) {
+        self.shared
             .stream_registry
             .lock()
             .unwrap()
-            .register_outgoing(stream_id);
-        Tx::new(sender)
+            .register_incoming(stream_id, tx);
     }
 
-    /// Allocate a new incoming stream (callee → caller).
+    /// Register credit tracking for an outgoing stream.
     ///
-    /// Returns an `Rx<T>` that can be passed as an argument to a call.
-    pub fn new_rx<T: 'static>(&self) -> Rx<T> {
-        let stream_id = self.shared.stream_ids.next();
-        let rx = self
-            .shared
+    /// The actual receiver is owned by the driver, not the registry.
+    pub fn register_outgoing_credit(&self, stream_id: StreamId) {
+        self.shared
             .stream_registry
             .lock()
             .unwrap()
-            .register_incoming(stream_id);
-        Rx::new(stream_id, rx)
-    }
-
-    /// Get the outgoing notify handle for the driver to wait on.
-    pub fn outgoing_notify(&self) -> Arc<Notify> {
-        self.shared.outgoing_notify.clone()
-    }
-
-    /// Poll outgoing stream data.
-    ///
-    /// Called by the driver to get pending Data/Close messages.
-    pub fn poll_outgoing(&self) -> OutgoingPoll {
-        self.shared.stream_registry.lock().unwrap().poll_outgoing()
+            .register_outgoing_credit(stream_id);
     }
 
     /// Route incoming stream data to the appropriate Rx.
@@ -1176,87 +1160,32 @@ mod tests {
     // r[verify streaming.holder-semantics]
     #[tokio::test]
     async fn tx_serializes_and_rx_deserializes() {
-        // Create a channel pair for Tx → Rx communication
-        let (tx, rx) = mpsc::channel::<Vec<u8>>(10);
-        let notify = Arc::new(Notify::new());
+        // Create a channel pair using roam::channel
+        let (tx, mut rx) = channel::<i32>();
 
-        // Wrap in Tx/Rx types (normally StreamRegistry would do this)
-        let outgoing_sender = OutgoingSender::new(
-            42,
-            {
-                // Create a channel that converts OutgoingMessage to raw bytes for Rx
-                let (out_tx, mut out_rx) = mpsc::channel::<OutgoingMessage>(10);
-                // Spawn a task to bridge OutgoingMessage to raw bytes
-                tokio::spawn(async move {
-                    while let Some(msg) = out_rx.recv().await {
-                        match msg {
-                            OutgoingMessage::Data(bytes) => {
-                                let _ = tx.send(bytes).await;
-                            }
-                            OutgoingMessage::Close => break,
-                        }
-                    }
-                });
-                out_tx
-            },
-            notify,
-        );
+        // Simulate what ConnectionHandle::call would do: take the receiver
+        let mut taken_rx = rx.receiver.take().expect("receiver should be present");
 
-        let tx: Tx<i32> = Tx::new(outgoing_sender);
-        let mut rx: Rx<i32> = Rx::new(42, rx);
-
-        assert_eq!(tx.stream_id(), 42);
-        assert_eq!(rx.stream_id(), 42);
-
+        // Now tx can send and we can receive on the taken receiver
         tx.send(&100).await.unwrap();
         tx.send(&200).await.unwrap();
 
-        assert_eq!(rx.recv().await.unwrap(), Some(100));
-        assert_eq!(rx.recv().await.unwrap(), Some(200));
+        // Receive raw bytes and deserialize
+        let bytes1 = taken_rx.recv().await.unwrap();
+        let val1: i32 = facet_postcard::from_slice(&bytes1).unwrap();
+        assert_eq!(val1, 100);
 
-        drop(tx);
-        // Give the spawned task time to process the Close message
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-        assert_eq!(rx.recv().await.unwrap(), None); // channel closed
-    }
-
-    // r[verify streaming.lifecycle.caller-closes-pushes]
-    #[tokio::test]
-    async fn tx_drop_sends_close() {
-        let mut registry = StreamRegistry::new();
-        let sender = registry.register_outgoing(42);
-
-        let tx: Tx<i32> = Tx::new(sender);
-
-        // Send some data
-        tx.send(&100).await.unwrap();
-
-        // Drop the tx - should trigger Close
-        drop(tx);
-
-        // Poll should return Data first, then Close
-        match registry.poll_outgoing() {
-            OutgoingPoll::Data { stream_id, payload } => {
-                assert_eq!(stream_id, 42);
-                let value: i32 = facet_postcard::from_slice(&payload).unwrap();
-                assert_eq!(value, 100);
-            }
-            other => panic!("expected Data, got {:?}", other),
-        }
-
-        match registry.poll_outgoing() {
-            OutgoingPoll::Close { stream_id } => {
-                assert_eq!(stream_id, 42);
-            }
-            other => panic!("expected Close, got {:?}", other),
-        }
+        let bytes2 = taken_rx.recv().await.unwrap();
+        let val2: i32 = facet_postcard::from_slice(&bytes2).unwrap();
+        assert_eq!(val2, 200);
     }
 
     // r[verify streaming.data-after-close]
     #[tokio::test]
     async fn data_after_close_is_rejected() {
         let mut registry = StreamRegistry::new();
-        let _rx = registry.register_incoming(42);
+        let (tx, _rx) = mpsc::channel::<Vec<u8>>(10);
+        registry.register_incoming(42, tx);
 
         // Close the stream
         registry.close(42);
@@ -1273,7 +1202,8 @@ mod tests {
         let mut registry = StreamRegistry::new();
 
         // Register a stream
-        let mut rx = registry.register_incoming(42);
+        let (tx, mut rx) = mpsc::channel::<Vec<u8>>(10);
+        registry.register_incoming(42, tx);
 
         // Data to registered stream should succeed
         assert!(registry.route_data(42, b"hello".to_vec()).await.is_ok());
@@ -1289,7 +1219,8 @@ mod tests {
     #[tokio::test]
     async fn stream_registry_close_terminates_stream() {
         let mut registry = StreamRegistry::new();
-        let mut rx = registry.register_incoming(42);
+        let (tx, mut rx) = mpsc::channel::<Vec<u8>>(10);
+        registry.register_incoming(42, tx);
 
         // Send some data
         registry.route_data(42, b"data1".to_vec()).await.unwrap();
@@ -1313,41 +1244,6 @@ mod tests {
 
         let tx_shape = <Tx<i32> as Facet>::SHAPE;
         let rx_shape = <Rx<i32> as Facet>::SHAPE;
-
-        eprintln!("Tx<i32> type_identifier: {:?}", tx_shape.type_identifier);
-        eprintln!("Tx<i32> module_path: {:?}", tx_shape.module_path);
-        eprintln!(
-            "Tx<i32> type_params: {:?}",
-            tx_shape
-                .type_params
-                .iter()
-                .map(|p| p.name)
-                .collect::<Vec<_>>()
-        );
-
-        eprintln!("Rx<i32> type_identifier: {:?}", rx_shape.type_identifier);
-        eprintln!("Rx<i32> module_path: {:?}", rx_shape.module_path);
-        eprintln!(
-            "Rx<i32> type_params: {:?}",
-            rx_shape
-                .type_params
-                .iter()
-                .map(|p| p.name)
-                .collect::<Vec<_>>()
-        );
-
-        // Verify we can identify Tx/Rx by their fully qualified path
-        let tx_fqp = match tx_shape.module_path {
-            Some(m) => format!("{}::{}", m, tx_shape.type_identifier),
-            None => tx_shape.type_identifier.to_string(),
-        };
-        let rx_fqp = match rx_shape.module_path {
-            Some(m) => format!("{}::{}", m, rx_shape.type_identifier),
-            None => rx_shape.type_identifier.to_string(),
-        };
-
-        eprintln!("Tx<i32> fully qualified: {}", tx_fqp);
-        eprintln!("Rx<i32> fully qualified: {}", rx_fqp);
 
         // Verify module_path and type_identifier are set correctly
         assert_eq!(tx_shape.module_path, Some("roam_session"));

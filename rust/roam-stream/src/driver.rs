@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use roam_session::{
-    CallError, ConnectionHandle, HandleCommand, OutgoingPoll, Role, ServiceDispatcher, StreamError,
+    CallError, ConnectionHandle, HandleCommand, Role, ServiceDispatcher, StreamError,
     StreamRegistry,
 };
 use roam_wire::{Hello, Message};
@@ -86,10 +86,11 @@ where
     }
 
     /// Run the driver until the connection closes.
+    ///
+    /// TODO: Add FuturesUnordered for outgoing stream receivers.
+    /// When ConnectionHandle::call binds streams, it should return taken receivers
+    /// that get added to a FuturesUnordered here for polling.
     pub async fn run(mut self) -> Result<(), ConnectionError> {
-        let server_outgoing_notify = self.server_stream_registry.outgoing_notify();
-        let client_outgoing_notify = self.handle.outgoing_notify();
-
         loop {
             tokio::select! {
                 biased;
@@ -113,15 +114,9 @@ where
                     }
                 }
 
-                // Flush server-side outgoing stream data
-                _ = server_outgoing_notify.notified() => {
-                    self.flush_server_outgoing().await?;
-                }
-
-                // Flush client-side outgoing stream data
-                _ = client_outgoing_notify.notified() => {
-                    self.flush_client_outgoing().await?;
-                }
+                // TODO: Poll FuturesUnordered for outgoing stream data
+                // When a receiver yields data, send it as a Data message
+                // When a receiver is exhausted, send a Close message
             }
         }
     }
@@ -133,9 +128,6 @@ where
         result: Result<Vec<u8>, String>,
     ) -> Result<(), ConnectionError> {
         let response_payload = result.map_err(ConnectionError::Dispatch)?;
-
-        // Flush server outgoing stream data before Response
-        self.flush_server_outgoing().await?;
 
         let resp = Message::Response {
             request_id,
@@ -308,7 +300,6 @@ where
             };
             self.io.send(&resp).await?;
             self.in_flight_server_requests.remove(&request_id);
-            self.flush_server_outgoing().await?;
         }
         Ok(())
     }
@@ -398,38 +389,6 @@ where
             self.handle.receive_credit(stream_id, bytes);
         }
         // Unknown stream for Credit - should be error but we'd need async
-        Ok(())
-    }
-
-    /// Flush server-side outgoing stream data.
-    async fn flush_server_outgoing(&mut self) -> Result<(), ConnectionError> {
-        loop {
-            match self.server_stream_registry.poll_outgoing() {
-                OutgoingPoll::Data { stream_id, payload } => {
-                    self.io.send(&Message::Data { stream_id, payload }).await?;
-                }
-                OutgoingPoll::Close { stream_id } => {
-                    self.io.send(&Message::Close { stream_id }).await?;
-                }
-                OutgoingPoll::Pending | OutgoingPoll::Done => break,
-            }
-        }
-        Ok(())
-    }
-
-    /// Flush client-side outgoing stream data.
-    async fn flush_client_outgoing(&mut self) -> Result<(), ConnectionError> {
-        loop {
-            match self.handle.poll_outgoing() {
-                OutgoingPoll::Data { stream_id, payload } => {
-                    self.io.send(&Message::Data { stream_id, payload }).await?;
-                }
-                OutgoingPoll::Close { stream_id } => {
-                    self.io.send(&Message::Close { stream_id }).await?;
-                }
-                OutgoingPoll::Pending | OutgoingPoll::Done => break,
-            }
-        }
         Ok(())
     }
 

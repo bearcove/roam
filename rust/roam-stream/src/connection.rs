@@ -9,12 +9,10 @@
 //! - `WsTransport` for WebSocket connections
 
 use std::collections::HashSet;
-use std::sync::Arc;
 use std::time::Duration;
 
-use roam_session::{OutgoingPoll, Role, StreamError, StreamIdAllocator, StreamRegistry};
+use roam_session::{Role, StreamError, StreamIdAllocator, StreamRegistry};
 use roam_wire::{Hello, Message};
-use tokio::sync::Notify;
 
 use crate::transport::MessageTransport;
 
@@ -126,14 +124,6 @@ impl<T> Connection<T> {
         &mut self.stream_registry
     }
 
-    /// Get the notify handle for outgoing stream data.
-    ///
-    /// When an `OutgoingSender` has new data, it notifies this handle.
-    /// Use in select! to wake up when stream data is ready to send.
-    pub fn outgoing_notify(&self) -> Arc<Notify> {
-        self.stream_registry.outgoing_notify()
-    }
-
     /// Validate payload size against negotiated limit.
     ///
     /// r[impl flow.unary.payload-limit] - Payloads bounded by max_payload_size.
@@ -168,33 +158,6 @@ where
         }
     }
 
-    /// Send all pending outgoing stream messages.
-    ///
-    /// Drains the outgoing stream channels and sends Data/Close messages
-    /// to the peer. Call this periodically or after processing requests.
-    ///
-    /// r[impl streaming.data] - Send Data messages for outgoing streams.
-    /// r[impl streaming.close] - Send Close messages when streams end.
-    pub async fn flush_outgoing(&mut self) -> Result<(), ConnectionError> {
-        loop {
-            match self.stream_registry.poll_outgoing() {
-                OutgoingPoll::Data { stream_id, payload } => {
-                    let msg = Message::Data { stream_id, payload };
-                    self.io.send(&msg).await?;
-                }
-                OutgoingPoll::Close { stream_id } => {
-                    let msg = Message::Close { stream_id };
-                    self.io.send(&msg).await?;
-                }
-                OutgoingPoll::Pending | OutgoingPoll::Done => {
-                    // No more pending data
-                    break;
-                }
-            }
-        }
-        Ok(())
-    }
-
     /// Run the message loop with a dispatcher.
     ///
     /// This is the main event loop that:
@@ -202,7 +165,9 @@ where
     /// - Validates them according to protocol rules
     /// - Dispatches requests to the service
     /// - Sends responses back
-    /// - Flushes outgoing stream data when notified
+    ///
+    /// Note: Outgoing stream data (from Rx<T> passed to calls) is handled by the Driver,
+    /// not by this Connection. The Driver owns those receivers in a FuturesUnordered.
     ///
     /// r[impl unary.pipelining.allowed] - Handle requests as they arrive.
     /// r[impl unary.pipelining.independence] - Each request handled independently.
@@ -210,23 +175,13 @@ where
     where
         D: ServiceDispatcher,
     {
-        // Get notify handle before entering loop - OutgoingSenders will notify
-        // when they have data ready to send.
-        let outgoing_notify = self.stream_registry.outgoing_notify();
-
         loop {
             tokio::select! {
                 biased;
 
                 // Handle completed streaming handlers
                 Some((request_id, result)) = self.streaming_results_rx.recv() => {
-                    let response_payload = result.map_err(ConnectionError::Dispatch)?;
-
-                    // Flush any outgoing stream data (Data/Close) BEFORE Response.
-                    // This ensures the client receives all streamed data before the
-                    // Response that signals call completion.
-                    // r[impl streaming.flush-before-response] - Stream data sent before Response.
-                    self.flush_outgoing().await?;
+                    let response_payload: Vec<u8> = result.map_err(ConnectionError::Dispatch)?;
 
                     // r[impl streaming.call-complete] - Call completes when Response sent.
                     // r[impl streaming.lifecycle.response-closes-pulls] - Rx streams close with Response.
@@ -239,7 +194,7 @@ where
                     self.in_flight_requests.remove(&request_id);
                 }
 
-                // Prioritize incoming messages over outgoing flush
+                // Prioritize incoming messages
                 result = self.io.recv_timeout(Duration::from_secs(30)) => {
                     let msg = match result {
                         Ok(Some(m)) => m,
@@ -271,11 +226,6 @@ where
                         Err(ConnectionError::Closed) => return Ok(()), // Clean shutdown
                         Err(e) => return Err(e),
                     }
-                }
-
-                // Wake up when outgoing stream data is available
-                _ = outgoing_notify.notified() => {
-                    self.flush_outgoing().await?;
                 }
             }
         }
@@ -363,9 +313,6 @@ where
                     };
                     self.io.send(&resp).await?;
                     self.in_flight_requests.remove(&request_id);
-
-                    // Flush any outgoing stream data that handlers may have queued
-                    self.flush_outgoing().await?;
                 }
             }
             Message::Response { request_id, .. } => {
