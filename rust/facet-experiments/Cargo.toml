@@ -13,4 +13,4 @@ facet = { path = "../../../facet/facet" }
 facet-reflect = { path = "../../../facet/facet-reflect" }
 facet-json = { path = "../../../facet/facet-json" }
 facet-postcard = { path = "../../../facet/facet-postcard" }
-tokio = { version = "1", features = ["sync"] }
+tokio = { version = "1", features = ["sync", "rt", "rt-multi-thread"] }

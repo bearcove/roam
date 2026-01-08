@@ -359,6 +359,132 @@ fn test_tx_in_struct() {
     }
 }
 
+// ============================================================================
+// Experiment C: Wrapper for Option<Receiver> that implements Facet
+// ============================================================================
+
+/// A wrapper around Option<mpsc::Receiver<Vec<u8>>> that implements Facet.
+/// This allows Poke::get_mut() to work, enabling .take() via reflection.
+#[derive(Facet)]
+#[facet(opaque)] // Still opaque for serialization (shouldn't be serialized)
+pub struct ReceiverSlot {
+    inner: Option<mpsc::Receiver<Vec<u8>>>,
+}
+
+impl ReceiverSlot {
+    pub fn new(receiver: mpsc::Receiver<Vec<u8>>) -> Self {
+        Self {
+            inner: Some(receiver),
+        }
+    }
+
+    pub fn empty() -> Self {
+        Self { inner: None }
+    }
+
+    pub fn take(&mut self) -> Option<mpsc::Receiver<Vec<u8>>> {
+        self.inner.take()
+    }
+
+    pub fn is_some(&self) -> bool {
+        self.inner.is_some()
+    }
+}
+
+/// Rx3 - uses ReceiverSlot wrapper so we can .take() via Poke
+#[derive(Facet)]
+#[facet(proxy = u64)]
+pub struct Rx3<T: 'static> {
+    pub stream_id: u64,
+    pub receiver: ReceiverSlot, // Now pokeable!
+    #[facet(opaque)]
+    _marker: PhantomData<T>,
+}
+
+// For SERIALIZATION: &Rx3<T> -> u64
+#[allow(clippy::infallible_try_from)]
+impl<T: 'static> TryFrom<&Rx3<T>> for u64 {
+    type Error = std::convert::Infallible;
+    fn try_from(rx: &Rx3<T>) -> Result<Self, Self::Error> {
+        Ok(rx.stream_id)
+    }
+}
+
+// For DESERIALIZATION: u64 -> Rx3<T>
+#[allow(clippy::infallible_try_from)]
+impl<T: 'static> TryFrom<u64> for Rx3<T> {
+    type Error = std::convert::Infallible;
+    fn try_from(stream_id: u64) -> Result<Self, Self::Error> {
+        Ok(Rx3 {
+            stream_id,
+            receiver: ReceiverSlot::empty(),
+            _marker: PhantomData,
+        })
+    }
+}
+
+fn test_poke_take_receiver() {
+    println!("\n### Testing Poke + take() on Rx3 ###");
+
+    // Create a channel
+    let (_tx, rx) = mpsc::channel::<Vec<u8>>(64);
+
+    // Create Rx3 with the receiver
+    let mut rx3 = Rx3::<i32> {
+        stream_id: 0,
+        receiver: ReceiverSlot::new(rx),
+        _marker: PhantomData,
+    };
+
+    println!(
+        "Initial: stream_id={}, receiver.is_some()={}",
+        rx3.stream_id,
+        rx3.receiver.is_some()
+    );
+
+    // Now use Poke to:
+    // 1. Set stream_id
+    // 2. Take the receiver
+
+    let poke = Poke::new(&mut rx3);
+
+    match poke.into_struct() {
+        Ok(mut poke_struct) => {
+            // Step 1: Set stream_id
+            match poke_struct.field_by_name("stream_id") {
+                Ok(mut field_poke) => match field_poke.set(42u64) {
+                    Ok(()) => println!("✅ Poked stream_id = 42"),
+                    Err(e) => println!("❌ Failed to set stream_id: {e}"),
+                },
+                Err(e) => println!("❌ Cannot access stream_id: {e}"),
+            }
+
+            // Step 2: Get mutable reference to ReceiverSlot and .take()
+            match poke_struct.field_by_name("receiver") {
+                Ok(mut field_poke) => match field_poke.get_mut::<ReceiverSlot>() {
+                    Ok(slot) => {
+                        let taken = slot.take();
+                        if taken.is_some() {
+                            println!("✅ Successfully took receiver via Poke!");
+                        } else {
+                            println!("❌ Receiver was already None");
+                        }
+                    }
+                    Err(e) => println!("❌ Failed to get_mut ReceiverSlot: {e}"),
+                },
+                Err(e) => println!("❌ Cannot access receiver field: {e}"),
+            }
+        }
+        Err(e) => println!("❌ Cannot convert to PokeStruct: {e}"),
+    }
+
+    println!(
+        "Final: stream_id={}, receiver.is_some()={}",
+        rx3.stream_id,
+        rx3.receiver.is_some()
+    );
+}
+
 fn main() {
     println!("===========================================");
     println!("Container-Level Proxy Experiment");
@@ -380,6 +506,9 @@ fn main() {
 
     // Test Tx embedded in a struct (real use case)
     test_tx_in_struct();
+
+    // NEW: Test Poke + take() with ReceiverSlot wrapper
+    test_poke_take_receiver();
 
     println!("\n===========================================");
     println!("Experiment complete!");
