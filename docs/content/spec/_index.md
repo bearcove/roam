@@ -102,28 +102,28 @@ The following abstract messages relate to calls:
 > the completed result or a `Cancelled` error). Implementations MUST
 > handle late Responses gracefully.
 
-## Channels (Push/Pull)
+## Channels (Tx/Rx)
 
 A **channel** is a unidirectional, ordered sequence of typed values. At the
-type level, roam provides `Push<T>` and `Pull<T>` to indicate direction.
+type level, roam provides `Tx<T>` and `Rx<T>` to indicate direction.
 
 > r[core.channel]
 >
-> `Push<T>` represents data flowing from **caller to callee** (input).
-> `Pull<T>` represents data flowing from **callee to caller** (output).
+> `Tx<T>` represents data flowing from **caller to callee** (input).
+> `Rx<T>` represents data flowing from **callee to caller** (output).
 > Each has exactly one sender and one receiver.
 
-On the wire, both `Push<T>` and `Pull<T>` serialize as a `channel_id`
+On the wire, both `Tx<T>` and `Rx<T>` serialize as a `channel_id`
 (u64). The direction is determined by the type, not the ID.
 See `r[channeling.type]` for details.
 
 > r[core.channel.return-forbidden]
 >
-> `Push<T>` and `Pull<T>` MUST NOT appear in return types. They may
+> `Tx<T>` and `Rx<T>` MUST NOT appear in return types. They may
 > only appear in argument position. The return type is always a plain
-> value (possibly `()` for methods that only produce output via Pull).
+> value (possibly `()` for methods that only produce output via Rx).
 
-For bidirectional communication, use one Push (input) and one Pull (output).
+For bidirectional communication, use one Tx (input) and one Rx (output).
 
 ### Channel Messages
 
@@ -136,11 +136,11 @@ The following abstract messages relate to channels:
 | **Reset** | either peer | Abort the channel immediately |
 | **Credit** | receiver | Grant permission to send more bytes |
 
-For `Push<T>` (caller→callee), the caller sends Close when done sending.
+For `Tx<T>` (caller→callee), the caller sends Close when done sending.
 After sending Close, the caller MUST NOT send more Data on that channel.
 See `r[channeling.close]` for details.
 
-For `Pull<T>` (callee→caller), the channel is implicitly closed when the
+For `Rx<T>` (callee→caller), the channel is implicitly closed when the
 callee sends the Response. No explicit Close message is sent.
 See `r[channeling.lifecycle.response-closes-pulls]`.
 
@@ -164,9 +164,9 @@ acceptor calls back, they use even IDs.
 
 ### Channels and Calls
 
-Channels are established via method calls. `Push<T>` channels may outlive
+Channels are established via method calls. `Tx<T>` channels may outlive
 the Response — the caller continues sending until they send Close.
-`Pull<T>` channels are implicitly closed when Response is sent.
+`Rx<T>` channels are implicitly closed when Response is sent.
 See `r[channeling.call-complete]` and `r[channeling.channels-outlive-response]`.
 
 ## Errors
@@ -615,27 +615,27 @@ await all 10 responses, rather than round-tripping each one sequentially.
 
 # Channeling RPC
 
-Channeling methods have `Push<T>` (caller→callee) or `Pull<T>` (callee→caller)
+Channeling methods have `Tx<T>` (caller→callee) or `Rx<T>` (callee→caller)
 in argument position. Unlike unary RPC, data flows continuously over dedicated
 channels.
 
-## Push and Pull Types
+## Tx and Rx Types
 
 > r[channeling.type]
 >
-> `Push<T>` and `Pull<T>` are roam-provided types recognized by the
+> `Tx<T>` and `Rx<T>` are roam-provided types recognized by the
 > `#[roam::service]` macro. On the wire, both serialize as a `u64` channel ID.
 
 > r[channeling.caller-pov]
 >
 > Service definitions are written from the **caller's perspective**.
-> `Push<T>` means "caller pushes data to callee". `Pull<T>` means
-> "caller pulls data from callee".
+> `Tx<T>` means "caller transmits data to callee". `Rx<T>` means
+> "caller receives data from callee".
 
 > r[channeling.holder-semantics]
 >
-> From the holder's perspective: `Push<T>` means "I send on this",
-> `Pull<T>` means "I receive from this". Generated callee handlers
+> From the holder's perspective: `Tx<T>` means "I send on this",
+> `Rx<T>` means "I receive from this". Generated callee handlers
 > have the types flipped relative to the service definition.
 
 Example:
@@ -644,20 +644,20 @@ Example:
 // Service definition (caller's perspective)
 #[roam::service]
 pub trait Channeling {
-    async fn sum(&self, numbers: Push<u32>) -> u32;       // caller→callee
-    async fn range(&self, n: u32, output: Pull<u32>);     // callee→caller
+    async fn sum(&self, numbers: Tx<u32>) -> u32;       // caller→callee
+    async fn range(&self, n: u32, output: Rx<u32>);     // callee→caller
 }
 
 // Generated caller stub — same types as definition
 impl ChannelingClient {
-    async fn sum(&self, numbers: Push<u32>) -> u32;       // caller sends
-    async fn range(&self, n: u32, output: Pull<u32>);     // caller receives
+    async fn sum(&self, numbers: Tx<u32>) -> u32;       // caller sends
+    async fn range(&self, n: u32, output: Rx<u32>);     // caller receives
 }
 
 // Generated callee handler — types flipped
 trait ChannelingHandler {
-    async fn sum(&self, numbers: Pull<u32>) -> u32;       // callee receives
-    async fn range(&self, n: u32, output: Push<u32>);     // callee sends
+    async fn sum(&self, numbers: Rx<u32>) -> u32;       // callee receives
+    async fn range(&self, n: u32, output: Tx<u32>);     // callee sends
 }
 ```
 
@@ -669,7 +669,7 @@ on which variant is passed.
 
 > r[channeling.allocation.caller]
 >
-> The **caller** allocates ALL channel IDs (both Push and Pull). All are
+> The **caller** allocates ALL channel IDs (both Tx and Rx). All are
 > serialized in the Request payload. The callee does not allocate any IDs.
 
 > r[channeling.id.uniqueness]
@@ -690,18 +690,18 @@ on which variant is passed.
 > make concurrent calls.
 
 Note: "Initiator" and "acceptor" refer to who opened the connection, not
-who is calling whom. If the initiator calls with a Push and Pull, both
-use odd IDs (e.g., push=1, pull=3). If the acceptor calls, both use even
-IDs (e.g., push=2, pull=4).
+who is calling whom. If the initiator calls with a Tx and Rx, both
+use odd IDs (e.g., tx=1, rx=3). If the acceptor calls back, both use even
+IDs (e.g., tx=2, rx=4).
 
 ## Call Lifecycle with Channels
 
-### Caller Channeling (Push): `sum(numbers: Push<u32>) -> u32`
+### Caller Channeling (Tx): `sum(numbers: Tx<u32>) -> u32`
 
 ```
 Caller (initiator)                         Callee (acceptor)
     |                                          |
-    |-- Request(sum, push=1) ----------------->|
+    |-- Request(sum, tx=1) ------------------->|
     |-- Data(channel=1, 10) ------------------>|
     |-- Data(channel=1, 20) ------------------>|
     |-- Close(channel=1) --------------------->|
@@ -709,36 +709,36 @@ Caller (initiator)                         Callee (acceptor)
     |<-- Response(Ok, 30) --------------------|
 ```
 
-### Callee Channeling (Pull): `range(n, output: Pull<u32>)`
+### Callee Channeling (Rx): `range(n, output: Rx<u32>)`
 
 ```
 Caller (initiator)                         Callee (acceptor)
     |                                          |
-    |-- Request(range, n=3, pull=1) ---------->|
+    |-- Request(range, n=3, rx=1) ------------>|
     |                                          |
     |<-- Data(channel=1, 0) -------------------|
     |<-- Data(channel=1, 1) -------------------|
     |<-- Data(channel=1, 2) -------------------|
-    |<-- Response(Ok, ()) --------------------|  // pull channel implicitly closed
+    |<-- Response(Ok, ()) --------------------|  // rx channel implicitly closed
 ```
 
-### Bidirectional: `pipe(input: Push, output: Pull)`
+### Bidirectional: `pipe(input: Tx, output: Rx)`
 
 ```
 Caller (initiator)                         Callee (acceptor)
     |                                          |
-    |-- Request(pipe, push=1, pull=3) -------->|
+    |-- Request(pipe, tx=1, rx=3) ------------>|
     |-- Data(channel=1, "a") ----------------->|
     |<-- Data(channel=3, "a") -----------------|
     |-- Data(channel=1, "b") ----------------->|
     |<-- Data(channel=3, "b") -----------------|
     |-- Close(channel=1) --------------------->|
-    |<-- Response(Ok, ()) --------------------|  // pull=3 closed
+    |<-- Response(Ok, ()) --------------------|  // rx=3 closed
 ```
 
 > r[channeling.lifecycle.immediate-data]
 >
-> The caller MAY send Data on `Push<T>` channels immediately after sending
+> The caller MAY send Data on `Tx<T>` channels immediately after sending
 > the Request, without waiting for Response. This enables pipelining for
 > lower latency.
 
@@ -751,18 +751,18 @@ Caller (initiator)                         Callee (acceptor)
 
 > r[channeling.lifecycle.response-closes-pulls]
 >
-> When the callee sends Response, all `Pull<T>` channels are implicitly
-> closed. The callee MUST NOT send Data on any Pull channel after sending Response.
+> When the callee sends Response, all `Rx<T>` channels are implicitly
+> closed. The callee MUST NOT send Data on any Rx channel after sending Response.
 
 > r[channeling.lifecycle.caller-closes-pushes]
 >
-> The caller MUST send Close on each `Push<T>` channel when done sending.
+> The caller MUST send Close on each `Tx<T>` channel when done sending.
 > The callee waits for Close before it knows all input has arrived.
 
 > r[channeling.error-no-channels]
 >
-> `Push<T>` and `Pull<T>` MUST NOT appear inside error types. A method's
-> error type `E` in `Result<T, E>` MUST NOT contain `Push<T>` or `Pull<T>`
+> `Tx<T>` and `Rx<T>` MUST NOT appear inside error types. A method's
+> error type `E` in `Result<T, E>` MUST NOT contain `Tx<T>` or `Rx<T>`
 > at any nesting level.
 
 ## Channel Data Flow
@@ -788,8 +788,8 @@ Caller (initiator)                         Callee (acceptor)
 
 > r[channeling.close]
 >
-> For `Push<T>` (caller→callee), the caller sends Close when done.
-> For `Pull<T>` (callee→caller), the channel closes implicitly with Response.
+> For `Tx<T>` (caller→callee), the caller sends Close when done.
+> For `Rx<T>` (callee→caller), the channel closes implicitly with Response.
 
 > r[channeling.data-after-close]
 >
@@ -826,13 +826,13 @@ Caller (initiator)                         Callee (acceptor)
 > r[channeling.call-complete]
 >
 > The RPC call completes when the Response is received. At that point:
-> - All `Pull<T>` channels are closed (callee can no longer send)
-> - `Push<T>` channels may still be open (caller may still be sending)
+> - All `Rx<T>` channels are closed (callee can no longer send)
+> - `Tx<T>` channels may still be open (caller may still be sending)
 > - The request ID is no longer in-flight
 
 > r[channeling.channels-outlive-response]
 >
-> `Push<T>` channels (caller→callee) may outlive the Response. The caller
+> `Tx<T>` channels (caller→callee) may outlive the Response. The caller
 > continues sending until they send Close. The callee processes the final
 > return value only after all input channels are closed.
 
@@ -851,8 +851,8 @@ roam uses credit-based flow control for channels on all transports.
 
 > r[flow.channel.all-transports]
 >
-> Credit-based flow control applies to all transports for both `Push<T>`
-> and `Pull<T>` channels. On multi-stream transports (QUIC, WebTransport),
+> Credit-based flow control applies to all transports for both `Tx<T>`
+> and `Rx<T>` channels. On multi-stream transports (QUIC, WebTransport),
 > roam credit operates independently of any transport-level flow control.
 > The transport may additionally block writes, but that is transparent
 > to the roam layer.
