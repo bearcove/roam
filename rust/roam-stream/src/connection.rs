@@ -229,7 +229,7 @@ where
                     self.flush_outgoing().await?;
 
                     // r[impl streaming.call-complete] - Call completes when Response sent.
-                    // r[impl streaming.lifecycle.response-closes-pulls] - Pull streams close with Response.
+                    // r[impl streaming.lifecycle.response-closes-pulls] - Rx streams close with Response.
                     let resp = Message::Response {
                         request_id,
                         metadata: Vec::new(),
@@ -322,11 +322,11 @@ where
                     return Err(self.goodbye(rule_id).await);
                 }
 
-                // Dispatch to service - use streaming dispatch if method has Tx/Pull args
+                // Dispatch to service - use streaming dispatch if method has Tx/Rx args
                 if dispatcher.is_streaming(method_id) {
                     // For streaming methods, we need to continue processing messages
                     // (Data, Close) while the handler runs. The handler reads from
-                    // Pull<T> which is backed by an mpsc channel that we route to.
+                    // Rx<T> which is backed by an mpsc channel that we route to.
                     //
                     // dispatch_streaming registers streams synchronously, then returns
                     // a future. We spawn that future as a task so the message loop

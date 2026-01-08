@@ -3,7 +3,7 @@
 //! Serves the Calculator service over WebSocket on port 9000.
 
 use codegen_test_consumer::calculator::{CalculatorDispatcher, CalculatorHandler};
-use roam::session::{Pull, Tx};
+use roam::session::{Rx, Tx};
 use roam_stream::Hello;
 use roam_websocket::{WsTransport, ws_accept};
 use std::env;
@@ -35,7 +35,7 @@ impl CalculatorHandler for Calculator {
 
     fn sum_stream(
         &self,
-        mut numbers: Pull<i32>,
+        mut numbers: Rx<i32>,
     ) -> impl std::future::Future<Output = Result<i64, Box<dyn std::error::Error + Send + Sync>>> + Send
     {
         async move {

@@ -156,14 +156,14 @@ pub struct Tx<T: Facet<'static>> {
 /// Static marker for the roam::tx attribute.
 static TX_MARKER: () = ();
 
-/// Static marker for the roam::pull attribute.
-static PULL_MARKER: () = ();
+/// Static marker for the roam::rx attribute.
+static RX_MARKER: () = ();
 
 /// Static attribute array for roam::tx marker.
 static ROAM_TX_ATTRS: [Attr; 1] = [Attr::new(Some("roam"), "tx", &TX_MARKER)];
 
-/// Static attribute array for roam::pull marker.
-static ROAM_PULL_ATTRS: [Attr; 1] = [Attr::new(Some("roam"), "pull", &PULL_MARKER)];
+/// Static attribute array for roam::rx marker.
+static ROAM_RX_ATTRS: [Attr; 1] = [Attr::new(Some("roam"), "rx", &RX_MARKER)];
 
 // SAFETY: Tx<T> is a handle type that doesn't expose T directly in its shape.
 // The roam::tx attribute marks it for special handling by roam_reflect.
@@ -236,15 +236,15 @@ impl std::fmt::Display for TxError {
 
 impl std::error::Error for TxError {}
 
-/// Pull stream handle - caller receives data from callee.
+/// Rx stream handle - caller receives data from callee.
 ///
-/// r[impl streaming.caller-pov] - From caller's perspective, Pull means "I receive".
+/// r[impl streaming.caller-pov] - From caller's perspective, Rx means "I receive".
 /// r[impl streaming.type] - Serializes as u64 stream ID on wire.
 /// r[impl streaming.holder-semantics] - The holder receives from this stream.
 ///
-/// This type implements `Facet` manually with the `roam::pull` attribute marker
-/// so that `roam_reflect::type_detail` recognizes it and generates `TypeDetail::Pull`.
-pub struct Pull<T: Facet<'static>> {
+/// This type implements `Facet` manually with the `roam::rx` attribute marker
+/// so that `roam_reflect::type_detail` recognizes it and generates `TypeDetail::Rx`.
+pub struct Rx<T: Facet<'static>> {
     /// The unique stream ID for this stream.
     stream_id: StreamId,
     /// Channel receiver for incoming data.
@@ -253,25 +253,25 @@ pub struct Pull<T: Facet<'static>> {
     _marker: PhantomData<fn() -> T>,
 }
 
-// SAFETY: Pull<T> is a handle type that doesn't expose T directly in its shape.
-// The roam::pull attribute marks it for special handling by roam_reflect.
+// SAFETY: Rx<T> is a handle type that doesn't expose T directly in its shape.
+// The roam::rx attribute marks it for special handling by roam_reflect.
 #[allow(unsafe_code)]
-unsafe impl<T: Facet<'static>> Facet<'static> for Pull<T> {
+unsafe impl<T: Facet<'static>> Facet<'static> for Rx<T> {
     const SHAPE: &'static Shape = &const {
-        ShapeBuilder::for_sized::<Pull<T>>("Pull")
+        ShapeBuilder::for_sized::<Rx<T>>("Rx")
             .ty(Type::User(UserType::Opaque))
             .def(Def::Scalar)
             .type_params(&[TypeParam {
                 name: "T",
                 shape: T::SHAPE,
             }])
-            .attributes(&ROAM_PULL_ATTRS)
+            .attributes(&ROAM_RX_ATTRS)
             .build()
     };
 }
 
-impl<T: Facet<'static>> Pull<T> {
-    /// Create a new Pull stream with the given ID and receiver channel.
+impl<T: Facet<'static>> Rx<T> {
+    /// Create a new Rx stream with the given ID and receiver channel.
     pub fn new(stream_id: StreamId, rx: mpsc::Receiver<Vec<u8>>) -> Self {
         Self {
             stream_id,
@@ -293,10 +293,10 @@ impl<T: Facet<'static>> Pull<T> {
     ///
     /// r[impl streaming.data] - Deserialize Data message payloads.
     /// r[impl streaming.data.invalid] - Caller must send Goodbye on deserialize error.
-    pub async fn recv(&mut self) -> Result<Option<T>, PullError> {
+    pub async fn recv(&mut self) -> Result<Option<T>, RxError> {
         match self.rx.recv().await {
             Some(bytes) => {
-                let value = facet_postcard::from_slice(&bytes).map_err(PullError::Deserialize)?;
+                let value = facet_postcard::from_slice(&bytes).map_err(RxError::Deserialize)?;
                 Ok(Some(value))
             }
             None => Ok(None),
@@ -304,22 +304,22 @@ impl<T: Facet<'static>> Pull<T> {
     }
 }
 
-/// Error when receiving from a Pull stream.
+/// Error when receiving from a Rx stream.
 #[derive(Debug)]
-pub enum PullError {
+pub enum RxError {
     /// Failed to deserialize the value.
     Deserialize(facet_postcard::DeserializeError<facet_postcard::PostcardError>),
 }
 
-impl std::fmt::Display for PullError {
+impl std::fmt::Display for RxError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            PullError::Deserialize(e) => write!(f, "deserialize error: {e}"),
+            RxError::Deserialize(e) => write!(f, "deserialize error: {e}"),
         }
     }
 }
 
-impl std::error::Error for PullError {}
+impl std::error::Error for RxError {}
 
 // ============================================================================
 // Stream Registry
@@ -345,13 +345,13 @@ pub enum OutgoingPoll {
 
 /// Registry of active streams for a connection.
 ///
-/// Handles both incoming streams (Data from wire → `Pull<T>`) and
+/// Handles both incoming streams (Data from wire → `Rx<T>`) and
 /// outgoing streams (`Tx<T>` → Data to wire).
 ///
 /// r[impl streaming.unknown] - Unknown stream IDs cause Goodbye.
 pub struct StreamRegistry {
-    /// Streams where we receive Data messages (backing `Pull<T>` handles on our side).
-    /// Key: stream_id, Value: sender to route Data payloads to the `Pull<T>`.
+    /// Streams where we receive Data messages (backing `Rx<T>` handles on our side).
+    /// Key: stream_id, Value: sender to route Data payloads to the `Rx<T>`.
     incoming: HashMap<StreamId, mpsc::Sender<Vec<u8>>>,
 
     /// Streams where we send Data messages (backing `Tx<T>` handles on our side).
@@ -420,10 +420,10 @@ impl StreamRegistry {
         self.outgoing_notify.clone()
     }
 
-    /// Register an incoming stream and return the receiver for `Pull<T>`.
+    /// Register an incoming stream and return the receiver for `Rx<T>`.
     ///
     /// The connection layer will route Data messages for this stream_id to the
-    /// returned receiver. The caller wraps this in a `Pull<T>`.
+    /// returned receiver. The caller wraps this in a `Rx<T>`.
     ///
     /// r[impl streaming.allocation.caller] - Caller allocates stream IDs.
     /// r[impl flow.stream.initial-credit] - Stream starts with initial credit.
@@ -482,10 +482,10 @@ impl StreamRegistry {
             *credit -= payload_len;
         }
         // Note: if no credit entry exists, the stream may not be registered yet
-        // (e.g., Pull stream created by callee). In that case, skip credit check.
+        // (e.g., Rx stream created by callee). In that case, skip credit check.
 
         if let Some(tx) = self.incoming.get(&stream_id) {
-            // If send fails, the Pull<T> was dropped - that's okay, just drop the data
+            // If send fails, the Rx<T> was dropped - that's okay, just drop the data
             let _ = tx.send(payload).await;
             Ok(())
         } else {
@@ -535,7 +535,7 @@ impl StreamRegistry {
 
     /// Close an incoming stream (remove from registry).
     ///
-    /// Dropping the sender will cause the `Pull<T>`'s recv() to return None.
+    /// Dropping the sender will cause the `Rx<T>`'s recv() to return None.
     ///
     /// r[impl streaming.close] - Close terminates the stream.
     /// r[impl flow.stream.close-exempt] - Close doesn't consume credit.
@@ -664,7 +664,7 @@ impl Default for RequestIdGenerator {
 
 /// Trait for dispatching requests to a service.
 pub trait ServiceDispatcher: Send + Sync {
-    /// Check if a method uses streaming (Tx/Pull arguments).
+    /// Check if a method uses streaming (Tx/Rx arguments).
     ///
     /// Returns true if the method has any streaming arguments that require
     /// channel setup before dispatch.
@@ -687,8 +687,8 @@ pub trait ServiceDispatcher: Send + Sync {
     ///
     /// For streaming methods, the dispatcher must:
     /// - Decode stream IDs from the payload
-    /// - Register streams with the registry (incoming for Tx args, outgoing for Pull args)
-    /// - Create Tx/Pull handles from the registry
+    /// - Register streams with the registry (incoming for Tx args, outgoing for Rx args)
+    /// - Create Tx/Rx handles from the registry
     /// - Call the handler method with those handles
     /// - Serialize the response
     ///
@@ -865,16 +865,16 @@ mod tests {
 
     // r[verify streaming.holder-semantics]
     #[tokio::test]
-    async fn push_serializes_and_pull_deserializes() {
-        // Create a channel pair for Tx → Pull communication
+    async fn tx_serializes_and_rx_deserializes() {
+        // Create a channel pair for Tx → Rx communication
         let (tx, rx) = mpsc::channel::<Vec<u8>>(10);
         let notify = Arc::new(Notify::new());
 
-        // Wrap in Tx/Pull types (normally StreamRegistry would do this)
+        // Wrap in Tx/Rx types (normally StreamRegistry would do this)
         let outgoing_sender = OutgoingSender::new(
             42,
             {
-                // Create a channel that converts OutgoingMessage to raw bytes for Pull
+                // Create a channel that converts OutgoingMessage to raw bytes for Rx
                 let (out_tx, mut out_rx) = mpsc::channel::<OutgoingMessage>(10);
                 // Spawn a task to bridge OutgoingMessage to raw bytes
                 tokio::spawn(async move {
@@ -893,26 +893,26 @@ mod tests {
         );
 
         let tx: Tx<i32> = Tx::new(outgoing_sender);
-        let mut pull: Pull<i32> = Pull::new(42, rx);
+        let mut rx: Rx<i32> = Rx::new(42, rx);
 
         assert_eq!(tx.stream_id(), 42);
-        assert_eq!(pull.stream_id(), 42);
+        assert_eq!(rx.stream_id(), 42);
 
         tx.send(&100).await.unwrap();
         tx.send(&200).await.unwrap();
 
-        assert_eq!(pull.recv().await.unwrap(), Some(100));
-        assert_eq!(pull.recv().await.unwrap(), Some(200));
+        assert_eq!(rx.recv().await.unwrap(), Some(100));
+        assert_eq!(rx.recv().await.unwrap(), Some(200));
 
         drop(tx);
         // Give the spawned task time to process the Close message
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-        assert_eq!(pull.recv().await.unwrap(), None); // channel closed
+        assert_eq!(rx.recv().await.unwrap(), None); // channel closed
     }
 
     // r[verify streaming.lifecycle.caller-closes-pushes]
     #[tokio::test]
-    async fn push_drop_sends_close() {
+    async fn tx_drop_sends_close() {
         let mut registry = StreamRegistry::new();
         let sender = registry.register_outgoing(42);
 

@@ -44,7 +44,7 @@ mod tests {
 
         fn sum_stream(
             &self,
-            mut numbers: Pull<i32>,
+            mut numbers: Rx<i32>,
         ) -> impl std::future::Future<
             Output = Result<i64, Box<dyn std::error::Error + Send + Sync>>,
         > + Send {

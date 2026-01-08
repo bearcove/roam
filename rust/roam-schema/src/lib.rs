@@ -103,10 +103,10 @@ pub enum TypeDetail {
     /// r[impl core.stream] - `Tx<T>` represents data flowing from caller to callee.
     Tx(Box<TypeDetail>) = 38,
 
-    /// Pull stream: callee sends data to caller.
+    /// Rx stream: callee sends data to caller.
     ///
-    /// r[impl core.stream] - `Pull<T>` represents data flowing from callee to caller.
-    Pull(Box<TypeDetail>) = 39,
+    /// r[impl core.stream] - `Rx<T>` represents data flowing from callee to caller.
+    Rx(Box<TypeDetail>) = 39,
 
     // Composite
     Struct {
@@ -159,7 +159,7 @@ impl TypeDetail {
             | TypeDetail::Set(inner)
             | TypeDetail::Option(inner)
             | TypeDetail::Tx(inner)
-            | TypeDetail::Pull(inner) => inner.visit(visitor),
+            | TypeDetail::Rx(inner) => inner.visit(visitor),
             TypeDetail::Array { element, .. } => element.visit(visitor),
             TypeDetail::Map { key, value } => key.visit(visitor) && value.visit(visitor),
             TypeDetail::Tuple(items) => items.iter().all(|item| item.visit(visitor)),

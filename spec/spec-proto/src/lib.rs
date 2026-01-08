@@ -2,7 +2,7 @@
 
 use facet::Facet;
 use roam::service;
-use roam::session::{Pull, Tx};
+use roam::session::{Rx, Tx};
 
 /// Simple echo service for conformance testing.
 #[service]
@@ -78,7 +78,7 @@ pub enum Message {
 
 /// Streaming service for cross-language conformance testing.
 ///
-/// Tests Tx/Pull semantics, stream lifecycle, and bidirectional streaming.
+/// Tests Tx/Rx semantics, stream lifecycle, and bidirectional streaming.
 /// r[impl streaming.caller-pov] - Types are from caller's perspective.
 #[service]
 pub trait Streaming {
@@ -90,15 +90,15 @@ pub trait Streaming {
 
     /// Client sends a count, server streams that many numbers back.
     ///
-    /// Tests: server-to-client streaming (scalar → `Pull<T>` as output parameter).
+    /// Tests: server-to-client streaming (scalar → `Rx<T>` as output parameter).
     /// r[impl streaming.server-to-client] - Client sends scalar, server returns stream.
-    async fn range(&self, count: u32, output: Pull<u32>);
+    async fn range(&self, count: u32, output: Rx<u32>);
 
     /// Client pushes strings, server echoes each back.
     ///
-    /// Tests: bidirectional streaming (`Tx<T>` ↔ `Pull<T>`).
+    /// Tests: bidirectional streaming (`Tx<T>` ↔ `Rx<T>`).
     /// r[impl streaming.bidirectional] - Both sides stream simultaneously.
-    async fn pipe(&self, input: Tx<String>, output: Pull<String>);
+    async fn pipe(&self, input: Tx<String>, output: Rx<String>);
 
     /// Client pushes numbers, server returns (sum, count, average).
     ///

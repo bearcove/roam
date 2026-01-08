@@ -88,7 +88,7 @@ fn generate_service(
             return Err(parser::Error::new(
                 proc_macro2::Span::call_site(),
                 format!(
-                    "method `{}` has Stream (Tx/Pull) in error type - streams are not allowed in error types (see r[streaming.error-no-streams])",
+                    "method `{}` has Stream (Tx/Rx) in error type - streams are not allowed in error types (see r[streaming.error-no-streams])",
                     method.name
                 ),
             ));

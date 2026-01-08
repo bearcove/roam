@@ -33,8 +33,8 @@ mod sig {
     pub const MAP: u8 = 0x23;
     pub const SET: u8 = 0x24;
     pub const TUPLE: u8 = 0x25;
-    pub const PUSH: u8 = 0x26;
-    pub const PULL: u8 = 0x27;
+    pub const TX: u8 = 0x26;
+    pub const RX: u8 = 0x27;
 
     // Composite (0x30-0x31)
     pub const STRUCT: u8 = 0x30;
@@ -65,7 +65,7 @@ fn encode_string(s: &str, out: &mut Vec<u8>) {
 // rs[impl signature.container] - encode container types (List, Option, Array, Map, Set, Tuple)
 // rs[impl signature.struct] - encode struct types
 // rs[impl signature.enum] - encode enum types
-// rs[impl signature.stream] - encode Push/Pull stream types
+// rs[impl signature.stream] - encode Tx/Rx stream types
 pub fn encode_type(ty: &TypeDetail, out: &mut Vec<u8>) {
     match ty {
         // Primitives
@@ -123,11 +123,11 @@ pub fn encode_type(ty: &TypeDetail, out: &mut Vec<u8>) {
             }
         }
         TypeDetail::Tx(inner) => {
-            out.push(sig::PUSH);
+            out.push(sig::TX);
             encode_type(inner, out);
         }
-        TypeDetail::Pull(inner) => {
-            out.push(sig::PULL);
+        TypeDetail::Rx(inner) => {
+            out.push(sig::RX);
             encode_type(inner, out);
         }
 

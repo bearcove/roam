@@ -86,7 +86,7 @@ fn collect_named_types(service: &ServiceDetail) -> Vec<(String, TypeDetail)> {
                     visit(item, seen, types);
                 }
             }
-            TypeDetail::Tx(inner) | TypeDetail::Pull(inner) => visit(inner, seen, types),
+            TypeDetail::Tx(inner) | TypeDetail::Rx(inner) => visit(inner, seen, types),
             _ => {}
         }
     }
@@ -468,7 +468,7 @@ fn generate_client_impl(service: &ServiceDetail) -> String {
 /// Generate handler interface (for handling incoming calls).
 ///
 /// r[impl streaming.caller-pov] - Schema is from caller's perspective, handler inverts.
-/// Handler's Push becomes Pull (receives), handler's Pull becomes Push (sends).
+/// Handler's Tx becomes Rx (receives), handler's Rx becomes Tx (sends).
 fn generate_handler_interface(service: &ServiceDetail) -> String {
     let mut out = String::new();
     let service_name = service.name.to_upper_camel_case();
@@ -482,7 +482,7 @@ fn generate_handler_interface(service: &ServiceDetail) -> String {
 
     for method in &service.methods {
         let method_name = method.method_name.to_upper_camel_case();
-        // Handler args: Push becomes Pull (receives), Pull becomes Push (sends)
+        // Handler args: Tx becomes Rx (receives), Rx becomes Tx (sends)
         // r[impl streaming.caller-pov]
         let args = method
             .args
@@ -604,9 +604,9 @@ fn generate_dispatcher(service: &ServiceDetail) -> String {
 // Type Conversion Functions
 // ============================================================================
 
-/// Check if a type is a stream (Push or Pull).
+/// Check if a type is a stream (Tx or Rx).
 fn is_stream(ty: &TypeDetail) -> bool {
-    matches!(ty, TypeDetail::Tx(_) | TypeDetail::Pull(_))
+    matches!(ty, TypeDetail::Tx(_) | TypeDetail::Rx(_))
 }
 
 /// Convert TypeDetail to base Go type (non-streaming, non-perspective-aware).
@@ -647,7 +647,7 @@ fn go_type_base(ty: &TypeDetail) -> String {
             format!("struct {{ {inner} }}")
         }
         TypeDetail::Tx(inner) => format!("chan<- {}", go_type_base(inner)),
-        TypeDetail::Pull(inner) => format!("<-chan {}", go_type_base(inner)),
+        TypeDetail::Rx(inner) => format!("<-chan {}", go_type_base(inner)),
         TypeDetail::Struct {
             name: Some(name), ..
         } => name.clone(),
@@ -674,11 +674,11 @@ fn go_type_base(ty: &TypeDetail) -> String {
 
 /// Convert TypeDetail to Go type for client arguments.
 /// Schema types are from CALLER's perspective (per spec r[streaming.caller-pov]).
-/// Caller uses types as-is: Push = caller sends, Pull = caller receives.
+/// Caller uses types as-is: Tx = caller sends, Rx = caller receives.
 fn go_type_client_arg(ty: &TypeDetail) -> String {
     match ty {
         TypeDetail::Tx(inner) => format!("chan<- {}", go_type_base(inner)),
-        TypeDetail::Pull(inner) => format!("<-chan {}", go_type_base(inner)),
+        TypeDetail::Rx(inner) => format!("<-chan {}", go_type_base(inner)),
         _ => go_type_base(ty),
     }
 }
@@ -688,7 +688,7 @@ fn go_type_client_arg(ty: &TypeDetail) -> String {
 fn go_type_client_return(ty: &TypeDetail) -> String {
     match ty {
         TypeDetail::Tx(inner) => format!("chan<- {}", go_type_base(inner)),
-        TypeDetail::Pull(inner) => format!("<-chan {}", go_type_base(inner)),
+        TypeDetail::Rx(inner) => format!("<-chan {}", go_type_base(inner)),
         TypeDetail::Unit => "()".into(), // Special case for no return value
         _ => go_type_base(ty),
     }
@@ -696,14 +696,14 @@ fn go_type_client_return(ty: &TypeDetail) -> String {
 
 /// Convert TypeDetail to Go type for server/handler arguments.
 /// Schema types are from caller's perspective, so we INVERT for handler.
-/// Caller's Push (sends) becomes handler's Pull (receives).
-/// Caller's Pull (receives) becomes handler's Push (sends).
+/// Caller's Tx (sends) becomes handler's Rx (receives).
+/// Caller's Rx (receives) becomes handler's Tx (sends).
 ///
 /// r[impl streaming.caller-pov] - Schema is from caller's perspective, server inverts.
 fn go_type_server_arg(ty: &TypeDetail) -> String {
     match ty {
         TypeDetail::Tx(inner) => format!("<-chan {}", go_type_base(inner)),
-        TypeDetail::Pull(inner) => format!("chan<- {}", go_type_base(inner)),
+        TypeDetail::Rx(inner) => format!("chan<- {}", go_type_base(inner)),
         _ => go_type_base(ty),
     }
 }
@@ -713,7 +713,7 @@ fn go_type_server_arg(ty: &TypeDetail) -> String {
 fn go_type_server_return(ty: &TypeDetail) -> String {
     match ty {
         TypeDetail::Tx(inner) => format!("<-chan {}", go_type_base(inner)),
-        TypeDetail::Pull(inner) => format!("chan<- {}", go_type_base(inner)),
+        TypeDetail::Rx(inner) => format!("chan<- {}", go_type_base(inner)),
         TypeDetail::Unit => "()".into(), // Special case for no return value
         _ => go_type_base(ty),
     }
@@ -856,7 +856,7 @@ fn generate_encode_expr(ty: &TypeDetail, expr: &str) -> String {
             code.push_str("\tdefault:\n\t\treturn nil\n\t}\n}()");
             code
         }
-        TypeDetail::Tx(_) | TypeDetail::Pull(_) => {
+        TypeDetail::Tx(_) | TypeDetail::Rx(_) => {
             // Streaming types encode as u64 stream ID
             // r[impl streaming.type]
             format!("encodeUvarint({expr}.StreamID)")
@@ -1028,7 +1028,7 @@ fn generate_decode_stmt_buf(
             code.push_str(&format!("\t\t\t_ = {var_name}"));
             code
         }
-        TypeDetail::Tx(_) | TypeDetail::Pull(_) => {
+        TypeDetail::Tx(_) | TypeDetail::Rx(_) => {
             // Streaming types decode as u64 stream ID
             // r[impl streaming.type]
             format!(
@@ -1472,23 +1472,23 @@ mod tests {
 
     #[test]
     fn test_go_type_streaming_client() {
-        // Client uses Push to send, Pull to receive (no inversion)
-        let push_ty = TypeDetail::Tx(Box::new(TypeDetail::String));
-        assert_eq!(go_type_client_arg(&push_ty), "chan<- string");
+        // Client uses Tx to send, Rx to receive (no inversion)
+        let tx_ty = TypeDetail::Tx(Box::new(TypeDetail::String));
+        assert_eq!(go_type_client_arg(&tx_ty), "chan<- string");
 
-        let pull_ty = TypeDetail::Pull(Box::new(TypeDetail::U32));
-        assert_eq!(go_type_client_arg(&pull_ty), "<-chan uint32");
+        let rx_ty = TypeDetail::Rx(Box::new(TypeDetail::U32));
+        assert_eq!(go_type_client_arg(&rx_ty), "<-chan uint32");
     }
 
     #[test]
     fn test_go_type_streaming_server() {
-        // Server inverts: Push becomes Pull (receives), Pull becomes Push (sends)
+        // Server inverts: Tx becomes Rx (receives), Rx becomes Tx (sends)
         // r[impl streaming.caller-pov]
-        let push_ty = TypeDetail::Tx(Box::new(TypeDetail::String));
-        assert_eq!(go_type_server_arg(&push_ty), "<-chan string");
+        let tx_ty = TypeDetail::Tx(Box::new(TypeDetail::String));
+        assert_eq!(go_type_server_arg(&tx_ty), "<-chan string");
 
-        let pull_ty = TypeDetail::Pull(Box::new(TypeDetail::U32));
-        assert_eq!(go_type_server_arg(&pull_ty), "chan<- uint32");
+        let rx_ty = TypeDetail::Rx(Box::new(TypeDetail::U32));
+        assert_eq!(go_type_server_arg(&rx_ty), "chan<- uint32");
     }
 
     fn sample_service() -> ServiceDetail {

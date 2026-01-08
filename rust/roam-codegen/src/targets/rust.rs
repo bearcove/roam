@@ -51,9 +51,8 @@ impl<'a> RustGenerator<'a> {
         ));
 
         // Re-export common types for convenience
-        self.scope.raw(
-            "    pub use ::roam::session::{Tx, Pull, StreamId, RoamError, CallResult, Never};",
-        );
+        self.scope
+            .raw("    pub use ::roam::session::{Tx, Rx, StreamId, RoamError, CallResult, Never};");
 
         // Internal imports for codegen (with allow to suppress warnings when not all are used)
         self.scope
@@ -560,21 +559,21 @@ fn generate_streaming_setup_and_dispatch(
 fn generate_stream_handle_creation(block: &mut Block, arg_name: &str, ty: &TypeDetail) {
     // Schema types are from CALLER's perspective (per spec r[streaming.caller-pov]).
     // We need to INVERT for the handler:
-    // - Schema Tx<T> (caller sends) → handler receives → create Pull for handler
-    // - Schema Pull<T> (caller receives) → handler sends → create Tx for handler
+    // - Schema Tx<T> (caller sends) → handler receives → create Rx for handler
+    // - Schema Rx<T> (caller receives) → handler sends → create Tx for handler
     match ty {
         TypeDetail::Tx(inner) => {
-            // Caller sends → handler receives → create Pull for handler
+            // Caller sends → handler receives → create Rx for handler
             let inner_ty = rust_type_base(inner);
             block.line(format!(
                 "let {arg_name}_rx = registry.register_incoming({arg_name}_id);"
             ));
             block.line(format!(
-                "let {arg_name}: Pull<{inner_ty}> = Pull::new({arg_name}_id, {arg_name}_rx);"
+                "let {arg_name}: Rx<{inner_ty}> = Rx::new({arg_name}_id, {arg_name}_rx);"
             ));
         }
-        TypeDetail::Pull(inner) => {
-            // Caller receives → handler sends → create Push for handler
+        TypeDetail::Rx(inner) => {
+            // Caller receives → handler sends → create Tx for handler
             let inner_ty = rust_type_base(inner);
             block.line(format!(
                 "let {arg_name}_sender = registry.register_outgoing({arg_name}_id);"
@@ -604,18 +603,18 @@ pub fn generate_service_with_options(
     RustGenerator::new(service, options).generate()
 }
 
-/// Check if a type is a stream (Push or Pull).
+/// Check if a type is a stream (Tx or Rx).
 fn is_stream(ty: &TypeDetail) -> bool {
-    matches!(ty, TypeDetail::Tx(_) | TypeDetail::Pull(_))
+    matches!(ty, TypeDetail::Tx(_) | TypeDetail::Rx(_))
 }
 
 /// Convert TypeDetail to Rust type string for client arguments.
 /// Schema types are from CALLER's perspective (per spec r[streaming.caller-pov]).
-/// Caller uses types as-is: Push = caller sends, Pull = caller receives.
+/// Caller uses types as-is: Tx = caller sends, Rx = caller receives.
 fn rust_type_client_arg(ty: &TypeDetail) -> String {
     match ty {
-        TypeDetail::Tx(inner) => format!("Push<{}>", rust_type_base(inner)),
-        TypeDetail::Pull(inner) => format!("Pull<{}>", rust_type_base(inner)),
+        TypeDetail::Tx(inner) => format!("Tx<{}>", rust_type_base(inner)),
+        TypeDetail::Rx(inner) => format!("Rx<{}>", rust_type_base(inner)),
         _ => rust_type_base(ty),
     }
 }
@@ -624,20 +623,20 @@ fn rust_type_client_arg(ty: &TypeDetail) -> String {
 /// Schema types are from CALLER's perspective - no transformation needed.
 fn rust_type_client_return(ty: &TypeDetail) -> String {
     match ty {
-        TypeDetail::Tx(inner) => format!("Push<{}>", rust_type_base(inner)),
-        TypeDetail::Pull(inner) => format!("Pull<{}>", rust_type_base(inner)),
+        TypeDetail::Tx(inner) => format!("Tx<{}>", rust_type_base(inner)),
+        TypeDetail::Rx(inner) => format!("Rx<{}>", rust_type_base(inner)),
         _ => rust_type_base(ty),
     }
 }
 
 /// Convert TypeDetail to Rust type string for server/handler arguments.
 /// Schema types are from caller's perspective, so we INVERT for handler.
-/// Caller's Push (sends) becomes handler's Pull (receives).
-/// Caller's Pull (receives) becomes handler's Push (sends).
+/// Caller's Tx (sends) becomes handler's Rx (receives).
+/// Caller's Rx (receives) becomes handler's Tx (sends).
 fn rust_type_server_arg(ty: &TypeDetail) -> String {
     match ty {
-        TypeDetail::Tx(inner) => format!("Pull<{}>", rust_type_base(inner)),
-        TypeDetail::Pull(inner) => format!("Push<{}>", rust_type_base(inner)),
+        TypeDetail::Tx(inner) => format!("Rx<{}>", rust_type_base(inner)),
+        TypeDetail::Rx(inner) => format!("Tx<{}>", rust_type_base(inner)),
         _ => rust_type_base(ty),
     }
 }
@@ -646,8 +645,8 @@ fn rust_type_server_arg(ty: &TypeDetail) -> String {
 /// Schema types are from caller's perspective, so we INVERT for handler.
 fn rust_type_server_return(ty: &TypeDetail) -> String {
     match ty {
-        TypeDetail::Tx(inner) => format!("Pull<{}>", rust_type_base(inner)),
-        TypeDetail::Pull(inner) => format!("Push<{}>", rust_type_base(inner)),
+        TypeDetail::Tx(inner) => format!("Rx<{}>", rust_type_base(inner)),
+        TypeDetail::Rx(inner) => format!("Tx<{}>", rust_type_base(inner)),
         _ => rust_type_base(ty),
     }
 }
@@ -695,11 +694,11 @@ fn rust_type_base(ty: &TypeDetail) -> String {
         }
         TypeDetail::Tx(inner) => {
             // Should be handled by caller-specific functions, but fallback
-            format!("Push<{}>", rust_type_base(inner))
+            format!("Tx<{}>", rust_type_base(inner))
         }
-        TypeDetail::Pull(inner) => {
+        TypeDetail::Rx(inner) => {
             // Should be handled by caller-specific functions, but fallback
-            format!("Pull<{}>", rust_type_base(inner))
+            format!("Rx<{}>", rust_type_base(inner))
         }
         TypeDetail::Struct { name, fields } => {
             if let Some(name) = name {
@@ -913,15 +912,15 @@ mod tests {
         }
 
         #[test]
-        fn pull_of_primitive() {
-            let ty = TypeDetail::Pull(Box::new(TypeDetail::I64));
-            assert_eq!(rust_type_base(&ty), "Pull<i64>");
+        fn rx_of_primitive() {
+            let ty = TypeDetail::Rx(Box::new(TypeDetail::I64));
+            assert_eq!(rust_type_base(&ty), "Rx<i64>");
         }
 
         #[test]
-        fn pull_of_bytes() {
-            let ty = TypeDetail::Pull(Box::new(TypeDetail::Bytes));
-            assert_eq!(rust_type_base(&ty), "Pull<::std::vec::Vec<u8>>");
+        fn rx_of_bytes() {
+            let ty = TypeDetail::Rx(Box::new(TypeDetail::Bytes));
+            assert_eq!(rust_type_base(&ty), "Rx<::std::vec::Vec<u8>>");
         }
     }
 
@@ -1203,7 +1202,7 @@ mod tests {
 
         // Schema types are from CALLER's perspective (per spec r[streaming.caller-pov]).
         // Client IS the caller → keeps types as-is.
-        // Handler is opposite of caller → inverts types (Push↔Pull).
+        // Handler is opposite of caller → inverts types (Tx↔Rx).
 
         #[test]
         fn push_client_arg_stays_push() {
@@ -1213,24 +1212,24 @@ mod tests {
         }
 
         #[test]
-        fn push_server_arg_becomes_pull() {
-            // Schema Push (caller sends) → Handler receives → Handler uses Pull
+        fn tx_server_arg_becomes_rx() {
+            // Schema Tx (caller sends) → Handler receives → Handler uses Rx
             let ty = TypeDetail::Tx(Box::new(TypeDetail::String));
-            assert_eq!(rust_type_server_arg(&ty), "Pull<::std::string::String>");
+            assert_eq!(rust_type_server_arg(&ty), "Rx<::std::string::String>");
         }
 
         #[test]
-        fn pull_client_arg_stays_pull() {
-            // Schema Pull (caller receives) → Client uses Pull to receive
-            let ty = TypeDetail::Pull(Box::new(TypeDetail::U32));
-            assert_eq!(rust_type_client_arg(&ty), "Pull<u32>");
+        fn tx_client_arg_stays_tx() {
+            // Schema Rx (caller receives) → Client uses Rx to receive
+            let ty = TypeDetail::Rx(Box::new(TypeDetail::U32));
+            assert_eq!(rust_type_client_arg(&ty), "Rx<u32>");
         }
 
         #[test]
-        fn pull_server_arg_becomes_push() {
-            // Schema Pull (caller receives) → Handler sends → Handler uses Push
-            let ty = TypeDetail::Pull(Box::new(TypeDetail::U32));
-            assert_eq!(rust_type_server_arg(&ty), "Push<u32>");
+        fn rx_server_arg_becomes_tx() {
+            // Schema Rx (caller receives) → Handler sends → Handler uses Tx
+            let ty = TypeDetail::Rx(Box::new(TypeDetail::U32));
+            assert_eq!(rust_type_server_arg(&ty), "Tx<u32>");
         }
 
         #[test]
@@ -1290,23 +1289,20 @@ mod tests {
     fn test_streaming_types() {
         // Schema types are from CALLER's perspective (per spec r[streaming.caller-pov]).
         // Client IS the caller → keeps types as-is.
-        // Handler is opposite of caller → inverts types (Push↔Pull).
+        // Handler is opposite of caller → inverts types (Tx↔Rx).
 
-        // Schema Push<T>: caller sends → client uses Push, handler uses Pull
+        // Schema Tx<T>: caller sends → client uses Tx, handler uses Rx
         let push_ty = TypeDetail::Tx(Box::new(TypeDetail::String));
         assert_eq!(
             rust_type_client_arg(&push_ty),
             "Push<::std::string::String>"
         );
-        assert_eq!(
-            rust_type_server_arg(&push_ty),
-            "Pull<::std::string::String>"
-        );
+        assert_eq!(rust_type_server_arg(&push_ty), "Rx<::std::string::String>");
 
-        // Schema Pull<T>: caller receives → client uses Pull, handler uses Push
-        let pull_ty = TypeDetail::Pull(Box::new(TypeDetail::U32));
-        assert_eq!(rust_type_client_arg(&pull_ty), "Pull<u32>");
-        assert_eq!(rust_type_server_arg(&pull_ty), "Push<u32>");
+        // Schema Rx<T>: caller receives → client uses Rx, handler uses Tx
+        let rx_ty = TypeDetail::Rx(Box::new(TypeDetail::U32));
+        assert_eq!(rust_type_client_arg(&rx_ty), "Rx<u32>");
+        assert_eq!(rust_type_server_arg(&rx_ty), "Tx<u32>");
     }
 
     #[test]

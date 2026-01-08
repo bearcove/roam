@@ -232,8 +232,8 @@ fn java_type(ty: &TypeDetail) -> String {
         TypeDetail::Tx(inner) => {
             format!("java.util.concurrent.Flow.Subscriber<{}>", java_type(inner))
         }
-        // Pull: callee sends data to caller
-        TypeDetail::Pull(inner) => {
+        // Rx: callee sends data to caller
+        TypeDetail::Rx(inner) => {
             format!("java.util.concurrent.Flow.Publisher<{}>", java_type(inner))
         }
         TypeDetail::Struct { .. } => "Object".into(), // Would need proper class generation

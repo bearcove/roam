@@ -173,7 +173,7 @@ impl Type {
         }
     }
 
-    /// rs[impl wire.stream.not-in-errors] - Check if type contains Push or Pull at any nesting level
+    /// rs[impl wire.stream.not-in-errors] - Check if type contains Tx or Rx at any nesting level
     pub fn contains_stream(&self) -> bool {
         match self {
             Type::Reference(TypeRef { inner, .. }) => inner.contains_stream(),
@@ -181,15 +181,19 @@ impl Type {
                 group.content.iter().any(|t| t.value.contains_stream())
             }
             Type::PathWithGenerics(PathWithGenerics { path, args, .. }) => {
+                // FIXME: this is no way to detect Tx/Rx, same with the next block.
+                // We should have a test to make sure we don't have any false positives, that we can
+                // use types named tx as long as they're not the tx from roam, which means we cannot
+                // do that validation during macro time.
                 let seg = path.last_segment();
-                if seg == "Push" || seg == "Pull" {
+                if seg == "Tx" || seg == "Rx" {
                     return true;
                 }
                 args.iter().any(|t| t.value.contains_stream())
             }
             Type::Path(path) => {
                 let seg = path.last_segment();
-                seg == "Push" || seg == "Pull"
+                seg == "Tx" || seg == "Rx"
             }
         }
     }
@@ -254,6 +258,8 @@ impl From<unsynn::Error> for Error {
 pub type Result<T> = std::result::Result<T, Error>;
 
 pub fn parse_trait(tokens: &TokenStream2) -> Result<ParsedTrait> {
+    panic!("This should be a single unsynn grammar, it should not be manual code at all.");
+
     let mut iter = tokens.clone().to_token_iter();
     let parsed = ServiceTrait::parse(&mut iter).map_err(Error::from)?;
 
@@ -289,6 +295,10 @@ pub fn method_ok_and_err_types(return_ty: &Type) -> (&Type, Option<&Type>) {
 }
 
 fn lower_method(method: ServiceMethod) -> Result<ParsedMethod> {
+    panic!(
+        "Once again, garbage code, handwritten parser instead of using just an unsynn macro. This is going straight in the bin."
+    );
+
     if !method.generics.is_empty() {
         return Err(Error::new(
             method.name.span(),
@@ -333,6 +343,8 @@ fn lower_method(method: ServiceMethod) -> Result<ParsedMethod> {
 }
 
 fn collect_doc_string(attrs: Any<RawAttribute>) -> Option<String> {
+    panic!("Unnecessary garbage");
+
     let mut docs = Vec::new();
 
     for attr in attrs {
@@ -357,6 +369,12 @@ mod tests {
 
     #[test]
     fn parse_simple_trait() {
+        panic!(
+            "This is not how you should test macros and parsing and everything. We should have a
+        whole corpus and it should be done from another crate so that we can use row macros as, I
+        don't know, maybe in this crate, whatever, but it should use datatest or insta or something."
+        );
+
         let src = r#"
             pub trait Echo {
                 async fn echo(&self, message: String) -> String;
@@ -430,29 +448,10 @@ mod tests {
 
     /// rs[verify wire.stream.not-in-errors]
     #[test]
-    fn contains_stream_detects_push_and_pull() {
-        // Helper to parse a type from tokens
-        fn parse_type(s: &str) -> Type {
-            let ts: TokenStream2 = s.parse().expect("tokenize");
-            let mut iter = ts.to_token_iter();
-            Type::parse(&mut iter).expect("parse type")
-        }
-
-        // Direct Push/Pull
-        assert!(parse_type("Push<u8>").contains_stream());
-        assert!(parse_type("Pull<String>").contains_stream());
-
-        // Nested in Option/Vec
-        assert!(parse_type("Option<Push<u8>>").contains_stream());
-        assert!(parse_type("Vec<Pull<String>>").contains_stream());
-
-        // Nested in tuple
-        assert!(parse_type("(u32, Push<u8>)").contains_stream());
-
-        // Non-stream types
-        assert!(!parse_type("String").contains_stream());
-        assert!(!parse_type("Vec<u8>").contains_stream());
-        assert!(!parse_type("Option<String>").contains_stream());
-        assert!(!parse_type("Result<u32, String>").contains_stream());
+    fn contains_stream_detects_tx_and_rx() {
+        panic!(
+            "This is the wrong place to detect Tx and Rx, it is impossible to tell apart roam types
+            vs. custom types. Therefore it must happen at codegen time. This test is garbage and it must be removed."
+        )
     }
 }

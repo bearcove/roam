@@ -60,7 +60,7 @@ fn collect_named_types(service: &ServiceDetail) -> Vec<(String, TypeDetail)> {
                     visit(item, seen, types);
                 }
             }
-            TypeDetail::Tx(inner) | TypeDetail::Pull(inner) => visit(inner, seen, types),
+            TypeDetail::Tx(inner) | TypeDetail::Rx(inner) => visit(inner, seen, types),
             // Anonymous structs and enums, primitives - no action needed
             _ => {}
         }
@@ -173,8 +173,8 @@ fn ts_type_base_named(ty: &TypeDetail) -> String {
                 .join(", ");
             format!("[{inner}]")
         }
-        TypeDetail::Tx(inner) => format!("Push<{}>", ts_type_base_named(inner)),
-        TypeDetail::Pull(inner) => format!("Pull<{}>", ts_type_base_named(inner)),
+        TypeDetail::Tx(inner) => format!("Tx<{}>", ts_type_base_named(inner)),
+        TypeDetail::Rx(inner) => format!("Rx<{}>", ts_type_base_named(inner)),
 
         // Anonymous structs - inline as object type
         TypeDetail::Struct { name: None, fields } => {
@@ -270,7 +270,7 @@ pub fn generate_service(service: &ServiceDetail) -> String {
         .any(|m| m.args.iter().any(|a| is_stream(&a.type_info)) || is_stream(&m.return_type));
 
     if has_streaming {
-        out.push_str("import { Push, Pull } from \"@bearcove/roam-core\";\n");
+        out.push_str("import { Tx, Rx } from \"@bearcove/roam-core\";\n");
         out.push_str("import type { StreamId } from \"@bearcove/roam-core\";\n");
     }
     out.push('\n');
@@ -337,7 +337,7 @@ fn generate_types(service: &ServiceDetail) -> String {
 
 /// Generate caller interface (for making calls to the service).
 ///
-/// r[impl streaming.caller-pov] - Caller uses Push for args, Pull for returns.
+/// r[impl streaming.caller-pov] - Caller uses Tx for args, Rx for returns.
 fn generate_caller_interface(service: &ServiceDetail) -> String {
     let mut out = String::new();
     let service_name = service.name.to_upper_camel_case();
@@ -347,7 +347,7 @@ fn generate_caller_interface(service: &ServiceDetail) -> String {
 
     for method in &service.methods {
         let method_name = method.method_name.to_lower_camel_case();
-        // Caller args: Push stays Push, Pull stays Pull
+        // Caller args: Tx stays Tx, Rx stays Rx
         let args = method
             .args
             .iter()
@@ -474,7 +474,7 @@ fn generate_client_impl(service: &ServiceDetail) -> String {
 
 /// Generate handler interface (for handling incoming calls).
 ///
-/// r[impl streaming.caller-pov] - Handler uses Pull for args, Push for returns.
+/// r[impl streaming.caller-pov] - Handler uses Rx for args, Tx for returns.
 fn generate_handler_interface(service: &ServiceDetail) -> String {
     let mut out = String::new();
     let service_name = service.name.to_upper_camel_case();
@@ -484,7 +484,7 @@ fn generate_handler_interface(service: &ServiceDetail) -> String {
 
     for method in &service.methods {
         let method_name = method.method_name.to_lower_camel_case();
-        // Handler args: Push becomes Pull (receives), Pull becomes Push (sends)
+        // Handler args: Tx becomes Rx (receives), Rx becomes Tx (sends)
         let args = method
             .args
             .iter()
@@ -526,12 +526,12 @@ fn generate_handler_interface(service: &ServiceDetail) -> String {
         let can_encode_return = is_fully_supported(&method.return_type);
 
         if can_decode_args && can_encode_return {
-            // Decode all arguments (using server context for proper Push/Pull inversion)
+            // Decode all arguments (using server context for proper Tx/Rx inversion)
             out.push_str("      const buf = payload;\n");
             out.push_str("      let offset = 0;\n");
             for arg in &method.args {
                 let arg_name = arg.name.to_lower_camel_case();
-                // Use server-side decode for proper Push/Pull inversion
+                // Use server-side decode for proper Tx/Rx inversion
                 // r[impl streaming.caller-pov] - Schema is caller's perspective, server inverts.
                 let decode_stmt = generate_decode_stmt_server(&arg.type_info, &arg_name, "offset");
                 out.push_str(&format!("      {decode_stmt}\n"));
@@ -571,9 +571,9 @@ fn generate_handler_interface(service: &ServiceDetail) -> String {
     out
 }
 
-/// Check if a type is a stream (Push or Pull).
+/// Check if a type is a stream (Tx or Rx).
 fn is_stream(ty: &TypeDetail) -> bool {
-    matches!(ty, TypeDetail::Tx(_) | TypeDetail::Pull(_))
+    matches!(ty, TypeDetail::Tx(_) | TypeDetail::Rx(_))
 }
 
 /// Convert TypeDetail to TypeScript type (non-streaming base types).
@@ -617,11 +617,11 @@ fn ts_type_base(ty: &TypeDetail) -> String {
         }
         TypeDetail::Tx(inner) => {
             // Fallback - shouldn't reach here if called via context-specific functions
-            format!("Push<{}>", ts_type_base(inner))
+            format!("Tx<{}>", ts_type_base(inner))
         }
-        TypeDetail::Pull(inner) => {
+        TypeDetail::Rx(inner) => {
             // Fallback - shouldn't reach here if called via context-specific functions
-            format!("Pull<{}>", ts_type_base(inner))
+            format!("Rx<{}>", ts_type_base(inner))
         }
         TypeDetail::Struct { fields, .. } => {
             let inner = fields
@@ -657,11 +657,11 @@ fn ts_type_base(ty: &TypeDetail) -> String {
 
 /// Convert TypeDetail to TypeScript type string for client arguments.
 /// Schema types are from CALLER's perspective (per spec r[streaming.caller-pov]).
-/// Caller uses types as-is: Push = caller sends, Pull = caller receives.
+/// Caller uses types as-is: Tx = caller sends, Rx = caller receives.
 fn ts_type_client_arg(ty: &TypeDetail) -> String {
     match ty {
-        TypeDetail::Tx(inner) => format!("Push<{}>", ts_type_client_arg(inner)),
-        TypeDetail::Pull(inner) => format!("Pull<{}>", ts_type_client_arg(inner)),
+        TypeDetail::Tx(inner) => format!("Tx<{}>", ts_type_client_arg(inner)),
+        TypeDetail::Rx(inner) => format!("Rx<{}>", ts_type_client_arg(inner)),
         _ => ts_type_base_named(ty),
     }
 }
@@ -670,20 +670,20 @@ fn ts_type_client_arg(ty: &TypeDetail) -> String {
 /// Schema types are from CALLER's perspective - no transformation needed.
 fn ts_type_client_return(ty: &TypeDetail) -> String {
     match ty {
-        TypeDetail::Tx(inner) => format!("Push<{}>", ts_type_client_return(inner)),
-        TypeDetail::Pull(inner) => format!("Pull<{}>", ts_type_client_return(inner)),
+        TypeDetail::Tx(inner) => format!("Tx<{}>", ts_type_client_return(inner)),
+        TypeDetail::Rx(inner) => format!("Rx<{}>", ts_type_client_return(inner)),
         _ => ts_type_base_named(ty),
     }
 }
 
 /// Convert TypeDetail to TypeScript type string for server/handler arguments.
 /// Schema types are from caller's perspective, so we INVERT for handler.
-/// Caller's Push (sends) becomes handler's Pull (receives).
-/// Caller's Pull (receives) becomes handler's Push (sends).
+/// Caller's Tx (sends) becomes handler's Rx (receives).
+/// Caller's Rx (receives) becomes handler's Tx (sends).
 fn ts_type_server_arg(ty: &TypeDetail) -> String {
     match ty {
-        TypeDetail::Tx(inner) => format!("Pull<{}>", ts_type_server_arg(inner)),
-        TypeDetail::Pull(inner) => format!("Push<{}>", ts_type_server_arg(inner)),
+        TypeDetail::Tx(inner) => format!("Rx<{}>", ts_type_server_arg(inner)),
+        TypeDetail::Rx(inner) => format!("Tx<{}>", ts_type_server_arg(inner)),
         _ => ts_type_base_named(ty),
     }
 }
@@ -692,8 +692,8 @@ fn ts_type_server_arg(ty: &TypeDetail) -> String {
 /// Schema types are from caller's perspective, so we INVERT for handler.
 fn ts_type_server_return(ty: &TypeDetail) -> String {
     match ty {
-        TypeDetail::Tx(inner) => format!("Pull<{}>", ts_type_server_return(inner)),
-        TypeDetail::Pull(inner) => format!("Push<{}>", ts_type_server_return(inner)),
+        TypeDetail::Tx(inner) => format!("Rx<{}>", ts_type_server_return(inner)),
+        TypeDetail::Rx(inner) => format!("Tx<{}>", ts_type_server_return(inner)),
         _ => ts_type_base_named(ty),
     }
 }
@@ -816,9 +816,9 @@ fn generate_encode_expr(ty: &TypeDetail, expr: &str) -> String {
                 "(() => {{ switch ({expr}.tag) {{\n{cases}      default: throw new Error('unknown enum variant'); }} }})()"
             )
         }
-        TypeDetail::Tx(_) | TypeDetail::Pull(_) => {
+        TypeDetail::Tx(_) | TypeDetail::Rx(_) => {
             // Streaming types encode as u64 stream ID (varint)
-            // r[impl streaming.type] - Push/Pull serialize as stream_id on wire.
+            // r[impl streaming.type] - Tx/Rx serialize as stream_id on wire.
             format!("encodeU64({expr}.streamId)")
         }
     }
@@ -837,13 +837,13 @@ fn generate_decode_stmt_client(ty: &TypeDetail, var_name: &str, offset_var: &str
                 "const _{var_name}_r = decodeU64(buf, {offset_var}); const {var_name} = {{ streamId: _{var_name}_r.value }} as Push<{inner_type}>; {offset_var} = _{var_name}_r.next; /* TODO: create real Push handle */"
             )
         }
-        TypeDetail::Pull(inner) => {
-            // Caller's Pull (caller receives) - decode stream_id and create Pull handle
+        TypeDetail::Rx(inner) => {
+            // Caller's Rx (caller receives) - decode stream_id and create Rx handle
             // r[impl streaming.type] - Stream types decode as stream_id on wire.
-            // TODO: Need Connection access to create proper Pull handle
+            // TODO: Need Connection access to create proper Rx handle
             let inner_type = ts_type_client_return(inner);
             format!(
-                "const _{var_name}_r = decodeU64(buf, {offset_var}); const {var_name} = {{ streamId: _{var_name}_r.value }} as Pull<{inner_type}>; {offset_var} = _{var_name}_r.next; /* TODO: create real Pull handle */"
+                "const _{var_name}_r = decodeU64(buf, {offset_var}); const {var_name} = {{ streamId: _{var_name}_r.value }} as Rx<{inner_type}>; {offset_var} = _{var_name}_r.next; /* TODO: create real Rx handle */"
             )
         }
         // For non-streaming types, use the regular decode
@@ -853,22 +853,22 @@ fn generate_decode_stmt_client(ty: &TypeDetail, var_name: &str, offset_var: &str
 
 /// Generate TypeScript code that decodes a value from a buffer for SERVER context.
 /// Schema types are from caller's perspective - server needs INVERTED types:
-/// - Schema Push (caller sends) → server receives → Pull for server
-/// - Schema Pull (caller receives) → server sends → Push for server
+/// - Schema Tx (caller sends) → server receives → Rx for server
+/// - Schema Rx (caller receives) → server sends → Tx for server
 ///
 /// r[impl streaming.caller-pov] - Schema is from caller's perspective, server inverts.
 fn generate_decode_stmt_server(ty: &TypeDetail, var_name: &str, offset_var: &str) -> String {
     match ty {
         TypeDetail::Tx(inner) => {
-            // Schema Push (caller sends) → server receives → Pull for server
+            // Schema Tx (caller sends) → server receives → Rx for server
             // r[impl streaming.type] - Stream types decode as stream_id on wire.
             let inner_type = ts_type_server_arg(inner);
             format!(
-                "const _{var_name}_r = decodeU64(buf, {offset_var}); const {var_name} = {{ streamId: _{var_name}_r.value }} as Pull<{inner_type}>; {offset_var} = _{var_name}_r.next; /* TODO: create real Pull handle */"
+                "const _{var_name}_r = decodeU64(buf, {offset_var}); const {var_name} = {{ streamId: _{var_name}_r.value }} as Rx<{inner_type}>; {offset_var} = _{var_name}_r.next; /* TODO: create real Rx handle */"
             )
         }
-        TypeDetail::Pull(inner) => {
-            // Schema Pull (caller receives) → server sends → Push for server
+        TypeDetail::Rx(inner) => {
+            // Schema Rx (caller receives) → server sends → Tx for server
             // r[impl streaming.type] - Stream types decode as stream_id on wire.
             let inner_type = ts_type_server_arg(inner);
             format!(
@@ -1088,14 +1088,14 @@ fn generate_decode_stmt(ty: &TypeDetail, var_name: &str, offset_var: &str) -> St
                 "const _{var_name}_r = decodeU64(buf, {offset_var}); const {var_name} = {{ streamId: _{var_name}_r.value }} as Push<{inner_type}>; {offset_var} = _{var_name}_r.next; /* TODO: create real Push handle */"
             )
         }
-        TypeDetail::Pull(inner) => {
-            // Pull types decode as u64 stream ID (varint)
-            // r[impl streaming.type] - Pull serializes as stream_id on wire.
-            // For handlers: Pull means "handler receives", so handler creates ChannelReceiver
-            // TODO: Need Connection access to create proper Pull handle
+        TypeDetail::Rx(inner) => {
+            // Rx types decode as u64 stream ID (varint)
+            // r[impl streaming.type] - Rx serializes as stream_id on wire.
+            // For handlers: Rx means "handler receives", so handler creates ChannelReceiver
+            // TODO: Need Connection access to create proper Rx handle
             let inner_type = ts_type_base_named(inner);
             format!(
-                "const _{var_name}_r = decodeU64(buf, {offset_var}); const {var_name} = {{ streamId: _{var_name}_r.value }} as Pull<{inner_type}>; {offset_var} = _{var_name}_r.next; /* TODO: create real Pull handle */"
+                "const _{var_name}_r = decodeU64(buf, {offset_var}); const {var_name} = {{ streamId: _{var_name}_r.value }} as Rx<{inner_type}>; {offset_var} = _{var_name}_r.next; /* TODO: create real Rx handle */"
             )
         }
     }
@@ -1214,11 +1214,11 @@ fn generate_decode_fn(ty: &TypeDetail, _var_hint: &str) -> String {
 }
 
 /// Check if a type can be fully encoded/decoded.
-/// Streaming types (Push/Pull) are supported - they encode as stream IDs.
+/// Streaming types (Tx/Rx) are supported - they encode as stream IDs.
 fn is_fully_supported(ty: &TypeDetail) -> bool {
     match ty {
         // Streaming types are supported - they encode/decode as stream IDs
-        TypeDetail::Tx(inner) | TypeDetail::Pull(inner) => is_fully_supported(inner),
+        TypeDetail::Tx(inner) | TypeDetail::Rx(inner) => is_fully_supported(inner),
         TypeDetail::List(inner)
         | TypeDetail::Option(inner)
         | TypeDetail::Set(inner)

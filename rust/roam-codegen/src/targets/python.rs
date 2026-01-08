@@ -185,10 +185,10 @@ fn py_type(ty: &TypeDetail) -> String {
             let inner = items.iter().map(py_type).collect::<Vec<_>>().join(", ");
             format!("tuple[{inner}]")
         }
-        // Push: caller sends data to callee
+        // Tx: caller sends data to callee
         TypeDetail::Tx(inner) => format!("AsyncGenerator[{}, None, None]", py_type(inner)),
-        // Pull: callee sends data to caller
-        TypeDetail::Pull(inner) => format!("AsyncIterator[{}]", py_type(inner)),
+        // Rx: callee sends data to caller
+        TypeDetail::Rx(inner) => format!("AsyncIterator[{}]", py_type(inner)),
         TypeDetail::Struct { fields, .. } => {
             // Use TypedDict for inline structs
             let inner = fields

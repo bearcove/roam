@@ -22,7 +22,7 @@ pub use roam_session as session;
 
 // Re-export streaming types for user-facing API
 pub use roam_session::{
-    OutgoingMessage, OutgoingPoll, OutgoingSender, Pull, PullError, Role, StreamError, StreamId,
+    OutgoingMessage, OutgoingPoll, OutgoingSender, Role, Rx, RxError, StreamError, StreamId,
     StreamIdAllocator, StreamRegistry, Tx, TxError,
 };
 

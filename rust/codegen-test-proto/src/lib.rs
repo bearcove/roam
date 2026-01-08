@@ -1,7 +1,7 @@
 //! Test proto crate for validating build.rs codegen approach.
 
 use roam::service;
-use roam::session::{Pull, Tx};
+use roam::session::{Rx, Tx};
 
 /// Simple calculator service for testing codegen.
 #[service]
@@ -16,7 +16,7 @@ pub trait Calculator {
     async fn sum_stream(&self, numbers: Tx<i32>) -> i64;
 
     /// Generate a range of numbers (callee pushes to output, caller pulls).
-    async fn range(&self, count: u32, output: Pull<u32>);
+    async fn range(&self, count: u32, output: Rx<u32>);
 }
 
 /// Returns the service detail for build.rs access.
