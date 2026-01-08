@@ -1377,6 +1377,7 @@ name = "roam-codegen"
 version = "0.5.0"
 dependencies = [
  "codegen",
+ "facet-core",
  "heck",
  "roam",
  "roam-hash",

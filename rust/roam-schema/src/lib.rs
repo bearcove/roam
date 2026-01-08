@@ -223,22 +223,22 @@ pub struct EnumInfo<'a> {
 /// Classify a Shape into a ShapeKind for codegen.
 pub fn classify_shape(shape: &'static Shape) -> ShapeKind<'static> {
     // Check for roam streaming types first
-    if is_tx(shape) {
-        if let Some(inner) = shape.type_params.first() {
-            return ShapeKind::Tx { inner: inner.shape };
-        }
+    if is_tx(shape)
+        && let Some(inner) = shape.type_params.first()
+    {
+        return ShapeKind::Tx { inner: inner.shape };
     }
-    if is_rx(shape) {
-        if let Some(inner) = shape.type_params.first() {
-            return ShapeKind::Rx { inner: inner.shape };
-        }
+    if is_rx(shape)
+        && let Some(inner) = shape.type_params.first()
+    {
+        return ShapeKind::Rx { inner: inner.shape };
     }
 
     // Check for transparent wrappers
-    if shape.is_transparent() {
-        if let Some(inner) = shape.inner {
-            return classify_shape(inner);
-        }
+    if shape.is_transparent()
+        && let Some(inner) = shape.inner
+    {
+        return classify_shape(inner);
     }
 
     // Check scalars first
@@ -314,22 +314,21 @@ pub fn classify_shape(shape: &'static Shape) -> ShapeKind<'static> {
     }
 
     // Check for tuple via StructKind::Tuple
-    if let Type::User(UserType::Struct(st)) = shape.ty {
-        if st.kind == StructKind::Tuple {
-            return ShapeKind::Tuple {
-                elements: shape.type_params,
-            };
-        }
+    if let Type::User(UserType::Struct(st)) = shape.ty
+        && st.kind == StructKind::Tuple
+    {
+        return ShapeKind::Tuple {
+            elements: shape.type_params,
+        };
     }
 
     ShapeKind::Opaque
 }
 
-/// Extract the simple type name from a full type identifier.
-/// e.g., "my_crate::module::MyStruct" -> Some("MyStruct")
-/// Returns None for anonymous types or primitives.
+/// Get the type name if this is a named type.
+/// Returns None for anonymous types (tuples, arrays, primitives).
 fn extract_type_name(type_identifier: &'static str) -> Option<&'static str> {
-    // Skip common anonymous/primitive patterns
+    // Skip anonymous/primitive patterns
     if type_identifier.is_empty()
         || type_identifier.starts_with('(')
         || type_identifier.starts_with('[')
@@ -337,8 +336,8 @@ fn extract_type_name(type_identifier: &'static str) -> Option<&'static str> {
         return None;
     }
 
-    // Get the last segment after ::
-    type_identifier.rsplit("::").next()
+    // type_identifier is already the simple name (e.g., "MyStruct", "Vec")
+    Some(type_identifier)
 }
 
 /// Information about an enum variant for codegen.
