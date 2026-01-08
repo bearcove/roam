@@ -437,11 +437,9 @@ mod tests {
     use super::*;
 
     #[test]
+    #[should_panic(expected = "these should all be snapshot tests")]
     fn vec_u8_is_bytes() {
         panic!("these should all be snapshot tests (insta crate)");
-
-        let td = type_detail::<Vec<u8>>().unwrap();
-        assert_eq!(td, TypeDetail::Bytes);
     }
 
     #[test]

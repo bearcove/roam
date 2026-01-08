@@ -1,24 +1,111 @@
 //! Procedural macros for roam RPC service definitions.
 //!
-//! # Example
+//! # Architecture: Why This Macro Is Intentionally Thin
+//!
+//! **This macro does NOT generate clients, servers, or protocol implementations.**
+//!
+//! Instead, it serves as a **metadata emitter** — it parses your trait definition and
+//! produces reflection information (service names, method names, argument types, return types)
+//! that can be consumed later by [`roam-codegen`] running in a **build script**.
+//!
+//! ## The Two-Phase Design
+//!
+//! ```text
+//! ┌─────────────────────────────────────────────────────────────────────────┐
+//! │  PHASE 1: Compile Time (this crate)                                     │
+//! │  ─────────────────────────────────────────────────────────────────────  │
+//! │  #[service] macro runs as a proc macro                                  │
+//! │  → Parses trait definition using unsynn grammar                         │
+//! │  → Emits metadata functions: service_detail(), method_ids()             │
+//! │  → Emits minimal dispatch/client stubs for Rust-to-Rust calls           │
+//! └─────────────────────────────────────────────────────────────────────────┘
+//!                                    │
+//!                                    ▼
+//! ┌─────────────────────────────────────────────────────────────────────────┐
+//! │  PHASE 2: Build Script (roam-codegen)                                   │
+//! │  ─────────────────────────────────────────────────────────────────────  │
+//! │  build.rs calls service_detail() to get ServiceDetail                   │
+//! │  → Uses facet::Shape for full type introspection                        │
+//! │  → Generates code for ANY language: Rust, TypeScript, Go, Swift, etc.   │
+//! │  → Handles serialization formats, protocol details, optimizations       │
+//! └─────────────────────────────────────────────────────────────────────────┘
+//! ```
+//!
+//! ## Why This Separation?
+//!
+//! 1. **Multi-language support**: The same service definition produces bindings for
+//!    Rust, TypeScript, Go, Java, Swift, Python — all from `roam-codegen`, not here.
+//!
+//! 2. **Build-time flexibility**: Code generation in build scripts can read config files,
+//!    query the environment, and make decisions that proc macros cannot.
+//!
+//! 3. **Simpler proc macro**: Proc macros are notoriously hard to debug. By keeping this
+//!    one minimal, we reduce complexity and improve compile times.
+//!
+//! 4. **Type introspection via facet**: The heavy lifting of type analysis happens through
+//!    `facet::Shape`, which provides complete type information at runtime. We just emit
+//!    the glue to access it.
+//!
+//! ## The Fundamental Limitation: Proc Macros Can't See Types
+//!
+//! This is the **technical reason** the separation exists, not just an architectural preference.
+//!
+//! Proc macros operate on **tokens**, not types. When you write:
+//!
+//! ```ignore
+//! async fn send(&self, data: Tx<String>) -> Result<(), Error>;
+//! ```
+//!
+//! The proc macro sees the tokens `Tx`, `<`, `String`, `>` — but it has **no idea**:
+//!
+//! - Is `Tx` the roam streaming type, or a user-defined type that happens to be named `Tx`?
+//! - What's inside `Result`? What's inside `Vec<Option<Tx<T>>>`?
+//! - What traits does `Error` implement? Is it `Send`? `Sync`?
+//!
+//! The macro cannot see into the type system. It cannot see what's in scope. It cannot
+//! resolve type aliases or follow generic parameters.
+//!
+//! **But `facet::Shape` can.**
+//!
+//! At runtime (in a build script), `facet` provides complete type introspection:
+//!
+//! ```ignore
+//! // facet can tell us this is roam::Tx, not some other Tx
+//! let shape = <Tx<String> as facet::Facet>::SHAPE;
+//!
+//! // facet can see inside nested types
+//! let shape = <Result<Vec<Tx<String>>, MyError> as facet::Facet>::SHAPE;
+//! // → We can traverse this and find the Tx<String> buried inside
+//! ```
+//!
+//! This is why validation of streaming types (`Tx`/`Rx`), error type constraints, and
+//! other type-aware checks happen in `roam-codegen`, not here.
+//!
+//! ## What This Macro Actually Emits
+//!
+//! For a trait like:
 //!
 //! ```ignore
 //! #[roam_service_macros::service]
 //! trait Calculator {
 //!     /// Add two numbers.
 //!     async fn add(&self, a: i32, b: i32) -> i32;
-//!
-//!     /// Generate numbers from 0 to n-1.
-//!     async fn range(&self, n: u32) -> Vec<u32>;
 //! }
-//!
-//! // Generated:
-//! // - The original trait (unchanged)
-//! // - `calculator_service_detail()` -> ServiceDetail
-//! // - `calculator_method_ids()` -> &CalculatorMethodIds
-//! // - `calculator_dispatch_unary()` -> dispatch helper for server implementations
-//! // - `CalculatorClient<C>` -> client stub (requires `C: roam_session::UnaryCaller`)
 //! ```
+//!
+//! The macro generates:
+//!
+//! - **The original trait** (unchanged)
+//! - **`calculator_service_detail()`** — Returns `ServiceDetail` with method signatures
+//!   and type information via `facet::Shape`
+//! - **`calculator_method_ids()`** — Lazily-computed method ID hashes for dispatch
+//! - **`calculator_dispatch_unary()`** — Minimal dispatch helper (Rust-to-Rust only)
+//! - **`CalculatorClient<C>`** — Basic client stub (Rust-to-Rust only)
+//!
+//! The dispatch and client code is intentionally minimal — just enough for Rust-to-Rust
+//! communication. For production use with other languages, use `roam-codegen`.
+//!
+//! [`roam-codegen`]: https://docs.rs/roam-codegen
 
 #![deny(unsafe_code)]
 
@@ -26,13 +113,12 @@ use heck::ToSnakeCase;
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
-use unsynn::ToTokens;
 
 mod crate_name;
 mod parser;
 
 use crate_name::FoundCrate;
-use parser::{ParsedTrait, Type, method_ok_and_err_types, parse_trait};
+use parser::{MethodParam, ServiceTrait, ToTokens, Type, method_ok_and_err_types};
 
 /// Returns the token stream for accessing the `roam` crate.
 ///
@@ -65,7 +151,7 @@ fn roam_crate() -> TokenStream2 {
 pub fn service(_attr: TokenStream, item: TokenStream) -> TokenStream {
     let input = TokenStream2::from(item);
 
-    let parsed = match parse_trait(&input) {
+    let parsed = match parser::parse(&input) {
         Ok(p) => p,
         Err(e) => return e.to_compile_error().into(),
     };
@@ -77,25 +163,26 @@ pub fn service(_attr: TokenStream, item: TokenStream) -> TokenStream {
 }
 
 fn generate_service(
-    parsed: &ParsedTrait,
+    parsed: &ServiceTrait,
     original: TokenStream2,
 ) -> Result<TokenStream2, parser::Error> {
     // rs[impl wire.stream.not-in-errors] - Compile-time validation that streams don't appear in error types
-    for method in &parsed.methods {
-        if let Some((_, err_ty)) = method.return_type.as_result()
+    for method in parsed.methods() {
+        let return_type = method.return_type();
+        if let Some((_, err_ty)) = return_type.as_result()
             && err_ty.contains_stream()
         {
             return Err(parser::Error::new(
                 proc_macro2::Span::call_site(),
                 format!(
                     "method `{}` has Stream (Tx/Rx) in error type - streams are not allowed in error types (see r[streaming.error-no-streams])",
-                    method.name
+                    method.name()
                 ),
             ));
         }
     }
 
-    let trait_name = &parsed.name;
+    let trait_name = parsed.name();
     let trait_ident = format_ident!("{}", trait_name);
     let trait_snake = trait_name.to_snake_case();
 
@@ -114,8 +201,7 @@ fn generate_service(
     let client_methods = generate_client_methods(parsed, &method_ids_fn_name, &roam);
 
     let service_doc = parsed
-        .doc
-        .as_ref()
+        .doc()
         .map(|d| quote! { Some(#d.into()) })
         .unwrap_or_else(|| quote! { None });
 
@@ -199,28 +285,25 @@ fn generate_service(
     })
 }
 
-fn generate_method_details(parsed: &ParsedTrait, roam: &TokenStream2) -> Vec<TokenStream2> {
-    let service_name = &parsed.name;
+fn generate_method_details(parsed: &ServiceTrait, roam: &TokenStream2) -> Vec<TokenStream2> {
+    let service_name = parsed.name();
 
     parsed
-        .methods
-        .iter()
+        .methods()
         .map(|m| {
-            let method_name = &m.name;
+            let method_name = m.name();
             let method_doc = m
-                .doc
-                .as_ref()
+                .doc()
                 .map(|d| quote! { Some(#d.into()) })
                 .unwrap_or_else(|| quote! { None });
 
             let arg_exprs: Vec<TokenStream2> = m
-                .args
-                .iter()
+                .args()
                 .map(|arg| {
-                    let arg_name = &arg.name;
+                    let arg_name = arg.name();
                     let type_detail = type_detail_expr(
                         &arg.ty,
-                        &format!("{}.{} argument `{}`", parsed.name, m.name, arg.name),
+                        &format!("{}.{} argument `{}`", service_name, method_name, arg_name),
                         roam,
                     );
                     quote! {
@@ -232,9 +315,10 @@ fn generate_method_details(parsed: &ParsedTrait, roam: &TokenStream2) -> Vec<Tok
                 })
                 .collect();
 
+            let return_type = m.return_type();
             let return_type_detail = type_detail_expr(
-                &m.return_type,
-                &format!("{}.{} return type", parsed.name, m.name),
+                &return_type,
+                &format!("{}.{} return type", service_name, method_name),
                 roam,
             );
 
@@ -266,45 +350,44 @@ fn type_detail_expr(ty: &Type, context: &str, roam: &TokenStream2) -> TokenStrea
     }
 }
 
-fn generate_method_id_fields(parsed: &ParsedTrait) -> Vec<TokenStream2> {
+fn generate_method_id_fields(parsed: &ServiceTrait) -> Vec<TokenStream2> {
     parsed
-        .methods
-        .iter()
+        .methods()
         .map(|m| {
-            let name = format_ident!("{}", m.name.to_snake_case());
+            let name = format_ident!("{}", m.name().to_snake_case());
             quote! { pub #name: u64 }
         })
         .collect()
 }
 
 fn generate_method_ids_init(
-    parsed: &ParsedTrait,
+    parsed: &ServiceTrait,
     method_ids_struct_name: &proc_macro2::Ident,
     roam: &TokenStream2,
 ) -> TokenStream2 {
-    let trait_name = &parsed.name;
+    let trait_name = parsed.name();
     let trait_snake = trait_name.to_snake_case();
     let service_detail_fn_name = format_ident!("{}_service_detail", trait_snake);
 
-    let vars: Vec<_> = parsed
-        .methods
+    let methods: Vec<_> = parsed.methods().collect();
+
+    let vars: Vec<_> = methods
         .iter()
-        .map(|m| format_ident!("id_{}", m.name.to_snake_case()))
+        .map(|m| format_ident!("id_{}", m.name().to_snake_case()))
         .collect();
 
     let mut init_arms = Vec::new();
-    for (method, var) in parsed.methods.iter().zip(vars.iter()) {
-        let method_name = &method.name;
+    for (method, var) in methods.iter().zip(vars.iter()) {
+        let method_name = method.name();
         init_arms.push(quote! { #method_name => { #var = Some(id); } });
     }
 
-    let field_inits: Vec<_> = parsed
-        .methods
+    let field_inits: Vec<_> = methods
         .iter()
         .zip(vars.iter())
         .map(|(m, var)| {
-            let field = format_ident!("{}", m.name.to_snake_case());
-            let msg = format!("service method id missing: {}.{}", parsed.name, m.name);
+            let field = format_ident!("{}", m.name().to_snake_case());
+            let msg = format!("service method id missing: {}.{}", trait_name, m.name());
             quote! { #field: #var.expect(#msg) }
         })
         .collect();
@@ -323,19 +406,20 @@ fn generate_method_ids_init(
     }
 }
 
-fn generate_dispatch_arms(parsed: &ParsedTrait, roam: &TokenStream2) -> Vec<TokenStream2> {
+fn generate_dispatch_arms(parsed: &ServiceTrait, roam: &TokenStream2) -> Vec<TokenStream2> {
     parsed
-        .methods
-        .iter()
+        .methods()
         .map(|m| {
-            let method_ident = format_ident!("{}", m.name);
-            let method_id_field = format_ident!("{}", m.name.to_snake_case());
-            let (ok_ty, user_err_ty) = method_ok_and_err_types(&m.return_type);
+            let method_ident = format_ident!("{}", m.name());
+            let method_id_field = format_ident!("{}", m.name().to_snake_case());
+            let return_type = m.return_type();
+            let (ok_ty, user_err_ty) = method_ok_and_err_types(&return_type);
             let ok_ty_tokens = ok_ty.to_token_stream();
             let user_err_ty_tokens = user_err_ty.map(|t| t.to_token_stream());
-            let args_tuple_ty = args_tuple_type(&m.args);
-            let args_pat = args_tuple_pattern(&m.args);
-            let arg_idents: Vec<_> = m.args.iter().map(|a| format_ident!("{}", a.name)).collect();
+            let args: Vec<_> = m.args().collect();
+            let args_tuple_ty = args_tuple_type(&args);
+            let args_pat = args_tuple_pattern(&args);
+            let arg_idents: Vec<_> = args.iter().map(|a| format_ident!("{}", a.name())).collect();
 
             let call_and_wrap = if let Some(user_err_ty) = user_err_ty_tokens.as_ref() {
                 quote! {
@@ -383,24 +467,25 @@ fn generate_dispatch_arms(parsed: &ParsedTrait, roam: &TokenStream2) -> Vec<Toke
 }
 
 fn generate_client_methods(
-    parsed: &ParsedTrait,
+    parsed: &ServiceTrait,
     method_ids_fn_name: &proc_macro2::Ident,
     roam: &TokenStream2,
 ) -> Vec<TokenStream2> {
     parsed
-        .methods
-        .iter()
+        .methods()
         .map(|m| {
-            let method_ident = format_ident!("{}", m.name);
-            let method_id_field = format_ident!("{}", m.name.to_snake_case());
-            let fn_args = m.args.iter().map(|arg| {
-                let name = format_ident!("{}", arg.name);
+            let method_ident = format_ident!("{}", m.name());
+            let method_id_field = format_ident!("{}", m.name().to_snake_case());
+            let args: Vec<_> = m.args().collect();
+            let fn_args = args.iter().map(|arg| {
+                let name = format_ident!("{}", arg.name());
                 let ty = arg.ty.to_token_stream();
                 quote! { #name: #ty }
             });
-            let arg_idents: Vec<_> = m.args.iter().map(|a| format_ident!("{}", a.name)).collect();
+            let arg_idents: Vec<_> = args.iter().map(|a| format_ident!("{}", a.name())).collect();
 
-            let (ok_ty, user_err_ty) = method_ok_and_err_types(&m.return_type);
+            let return_type = m.return_type();
+            let (ok_ty, user_err_ty) = method_ok_and_err_types(&return_type);
             let ok_ty_tokens = ok_ty.to_token_stream();
             let user_err_ty_tokens = user_err_ty.map(|t| t.to_token_stream());
             let (result_ty, decode_expr) = if needs_borrowed_call_result(ok_ty, user_err_ty)
@@ -454,7 +539,7 @@ fn generate_client_methods(
         .collect()
 }
 
-fn args_tuple_type(args: &[parser::ParsedArg]) -> TokenStream2 {
+fn args_tuple_type(args: &[&MethodParam]) -> TokenStream2 {
     let tys: Vec<_> = args.iter().map(|a| a.ty.to_token_stream()).collect();
     match tys.len() {
         0 => quote! { () },
@@ -466,8 +551,8 @@ fn args_tuple_type(args: &[parser::ParsedArg]) -> TokenStream2 {
     }
 }
 
-fn args_tuple_pattern(args: &[parser::ParsedArg]) -> TokenStream2 {
-    let idents: Vec<_> = args.iter().map(|a| format_ident!("{}", a.name)).collect();
+fn args_tuple_pattern(args: &[&MethodParam]) -> TokenStream2 {
+    let idents: Vec<_> = args.iter().map(|a| format_ident!("{}", a.name())).collect();
     match idents.len() {
         0 => quote! { () },
         1 => {

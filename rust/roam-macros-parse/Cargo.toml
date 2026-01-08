@@ -1,27 +1,26 @@
 [package]
-name = "roam-service-macros"
+name = "roam-macros-parse"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Procedural macros for roam RPC services"
+description = "Parser grammar for roam RPC service trait definitions"
 
 [package.metadata]
 
 [package.metadata."docs.rs"]
 rustdoc-args = ["--html-in-header", "arborium-header.html"]
 
-[lib]
-proc-macro = true
-
 [dependencies]
-roam-macros-parse = { path = "../roam-macros-parse" }
+unsynn = "0.3"
 proc-macro2 = "1"
 quote = "1"
-heck = "0.5"
-facet-cargo-toml.workspace = true
 
 [dev-dependencies]
-facet.workspace = true
-roam = { path = "../roam" }
+datatest-stable = "0.3"
+insta = "1"
+
+[[test]]
+name = "parser"
+harness = false
