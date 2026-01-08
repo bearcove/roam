@@ -457,11 +457,12 @@ pub fn channel<T: 'static>() -> (Tx<T>, Rx<T>) {
 
 use std::collections::{HashMap, HashSet};
 
-/// Message to send on the wire (for outgoing stream data).
+/// Message from spawned handler tasks to the connection driver.
 ///
-/// Used by spawned tasks to send Data/Close messages back to the driver.
+/// All messages from tasks go through a single channel to preserve ordering.
+/// This ensures Data/Close messages are sent before the Response.
 #[derive(Debug)]
-pub enum OutgoingStreamMessage {
+pub enum TaskMessage {
     /// Send a Data message on a stream.
     Data {
         stream_id: StreamId,
@@ -469,13 +470,15 @@ pub enum OutgoingStreamMessage {
     },
     /// Send a Close message to end a stream.
     Close { stream_id: StreamId },
+    /// Send a Response message (call completed).
+    Response { request_id: u64, payload: Vec<u8> },
 }
 
 /// Registry of active streams for a connection.
 ///
 /// Handles incoming streams (Data from wire → `Rx<T>` / `Tx<T>` handles).
 /// For outgoing streams (server `Tx<T>` args), spawned tasks drain receivers
-/// and send Data/Close messages via `outgoing_tx`.
+/// and send Data/Close messages via `task_tx`.
 ///
 /// r[impl streaming.unknown] - Unknown stream IDs cause Goodbye.
 pub struct StreamRegistry {
@@ -508,29 +511,27 @@ pub struct StreamRegistry {
     /// r[impl flow.stream.initial-credit] - Each stream starts with this credit.
     initial_credit: u32,
 
-    /// Channel for spawned tasks to send outgoing stream messages (Data/Close).
+    /// Channel for spawned tasks to send messages (Data/Close/Response).
     /// The driver owns the receiving end and sends these on the wire.
-    outgoing_tx: mpsc::Sender<OutgoingStreamMessage>,
+    /// Using a single channel ensures correct ordering (Data/Close before Response).
+    task_tx: mpsc::Sender<TaskMessage>,
 }
 
 impl StreamRegistry {
-    /// Create a new registry with the given initial credit and outgoing message channel.
+    /// Create a new registry with the given initial credit and task message channel.
     ///
-    /// The `outgoing_tx` is used by spawned tasks to send Data/Close messages
+    /// The `task_tx` is used by spawned tasks to send Data/Close/Response messages
     /// back to the driver for transmission on the wire.
     ///
     /// r[impl flow.stream.initial-credit] - Each stream starts with this credit.
-    pub fn new_with_credit(
-        initial_credit: u32,
-        outgoing_tx: mpsc::Sender<OutgoingStreamMessage>,
-    ) -> Self {
+    pub fn new_with_credit(initial_credit: u32, task_tx: mpsc::Sender<TaskMessage>) -> Self {
         Self {
             incoming: HashMap::new(),
             closed: HashSet::new(),
             incoming_credit: HashMap::new(),
             outgoing_credit: HashMap::new(),
             initial_credit,
-            outgoing_tx,
+            task_tx,
         }
     }
 
@@ -539,15 +540,15 @@ impl StreamRegistry {
     /// r[impl flow.stream.infinite-credit] - Implementations MAY use very large credit.
     /// r[impl flow.stream.zero-credit] - With infinite credit, zero-credit never occurs.
     /// This disables backpressure but simplifies implementation.
-    pub fn new(outgoing_tx: mpsc::Sender<OutgoingStreamMessage>) -> Self {
-        Self::new_with_credit(u32::MAX, outgoing_tx)
+    pub fn new(task_tx: mpsc::Sender<TaskMessage>) -> Self {
+        Self::new_with_credit(u32::MAX, task_tx)
     }
 
-    /// Get a clone of the outgoing message sender.
+    /// Get a clone of the task message sender.
     ///
-    /// Used by codegen to spawn tasks that drain `Tx` receivers and send Data/Close.
-    pub fn outgoing_tx(&self) -> mpsc::Sender<OutgoingStreamMessage> {
-        self.outgoing_tx.clone()
+    /// Used by codegen to spawn tasks that send Data/Close/Response messages.
+    pub fn task_tx(&self) -> mpsc::Sender<TaskMessage> {
+        self.task_tx.clone()
     }
 
     /// Register an incoming stream.
@@ -762,14 +763,18 @@ impl Default for RequestIdGenerator {
 /// The dispatcher handles both unary and streaming methods uniformly.
 /// Stream binding is done via reflection (Poke) on the deserialized args.
 pub trait ServiceDispatcher: Send + Sync {
-    /// Dispatch a request and return the response payload.
+    /// Dispatch a request and send the response via the task channel.
     ///
     /// The dispatcher is responsible for:
     /// - Looking up the method by method_id
     /// - Deserializing arguments from payload
     /// - Binding any Tx/Rx streams via the registry
     /// - Calling the service method
-    /// - Serializing the response
+    /// - Sending Data/Close messages for any Tx streams
+    /// - Sending the Response message via TaskMessage::Response
+    ///
+    /// By using a single channel for Data/Close/Response, correct ordering is guaranteed:
+    /// all stream Data and Close messages are sent before the Response.
     ///
     /// Returns a boxed future with `'static` lifetime so it can be spawned.
     /// Implementations should clone their service into the future to achieve this.
@@ -779,10 +784,9 @@ pub trait ServiceDispatcher: Send + Sync {
         &self,
         method_id: u64,
         payload: Vec<u8>,
+        request_id: u64,
         registry: &mut StreamRegistry,
-    ) -> std::pin::Pin<
-        Box<dyn std::future::Future<Output = Result<Vec<u8>, String>> + Send + 'static>,
-    >;
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'static>>;
 }
 
 /// A dispatcher that routes to one of two dispatchers based on method ID.
@@ -817,14 +821,15 @@ where
         &self,
         method_id: u64,
         payload: Vec<u8>,
+        request_id: u64,
         registry: &mut StreamRegistry,
-    ) -> std::pin::Pin<
-        Box<dyn std::future::Future<Output = Result<Vec<u8>, String>> + Send + 'static>,
-    > {
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'static>> {
         if self.first_methods.contains(&method_id) {
-            self.first.dispatch(method_id, payload, registry)
+            self.first
+                .dispatch(method_id, payload, request_id, registry)
         } else {
-            self.second.dispatch(method_id, payload, registry)
+            self.second
+                .dispatch(method_id, payload, request_id, registry)
         }
     }
 }
@@ -944,14 +949,14 @@ pub struct ConnectionHandle {
 }
 
 impl ConnectionHandle {
-    /// Create a new handle with the given command channel, role, and outgoing stream sender.
+    /// Create a new handle with the given command channel, role, and task message sender.
     pub fn new(
         command_tx: mpsc::Sender<HandleCommand>,
         role: Role,
         initial_credit: u32,
-        outgoing_stream_tx: mpsc::Sender<OutgoingStreamMessage>,
+        task_tx: mpsc::Sender<TaskMessage>,
     ) -> Self {
-        let stream_registry = StreamRegistry::new_with_credit(initial_credit, outgoing_stream_tx);
+        let stream_registry = StreamRegistry::new_with_credit(initial_credit, task_tx);
         Self {
             shared: Arc::new(HandleShared {
                 command_tx,
@@ -1052,20 +1057,18 @@ impl ConnectionHandle {
                 if let Ok(slot) = receiver_field.get_mut::<ReceiverSlot>() {
                     if let Some(mut rx) = slot.take() {
                         // Spawn task to drain rx and send Data messages
-                        let outgoing_tx = self.shared.stream_registry.lock().unwrap().outgoing_tx();
+                        let task_tx = self.shared.stream_registry.lock().unwrap().task_tx();
                         tokio::spawn(async move {
                             while let Some(data) = rx.recv().await {
-                                let _ = outgoing_tx
-                                    .send(OutgoingStreamMessage::Data {
+                                let _ = task_tx
+                                    .send(TaskMessage::Data {
                                         stream_id,
                                         payload: data,
                                     })
                                     .await;
                             }
                             // Stream ended, send Close
-                            let _ = outgoing_tx
-                                .send(OutgoingStreamMessage::Close { stream_id })
-                                .await;
+                            let _ = task_tx.send(TaskMessage::Close { stream_id }).await;
                         });
                     }
                 }
@@ -1274,10 +1277,10 @@ mod tests {
         assert_eq!(val2, 200);
     }
 
-    /// Create a test registry with a dummy outgoing channel.
+    /// Create a test registry with a dummy task channel.
     fn test_registry() -> StreamRegistry {
-        let (outgoing_tx, _outgoing_rx) = mpsc::channel(10);
-        StreamRegistry::new(outgoing_tx)
+        let (task_tx, _task_rx) = mpsc::channel(10);
+        StreamRegistry::new(task_tx)
     }
 
     // r[verify streaming.data-after-close]

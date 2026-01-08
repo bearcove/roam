@@ -1,3 +1,6 @@
+// TODO: This file uses `.raw()` extensively which is fragile and hard to maintain.
+// Refactor to use proper codegen builder patterns throughout.
+
 //! Rust code generation for roam services.
 //!
 //! Generates caller traits and handler dispatchers from ServiceDetail.
@@ -201,12 +204,12 @@ impl<'a> RustGenerator<'a> {
             let method_name = method.method_name.to_snake_case();
             let const_name = method_name.to_uppercase();
             dispatch_arms.push(format!(
-                "                method_id::{const_name} => self.dispatch_{method_name}(payload, registry),"
+                "                method_id::{const_name} => self.dispatch_{method_name}(payload, request_id, registry),"
             ));
         }
-        // Unknown method returns encoded Result::Err(RoamError::UnknownMethod)
+        // Unknown method sends Response with encoded Result::Err(RoamError::UnknownMethod)
         dispatch_arms.push(
-            "                _ => Box::pin(async {{ Ok(vec![1, 1]) }}), // UnknownMethod"
+            "                _ => { let task_tx = registry.task_tx(); Box::pin(async move { let _ = task_tx.send(::roam::session::TaskMessage::Response { request_id, payload: vec![1, 1] }).await; }) }"
                 .to_string(),
         );
         let dispatch_match = dispatch_arms.join("\n");
@@ -222,10 +225,9 @@ impl<'a> RustGenerator<'a> {
             &self,
             method_id: u64,
             payload: Vec<u8>,
+            request_id: u64,
             registry: &mut ::roam::session::StreamRegistry,
-        ) -> std::pin::Pin<
-            Box<dyn std::future::Future<Output = Result<Vec<u8>, String>> + Send + 'static>,
-        > {{
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'static>> {{
             match method_id {{
 {dispatch_match}
             }}
@@ -275,9 +277,6 @@ fn generate_dispatch_method_fn(
 
     let arg_names: Vec<String> = method.args.iter().map(|a| a.name.to_snake_case()).collect();
 
-    // Check if method has streams
-    let has_streams = method.args.iter().any(|a| is_stream(a.ty)) || is_stream(method.return_type);
-
     // Collect Tx arg names for drain task handling
     let tx_arg_names: Vec<String> = method
         .args
@@ -299,7 +298,12 @@ fn generate_dispatch_method_fn(
             "let ({tuple_pattern}) = match facet_postcard::from_slice::<({tuple_type})>(&payload) {{\n"
         ));
         body.push_str("    Ok(args) => args,\n");
-        body.push_str("    Err(_) => return Box::pin(async { Ok(vec![1, 2]) }),\n");
+        body.push_str("    Err(_) => {\n");
+        body.push_str("        let task_tx = registry.task_tx();\n");
+        body.push_str("        return Box::pin(async move {\n");
+        body.push_str("            let _ = task_tx.send(::roam::session::TaskMessage::Response { request_id, payload: vec![1, 2] }).await;\n");
+        body.push_str("        });\n");
+        body.push_str("    }\n");
         body.push_str("};\n");
     }
 
@@ -343,10 +347,8 @@ fn generate_dispatch_method_fn(
         }
     }
 
-    // Get outgoing_tx if we have Tx args
-    if !tx_arg_names.is_empty() {
-        body.push_str("let outgoing_tx = registry.outgoing_tx();\n");
-    }
+    // Get task_tx - always needed to send Response, also used for Tx drain tasks
+    body.push_str("let task_tx = registry.task_tx();\n");
 
     // Clone handler for 'static future
     body.push_str("let handler = self.handler.clone();\n");
@@ -360,12 +362,12 @@ fn generate_dispatch_method_fn(
         body.push_str(&format!("    let {tx_arg}_drain = {{\n"));
         body.push_str(&format!("        let mut rx = {tx_arg}_rx;\n"));
         body.push_str(&format!("        let stream_id = {tx_arg}_stream_id;\n"));
-        body.push_str("        let tx = outgoing_tx.clone();\n");
+        body.push_str("        let tx = task_tx.clone();\n");
         body.push_str("        tokio::spawn(async move {\n");
         body.push_str("            while let Some(data) = rx.recv().await {\n");
-        body.push_str("                let _ = tx.send(::roam::session::OutgoingStreamMessage::Data { stream_id, payload: data }).await;\n");
+        body.push_str("                let _ = tx.send(::roam::session::TaskMessage::Data { stream_id, payload: data }).await;\n");
         body.push_str("            }\n");
-        body.push_str("            let _ = tx.send(::roam::session::OutgoingStreamMessage::Close { stream_id }).await;\n");
+        body.push_str("            let _ = tx.send(::roam::session::TaskMessage::Close { stream_id }).await;\n");
         body.push_str("        })\n");
         body.push_str("    };\n");
     }
@@ -383,30 +385,29 @@ fn generate_dispatch_method_fn(
         body.push_str(&format!("    let _ = {tx_arg}_drain.await;\n"));
     }
 
-    // Encode response
-    body.push_str("    match result {\n");
+    // Encode response and send via task channel
+    body.push_str("    let payload = match result {\n");
     body.push_str("        Ok(result) => {\n");
     body.push_str("            let mut out = vec![0u8];\n");
-    body.push_str(
-        "            out.extend(facet_postcard::to_vec(&result).map_err(|e| e.to_string())?);\n",
-    );
-    body.push_str("            Ok(out)\n");
+    body.push_str("            match facet_postcard::to_vec(&result) {\n");
+    body.push_str("                Ok(bytes) => out.extend(bytes),\n");
+    body.push_str("                Err(_) => return,\n");
+    body.push_str("            }\n");
+    body.push_str("            out\n");
     body.push_str("        }\n");
-    body.push_str("        Err(_e) => Ok(vec![1, 1]),\n");
-    body.push_str("    }\n");
+    body.push_str("        Err(_e) => vec![1, 1],\n");
+    body.push_str("    };\n");
+    body.push_str("    let _ = task_tx.send(::roam::session::TaskMessage::Response { request_id, payload }).await;\n");
     body.push_str("})");
 
     // Generate the function
     let dispatch_fn = impl_block.new_fn(&dispatch_name);
     dispatch_fn.arg_ref_self();
     dispatch_fn.arg("payload", "Vec<u8>");
-    // Only take registry if we have streams (avoid unused warning)
-    if has_streams {
-        dispatch_fn.arg("registry", "&mut ::roam::session::StreamRegistry");
-    } else {
-        dispatch_fn.arg("_registry", "&mut ::roam::session::StreamRegistry");
-    }
-    dispatch_fn.ret("std::pin::Pin<Box<dyn std::future::Future<Output = Result<Vec<u8>, String>> + Send + 'static>>");
+    dispatch_fn.arg("request_id", "u64");
+    // Always need registry to get task_tx for sending Response
+    dispatch_fn.arg("registry", "&mut ::roam::session::StreamRegistry");
+    dispatch_fn.ret("std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'static>>");
     dispatch_fn.line(body);
 }
 /// Generate service code with default options.
@@ -420,11 +421,6 @@ pub fn generate_service_with_options(
     options: &RustCodegenOptions,
 ) -> String {
     RustGenerator::new(service, options).generate()
-}
-
-/// Check if a shape is a stream (Tx or Rx).
-fn is_stream(shape: &'static Shape) -> bool {
-    is_tx(shape) || is_rx(shape)
 }
 
 /// Convert Shape to Rust type string for service trait arguments.

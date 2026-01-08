@@ -11,7 +11,7 @@
 use std::collections::HashSet;
 use std::time::Duration;
 
-use roam_session::{OutgoingStreamMessage, Role, StreamError, StreamIdAllocator, StreamRegistry};
+use roam_session::{Role, StreamError, StreamIdAllocator, StreamRegistry, TaskMessage};
 use roam_wire::{Hello, Message};
 
 use crate::transport::MessageTransport;
@@ -52,9 +52,6 @@ impl From<std::io::Error> for ConnectionError {
     }
 }
 
-/// Result from a completed streaming handler: (request_id, serialized_result).
-type StreamingResult = (u64, Result<Vec<u8>, String>);
-
 /// A live connection with completed Hello exchange.
 ///
 /// Generic over the transport type `T` which must implement [`MessageTransport`].
@@ -71,12 +68,9 @@ pub struct Connection<T> {
     in_flight_requests: HashSet<u64>,
     #[allow(dead_code)]
     our_hello: Hello,
-    /// Channel for receiving completed streaming handler results.
-    /// Spawned tasks send (request_id, result) when they complete.
-    streaming_results_tx: tokio::sync::mpsc::Sender<StreamingResult>,
-    streaming_results_rx: tokio::sync::mpsc::Receiver<StreamingResult>,
-    /// Channel for receiving outgoing stream messages (Data/Close) from spawned tasks.
-    outgoing_stream_rx: tokio::sync::mpsc::Receiver<OutgoingStreamMessage>,
+    /// Channel for receiving messages (Data/Close/Response) from spawned tasks.
+    /// Using a single channel ensures correct ordering (Data/Close before Response).
+    task_rx: tokio::sync::mpsc::Receiver<TaskMessage>,
 }
 
 impl<T> Connection<T> {
@@ -168,8 +162,8 @@ where
     /// - Dispatches requests to the service
     /// - Sends responses back
     ///
-    /// Note: Outgoing stream data (from Rx<T> passed to calls) is handled by the Driver,
-    /// not by this Connection. The Driver owns those receivers in a FuturesUnordered.
+    /// All task messages (Data/Close/Response) go through a single channel to ensure
+    /// correct ordering: Data and Close are sent before Response.
     ///
     /// r[impl unary.pipelining.allowed] - Handle requests as they arrive.
     /// r[impl unary.pipelining.independence] - Each request handled independently.
@@ -181,33 +175,33 @@ where
             tokio::select! {
                 biased;
 
-                // Handle completed streaming handlers
-                Some((request_id, result)) = self.streaming_results_rx.recv() => {
-                    let response_payload: Vec<u8> = result.map_err(ConnectionError::Dispatch)?;
-
-                    // r[impl streaming.call-complete] - Call completes when Response sent.
-                    // r[impl streaming.lifecycle.response-closes-pulls] - Rx streams close with Response.
-                    let resp = Message::Response {
-                        request_id,
-                        metadata: Vec::new(),
-                        payload: response_payload,
-                    };
-                    self.io.send(&resp).await?;
-                    self.in_flight_requests.remove(&request_id);
-                }
-
-                // Handle outgoing stream messages (Data/Close from spawned tasks)
-                Some(msg) = self.outgoing_stream_rx.recv() => {
+                // Handle task messages (Data/Close/Response) from spawned handlers.
+                // Using a single channel ensures Data/Close are sent before Response.
+                Some(msg) = self.task_rx.recv() => {
                     let wire_msg = match msg {
-                        OutgoingStreamMessage::Data { stream_id, payload } => {
+                        TaskMessage::Data { stream_id, payload } => {
                             Message::Data { stream_id, payload }
                         }
-                        OutgoingStreamMessage::Close { stream_id } => Message::Close { stream_id },
+                        TaskMessage::Close { stream_id } => Message::Close { stream_id },
+                        TaskMessage::Response { request_id, payload } => {
+                            // r[impl streaming.call-complete] - Call completes when Response sent.
+                            // r[impl streaming.lifecycle.response-closes-pulls] - Rx streams close with Response.
+                            if !self.in_flight_requests.remove(&request_id) {
+                                // Request not in-flight - likely already completed or cancelled.
+                                // Skip sending this Response.
+                                continue;
+                            }
+                            Message::Response {
+                                request_id,
+                                metadata: Vec::new(),
+                                payload,
+                            }
+                        }
                     };
                     self.io.send(&wire_msg).await?;
                 }
 
-                // Prioritize incoming messages
+                // Handle incoming messages from peer
                 result = self.io.recv_timeout(Duration::from_secs(30)) => {
                     let msg = match result {
                         Ok(Some(m)) => m,
@@ -289,17 +283,13 @@ where
                 // dispatch() registers streams synchronously, then returns a future.
                 // We spawn that future as a task so the message loop can continue
                 // processing Data messages for streaming methods.
+                //
+                // The dispatch future sends Data/Close/Response via task_tx in order,
+                // ensuring Data and Close are sent before Response.
                 let handler_fut =
-                    dispatcher.dispatch(method_id, payload, &mut self.stream_registry);
+                    dispatcher.dispatch(method_id, payload, request_id, &mut self.stream_registry);
 
-                // Spawn the handler as a task that sends its result to our channel
-                let results_tx = self.streaming_results_tx.clone();
-                tokio::spawn(async move {
-                    let result = handler_fut.await;
-                    // Send result to the connection's run loop
-                    // Ignore send error if connection closed
-                    let _ = results_tx.send((request_id, result)).await;
-                });
+                tokio::spawn(handler_fut);
             }
             Message::Response { request_id, .. } => {
                 // Server doesn't expect Response messages (it sends them, not receives them).
@@ -448,23 +438,17 @@ where
         initial_credit: our_credit.min(peer_credit),
     };
 
-    let (streaming_results_tx, streaming_results_rx) = tokio::sync::mpsc::channel(64);
-    let (outgoing_stream_tx, outgoing_stream_rx) = tokio::sync::mpsc::channel(64);
+    let (task_tx, task_rx) = tokio::sync::mpsc::channel(64);
     Ok(Connection {
         io,
         role: Role::Acceptor,
         negotiated: negotiated.clone(),
         stream_allocator: StreamIdAllocator::new(Role::Acceptor),
         // r[impl flow.stream.initial-credit] - Use negotiated credit for streams.
-        stream_registry: StreamRegistry::new_with_credit(
-            negotiated.initial_credit,
-            outgoing_stream_tx,
-        ),
+        stream_registry: StreamRegistry::new_with_credit(negotiated.initial_credit, task_tx),
         in_flight_requests: HashSet::new(),
         our_hello,
-        streaming_results_tx,
-        streaming_results_rx,
-        outgoing_stream_rx,
+        task_rx,
     })
 }
 
@@ -535,22 +519,16 @@ where
         initial_credit: our_credit.min(peer_credit),
     };
 
-    let (streaming_results_tx, streaming_results_rx) = tokio::sync::mpsc::channel(64);
-    let (outgoing_stream_tx, outgoing_stream_rx) = tokio::sync::mpsc::channel(64);
+    let (task_tx, task_rx) = tokio::sync::mpsc::channel(64);
     Ok(Connection {
         io,
         role: Role::Initiator,
         negotiated: negotiated.clone(),
         stream_allocator: StreamIdAllocator::new(Role::Initiator),
         // r[impl flow.stream.initial-credit] - Use negotiated credit for streams.
-        stream_registry: StreamRegistry::new_with_credit(
-            negotiated.initial_credit,
-            outgoing_stream_tx,
-        ),
+        stream_registry: StreamRegistry::new_with_credit(negotiated.initial_credit, task_tx),
         in_flight_requests: HashSet::new(),
         our_hello,
-        streaming_results_tx,
-        streaming_results_rx,
-        outgoing_stream_rx,
+        task_rx,
     })
 }

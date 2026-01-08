@@ -162,6 +162,7 @@ fn streaming_generate_server_to_client() {
         io.send(&req).await.map_err(|e| e.to_string())?;
 
         // Collect Data messages from server
+        // Protocol requires: Data messages BEFORE Response (for server-to-client streaming)
         let mut received: Vec<i32> = Vec::new();
         let mut got_close = false;
         let mut got_response = false;
@@ -181,6 +182,10 @@ fn streaming_generate_server_to_client() {
                     if sid != stream_id {
                         return Err(format!("unexpected stream_id {sid}, expected {stream_id}"));
                     }
+                    // Data must arrive BEFORE Response
+                    if got_response {
+                        return Err(format!("received Data after Response - protocol violation"));
+                    }
                     let n: i32 = facet_postcard::from_slice(&payload)
                         .map_err(|e| format!("postcard data: {e}"))?;
                     received.push(n);
@@ -189,11 +194,19 @@ fn streaming_generate_server_to_client() {
                     if sid != stream_id {
                         return Err(format!("close stream_id mismatch: {sid}"));
                     }
+                    // Close must arrive BEFORE Response
+                    if got_response {
+                        return Err(format!("received Close after Response - protocol violation"));
+                    }
                     got_close = true;
                 }
                 Message::Response { request_id, .. } => {
                     if request_id != 1 {
                         return Err(format!("response request_id mismatch: {request_id}"));
+                    }
+                    // Response must come AFTER all Data and Close
+                    if !got_close {
+                        return Err(format!("received Response before Close - protocol violation (received so far: {received:?})"));
                     }
                     got_response = true;
                 }
