@@ -63,22 +63,6 @@ impl StreamIdAllocator {
 }
 
 // ============================================================================
-// Outgoing Stream Infrastructure
-// ============================================================================
-
-/// Message sent on an outgoing stream channel.
-///
-/// r[impl streaming.data] - Data contains serialized stream element.
-/// r[impl streaming.close] - Close terminates the stream.
-#[derive(Debug)]
-pub enum OutgoingMessage {
-    /// Serialized data to send on the stream.
-    Data(Vec<u8>),
-    /// Close the stream gracefully.
-    Close,
-}
-
-// ============================================================================
 // SenderSlot - Wrapper for Option<Sender> that implements Facet
 // ============================================================================
 
@@ -1049,8 +1033,12 @@ impl ConnectionHandle {
         let stream_id = self.alloc_stream_id();
 
         if let Ok(mut ps) = poke.into_struct() {
-            // Set stream_id field
-            let _ = ps.set_field_by_name("stream_id", stream_id);
+            // Set stream_id field by getting mutable access to the u64
+            if let Ok(mut stream_id_field) = ps.field_by_name("stream_id") {
+                if let Ok(id_ref) = stream_id_field.get_mut::<StreamId>() {
+                    *id_ref = stream_id;
+                }
+            }
 
             // Take the receiver from ReceiverSlot
             if let Ok(mut receiver_field) = ps.field_by_name("receiver") {
@@ -1082,8 +1070,12 @@ impl ConnectionHandle {
         let stream_id = self.alloc_stream_id();
 
         if let Ok(mut ps) = poke.into_struct() {
-            // Set stream_id field
-            let _ = ps.set_field_by_name("stream_id", stream_id);
+            // Set stream_id field by getting mutable access to the u64
+            if let Ok(mut stream_id_field) = ps.field_by_name("stream_id") {
+                if let Ok(id_ref) = stream_id_field.get_mut::<StreamId>() {
+                    *id_ref = stream_id;
+                }
+            }
 
             // Take the sender from SenderSlot
             if let Ok(mut sender_field) = ps.field_by_name("sender") {

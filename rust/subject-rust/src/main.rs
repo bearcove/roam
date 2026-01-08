@@ -185,7 +185,8 @@ fn main() -> Result<(), String> {
         .with_writer(std::io::stderr)
         .init();
 
-    info!("subject-rust starting");
+    let mode = std::env::var("SUBJECT_MODE").unwrap_or_else(|_| "server".to_string());
+    info!("subject-rust starting in {mode} mode");
 
     // Manual runtime (avoid tokio-macros / syn).
     let rt = tokio::runtime::Builder::new_current_thread()
@@ -193,13 +194,113 @@ fn main() -> Result<(), String> {
         .build()
         .map_err(|e| format!("failed to create tokio runtime: {e}"))?;
 
-    rt.block_on(async {
-        let server = Server::new();
-        // Use generated dispatcher with our service implementation
-        let dispatcher = testbed::TestbedDispatcher::new(TestbedService);
-        server
-            .run_subject(&dispatcher)
-            .await
-            .map_err(|e| format!("{e:?}"))
-    })
+    match mode.as_str() {
+        "server" => rt.block_on(run_server()),
+        "client" => rt.block_on(run_client()),
+        _ => Err(format!("unknown SUBJECT_MODE: {mode}")),
+    }
+}
+
+async fn run_server() -> Result<(), String> {
+    let server = Server::new();
+    // Use generated dispatcher with our service implementation
+    let dispatcher = testbed::TestbedDispatcher::new(TestbedService);
+    server
+        .run_subject(&dispatcher)
+        .await
+        .map_err(|e| format!("{e:?}"))
+}
+
+async fn run_client() -> Result<(), String> {
+    use roam_stream::{CobsFramed, Hello, establish_initiator};
+    use tokio::net::TcpStream;
+
+    let addr = std::env::var("PEER_ADDR").map_err(|_| "PEER_ADDR not set".to_string())?;
+    info!("connecting to {addr}");
+
+    let stream = TcpStream::connect(&addr)
+        .await
+        .map_err(|e| format!("connect failed: {e}"))?;
+    let io = CobsFramed::new(stream);
+
+    let hello = Hello::V1 {
+        max_payload_size: 1024 * 1024,
+        initial_stream_credit: 64 * 1024,
+    };
+
+    // We need a dispatcher even as client (for bidirectional calls)
+    // For now, use our TestbedService in case the server wants to call us
+    let dispatcher = testbed::TestbedDispatcher::new(TestbedService);
+
+    let (handle, driver) = establish_initiator(io, hello, dispatcher)
+        .await
+        .map_err(|e| format!("handshake failed: {e:?}"))?;
+
+    // Spawn the driver
+    tokio::spawn(async move {
+        if let Err(e) = driver.run().await {
+            error!("driver error: {e:?}");
+        }
+    });
+
+    // Create the typed client
+    let client = testbed::TestbedClient::new(handle);
+
+    // Run the client test scenario specified by CLIENT_SCENARIO env var
+    let scenario = std::env::var("CLIENT_SCENARIO").unwrap_or_else(|_| "echo".to_string());
+    info!("running client scenario: {scenario}");
+
+    match scenario.as_str() {
+        "echo" => {
+            let result = client.echo("hello from client".to_string()).await;
+            info!("echo result: {result:?}");
+        }
+        "sum" => {
+            // Client-to-server streaming: send numbers, get sum back
+            let (tx, rx) = roam::channel::<i32>();
+
+            // Spawn task to send numbers
+            tokio::spawn(async move {
+                for i in 1..=5 {
+                    debug!("sending {i}");
+                    if let Err(e) = tx.send(&i).await {
+                        error!("send failed: {e}");
+                        break;
+                    }
+                }
+                debug!("done sending, dropping tx");
+                // tx is dropped here, closing the stream
+            });
+
+            let result = client.sum(rx).await;
+            info!("sum result: {result:?}");
+        }
+        "generate" => {
+            // Server-to-client streaming: request N numbers
+            let (tx, mut rx) = roam::channel::<i32>();
+
+            // Spawn task to receive numbers
+            let recv_task = tokio::spawn(async move {
+                let mut received = Vec::new();
+                while let Ok(Some(n)) = rx.recv().await {
+                    debug!("received {n}");
+                    received.push(n);
+                }
+                received
+            });
+
+            let result = client.generate(5, tx).await;
+            info!("generate result: {result:?}");
+
+            let received = recv_task
+                .await
+                .map_err(|e| format!("recv task failed: {e}"))?;
+            info!("received numbers: {received:?}");
+        }
+        _ => {
+            return Err(format!("unknown CLIENT_SCENARIO: {scenario}"));
+        }
+    }
+
+    Ok(())
 }

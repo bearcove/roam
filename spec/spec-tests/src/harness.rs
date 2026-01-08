@@ -196,3 +196,76 @@ pub async fn accept_subject() -> Result<(CobsFramed, Child), String> {
 
     Ok((CobsFramed::new(stream), child))
 }
+
+/// Spawn subject in client mode with the given scenario.
+///
+/// The subject will connect to us, and we act as the server.
+pub async fn spawn_subject_client(peer_addr: &str, scenario: &str) -> Result<Child, String> {
+    let cmd = subject_cmd();
+
+    // Use a shell so SUBJECT_CMD can be `node subject.js`, etc.
+    let mut child = Command::new("sh")
+        .current_dir(workspace_root())
+        .arg("-lc")
+        .arg(cmd)
+        .env("PEER_ADDR", peer_addr)
+        .env("SUBJECT_MODE", "client")
+        .env("CLIENT_SCENARIO", scenario)
+        .stdin(Stdio::null())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .spawn()
+        .map_err(|e| format!("failed to spawn subject: {e}"))?;
+
+    // If it exits immediately, surface that early.
+    tokio::time::sleep(Duration::from_millis(10)).await;
+    if let Some(status) = child.try_wait().map_err(|e| e.to_string())? {
+        return Err(format!("subject exited immediately with {status}"));
+    }
+
+    Ok(child)
+}
+
+/// Accept a client connection and run as a server with the given dispatcher.
+///
+/// Returns when the client disconnects or errors.
+pub async fn run_as_server<D: roam::session::ServiceDispatcher>(
+    dispatcher: D,
+    scenario: &str,
+) -> Result<(), String> {
+    use roam_stream::{CobsFramed as StreamCobsFramed, establish_acceptor};
+
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .map_err(|e| format!("bind: {e}"))?;
+    let addr = listener
+        .local_addr()
+        .map_err(|e| format!("local_addr: {e}"))?;
+
+    // Spawn subject in client mode
+    let mut child = spawn_subject_client(&addr.to_string(), scenario).await?;
+
+    // Accept the connection
+    let (stream, _) = tokio::time::timeout(Duration::from_secs(5), listener.accept())
+        .await
+        .map_err(|_| "subject did not connect within 5s".to_string())?
+        .map_err(|e| format!("accept: {e}"))?;
+
+    let io = StreamCobsFramed::new(stream);
+    let hello = our_hello(1024 * 1024);
+
+    let (_handle, driver) = establish_acceptor(io, hello, dispatcher)
+        .await
+        .map_err(|e| format!("handshake failed: {e:?}"))?;
+
+    // Run the driver until completion
+    let result = driver.run().await;
+
+    // Wait for child to exit
+    let status = child.wait().await.map_err(|e| format!("wait: {e}"))?;
+    if !status.success() {
+        return Err(format!("subject exited with {status}"));
+    }
+
+    result.map_err(|e| format!("driver error: {e:?}"))
+}

@@ -101,9 +101,12 @@ impl<'a> RustGenerator<'a> {
         // Generate method IDs
         self.generate_method_ids();
 
-        // Generate service trait and dispatcher
+        // Generate service trait and dispatcher (server-side)
         self.generate_service_trait();
         self.generate_dispatcher();
+
+        // Generate client (caller-side)
+        self.generate_client();
 
         // Close module
         self.scope.raw("}");
@@ -235,6 +238,74 @@ impl<'a> RustGenerator<'a> {
     }}"#
         ));
     }
+
+    fn generate_client(&mut self) {
+        let service_name = self.service.name.to_upper_camel_case();
+        let client_name = format!("{service_name}Client");
+
+        // Generate the client struct
+        let client_struct = self.scope.new_struct(&client_name);
+        client_struct.vis("pub");
+        client_struct.derive("Clone");
+        client_struct.doc(&format!("Client for {service_name} service.\n\nWraps a [`ConnectionHandle`] and provides typed methods for each RPC."));
+        client_struct.field("handle", "::roam::session::ConnectionHandle");
+
+        // Generate impl block
+        let client_impl = self.scope.new_impl(&client_name);
+
+        // new() constructor
+        let new_fn = client_impl.new_fn("new");
+        new_fn.vis("pub");
+        new_fn.arg("handle", "::roam::session::ConnectionHandle");
+        new_fn.ret("Self");
+        new_fn.doc("Create a new client wrapping the given connection handle.");
+        new_fn.line("Self { handle }");
+
+        // Generate a method for each RPC
+        for method in &self.service.methods {
+            generate_client_method(client_impl, method);
+        }
+    }
+}
+
+fn generate_client_method(client_impl: &mut Impl, method: &MethodDetail) {
+    let method_name = method.method_name.to_snake_case();
+    let const_name = method_name.to_uppercase();
+
+    // Build the return type
+    let return_type = format_client_return_type(method.return_type);
+
+    // Build the tuple of args to pass to handle.call()
+    let arg_names: Vec<String> = method.args.iter().map(|a| a.name.to_snake_case()).collect();
+    let tuple_expr = if arg_names.is_empty() {
+        "()".to_string()
+    } else if arg_names.len() == 1 {
+        format!("({},)", arg_names[0])
+    } else {
+        format!("({})", arg_names.join(", "))
+    };
+
+    // Generate the method
+    let fn_def = client_impl.new_fn(&method_name);
+    fn_def.vis("pub");
+    fn_def.set_async(true);
+    fn_def.arg_ref_self();
+    for arg in &method.args {
+        let arg_name = arg.name.to_snake_case();
+        let arg_type = rust_type_client_arg(arg.ty);
+        fn_def.arg(&arg_name, &arg_type);
+    }
+    fn_def.ret(&return_type);
+
+    if let Some(doc) = &method.doc {
+        fn_def.doc(doc.as_ref());
+    }
+
+    fn_def.line(format!("let mut args = {tuple_expr};"));
+    fn_def.line(format!(
+        "let payload = self.handle.call(method_id::{const_name}, &mut args).await?;"
+    ));
+    fn_def.line("::roam::session::CallError::decode_response(&payload)");
 }
 
 /// Generate a dispatch method for a single service method.
@@ -443,6 +514,33 @@ fn rust_type_server_return(shape: &'static Shape) -> String {
         ShapeKind::Rx { inner } => format!("Rx<{}>", rust_type_base(inner)),
         _ => rust_type_base(shape),
     }
+}
+
+/// Convert Shape to Rust type string for client method arguments.
+///
+/// From the caller's perspective:
+/// - `Rx<T>` in schema means caller passes `Rx<T>` (from `roam::channel()`)
+/// - `Tx<T>` in schema means caller passes `Tx<T>` (from `roam::channel()`)
+fn rust_type_client_arg(shape: &'static Shape) -> String {
+    match classify_shape(shape) {
+        ShapeKind::Tx { inner } => format!("Tx<{}>", rust_type_base(inner)),
+        ShapeKind::Rx { inner } => format!("Rx<{}>", rust_type_base(inner)),
+        _ => rust_type_base(shape),
+    }
+}
+
+/// Format the return type for client methods.
+///
+/// Returns `Result<Result<T, RoamError<E>>, CallError>` where:
+/// - Outer Result: transport-level errors (encode/decode/connection)
+/// - Inner Result: RPC-level errors (user error, unknown method, etc.)
+fn format_client_return_type(return_shape: &'static Shape) -> String {
+    let (ok_ty, err_ty) = extract_result_types(return_shape);
+    let ok_type_str = rust_type_base(ok_ty);
+    let err_type_str = err_ty
+        .map(rust_type_base)
+        .unwrap_or_else(|| "Never".to_string());
+    format!("Result<Result<{ok_type_str}, RoamError<{err_type_str}>>, ::roam::session::CallError>")
 }
 
 /// Convert Shape to base Rust type (non-streaming).
