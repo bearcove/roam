@@ -78,57 +78,46 @@ pub enum OutgoingMessage {
     Close,
 }
 
-/// Sender handle for outgoing stream data.
+// ============================================================================
+// SenderSlot - Wrapper for Option<Sender> that implements Facet
+// ============================================================================
+
+/// A wrapper around `Option<mpsc::Sender<Vec<u8>>>` that implements Facet.
 ///
-/// This is the internal channel that `Tx<T>` writes to.
-/// The connection layer reads from the corresponding receiver.
-#[derive(Clone)]
-pub struct OutgoingSender {
-    stream_id: StreamId,
-    tx: mpsc::Sender<OutgoingMessage>,
-    /// Notify the connection loop that data is available.
-    notify: Arc<Notify>,
+/// This allows `Poke::get_mut::<SenderSlot>()` to work, enabling `.take()`
+/// via reflection. Used by `ConnectionHandle::call` to extract senders from
+/// `Tx<T>` arguments and register them with the stream registry.
+#[derive(Facet)]
+#[facet(opaque)]
+pub struct SenderSlot {
+    /// The optional sender. Public within crate for `Tx::send()` access.
+    pub(crate) inner: Option<mpsc::Sender<Vec<u8>>>,
 }
 
-impl OutgoingSender {
-    /// Create a new outgoing sender.
-    pub fn new(
-        stream_id: StreamId,
-        tx: mpsc::Sender<OutgoingMessage>,
-        notify: Arc<Notify>,
-    ) -> Self {
-        Self {
-            stream_id,
-            tx,
-            notify,
-        }
+impl SenderSlot {
+    /// Create a slot containing a sender.
+    pub fn new(tx: mpsc::Sender<Vec<u8>>) -> Self {
+        Self { inner: Some(tx) }
     }
 
-    /// Get the stream ID.
-    pub fn stream_id(&self) -> StreamId {
-        self.stream_id
+    /// Create an empty slot.
+    pub fn empty() -> Self {
+        Self { inner: None }
     }
 
-    /// Send serialized data.
-    pub async fn send_data(
-        &self,
-        data: Vec<u8>,
-    ) -> Result<(), mpsc::error::SendError<OutgoingMessage>> {
-        let result = self.tx.send(OutgoingMessage::Data(data)).await;
-        if result.is_ok() {
-            self.notify.notify_one();
-        }
-        result
+    /// Take the sender out of the slot, leaving it empty.
+    pub fn take(&mut self) -> Option<mpsc::Sender<Vec<u8>>> {
+        self.inner.take()
     }
 
-    /// Send close signal (used by Tx Drop impl).
-    ///
-    /// r[impl streaming.lifecycle.caller-closes-pushes] - Caller sends Close when done.
-    pub fn send_close(&self) {
-        // Use try_send since Drop can't be async
-        if self.tx.try_send(OutgoingMessage::Close).is_ok() {
-            self.notify.notify_one();
-        }
+    /// Check if the slot contains a sender.
+    pub fn is_some(&self) -> bool {
+        self.inner.is_some()
+    }
+
+    /// Check if the slot is empty.
+    pub fn is_none(&self) -> bool {
+        self.inner.is_none()
     }
 }
 
@@ -141,14 +130,16 @@ impl OutgoingSender {
 /// r[impl streaming.lifecycle.immediate-data] - Can send Data before Response.
 /// r[impl streaming.lifecycle.speculative] - Early Data may be wasted on error.
 ///
-/// When dropped, a Close message is sent automatically.
-///
 /// # Facet Implementation
 ///
 /// Uses `#[facet(proxy = u64)]` so that:
 /// - `stream_id` is pokeable (Connection can walk args and set stream IDs)
 /// - Serializes as just a `u64` on the wire
 /// - `T` is exposed as a type parameter for codegen introspection
+///
+/// The `sender` field uses `SenderSlot` wrapper so that `ConnectionHandle::call`
+/// can use `Poke::get_mut::<SenderSlot>()` to `.take()` the sender and register
+/// it with the stream registry.
 #[derive(Facet)]
 #[facet(proxy = u64)]
 pub struct Tx<T: 'static> {
@@ -156,8 +147,8 @@ pub struct Tx<T: 'static> {
     /// Public so Connection can poke it when binding streams.
     pub stream_id: StreamId,
     /// Channel sender for outgoing data.
-    #[facet(opaque)]
-    sender: OutgoingSender,
+    /// Uses SenderSlot so it's pokeable (can .take() via Poke).
+    pub sender: SenderSlot,
     /// Phantom data for the element type.
     #[facet(opaque)]
     _marker: PhantomData<T>,
@@ -176,7 +167,7 @@ impl<T: 'static> TryFrom<&Tx<T>> for u64 {
 
 /// Deserialization: u64 -> `Tx<T>` (creates a "hollow" Tx)
 ///
-/// The sender is a placeholder - the real sender gets set up by Connection
+/// The sender is empty - the real sender gets set up by Connection
 /// after deserialization when it binds the stream.
 ///
 /// Uses TryFrom rather than From because facet's proxy mechanism requires TryFrom.
@@ -184,24 +175,21 @@ impl<T: 'static> TryFrom<&Tx<T>> for u64 {
 impl<T: 'static> TryFrom<u64> for Tx<T> {
     type Error = Infallible;
     fn try_from(stream_id: u64) -> Result<Self, Self::Error> {
-        // Create a placeholder channel - Connection will replace this
-        let (tx, _rx) = mpsc::channel(1);
-        let notify = Arc::new(Notify::new());
-        let sender = OutgoingSender::new(stream_id, tx, notify);
+        // Create a hollow Tx - no actual sender, Connection will bind later
         Ok(Tx {
             stream_id,
-            sender,
+            sender: SenderSlot::empty(),
             _marker: PhantomData,
         })
     }
 }
 
 impl<T: 'static> Tx<T> {
-    /// Create a new Tx stream with the given sender.
-    pub fn new(sender: OutgoingSender) -> Self {
+    /// Create a new Tx stream with the given ID and sender channel.
+    pub fn new(stream_id: StreamId, tx: mpsc::Sender<Vec<u8>>) -> Self {
         Self {
-            stream_id: sender.stream_id(),
-            sender,
+            stream_id,
+            sender: SenderSlot::new(tx),
             _marker: PhantomData,
         }
     }
@@ -209,11 +197,11 @@ impl<T: 'static> Tx<T> {
     /// Create an unbound Tx with a sender but stream_id 0.
     ///
     /// Used by `roam::channel()` to create a pair before binding.
-    /// The Tx keeps its sender - only the paired Rx gets its receiver taken.
-    pub(crate) fn unbound(sender: mpsc::Sender<OutgoingMessage>, notify: Arc<Notify>) -> Self {
+    /// Connection will poke the stream_id when binding.
+    pub fn unbound(tx: mpsc::Sender<Vec<u8>>) -> Self {
         Self {
             stream_id: 0,
-            sender: OutgoingSender::new(0, sender, notify),
+            sender: SenderSlot::new(tx),
             _marker: PhantomData,
         }
     }
@@ -230,18 +218,9 @@ impl<T: 'static> Tx<T> {
     where
         T: Facet<'static>,
     {
+        let tx = self.sender.inner.as_ref().ok_or(TxError::Taken)?;
         let bytes = facet_postcard::to_vec(value).map_err(TxError::Serialize)?;
-        self.sender
-            .send_data(bytes)
-            .await
-            .map_err(|_| TxError::Closed)
-    }
-}
-
-impl<T: 'static> Drop for Tx<T> {
-    /// r[impl streaming.lifecycle.caller-closes-pushes] - Send Close when Tx is dropped.
-    fn drop(&mut self) {
-        self.sender.send_close();
+        tx.send(bytes).await.map_err(|_| TxError::Closed)
     }
 }
 
@@ -252,6 +231,8 @@ pub enum TxError {
     Serialize(facet_postcard::SerializeError),
     /// The stream channel is closed.
     Closed,
+    /// The sender was already taken (e.g., by ConnectionHandle::call).
+    Taken,
 }
 
 impl std::fmt::Display for TxError {
@@ -259,6 +240,7 @@ impl std::fmt::Display for TxError {
         match self {
             TxError::Serialize(e) => write!(f, "serialize error: {e}"),
             TxError::Closed => write!(f, "stream closed"),
+            TxError::Taken => write!(f, "sender was taken"),
         }
     }
 }
@@ -439,51 +421,59 @@ impl std::fmt::Display for RxError {
 impl std::error::Error for RxError {}
 
 // ============================================================================
+// Channel creation
+// ============================================================================
+
+/// Create an unbound channel pair for streaming RPC.
+///
+/// Returns `(Tx<T>, Rx<T>)` with `stream_id: 0`. The `ConnectionHandle::call`
+/// method will walk the args, find `Rx<T>` or `Tx<T>` fields, assign stream IDs,
+/// and take the internal channel handles to register with the stream registry.
+///
+/// # Channel semantics (like regular mpsc)
+///
+/// - If caller wants to **send** data: pass `rx`, keep `tx`
+/// - If caller wants to **receive** data: pass `tx`, keep `rx`
+///
+/// # Example
+///
+/// ```ignore
+/// // sum(numbers: Rx<i32>) -> i64
+/// let (tx, rx) = roam::channel::<i32>();
+/// let fut = client.sum(rx);  // pass rx, keep tx
+/// tx.send(1).await;
+/// tx.send(2).await;
+/// drop(tx);
+/// let sum = fut.await?;
+/// ```
+pub fn channel<T: 'static>() -> (Tx<T>, Rx<T>) {
+    let (sender, receiver) = mpsc::channel::<Vec<u8>>(64);
+    (Tx::unbound(sender), Rx::unbound(receiver))
+}
+
+// ============================================================================
 // Stream Registry
 // ============================================================================
 
 use std::collections::{HashMap, HashSet};
 
-/// Result of polling an outgoing stream.
-#[derive(Debug)]
-pub enum OutgoingPoll {
-    /// A Data message should be sent.
-    Data {
-        stream_id: StreamId,
-        payload: Vec<u8>,
-    },
-    /// A Close message should be sent.
-    Close { stream_id: StreamId },
-    /// No data available (would block).
-    Pending,
-    /// All outgoing streams are closed.
-    Done,
-}
-
 /// Registry of active streams for a connection.
 ///
-/// Handles both incoming streams (Data from wire → `Rx<T>`) and
-/// outgoing streams (`Tx<T>` → Data to wire).
+/// Handles incoming streams (Data from wire → `Rx<T>` / `Tx<T>` handles).
+/// Outgoing streams (Rx passed to calls) are NOT stored here - the driver
+/// owns those receivers directly in a `FuturesUnordered`.
 ///
 /// r[impl streaming.unknown] - Unknown stream IDs cause Goodbye.
 pub struct StreamRegistry {
-    /// Streams where we receive Data messages (backing `Rx<T>` handles on our side).
-    /// Key: stream_id, Value: sender to route Data payloads to the `Rx<T>`.
+    /// Streams where we receive Data messages (backing `Rx<T>` or `Tx<T>` handles on our side).
+    /// Key: stream_id, Value: sender to route Data payloads to the handle.
     incoming: HashMap<StreamId, mpsc::Sender<Vec<u8>>>,
-
-    /// Streams where we send Data messages (backing `Tx<T>` handles on our side).
-    /// Key: stream_id, Value: receiver to drain data from `Tx<T>`.
-    outgoing: HashMap<StreamId, mpsc::Receiver<OutgoingMessage>>,
 
     /// Stream IDs that have been closed.
     /// Used to detect data-after-close violations.
     ///
     /// r[impl streaming.data-after-close] - Track closed streams.
     closed: HashSet<StreamId>,
-
-    /// Notify the connection loop when outgoing data is available.
-    /// All OutgoingSenders share this and call notify_one() after enqueuing.
-    outgoing_notify: Arc<Notify>,
 
     // ========================================================================
     // Flow Control
@@ -512,9 +502,7 @@ impl StreamRegistry {
     pub fn new_with_credit(initial_credit: u32) -> Self {
         Self {
             incoming: HashMap::new(),
-            outgoing: HashMap::new(),
             closed: HashSet::new(),
-            outgoing_notify: Arc::new(Notify::new()),
             incoming_credit: HashMap::new(),
             outgoing_credit: HashMap::new(),
             initial_credit,
@@ -530,43 +518,27 @@ impl StreamRegistry {
         Self::new_with_credit(u32::MAX)
     }
 
-    /// Get the notify handle for the connection loop to wait on.
+    /// Register an incoming stream.
     ///
-    /// When notified, call `poll_outgoing()` in a loop until it returns `Pending`.
-    pub fn outgoing_notify(&self) -> Arc<Notify> {
-        self.outgoing_notify.clone()
-    }
-
-    /// Register an incoming stream and return the receiver for `Rx<T>`.
+    /// The connection layer will route Data messages for this stream_id to the sender.
+    /// Used for both `Rx<T>` (caller receives from callee) and `Tx<T>` (callee sends to caller).
     ///
-    /// The connection layer will route Data messages for this stream_id to the
-    /// returned receiver. The caller wraps this in a `Rx<T>`.
-    ///
-    /// r[impl streaming.allocation.caller] - Caller allocates stream IDs.
     /// r[impl flow.stream.initial-credit] - Stream starts with initial credit.
-    pub fn register_incoming(&mut self, stream_id: StreamId) -> mpsc::Receiver<Vec<u8>> {
-        // TODO: make buffer size configurable
-        let (tx, rx) = mpsc::channel(64);
+    pub fn register_incoming(&mut self, stream_id: StreamId, tx: mpsc::Sender<Vec<u8>>) {
         self.incoming.insert(stream_id, tx);
         // Grant initial credit - peer can send us this many bytes
         self.incoming_credit.insert(stream_id, self.initial_credit);
-        rx
     }
 
-    /// Register an outgoing stream and return the sender for `Tx<T>`.
+    /// Register credit tracking for an outgoing stream.
     ///
-    /// The connection layer will drain messages from this channel and send
-    /// them as Data/Close wire messages.
+    /// The actual receiver is NOT stored here - the driver owns it directly.
+    /// This only sets up credit tracking for the stream.
     ///
-    /// r[impl streaming.allocation.caller] - Caller allocates stream IDs.
     /// r[impl flow.stream.initial-credit] - Stream starts with initial credit.
-    pub fn register_outgoing(&mut self, stream_id: StreamId) -> OutgoingSender {
-        // TODO: make buffer size configurable
-        let (tx, rx) = mpsc::channel(64);
-        self.outgoing.insert(stream_id, rx);
+    pub fn register_outgoing_credit(&mut self, stream_id: StreamId) {
         // Assume peer grants us initial credit - we can send them this many bytes
         self.outgoing_credit.insert(stream_id, self.initial_credit);
-        OutgoingSender::new(stream_id, tx, self.outgoing_notify.clone())
     }
 
     /// Route a Data message payload to the appropriate incoming stream.
@@ -629,46 +601,6 @@ impl StreamRegistry {
         // If send fails, the Rx<T> was dropped - that's okay, just drop the data
         let _ = tx.send(payload).await;
         Ok(())
-    }
-
-    /// Poll all outgoing streams for data to send.
-    ///
-    /// Returns the first available message, or Pending if none are ready.
-    /// Call this in a loop in the connection's message processing.
-    pub fn poll_outgoing(&mut self) -> OutgoingPoll {
-        if self.outgoing.is_empty() {
-            return OutgoingPoll::Done;
-        }
-
-        // Collect stream IDs first to avoid borrowing issues
-        let stream_ids: Vec<StreamId> = self.outgoing.keys().copied().collect();
-
-        for stream_id in stream_ids {
-            let rx = self.outgoing.get_mut(&stream_id).unwrap();
-            match rx.try_recv() {
-                Ok(OutgoingMessage::Data(payload)) => {
-                    return OutgoingPoll::Data { stream_id, payload };
-                }
-                Ok(OutgoingMessage::Close) => {
-                    // Remove immediately before returning (fixes bug where we'd return
-                    // before the deferred removal, leaving stale entries)
-                    self.outgoing.remove(&stream_id);
-                    self.closed.insert(stream_id);
-                    return OutgoingPoll::Close { stream_id };
-                }
-                Err(mpsc::error::TryRecvError::Empty) => {
-                    // No data ready, continue to next stream
-                }
-                Err(mpsc::error::TryRecvError::Disconnected) => {
-                    // Sender dropped without sending Close - treat as implicit close
-                    self.outgoing.remove(&stream_id);
-                    self.closed.insert(stream_id);
-                    return OutgoingPoll::Close { stream_id };
-                }
-            }
-        }
-
-        OutgoingPoll::Pending
     }
 
     /// Close an incoming stream (remove from registry).
