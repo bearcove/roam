@@ -60,6 +60,7 @@ where
     ///
     /// The `task_tx` is used to create the server-side stream registry.
     /// The `task_rx` is polled in the driver loop to send Data/Close/Response messages.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         io: T,
         dispatcher: D,

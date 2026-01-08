@@ -960,7 +960,7 @@ impl ConnectionHandle {
     ///
     /// * `method_id` - The method ID to call
     /// * `args` - Arguments to serialize (typically a tuple of all method args).
-    ///           Must be mutable so stream IDs can be assigned.
+    ///   Must be mutable so stream IDs can be assigned.
     ///
     /// # Stream Binding
     ///
