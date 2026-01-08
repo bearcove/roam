@@ -7,10 +7,6 @@ use std::path::Path;
 
 fn main() {
     println!("cargo::rerun-if-changed=build.rs");
-    println!(
-        "cargo::rerun-if-changed={}",
-        Path::new("../../spec/spec-proto/src/lib.rs").display()
-    );
 
     // Generate code for all services in spec-proto
     let mut code = String::new();

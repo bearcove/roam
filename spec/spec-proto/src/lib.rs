@@ -6,7 +6,7 @@ use roam::session::{Rx, Tx};
 
 /// Testbed service for conformance testing.
 ///
-/// Combines unary and streaming methods for comprehensive testing.
+/// Combines unary, streaming, and complex type methods for comprehensive testing.
 #[service]
 pub trait Testbed {
     // ========================================================================
@@ -40,6 +40,37 @@ pub trait Testbed {
     /// Tests: bidirectional streaming (`Rx<T>` input + `Tx<T>` output).
     /// Caller creates two channels, passes receiving end for input, sending end for output.
     async fn transform(&self, input: Rx<String>, output: Tx<String>);
+
+    // ========================================================================
+    // Complex type methods
+    // ========================================================================
+
+    /// Echo a point back.
+    async fn echo_point(&self, point: Point) -> Point;
+
+    /// Create a person and return it.
+    async fn create_person(&self, name: String, age: u8, email: Option<String>) -> Person;
+
+    /// Calculate the area of a rectangle.
+    async fn rectangle_area(&self, rect: Rectangle) -> f64;
+
+    /// Get a color by name.
+    async fn parse_color(&self, name: String) -> Option<Color>;
+
+    /// Calculate the area of a shape.
+    async fn shape_area(&self, shape: Shape) -> f64;
+
+    /// Create a canvas with given shapes.
+    async fn create_canvas(&self, name: String, shapes: Vec<Shape>, background: Color) -> Canvas;
+
+    /// Process a message and return a response.
+    async fn process_message(&self, msg: Message) -> Message;
+
+    /// Return multiple points.
+    async fn get_points(&self, count: u32) -> Vec<Point>;
+
+    /// Test tuple types.
+    async fn swap_pair(&self, pair: (i32, String)) -> (String, i32);
 }
 
 // ============================================================================
@@ -104,83 +135,6 @@ pub enum Message {
     Data(Vec<u8>) = 2,
 }
 
-/// Streaming service for cross-language conformance testing.
-///
-/// Tests Tx/Rx semantics, stream lifecycle, and bidirectional streaming.
-///
-/// # Channel semantics (like regular mpsc channels)
-///
-/// - `Rx<T>` in args: caller passes the receiving end, keeps the sending end to push data
-/// - `Tx<T>` in args: caller passes the sending end, keeps the receiving end to pull data
-///
-/// This matches standard channel conventions:
-/// - `(tx, rx) = channel()` → tx sends, rx receives
-/// - If caller wants to send: pass `rx`, keep `tx`
-/// - If caller wants to receive: pass `tx`, keep `rx`
-#[service]
-pub trait Streaming {
-    /// Client pushes numbers, server returns their sum.
-    ///
-    /// Tests: client-to-server streaming (`Rx<T>` → scalar return).
-    /// Caller: `(tx, rx) = channel(); client.sum(rx); tx.send(...)`
-    async fn sum(&self, numbers: Rx<i32>) -> i64;
-
-    /// Client sends a count, server streams that many numbers back.
-    ///
-    /// Tests: server-to-client streaming (scalar → `Tx<T>` as output parameter).
-    /// Caller: `(tx, rx) = channel(); client.range(count, tx); rx.recv()`
-    async fn range(&self, count: u32, output: Tx<u32>);
-
-    /// Client pushes strings, server echoes each back.
-    ///
-    /// Tests: bidirectional streaming (`Rx<T>` input ↔ `Tx<T>` output).
-    /// Caller: creates two channels, passes rx for input (to send), tx for output (to receive)
-    async fn pipe(&self, input: Rx<String>, output: Tx<String>);
-
-    /// Client pushes numbers, server returns (sum, count, average).
-    ///
-    /// Tests: aggregating a stream into a compound result.
-    /// Caller: `(tx, rx) = channel(); client.stats(rx); tx.send(...)`
-    async fn stats(&self, numbers: Rx<i32>) -> (i64, u64, f64);
-}
-
-/// Complex types service for testing struct/enum encoding.
-///
-/// Tests postcard encoding of nested structs, enums, and various types.
-#[service]
-pub trait Complex {
-    /// Echo a point back.
-    async fn echo_point(&self, point: Point) -> Point;
-
-    /// Create a person and return it.
-    async fn create_person(&self, name: String, age: u8, email: Option<String>) -> Person;
-
-    /// Calculate the area of a rectangle.
-    async fn rectangle_area(&self, rect: Rectangle) -> f64;
-
-    /// Get a color by name.
-    async fn parse_color(&self, name: String) -> Option<Color>;
-
-    /// Calculate the area of a shape.
-    async fn shape_area(&self, shape: Shape) -> f64;
-
-    /// Create a canvas with given shapes.
-    async fn create_canvas(&self, name: String, shapes: Vec<Shape>, background: Color) -> Canvas;
-
-    /// Process a message and return a response.
-    async fn process_message(&self, msg: Message) -> Message;
-
-    /// Return multiple points.
-    async fn get_points(&self, count: u32) -> Vec<Point>;
-
-    /// Test tuple types.
-    async fn swap_pair(&self, pair: (i32, String)) -> (String, i32);
-}
-
 pub fn all_services() -> Vec<roam::schema::ServiceDetail> {
-    vec![
-        testbed_service_detail(),
-        streaming_service_detail(),
-        complex_service_detail(),
-    ]
+    vec![testbed_service_detail()]
 }
