@@ -60,7 +60,7 @@ fn collect_named_types(service: &ServiceDetail) -> Vec<(String, TypeDetail)> {
                     visit(item, seen, types);
                 }
             }
-            TypeDetail::Push(inner) | TypeDetail::Pull(inner) => visit(inner, seen, types),
+            TypeDetail::Tx(inner) | TypeDetail::Pull(inner) => visit(inner, seen, types),
             // Anonymous structs and enums, primitives - no action needed
             _ => {}
         }
@@ -173,7 +173,7 @@ fn ts_type_base_named(ty: &TypeDetail) -> String {
                 .join(", ");
             format!("[{inner}]")
         }
-        TypeDetail::Push(inner) => format!("Push<{}>", ts_type_base_named(inner)),
+        TypeDetail::Tx(inner) => format!("Push<{}>", ts_type_base_named(inner)),
         TypeDetail::Pull(inner) => format!("Pull<{}>", ts_type_base_named(inner)),
 
         // Anonymous structs - inline as object type
@@ -573,7 +573,7 @@ fn generate_handler_interface(service: &ServiceDetail) -> String {
 
 /// Check if a type is a stream (Push or Pull).
 fn is_stream(ty: &TypeDetail) -> bool {
-    matches!(ty, TypeDetail::Push(_) | TypeDetail::Pull(_))
+    matches!(ty, TypeDetail::Tx(_) | TypeDetail::Pull(_))
 }
 
 /// Convert TypeDetail to TypeScript type (non-streaming base types).
@@ -615,7 +615,7 @@ fn ts_type_base(ty: &TypeDetail) -> String {
                 .join(", ");
             format!("[{inner}]")
         }
-        TypeDetail::Push(inner) => {
+        TypeDetail::Tx(inner) => {
             // Fallback - shouldn't reach here if called via context-specific functions
             format!("Push<{}>", ts_type_base(inner))
         }
@@ -660,7 +660,7 @@ fn ts_type_base(ty: &TypeDetail) -> String {
 /// Caller uses types as-is: Push = caller sends, Pull = caller receives.
 fn ts_type_client_arg(ty: &TypeDetail) -> String {
     match ty {
-        TypeDetail::Push(inner) => format!("Push<{}>", ts_type_client_arg(inner)),
+        TypeDetail::Tx(inner) => format!("Push<{}>", ts_type_client_arg(inner)),
         TypeDetail::Pull(inner) => format!("Pull<{}>", ts_type_client_arg(inner)),
         _ => ts_type_base_named(ty),
     }
@@ -670,7 +670,7 @@ fn ts_type_client_arg(ty: &TypeDetail) -> String {
 /// Schema types are from CALLER's perspective - no transformation needed.
 fn ts_type_client_return(ty: &TypeDetail) -> String {
     match ty {
-        TypeDetail::Push(inner) => format!("Push<{}>", ts_type_client_return(inner)),
+        TypeDetail::Tx(inner) => format!("Push<{}>", ts_type_client_return(inner)),
         TypeDetail::Pull(inner) => format!("Pull<{}>", ts_type_client_return(inner)),
         _ => ts_type_base_named(ty),
     }
@@ -682,7 +682,7 @@ fn ts_type_client_return(ty: &TypeDetail) -> String {
 /// Caller's Pull (receives) becomes handler's Push (sends).
 fn ts_type_server_arg(ty: &TypeDetail) -> String {
     match ty {
-        TypeDetail::Push(inner) => format!("Pull<{}>", ts_type_server_arg(inner)),
+        TypeDetail::Tx(inner) => format!("Pull<{}>", ts_type_server_arg(inner)),
         TypeDetail::Pull(inner) => format!("Push<{}>", ts_type_server_arg(inner)),
         _ => ts_type_base_named(ty),
     }
@@ -692,7 +692,7 @@ fn ts_type_server_arg(ty: &TypeDetail) -> String {
 /// Schema types are from caller's perspective, so we INVERT for handler.
 fn ts_type_server_return(ty: &TypeDetail) -> String {
     match ty {
-        TypeDetail::Push(inner) => format!("Pull<{}>", ts_type_server_return(inner)),
+        TypeDetail::Tx(inner) => format!("Pull<{}>", ts_type_server_return(inner)),
         TypeDetail::Pull(inner) => format!("Push<{}>", ts_type_server_return(inner)),
         _ => ts_type_base_named(ty),
     }
@@ -816,7 +816,7 @@ fn generate_encode_expr(ty: &TypeDetail, expr: &str) -> String {
                 "(() => {{ switch ({expr}.tag) {{\n{cases}      default: throw new Error('unknown enum variant'); }} }})()"
             )
         }
-        TypeDetail::Push(_) | TypeDetail::Pull(_) => {
+        TypeDetail::Tx(_) | TypeDetail::Pull(_) => {
             // Streaming types encode as u64 stream ID (varint)
             // r[impl streaming.type] - Push/Pull serialize as stream_id on wire.
             format!("encodeU64({expr}.streamId)")
@@ -828,7 +828,7 @@ fn generate_encode_expr(ty: &TypeDetail, expr: &str) -> String {
 /// Schema types are from caller's perspective - no inversion needed for client.
 fn generate_decode_stmt_client(ty: &TypeDetail, var_name: &str, offset_var: &str) -> String {
     match ty {
-        TypeDetail::Push(inner) => {
+        TypeDetail::Tx(inner) => {
             // Caller's Push (caller sends) - decode stream_id and create Push handle
             // r[impl streaming.type] - Stream types decode as stream_id on wire.
             // TODO: Need Connection access to create proper Push handle
@@ -859,7 +859,7 @@ fn generate_decode_stmt_client(ty: &TypeDetail, var_name: &str, offset_var: &str
 /// r[impl streaming.caller-pov] - Schema is from caller's perspective, server inverts.
 fn generate_decode_stmt_server(ty: &TypeDetail, var_name: &str, offset_var: &str) -> String {
     match ty {
-        TypeDetail::Push(inner) => {
+        TypeDetail::Tx(inner) => {
             // Schema Push (caller sends) → server receives → Pull for server
             // r[impl streaming.type] - Stream types decode as stream_id on wire.
             let inner_type = ts_type_server_arg(inner);
@@ -1078,7 +1078,7 @@ fn generate_decode_stmt(ty: &TypeDetail, var_name: &str, offset_var: &str) -> St
                 "const _{var_name}_r = decodeVec(buf, {offset_var}, {decode_fn}); const {var_name} = new Set(_{var_name}_r.value); {offset_var} = _{var_name}_r.next;"
             )
         }
-        TypeDetail::Push(inner) => {
+        TypeDetail::Tx(inner) => {
             // Push types decode as u64 stream ID (varint)
             // r[impl streaming.type] - Push serializes as stream_id on wire.
             // For handlers: Push means "handler sends", so handler creates OutgoingSender
@@ -1218,7 +1218,7 @@ fn generate_decode_fn(ty: &TypeDetail, _var_hint: &str) -> String {
 fn is_fully_supported(ty: &TypeDetail) -> bool {
     match ty {
         // Streaming types are supported - they encode/decode as stream IDs
-        TypeDetail::Push(inner) | TypeDetail::Pull(inner) => is_fully_supported(inner),
+        TypeDetail::Tx(inner) | TypeDetail::Pull(inner) => is_fully_supported(inner),
         TypeDetail::List(inner)
         | TypeDetail::Option(inner)
         | TypeDetail::Set(inner)

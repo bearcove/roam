@@ -139,7 +139,7 @@ fn collect_named_types(service: &ServiceDetail) -> Vec<(String, TypeDetail)> {
                     visit(item, seen, types);
                 }
             }
-            TypeDetail::Push(inner) | TypeDetail::Pull(inner) => visit(inner, seen, types),
+            TypeDetail::Tx(inner) | TypeDetail::Pull(inner) => visit(inner, seen, types),
             _ => {}
         }
     }
@@ -567,7 +567,7 @@ fn generate_dispatcher(service: &ServiceDetail) -> String {
 
 /// Check if a type is a stream (Push or Pull).
 fn is_stream(ty: &TypeDetail) -> bool {
-    matches!(ty, TypeDetail::Push(_) | TypeDetail::Pull(_))
+    matches!(ty, TypeDetail::Tx(_) | TypeDetail::Pull(_))
 }
 
 /// Convert TypeDetail to base Swift type (non-streaming, non-perspective-aware).
@@ -608,7 +608,7 @@ fn swift_type_base(ty: &TypeDetail) -> String {
                 .join(", ");
             format!("({inner})")
         }
-        TypeDetail::Push(inner) => format!("Push<{}>", swift_type_base(inner)),
+        TypeDetail::Tx(inner) => format!("Push<{}>", swift_type_base(inner)),
         TypeDetail::Pull(inner) => format!("Pull<{}>", swift_type_base(inner)),
         TypeDetail::Struct {
             name: Some(name), ..
@@ -662,7 +662,7 @@ fn swift_type_base(ty: &TypeDetail) -> String {
 /// Caller uses types as-is: Push = caller sends, Pull = caller receives.
 fn swift_type_client_arg(ty: &TypeDetail) -> String {
     match ty {
-        TypeDetail::Push(inner) => format!("Push<{}>", swift_type_base(inner)),
+        TypeDetail::Tx(inner) => format!("Push<{}>", swift_type_base(inner)),
         TypeDetail::Pull(inner) => format!("Pull<{}>", swift_type_base(inner)),
         _ => swift_type_base(ty),
     }
@@ -672,7 +672,7 @@ fn swift_type_client_arg(ty: &TypeDetail) -> String {
 /// Schema types are from CALLER's perspective - no transformation needed.
 fn swift_type_client_return(ty: &TypeDetail) -> String {
     match ty {
-        TypeDetail::Push(inner) => format!("Push<{}>", swift_type_base(inner)),
+        TypeDetail::Tx(inner) => format!("Push<{}>", swift_type_base(inner)),
         TypeDetail::Pull(inner) => format!("Pull<{}>", swift_type_base(inner)),
         _ => swift_type_base(ty),
     }
@@ -686,7 +686,7 @@ fn swift_type_client_return(ty: &TypeDetail) -> String {
 /// r[impl streaming.caller-pov] - Schema is from caller's perspective, server inverts.
 fn swift_type_server_arg(ty: &TypeDetail) -> String {
     match ty {
-        TypeDetail::Push(inner) => format!("Pull<{}>", swift_type_base(inner)),
+        TypeDetail::Tx(inner) => format!("Pull<{}>", swift_type_base(inner)),
         TypeDetail::Pull(inner) => format!("Push<{}>", swift_type_base(inner)),
         _ => swift_type_base(ty),
     }
@@ -696,7 +696,7 @@ fn swift_type_server_arg(ty: &TypeDetail) -> String {
 /// Schema types are from caller's perspective, so we INVERT for handler.
 fn swift_type_server_return(ty: &TypeDetail) -> String {
     match ty {
-        TypeDetail::Push(inner) => format!("Pull<{}>", swift_type_base(inner)),
+        TypeDetail::Tx(inner) => format!("Pull<{}>", swift_type_base(inner)),
         TypeDetail::Pull(inner) => format!("Push<{}>", swift_type_base(inner)),
         _ => swift_type_base(ty),
     }
@@ -814,7 +814,7 @@ fn generate_encode_expr(ty: &TypeDetail, expr: &str) -> String {
             let item_encode = generate_encode_expr(element, "$0");
             format!("encodeVec({expr}, encoder: {{ {item_encode} }})")
         }
-        TypeDetail::Push(_) | TypeDetail::Pull(_) => {
+        TypeDetail::Tx(_) | TypeDetail::Pull(_) => {
             // Streaming types encode as stream ID (u64)
             // r[impl streaming.type]
             format!("encodeVarint({expr}.streamId)")
@@ -938,7 +938,7 @@ fn generate_decode_stmt(ty: &TypeDetail, var_name: &str, offset_var: &str) -> St
                 "let {var_name} = try decodeVec(from: payload, offset: &{offset_var}, decoder: {inner_decode})"
             )
         }
-        TypeDetail::Push(_) | TypeDetail::Pull(_) => {
+        TypeDetail::Tx(_) | TypeDetail::Pull(_) => {
             // Streaming types decode as stream ID (u64)
             // r[impl streaming.type]
             format!(
@@ -1091,7 +1091,7 @@ mod tests {
     #[test]
     fn test_swift_type_streaming_client() {
         // Client uses Push to send, Pull to receive (no inversion)
-        let push_ty = TypeDetail::Push(Box::new(TypeDetail::String));
+        let push_ty = TypeDetail::Tx(Box::new(TypeDetail::String));
         assert_eq!(swift_type_client_arg(&push_ty), "Push<String>");
 
         let pull_ty = TypeDetail::Pull(Box::new(TypeDetail::U32));
@@ -1102,7 +1102,7 @@ mod tests {
     fn test_swift_type_streaming_server() {
         // Server inverts: Push becomes Pull (receives), Pull becomes Push (sends)
         // r[impl streaming.caller-pov]
-        let push_ty = TypeDetail::Push(Box::new(TypeDetail::String));
+        let push_ty = TypeDetail::Tx(Box::new(TypeDetail::String));
         assert_eq!(swift_type_server_arg(&push_ty), "Pull<String>");
 
         let pull_ty = TypeDetail::Pull(Box::new(TypeDetail::U32));
@@ -1148,7 +1148,7 @@ mod tests {
                 method_name: "upload".into(),
                 args: vec![ArgDetail {
                     name: "data".into(),
-                    type_info: TypeDetail::Push(Box::new(TypeDetail::Bytes)),
+                    type_info: TypeDetail::Tx(Box::new(TypeDetail::Bytes)),
                 }],
                 return_type: TypeDetail::U64,
                 doc: None,

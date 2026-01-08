@@ -122,7 +122,7 @@ pub fn encode_type(ty: &TypeDetail, out: &mut Vec<u8>) {
                 encode_type(item, out);
             }
         }
-        TypeDetail::Push(inner) => {
+        TypeDetail::Tx(inner) => {
             out.push(sig::PUSH);
             encode_type(inner, out);
         }

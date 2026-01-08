@@ -98,10 +98,10 @@ pub enum TypeDetail {
     Set(Box<TypeDetail>) = 36,
     Tuple(Vec<TypeDetail>) = 37,
 
-    /// Push stream: caller sends data to callee.
+    /// Tx stream: caller sends data to callee.
     ///
-    /// r[impl core.stream] - `Push<T>` represents data flowing from caller to callee.
-    Push(Box<TypeDetail>) = 38,
+    /// r[impl core.stream] - `Tx<T>` represents data flowing from caller to callee.
+    Tx(Box<TypeDetail>) = 38,
 
     /// Pull stream: callee sends data to caller.
     ///
@@ -158,7 +158,7 @@ impl TypeDetail {
             TypeDetail::List(inner)
             | TypeDetail::Set(inner)
             | TypeDetail::Option(inner)
-            | TypeDetail::Push(inner)
+            | TypeDetail::Tx(inner)
             | TypeDetail::Pull(inner) => inner.visit(visitor),
             TypeDetail::Array { element, .. } => element.visit(visitor),
             TypeDetail::Map { key, value } => key.visit(visitor) && value.visit(visitor),

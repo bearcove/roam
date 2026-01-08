@@ -2,7 +2,7 @@
 
 use facet::Facet;
 use roam::service;
-use roam::session::{Pull, Push};
+use roam::session::{Pull, Tx};
 
 /// Simple echo service for conformance testing.
 #[service]
@@ -78,15 +78,15 @@ pub enum Message {
 
 /// Streaming service for cross-language conformance testing.
 ///
-/// Tests Push/Pull semantics, stream lifecycle, and bidirectional streaming.
+/// Tests Tx/Pull semantics, stream lifecycle, and bidirectional streaming.
 /// r[impl streaming.caller-pov] - Types are from caller's perspective.
 #[service]
 pub trait Streaming {
     /// Client pushes numbers, server returns their sum.
     ///
-    /// Tests: client-to-server streaming (`Push<T>` → scalar return).
+    /// Tests: client-to-server streaming (`Tx<T>` → scalar return).
     /// r[impl streaming.client-to-server] - Client sends stream, server returns scalar.
-    async fn sum(&self, numbers: Push<i32>) -> i64;
+    async fn sum(&self, numbers: Tx<i32>) -> i64;
 
     /// Client sends a count, server streams that many numbers back.
     ///
@@ -96,14 +96,14 @@ pub trait Streaming {
 
     /// Client pushes strings, server echoes each back.
     ///
-    /// Tests: bidirectional streaming (`Push<T>` ↔ `Pull<T>`).
+    /// Tests: bidirectional streaming (`Tx<T>` ↔ `Pull<T>`).
     /// r[impl streaming.bidirectional] - Both sides stream simultaneously.
-    async fn pipe(&self, input: Push<String>, output: Pull<String>);
+    async fn pipe(&self, input: Tx<String>, output: Pull<String>);
 
     /// Client pushes numbers, server returns (sum, count, average).
     ///
     /// Tests: aggregating a stream into a compound result.
-    async fn stats(&self, numbers: Push<i32>) -> (i64, u64, f64);
+    async fn stats(&self, numbers: Tx<i32>) -> (i64, u64, f64);
 }
 
 /// Complex types service for testing struct/enum encoding.

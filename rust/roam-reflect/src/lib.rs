@@ -81,7 +81,7 @@ impl Ctx {
                 ));
             };
             let inner = self.type_detail_from_shape(tp.shape)?;
-            return Ok(TypeDetail::Push(Box::new(inner)));
+            return Ok(TypeDetail::Tx(Box::new(inner)));
         }
 
         // roam-specific wire mapping for Pull<T> (callee→caller stream).
@@ -411,7 +411,7 @@ fn has_attr(attrs: &'static [Attr], ns: Option<&'static str>, key: &str) -> bool
 fn contains_stream(td: &TypeDetail) -> bool {
     let mut found = false;
     td.visit(&mut |t| {
-        if matches!(t, TypeDetail::Push(_) | TypeDetail::Pull(_)) {
+        if matches!(t, TypeDetail::Tx(_) | TypeDetail::Pull(_)) {
             found = true;
             false // Stop visiting
         } else {
@@ -424,7 +424,7 @@ fn contains_stream(td: &TypeDetail) -> bool {
 /// Format a TypeDetail for error messages
 fn format_type_detail(td: &TypeDetail) -> String {
     match td {
-        TypeDetail::Push(inner) => format!("Push<{}>", format_type_detail(inner)),
+        TypeDetail::Tx(inner) => format!("Push<{}>", format_type_detail(inner)),
         TypeDetail::Pull(inner) => format!("Pull<{}>", format_type_detail(inner)),
         TypeDetail::List(inner) => format!("List<{}>", format_type_detail(inner)),
         TypeDetail::Option(inner) => format!("Option<{}>", format_type_detail(inner)),
@@ -571,7 +571,7 @@ mod tests {
     #[test]
     fn rejects_stream_in_error_type() {
         // Test that contains_stream correctly detects Push in TypeDetail
-        let push_detail = TypeDetail::Push(Box::new(TypeDetail::String));
+        let push_detail = TypeDetail::Tx(Box::new(TypeDetail::String));
         assert!(contains_stream(&push_detail), "Should detect Push");
 
         // Test that contains_stream correctly detects Pull in TypeDetail
@@ -579,7 +579,7 @@ mod tests {
         assert!(contains_stream(&pull_detail), "Should detect Pull");
 
         // Test nested case
-        let nested = TypeDetail::List(Box::new(TypeDetail::Push(Box::new(TypeDetail::U8))));
+        let nested = TypeDetail::List(Box::new(TypeDetail::Tx(Box::new(TypeDetail::U8))));
         assert!(contains_stream(&nested), "Should detect nested Push");
     }
 
@@ -587,7 +587,7 @@ mod tests {
     #[test]
     fn stream_detection_works() {
         // Test that contains_stream correctly identifies Push types
-        assert!(contains_stream(&TypeDetail::Push(Box::new(
+        assert!(contains_stream(&TypeDetail::Tx(Box::new(
             TypeDetail::String
         ))));
 
@@ -598,7 +598,7 @@ mod tests {
 
         // Test nested in various containers
         assert!(contains_stream(&TypeDetail::List(Box::new(
-            TypeDetail::Push(Box::new(TypeDetail::U8))
+            TypeDetail::Tx(Box::new(TypeDetail::U8))
         ))));
         assert!(contains_stream(&TypeDetail::Option(Box::new(
             TypeDetail::Pull(Box::new(TypeDetail::Bool))
@@ -611,12 +611,12 @@ mod tests {
         ))));
     }
 
-    // r[verify streaming.type] - Push<T> generates TypeDetail::Push(T)
+    // r[verify streaming.type] - Push<T> generates TypeDetail::Tx(T)
     #[test]
     fn push_generates_push_type() {
-        use roam_session::Push;
-        let td = type_detail::<Push<String>>().unwrap();
-        assert_eq!(td, TypeDetail::Push(Box::new(TypeDetail::String)));
+        use roam_session::Tx;
+        let td = type_detail::<Tx<String>>().unwrap();
+        assert_eq!(td, TypeDetail::Tx(Box::new(TypeDetail::String)));
     }
 
     // r[verify streaming.type] - Pull<T> generates TypeDetail::Pull(T)
@@ -630,8 +630,8 @@ mod tests {
     // r[verify streaming.type] - Nested streams generate nested TypeDetail
     #[test]
     fn nested_stream_generates_nested_type() {
-        use roam_session::Push;
-        let td = type_detail::<Push<Vec<u8>>>().unwrap();
-        assert_eq!(td, TypeDetail::Push(Box::new(TypeDetail::Bytes)));
+        use roam_session::Tx;
+        let td = type_detail::<Tx<Vec<u8>>>().unwrap();
+        assert_eq!(td, TypeDetail::Tx(Box::new(TypeDetail::Bytes)));
     }
 }

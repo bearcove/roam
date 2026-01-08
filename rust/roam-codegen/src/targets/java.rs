@@ -229,7 +229,7 @@ fn java_type(ty: &TypeDetail) -> String {
             }
         }
         // Push: caller sends data to callee
-        TypeDetail::Push(inner) => {
+        TypeDetail::Tx(inner) => {
             format!("java.util.concurrent.Flow.Subscriber<{}>", java_type(inner))
         }
         // Pull: callee sends data to caller

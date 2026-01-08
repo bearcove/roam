@@ -79,7 +79,7 @@ pub enum OutgoingMessage {
 
 /// Sender handle for outgoing stream data.
 ///
-/// This is the internal channel that `Push<T>` writes to.
+/// This is the internal channel that `Tx<T>` writes to.
 /// The connection layer reads from the corresponding receiver.
 #[derive(Clone)]
 pub struct OutgoingSender {
@@ -120,7 +120,7 @@ impl OutgoingSender {
         result
     }
 
-    /// Send close signal (used by Push Drop impl).
+    /// Send close signal (used by Tx Drop impl).
     ///
     /// r[impl streaming.lifecycle.caller-closes-pushes] - Caller sends Close when done.
     pub fn send_close(&self) {
@@ -131,20 +131,20 @@ impl OutgoingSender {
     }
 }
 
-/// Push stream handle - caller sends data to callee.
+/// Tx stream handle - caller sends data to callee.
 ///
-/// r[impl streaming.caller-pov] - From caller's perspective, Push means "I send".
+/// r[impl streaming.caller-pov] - From caller's perspective, Tx means "I send".
 /// r[impl streaming.type] - Serializes as u64 stream ID on wire.
 /// r[impl streaming.holder-semantics] - The holder sends on this stream.
-/// r[impl streaming.streams-outlive-response] - Push streams may outlive Response.
+/// r[impl streaming.streams-outlive-response] - Tx streams may outlive Response.
 /// r[impl streaming.lifecycle.immediate-data] - Can send Data before Response.
 /// r[impl streaming.lifecycle.speculative] - Early Data may be wasted on error.
 ///
 /// When dropped, a Close message is sent automatically.
 ///
-/// This type implements `Facet` manually with the `roam::push` attribute marker
-/// so that `roam_reflect::type_detail` recognizes it and generates `TypeDetail::Push`.
-pub struct Push<T: Facet<'static>> {
+/// This type implements `Facet` manually with the `roam::tx` attribute marker
+/// so that `roam_reflect::type_detail` recognizes it and generates `TypeDetail::Tx`.
+pub struct Tx<T: Facet<'static>> {
     /// The unique stream ID for this stream.
     stream_id: StreamId,
     /// Channel sender for outgoing data.
@@ -153,37 +153,37 @@ pub struct Push<T: Facet<'static>> {
     _marker: PhantomData<fn(T)>,
 }
 
-/// Static marker for the roam::push attribute.
-static PUSH_MARKER: () = ();
+/// Static marker for the roam::tx attribute.
+static TX_MARKER: () = ();
 
 /// Static marker for the roam::pull attribute.
 static PULL_MARKER: () = ();
 
-/// Static attribute array for roam::push marker.
-static ROAM_PUSH_ATTRS: [Attr; 1] = [Attr::new(Some("roam"), "push", &PUSH_MARKER)];
+/// Static attribute array for roam::tx marker.
+static ROAM_TX_ATTRS: [Attr; 1] = [Attr::new(Some("roam"), "tx", &TX_MARKER)];
 
 /// Static attribute array for roam::pull marker.
 static ROAM_PULL_ATTRS: [Attr; 1] = [Attr::new(Some("roam"), "pull", &PULL_MARKER)];
 
-// SAFETY: Push<T> is a handle type that doesn't expose T directly in its shape.
-// The roam::push attribute marks it for special handling by roam_reflect.
+// SAFETY: Tx<T> is a handle type that doesn't expose T directly in its shape.
+// The roam::tx attribute marks it for special handling by roam_reflect.
 #[allow(unsafe_code)]
-unsafe impl<T: Facet<'static>> Facet<'static> for Push<T> {
+unsafe impl<T: Facet<'static>> Facet<'static> for Tx<T> {
     const SHAPE: &'static Shape = &const {
-        ShapeBuilder::for_sized::<Push<T>>("Push")
+        ShapeBuilder::for_sized::<Tx<T>>("Tx")
             .ty(Type::User(UserType::Opaque))
             .def(Def::Scalar)
             .type_params(&[TypeParam {
                 name: "T",
                 shape: T::SHAPE,
             }])
-            .attributes(&ROAM_PUSH_ATTRS)
+            .attributes(&ROAM_TX_ATTRS)
             .build()
     };
 }
 
-impl<T: Facet<'static>> Push<T> {
-    /// Create a new Push stream with the given sender.
+impl<T: Facet<'static>> Tx<T> {
+    /// Create a new Tx stream with the given sender.
     pub fn new(sender: OutgoingSender) -> Self {
         Self {
             stream_id: sender.stream_id(),
@@ -200,41 +200,41 @@ impl<T: Facet<'static>> Push<T> {
     /// Send a value on this stream.
     ///
     /// r[impl streaming.data] - Data messages carry serialized values.
-    pub async fn send(&self, value: &T) -> Result<(), PushError> {
-        let bytes = facet_postcard::to_vec(value).map_err(PushError::Serialize)?;
+    pub async fn send(&self, value: &T) -> Result<(), TxError> {
+        let bytes = facet_postcard::to_vec(value).map_err(TxError::Serialize)?;
         self.sender
             .send_data(bytes)
             .await
-            .map_err(|_| PushError::Closed)
+            .map_err(|_| TxError::Closed)
     }
 }
 
-impl<T: Facet<'static>> Drop for Push<T> {
-    /// r[impl streaming.lifecycle.caller-closes-pushes] - Send Close when Push is dropped.
+impl<T: Facet<'static>> Drop for Tx<T> {
+    /// r[impl streaming.lifecycle.caller-closes-pushes] - Send Close when Tx is dropped.
     fn drop(&mut self) {
         self.sender.send_close();
     }
 }
 
-/// Error when sending on a Push stream.
+/// Error when sending on a Tx stream.
 #[derive(Debug)]
-pub enum PushError {
+pub enum TxError {
     /// Failed to serialize the value.
     Serialize(facet_postcard::SerializeError),
     /// The stream channel is closed.
     Closed,
 }
 
-impl std::fmt::Display for PushError {
+impl std::fmt::Display for TxError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            PushError::Serialize(e) => write!(f, "serialize error: {e}"),
-            PushError::Closed => write!(f, "stream closed"),
+            TxError::Serialize(e) => write!(f, "serialize error: {e}"),
+            TxError::Closed => write!(f, "stream closed"),
         }
     }
 }
 
-impl std::error::Error for PushError {}
+impl std::error::Error for TxError {}
 
 /// Pull stream handle - caller receives data from callee.
 ///
@@ -346,7 +346,7 @@ pub enum OutgoingPoll {
 /// Registry of active streams for a connection.
 ///
 /// Handles both incoming streams (Data from wire → `Pull<T>`) and
-/// outgoing streams (`Push<T>` → Data to wire).
+/// outgoing streams (`Tx<T>` → Data to wire).
 ///
 /// r[impl streaming.unknown] - Unknown stream IDs cause Goodbye.
 pub struct StreamRegistry {
@@ -354,8 +354,8 @@ pub struct StreamRegistry {
     /// Key: stream_id, Value: sender to route Data payloads to the `Pull<T>`.
     incoming: HashMap<StreamId, mpsc::Sender<Vec<u8>>>,
 
-    /// Streams where we send Data messages (backing `Push<T>` handles on our side).
-    /// Key: stream_id, Value: receiver to drain data from `Push<T>`.
+    /// Streams where we send Data messages (backing `Tx<T>` handles on our side).
+    /// Key: stream_id, Value: receiver to drain data from `Tx<T>`.
     outgoing: HashMap<StreamId, mpsc::Receiver<OutgoingMessage>>,
 
     /// Stream IDs that have been closed.
@@ -436,7 +436,7 @@ impl StreamRegistry {
         rx
     }
 
-    /// Register an outgoing stream and return the sender for `Push<T>`.
+    /// Register an outgoing stream and return the sender for `Tx<T>`.
     ///
     /// The connection layer will drain messages from this channel and send
     /// them as Data/Close wire messages.
@@ -664,7 +664,7 @@ impl Default for RequestIdGenerator {
 
 /// Trait for dispatching requests to a service.
 pub trait ServiceDispatcher: Send + Sync {
-    /// Check if a method uses streaming (Push/Pull arguments).
+    /// Check if a method uses streaming (Tx/Pull arguments).
     ///
     /// Returns true if the method has any streaming arguments that require
     /// channel setup before dispatch.
@@ -687,8 +687,8 @@ pub trait ServiceDispatcher: Send + Sync {
     ///
     /// For streaming methods, the dispatcher must:
     /// - Decode stream IDs from the payload
-    /// - Register streams with the registry (incoming for Push args, outgoing for Pull args)
-    /// - Create Push/Pull handles from the registry
+    /// - Register streams with the registry (incoming for Tx args, outgoing for Pull args)
+    /// - Create Tx/Pull handles from the registry
     /// - Call the handler method with those handles
     /// - Serialize the response
     ///
@@ -866,11 +866,11 @@ mod tests {
     // r[verify streaming.holder-semantics]
     #[tokio::test]
     async fn push_serializes_and_pull_deserializes() {
-        // Create a channel pair for Push → Pull communication
+        // Create a channel pair for Tx → Pull communication
         let (tx, rx) = mpsc::channel::<Vec<u8>>(10);
         let notify = Arc::new(Notify::new());
 
-        // Wrap in Push/Pull types (normally StreamRegistry would do this)
+        // Wrap in Tx/Pull types (normally StreamRegistry would do this)
         let outgoing_sender = OutgoingSender::new(
             42,
             {
@@ -892,19 +892,19 @@ mod tests {
             notify,
         );
 
-        let push: Push<i32> = Push::new(outgoing_sender);
+        let tx: Tx<i32> = Tx::new(outgoing_sender);
         let mut pull: Pull<i32> = Pull::new(42, rx);
 
-        assert_eq!(push.stream_id(), 42);
+        assert_eq!(tx.stream_id(), 42);
         assert_eq!(pull.stream_id(), 42);
 
-        push.send(&100).await.unwrap();
-        push.send(&200).await.unwrap();
+        tx.send(&100).await.unwrap();
+        tx.send(&200).await.unwrap();
 
         assert_eq!(pull.recv().await.unwrap(), Some(100));
         assert_eq!(pull.recv().await.unwrap(), Some(200));
 
-        drop(push);
+        drop(tx);
         // Give the spawned task time to process the Close message
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         assert_eq!(pull.recv().await.unwrap(), None); // channel closed
@@ -916,13 +916,13 @@ mod tests {
         let mut registry = StreamRegistry::new();
         let sender = registry.register_outgoing(42);
 
-        let push: Push<i32> = Push::new(sender);
+        let tx: Tx<i32> = Tx::new(sender);
 
         // Send some data
-        push.send(&100).await.unwrap();
+        tx.send(&100).await.unwrap();
 
-        // Drop the push - should trigger Close
-        drop(push);
+        // Drop the tx - should trigger Close
+        drop(tx);
 
         // Poll should return Data first, then Close
         match registry.poll_outgoing() {

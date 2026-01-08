@@ -186,7 +186,7 @@ fn py_type(ty: &TypeDetail) -> String {
             format!("tuple[{inner}]")
         }
         // Push: caller sends data to callee
-        TypeDetail::Push(inner) => format!("AsyncGenerator[{}, None, None]", py_type(inner)),
+        TypeDetail::Tx(inner) => format!("AsyncGenerator[{}, None, None]", py_type(inner)),
         // Pull: callee sends data to caller
         TypeDetail::Pull(inner) => format!("AsyncIterator[{}]", py_type(inner)),
         TypeDetail::Struct { fields, .. } => {

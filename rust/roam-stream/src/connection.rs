@@ -322,7 +322,7 @@ where
                     return Err(self.goodbye(rule_id).await);
                 }
 
-                // Dispatch to service - use streaming dispatch if method has Push/Pull args
+                // Dispatch to service - use streaming dispatch if method has Tx/Pull args
                 if dispatcher.is_streaming(method_id) {
                     // For streaming methods, we need to continue processing messages
                     // (Data, Close) while the handler runs. The handler reads from

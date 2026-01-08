@@ -60,7 +60,7 @@ mod tests {
         fn range(
             &self,
             count: u32,
-            output: Push<u32>,
+            output: Tx<u32>,
         ) -> impl std::future::Future<Output = Result<(), Box<dyn std::error::Error + Send + Sync>>> + Send
         {
             async move {

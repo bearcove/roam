@@ -2,7 +2,7 @@
 //!
 //! Serves Echo and Complex services over WebSocket for cross-language testing.
 
-use roam::session::{Pull, Push};
+use roam::session::{Pull, Tx};
 use roam_stream::{Hello, RoutedDispatcher};
 use roam_websocket::{WsTransport, ws_accept};
 use spec_proto::{Canvas, Color, Message, Person, Point, Rectangle, Shape};
@@ -179,7 +179,7 @@ impl streaming::StreamingHandler for StreamingService {
     fn range(
         &self,
         count: u32,
-        output: Push<u32>,
+        output: Tx<u32>,
     ) -> impl Future<Output = Result<(), Box<dyn std::error::Error + Send + Sync>>> + Send {
         async move {
             for i in 0..count {
@@ -192,7 +192,7 @@ impl streaming::StreamingHandler for StreamingService {
     fn pipe(
         &self,
         mut input: Pull<String>,
-        output: Push<String>,
+        output: Tx<String>,
     ) -> impl Future<Output = Result<(), Box<dyn std::error::Error + Send + Sync>>> + Send {
         async move {
             while let Some(s) = input.recv().await? {
