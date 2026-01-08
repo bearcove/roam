@@ -247,7 +247,7 @@ impl<'a> RustGenerator<'a> {
         let client_struct = self.scope.new_struct(&client_name);
         client_struct.vis("pub");
         client_struct.derive("Clone");
-        client_struct.doc(&format!("Client for {service_name} service.\n\nWraps a [`ConnectionHandle`] and provides typed methods for each RPC."));
+        client_struct.doc(&format!("Client for {service_name} service.\n\nWraps a `ConnectionHandle` and provides typed methods for each RPC."));
         client_struct.field("handle", "::roam::session::ConnectionHandle");
 
         // Generate impl block
