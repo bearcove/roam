@@ -63,6 +63,8 @@ facet-postcard = { git = "https://github.com/facet-rs/facet", branch = "main", f
 facet-cargo-toml = { git = "https://github.com/bearcove/facet-cargo-toml", branch = "main" }
 
 # Tracing
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 static_assertions = "1.1.0"
 
 # Test utilities

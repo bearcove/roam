@@ -5,6 +5,7 @@
 
 use roam::session::{Rx, Tx};
 use roam_stream::Server;
+use tracing::{debug, error, info, instrument};
 
 // Re-export types from spec_proto for use in generated code
 pub use spec_proto::{Canvas, Color, Message, Person, Point, Rectangle, Shape};
@@ -21,11 +22,15 @@ impl testbed::Testbed for TestbedService {
     // Unary methods
     // ========================================================================
 
+    #[instrument(skip(self))]
     async fn echo(&self, message: String) -> Result<String, testbed::RoamError<testbed::Never>> {
+        info!("echo called");
         Ok(message)
     }
 
+    #[instrument(skip(self))]
     async fn reverse(&self, message: String) -> Result<String, testbed::RoamError<testbed::Never>> {
+        info!("reverse called");
         Ok(message.chars().rev().collect())
     }
 
@@ -33,33 +38,48 @@ impl testbed::Testbed for TestbedService {
     // Streaming methods
     // ========================================================================
 
+    #[instrument(skip(self, numbers))]
     async fn sum(&self, mut numbers: Rx<i32>) -> Result<i64, testbed::RoamError<testbed::Never>> {
+        info!("sum called, starting to receive numbers");
         let mut total: i64 = 0;
         while let Some(n) = numbers.recv().await.ok().flatten() {
+            debug!(n, total, "received number");
             total += n as i64;
         }
+        info!(total, "sum complete");
         Ok(total)
     }
 
+    #[instrument(skip(self, output))]
     async fn generate(
         &self,
         count: u32,
         output: Tx<i32>,
     ) -> Result<(), testbed::RoamError<testbed::Never>> {
+        info!(count, "generate called");
         for i in 0..count as i32 {
-            let _ = output.send(&i).await;
+            debug!(i, "sending value");
+            match output.send(&i).await {
+                Ok(()) => debug!(i, "sent OK"),
+                Err(e) => error!(i, ?e, "send failed"),
+            }
         }
+        info!("generate complete");
         Ok(())
     }
 
+    #[instrument(skip(self, input, output))]
     async fn transform(
         &self,
         mut input: Rx<String>,
         output: Tx<String>,
     ) -> Result<(), testbed::RoamError<testbed::Never>> {
+        info!("transform called");
         while let Some(s) = input.recv().await.ok().flatten() {
+            debug!(?s, "transforming");
             let _ = output.send(&s).await;
         }
+        info!("transform complete");
         Ok(())
     }
 
@@ -156,6 +176,17 @@ impl testbed::Testbed for TestbedService {
 }
 
 fn main() -> Result<(), String> {
+    // Initialize tracing subscriber (respects RUST_LOG env var)
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::from_default_env()
+                .add_directive(tracing::Level::INFO.into()),
+        )
+        .with_writer(std::io::stderr)
+        .init();
+
+    info!("subject-rust starting");
+
     // Manual runtime (avoid tokio-macros / syn).
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()

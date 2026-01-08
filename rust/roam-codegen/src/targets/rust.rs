@@ -251,6 +251,7 @@ impl<'a> RustGenerator<'a> {
 /// 2. Binds any streams via the registry
 /// 3. Clones handler into a boxed future
 /// 4. Calls the handler method and serializes the response
+/// 5. For Tx<T> args: waits for drain tasks to complete before returning
 fn generate_dispatch_method_fn(
     impl_block: &mut Impl,
     method: &MethodDetail,
@@ -276,6 +277,14 @@ fn generate_dispatch_method_fn(
 
     // Check if method has streams
     let has_streams = method.args.iter().any(|a| is_stream(a.ty)) || is_stream(method.return_type);
+
+    // Collect Tx arg names for drain task handling
+    let tx_arg_names: Vec<String> = method
+        .args
+        .iter()
+        .filter(|a| is_tx(a.ty))
+        .map(|a| a.name.to_snake_case())
+        .collect();
 
     // Start building the function body as a string (easier for complex logic)
     let mut body = String::new();
@@ -316,7 +325,8 @@ fn generate_dispatch_method_fn(
             ));
         } else if is_tx(arg.ty) {
             // Tx<T> = server sends to client
-            // Create channel, spawn drain task that sends Data messages, give handler Tx
+            // Create channel and Tx handle. Drain task is spawned inside the async block
+            // so we can join on it before returning.
             let inner_type = arg
                 .ty
                 .type_params
@@ -324,29 +334,18 @@ fn generate_dispatch_method_fn(
                 .map(|p| rust_type_base(p.shape))
                 .unwrap_or_else(|| "()".to_string());
             body.push_str(&format!(
-                "let ({arg_name}_tx, mut {arg_name}_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(64);\n"
+                "let ({arg_name}_tx, {arg_name}_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(64);\n"
             ));
             body.push_str(&format!("let {arg_name}_stream_id = {arg_name};\n"));
-            // Spawn drain task that reads from rx and sends Data messages
-            body.push_str("{\n");
-            body.push_str("    let outgoing_tx = registry.outgoing_tx();\n");
-            body.push_str("    tokio::spawn(async move {\n");
-            body.push_str(&format!(
-                "        while let Some(data) = {arg_name}_rx.recv().await {{\n"
-            ));
-            body.push_str(&format!(
-                "            let _ = outgoing_tx.send(::roam::session::OutgoingStreamMessage::Data {{ stream_id: {arg_name}_stream_id, payload: data }}).await;\n"
-            ));
-            body.push_str("        }\n");
-            body.push_str(&format!(
-                "        let _ = outgoing_tx.send(::roam::session::OutgoingStreamMessage::Close {{ stream_id: {arg_name}_stream_id }}).await;\n"
-            ));
-            body.push_str("    });\n");
-            body.push_str("}\n");
             body.push_str(&format!(
                 "let {arg_name} = Tx::<{inner_type}>::new({arg_name}_stream_id, {arg_name}_tx);\n"
             ));
         }
+    }
+
+    // Get outgoing_tx if we have Tx args
+    if !tx_arg_names.is_empty() {
+        body.push_str("let outgoing_tx = registry.outgoing_tx();\n");
     }
 
     // Clone handler for 'static future
@@ -355,9 +354,37 @@ fn generate_dispatch_method_fn(
     // Build async block
     let args_str = arg_names.join(", ");
     body.push_str("Box::pin(async move {\n");
+
+    // Spawn drain tasks for each Tx arg and collect JoinHandles
+    for tx_arg in &tx_arg_names {
+        body.push_str(&format!("    let {tx_arg}_drain = {{\n"));
+        body.push_str(&format!("        let mut rx = {tx_arg}_rx;\n"));
+        body.push_str(&format!("        let stream_id = {tx_arg}_stream_id;\n"));
+        body.push_str("        let tx = outgoing_tx.clone();\n");
+        body.push_str("        tokio::spawn(async move {\n");
+        body.push_str("            while let Some(data) = rx.recv().await {\n");
+        body.push_str("                let _ = tx.send(::roam::session::OutgoingStreamMessage::Data { stream_id, payload: data }).await;\n");
+        body.push_str("            }\n");
+        body.push_str("            let _ = tx.send(::roam::session::OutgoingStreamMessage::Close { stream_id }).await;\n");
+        body.push_str("        })\n");
+        body.push_str("    };\n");
+    }
+
+    // Call handler (Tx handles are moved into handler and dropped when it completes,
+    // which closes the channel and signals the drain tasks to finish)
     body.push_str(&format!(
-        "    match handler.{method_name}({args_str}).await {{\n"
+        "    let result = handler.{method_name}({args_str}).await;\n"
     ));
+
+    // Wait for all drain tasks to complete before encoding response.
+    // The handler has finished and dropped its Tx handles, so the drain tasks
+    // will see channel closure and finish sending Close messages.
+    for tx_arg in &tx_arg_names {
+        body.push_str(&format!("    let _ = {tx_arg}_drain.await;\n"));
+    }
+
+    // Encode response
+    body.push_str("    match result {\n");
     body.push_str("        Ok(result) => {\n");
     body.push_str("            let mut out = vec![0u8];\n");
     body.push_str(
