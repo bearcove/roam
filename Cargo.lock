@@ -681,6 +681,7 @@ dependencies = [
  "autocfg",
  "facet-core 0.42.0 (git+https://github.com/facet-rs/facet?branch=main)",
  "facet-macros 0.42.0 (git+https://github.com/facet-rs/facet?branch=main)",
+ "facet-reflect 0.42.0 (git+https://github.com/facet-rs/facet?branch=main)",
 ]
 
 [[package]]

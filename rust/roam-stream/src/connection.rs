@@ -11,7 +11,7 @@
 use std::collections::HashSet;
 use std::time::Duration;
 
-use roam_session::{Role, StreamError, StreamIdAllocator, StreamRegistry};
+use roam_session::{OutgoingStreamMessage, Role, StreamError, StreamIdAllocator, StreamRegistry};
 use roam_wire::{Hello, Message};
 
 use crate::transport::MessageTransport;
@@ -75,6 +75,8 @@ pub struct Connection<T> {
     /// Spawned tasks send (request_id, result) when they complete.
     streaming_results_tx: tokio::sync::mpsc::Sender<StreamingResult>,
     streaming_results_rx: tokio::sync::mpsc::Receiver<StreamingResult>,
+    /// Channel for receiving outgoing stream messages (Data/Close) from spawned tasks.
+    outgoing_stream_rx: tokio::sync::mpsc::Receiver<OutgoingStreamMessage>,
 }
 
 impl<T> Connection<T> {
@@ -192,6 +194,17 @@ where
                     };
                     self.io.send(&resp).await?;
                     self.in_flight_requests.remove(&request_id);
+                }
+
+                // Handle outgoing stream messages (Data/Close from spawned tasks)
+                Some(msg) = self.outgoing_stream_rx.recv() => {
+                    let wire_msg = match msg {
+                        OutgoingStreamMessage::Data { stream_id, payload } => {
+                            Message::Data { stream_id, payload }
+                        }
+                        OutgoingStreamMessage::Close { stream_id } => Message::Close { stream_id },
+                    };
+                    self.io.send(&wire_msg).await?;
                 }
 
                 // Prioritize incoming messages
@@ -463,17 +476,22 @@ where
     };
 
     let (streaming_results_tx, streaming_results_rx) = tokio::sync::mpsc::channel(64);
+    let (outgoing_stream_tx, outgoing_stream_rx) = tokio::sync::mpsc::channel(64);
     Ok(Connection {
         io,
         role: Role::Acceptor,
         negotiated: negotiated.clone(),
         stream_allocator: StreamIdAllocator::new(Role::Acceptor),
         // r[impl flow.stream.initial-credit] - Use negotiated credit for streams.
-        stream_registry: StreamRegistry::new_with_credit(negotiated.initial_credit),
+        stream_registry: StreamRegistry::new_with_credit(
+            negotiated.initial_credit,
+            outgoing_stream_tx,
+        ),
         in_flight_requests: HashSet::new(),
         our_hello,
         streaming_results_tx,
         streaming_results_rx,
+        outgoing_stream_rx,
     })
 }
 
@@ -545,16 +563,21 @@ where
     };
 
     let (streaming_results_tx, streaming_results_rx) = tokio::sync::mpsc::channel(64);
+    let (outgoing_stream_tx, outgoing_stream_rx) = tokio::sync::mpsc::channel(64);
     Ok(Connection {
         io,
         role: Role::Initiator,
         negotiated: negotiated.clone(),
         stream_allocator: StreamIdAllocator::new(Role::Initiator),
         // r[impl flow.stream.initial-credit] - Use negotiated credit for streams.
-        stream_registry: StreamRegistry::new_with_credit(negotiated.initial_credit),
+        stream_registry: StreamRegistry::new_with_credit(
+            negotiated.initial_credit,
+            outgoing_stream_tx,
+        ),
         in_flight_requests: HashSet::new(),
         our_hello,
         streaming_results_tx,
         streaming_results_rx,
+        outgoing_stream_rx,
     })
 }

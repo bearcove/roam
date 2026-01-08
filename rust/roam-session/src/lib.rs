@@ -1005,30 +1005,136 @@ impl ConnectionHandle {
         }
     }
 
-    /// Make a typed RPC call with automatic serialization.
+    /// Make a typed RPC call with automatic serialization and stream binding.
     ///
-    /// Serializes the args using postcard, sends the request, and returns the raw
-    /// response payload bytes for the caller to deserialize.
+    /// Walks the args using Poke reflection to find any `Rx<T>` or `Tx<T>` fields,
+    /// binds stream IDs, and sets up the stream infrastructure before serialization.
     ///
     /// # Arguments
     ///
     /// * `method_id` - The method ID to call
-    /// * `args` - Arguments to serialize (typically a tuple of all method args)
+    /// * `args` - Arguments to serialize (typically a tuple of all method args).
+    ///           Must be mutable so stream IDs can be assigned.
+    ///
+    /// # Stream Binding
+    ///
+    /// For `Rx<T>` in args (caller passes receiver, keeps sender to push data):
+    /// - Allocates a stream ID
+    /// - Takes the receiver and spawns a task to drain it, sending Data messages
+    /// - The caller keeps the `Tx<T>` from `roam::channel()` to send values
+    ///
+    /// For `Tx<T>` in args (caller passes sender, keeps receiver to pull data):
+    /// - Allocates a stream ID
+    /// - Takes the sender and registers for incoming Data routing
+    /// - The caller keeps the `Rx<T>` from `roam::channel()` to receive values
     ///
     /// # Example
     ///
     /// ```ignore
-    /// // For a method add(a: i32, b: i32) -> i32
-    /// let response = handle.call(method_id::ADD, &(2i32, 3i32)).await?;
-    /// let result: CallResult<i32, Never> = facet_postcard::from_slice(&response)?;
+    /// // For a streaming method sum(numbers: Rx<i32>) -> i64
+    /// let (tx, rx) = roam::channel::<i32>();
+    /// let response = handle.call(method_id::SUM, &mut (rx,)).await?;
+    /// // tx.send(&42).await to push values
     /// ```
     pub async fn call<T: Facet<'static>>(
         &self,
         method_id: u64,
-        args: &T,
+        args: &mut T,
     ) -> Result<Vec<u8>, CallError> {
+        // Walk args and bind any streams
+        self.bind_streams(args);
+
         let payload = facet_postcard::to_vec(args).map_err(CallError::Encode)?;
         self.call_raw(method_id, payload).await
+    }
+
+    /// Walk args and bind any Rx<T> or Tx<T> streams.
+    fn bind_streams<T: Facet<'static>>(&self, args: &mut T) {
+        let poke = facet::Poke::new(args);
+        self.bind_streams_recursive(poke);
+    }
+
+    /// Recursively walk a Poke value looking for Rx/Tx streams to bind.
+    fn bind_streams_recursive(&self, poke: facet::Poke<'_, '_>) {
+        let shape = poke.shape();
+
+        // Check if this is an Rx or Tx type
+        if shape.module_path == Some("roam_session") {
+            if shape.type_identifier == "Rx" {
+                self.bind_rx_stream(poke);
+                return;
+            } else if shape.type_identifier == "Tx" {
+                self.bind_tx_stream(poke);
+                return;
+            }
+        }
+
+        // Recurse into struct fields
+        if let Ok(mut ps) = poke.into_struct() {
+            let field_count = ps.field_count();
+            for i in 0..field_count {
+                if let Ok(field_poke) = ps.field(i) {
+                    self.bind_streams_recursive(field_poke);
+                }
+            }
+        }
+        // TODO: Handle tuples, enums, arrays, etc.
+    }
+
+    /// Bind an Rx<T> stream - caller passes receiver, keeps sender.
+    /// We take the receiver and spawn a drain task.
+    fn bind_rx_stream(&self, poke: facet::Poke<'_, '_>) {
+        let stream_id = self.alloc_stream_id();
+
+        if let Ok(mut ps) = poke.into_struct() {
+            // Set stream_id field
+            let _ = ps.set_field_by_name("stream_id", stream_id);
+
+            // Take the receiver from ReceiverSlot
+            if let Ok(mut receiver_field) = ps.field_by_name("receiver") {
+                if let Ok(slot) = receiver_field.get_mut::<ReceiverSlot>() {
+                    if let Some(mut rx) = slot.take() {
+                        // Spawn task to drain rx and send Data messages
+                        let outgoing_tx = self.shared.stream_registry.lock().unwrap().outgoing_tx();
+                        tokio::spawn(async move {
+                            while let Some(data) = rx.recv().await {
+                                let _ = outgoing_tx
+                                    .send(OutgoingStreamMessage::Data {
+                                        stream_id,
+                                        payload: data,
+                                    })
+                                    .await;
+                            }
+                            // Stream ended, send Close
+                            let _ = outgoing_tx
+                                .send(OutgoingStreamMessage::Close { stream_id })
+                                .await;
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    /// Bind a Tx<T> stream - caller passes sender, keeps receiver.
+    /// We take the sender and register for incoming Data routing.
+    fn bind_tx_stream(&self, poke: facet::Poke<'_, '_>) {
+        let stream_id = self.alloc_stream_id();
+
+        if let Ok(mut ps) = poke.into_struct() {
+            // Set stream_id field
+            let _ = ps.set_field_by_name("stream_id", stream_id);
+
+            // Take the sender from SenderSlot
+            if let Ok(mut sender_field) = ps.field_by_name("sender") {
+                if let Ok(slot) = sender_field.get_mut::<SenderSlot>() {
+                    if let Some(tx) = slot.take() {
+                        // Register for incoming Data routing
+                        self.register_incoming(stream_id, tx);
+                    }
+                }
+            }
+        }
     }
 
     /// Make a raw RPC call with pre-serialized payload.
@@ -1211,10 +1317,16 @@ mod tests {
         assert_eq!(val2, 200);
     }
 
+    /// Create a test registry with a dummy outgoing channel.
+    fn test_registry() -> StreamRegistry {
+        let (outgoing_tx, _outgoing_rx) = mpsc::channel(10);
+        StreamRegistry::new(outgoing_tx)
+    }
+
     // r[verify streaming.data-after-close]
     #[tokio::test]
     async fn data_after_close_is_rejected() {
-        let mut registry = StreamRegistry::new();
+        let mut registry = test_registry();
         let (tx, _rx) = mpsc::channel::<Vec<u8>>(10);
         registry.register_incoming(42, tx);
 
@@ -1230,7 +1342,7 @@ mod tests {
     // r[verify streaming.unknown]
     #[tokio::test]
     async fn stream_registry_routes_data_to_registered_stream() {
-        let mut registry = StreamRegistry::new();
+        let mut registry = test_registry();
 
         // Register a stream
         let (tx, mut rx) = mpsc::channel::<Vec<u8>>(10);
@@ -1249,7 +1361,7 @@ mod tests {
     // r[verify streaming.close]
     #[tokio::test]
     async fn stream_registry_close_terminates_stream() {
-        let mut registry = StreamRegistry::new();
+        let mut registry = test_registry();
         let (tx, mut rx) = mpsc::channel::<Vec<u8>>(10);
         registry.register_incoming(42, tx);
 

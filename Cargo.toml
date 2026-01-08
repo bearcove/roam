@@ -60,7 +60,7 @@ tokio = { version = "1", features = ["sync", "rt", "time", "macros"] }
 tokio-tungstenite = "0.26"
 
 # facet ecosystem
-facet = { git = "https://github.com/facet-rs/facet", branch = "main", features = ["camino"] }
+facet = { git = "https://github.com/facet-rs/facet", branch = "main", features = ["camino", "reflect"] }
 facet-core = { git = "https://github.com/facet-rs/facet", branch = "main" }
 facet-postcard = { git = "https://github.com/facet-rs/facet", branch = "main", features = ["jit", "camino"] }
 facet-cargo-toml = { git = "https://github.com/bearcove/facet-cargo-toml", branch = "main" }
