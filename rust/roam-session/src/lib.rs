@@ -1034,32 +1034,31 @@ impl ConnectionHandle {
 
         if let Ok(mut ps) = poke.into_struct() {
             // Set stream_id field by getting mutable access to the u64
-            if let Ok(mut stream_id_field) = ps.field_by_name("stream_id") {
-                if let Ok(id_ref) = stream_id_field.get_mut::<StreamId>() {
-                    *id_ref = stream_id;
-                }
+            if let Ok(mut stream_id_field) = ps.field_by_name("stream_id")
+                && let Ok(id_ref) = stream_id_field.get_mut::<StreamId>()
+            {
+                *id_ref = stream_id;
             }
 
             // Take the receiver from ReceiverSlot
-            if let Ok(mut receiver_field) = ps.field_by_name("receiver") {
-                if let Ok(slot) = receiver_field.get_mut::<ReceiverSlot>() {
-                    if let Some(mut rx) = slot.take() {
-                        // Spawn task to drain rx and send Data messages
-                        let task_tx = self.shared.stream_registry.lock().unwrap().task_tx();
-                        tokio::spawn(async move {
-                            while let Some(data) = rx.recv().await {
-                                let _ = task_tx
-                                    .send(TaskMessage::Data {
-                                        stream_id,
-                                        payload: data,
-                                    })
-                                    .await;
-                            }
-                            // Stream ended, send Close
-                            let _ = task_tx.send(TaskMessage::Close { stream_id }).await;
-                        });
+            if let Ok(mut receiver_field) = ps.field_by_name("receiver")
+                && let Ok(slot) = receiver_field.get_mut::<ReceiverSlot>()
+                && let Some(mut rx) = slot.take()
+            {
+                // Spawn task to drain rx and send Data messages
+                let task_tx = self.shared.stream_registry.lock().unwrap().task_tx();
+                tokio::spawn(async move {
+                    while let Some(data) = rx.recv().await {
+                        let _ = task_tx
+                            .send(TaskMessage::Data {
+                                stream_id,
+                                payload: data,
+                            })
+                            .await;
                     }
-                }
+                    // Stream ended, send Close
+                    let _ = task_tx.send(TaskMessage::Close { stream_id }).await;
+                });
             }
         }
     }
@@ -1071,20 +1070,19 @@ impl ConnectionHandle {
 
         if let Ok(mut ps) = poke.into_struct() {
             // Set stream_id field by getting mutable access to the u64
-            if let Ok(mut stream_id_field) = ps.field_by_name("stream_id") {
-                if let Ok(id_ref) = stream_id_field.get_mut::<StreamId>() {
-                    *id_ref = stream_id;
-                }
+            if let Ok(mut stream_id_field) = ps.field_by_name("stream_id")
+                && let Ok(id_ref) = stream_id_field.get_mut::<StreamId>()
+            {
+                *id_ref = stream_id;
             }
 
             // Take the sender from SenderSlot
-            if let Ok(mut sender_field) = ps.field_by_name("sender") {
-                if let Ok(slot) = sender_field.get_mut::<SenderSlot>() {
-                    if let Some(tx) = slot.take() {
-                        // Register for incoming Data routing
-                        self.register_incoming(stream_id, tx);
-                    }
-                }
+            if let Ok(mut sender_field) = ps.field_by_name("sender")
+                && let Ok(slot) = sender_field.get_mut::<SenderSlot>()
+                && let Some(tx) = slot.take()
+            {
+                // Register for incoming Data routing
+                self.register_incoming(stream_id, tx);
             }
         }
     }

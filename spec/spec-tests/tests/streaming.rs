@@ -184,7 +184,7 @@ fn streaming_generate_server_to_client() {
                     }
                     // Data must arrive BEFORE Response
                     if got_response {
-                        return Err(format!("received Data after Response - protocol violation"));
+                        return Err("received Data after Response - protocol violation".to_string());
                     }
                     let n: i32 = facet_postcard::from_slice(&payload)
                         .map_err(|e| format!("postcard data: {e}"))?;
@@ -196,7 +196,7 @@ fn streaming_generate_server_to_client() {
                     }
                     // Close must arrive BEFORE Response
                     if got_response {
-                        return Err(format!("received Close after Response - protocol violation"));
+                        return Err("received Close after Response - protocol violation".to_string());
                     }
                     got_close = true;
                 }
