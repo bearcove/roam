@@ -7,11 +7,7 @@
     "types": ["node"],
     "allowImportingTsExtensions": true,
     "strict": true,
-    "noEmit": true
+    "noEmit": true,
   },
-  "include": [
-    "packages/*/src/**/*.ts",
-    "subject/**/*.ts",
-    "generated/**/*.ts"
-  ]
+  "include": ["typescript/**/*.ts"],
 }

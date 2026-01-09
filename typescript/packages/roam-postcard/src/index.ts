@@ -3,10 +3,8 @@
 // This module provides encoding/decoding functions compatible with Rust's
 // postcard format (https://postcard.rs/), which uses variable-length integers.
 
-// FIXME: move into its own package
-
-import { encodeVarint, decodeVarint, decodeVarintNumber } from "../binary/varint.ts";
-import { concat } from "../binary/bytes.ts";
+import { encodeVarint, decodeVarint, decodeVarintNumber } from "./binary/varint.ts";
+import { concat } from "./binary/bytes.ts";
 
 // ============================================================================
 // Decode result type

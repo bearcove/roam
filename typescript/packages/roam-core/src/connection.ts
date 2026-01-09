@@ -7,8 +7,12 @@
 // - CobsFramed for TCP (byte streams with COBS framing)
 // - WsTransport for WebSocket (message-oriented transport)
 
-import { concat, encodeBytes, encodeString } from "./binary/bytes.ts";
-import { decodeVarint, decodeVarintNumber, encodeVarint } from "./binary/varint.ts";
+import { concat, encodeBytes, encodeString } from "../../roam-postcard/src/binary/bytes.ts";
+import {
+  decodeVarint,
+  decodeVarintNumber,
+  encodeVarint,
+} from "../../roam-postcard/src/binary/varint.ts";
 import {
   ChannelRegistry,
   ChannelIdAllocator,

@@ -20,7 +20,7 @@ import {
   encodeOption,
   encodeVec,
   encodeVarint,
-} from "./index.ts";
+} from "../../roam-core/src/postcard/index.ts";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -156,7 +156,7 @@ describe("Primitive encoding", () => {
     assertEncoding(encodeBytes(new Uint8Array([])), "primitives/bytes_empty.bin");
     assertEncoding(
       encodeBytes(new Uint8Array([0xde, 0xad, 0xbe, 0xef])),
-      "primitives/bytes_deadbeef.bin"
+      "primitives/bytes_deadbeef.bin",
     );
   });
 

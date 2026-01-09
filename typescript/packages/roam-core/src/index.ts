@@ -2,9 +2,13 @@
 // This package provides the core primitives and dispatcher for roam services.
 
 // Binary encoding primitives
-export { encodeVarint, decodeVarint, decodeVarintNumber } from "./binary/varint.ts";
-export { cobsEncode, cobsDecode } from "./binary/cobs.ts";
-export { concat } from "./binary/bytes.ts";
+export {
+  encodeVarint,
+  decodeVarint,
+  decodeVarintNumber,
+} from "../../roam-postcard/src/binary/varint.ts";
+export { cobsEncode, cobsDecode } from "../../roam-postcard/src/binary/cobs.ts";
+export { concat } from "../../roam-postcard/src/binary/bytes.ts";
 
 // Postcard encoding/decoding - comprehensive type support
 export {
@@ -50,19 +54,24 @@ export {
   // Enum support
   encodeEnumVariant,
   decodeEnumVariant,
-} from "./postcard/index.ts";
+} from "@bearcove/roam-postcard/index.ts";
 
 // Result encoding (for server-side responses)
-import { encodeResultOk, encodeResultErr } from "./postcard/result.ts";
+import { encodeResultOk, encodeResultErr } from "../../roam-postcard/src/result.ts";
 import {
   encodeUnknownMethod,
   encodeInvalidPayload,
   RAPACE_ERROR,
-} from "./postcard/rapace_error.ts";
+} from "../../roam-postcard/src/rapace_error.ts";
 export { encodeResultOk, encodeResultErr, encodeUnknownMethod, encodeInvalidPayload, RAPACE_ERROR };
 
 // RPC error types (for client-side error handling)
-export { RpcError, RpcErrorCode, decodeRpcResult, decodeUserError } from "./postcard/rpc_error.ts";
+export {
+  RpcError,
+  RpcErrorCode,
+  decodeRpcResult,
+  decodeUserError,
+} from "../../roam-postcard/src/rpc_error.ts";
 
 // Channel types
 export {

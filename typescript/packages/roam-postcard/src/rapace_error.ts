@@ -1,4 +1,4 @@
-import { encodeVarint } from "../binary/varint.ts";
+import { encodeVarint } from "./binary/varint.ts";
 
 export const RAPACE_ERROR = {
   USER: 0,
@@ -14,4 +14,3 @@ export function encodeUnknownMethod(): Uint8Array {
 export function encodeInvalidPayload(): Uint8Array {
   return encodeVarint(RAPACE_ERROR.INVALID_PAYLOAD);
 }
-

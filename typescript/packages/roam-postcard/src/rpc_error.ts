@@ -2,7 +2,7 @@
 // r[impl core.error.roam-error] - RoamError wraps call results
 // r[impl unary.error.protocol] - Protocol errors use discriminants 1-3
 
-import { decodeVarintNumber, type DecodeResult } from "./index.ts";
+import { decodeVarintNumber, type DecodeResult } from "../../roam-core/src/postcard/index.ts";
 
 /** RAPACE error discriminants */
 export const RpcErrorCode = {
@@ -107,7 +107,7 @@ export function decodeRpcResult(buf: Uint8Array, offset: number): number {
  */
 export function decodeUserError<E>(
   error: RpcError,
-  decoder: (buf: Uint8Array, offset: number) => DecodeResult<E>
+  decoder: (buf: Uint8Array, offset: number) => DecodeResult<E>,
 ): E {
   if (!error.isUserError() || error.payload === null) {
     throw new Error("Cannot decode user error: not a user error");
