@@ -72,7 +72,7 @@
 //!
 //! [`roam-macros`]: https://docs.rs/roam-service-macros
 
-mod code_writer;
+pub mod code_writer;
 mod render;
 pub mod targets;
 
