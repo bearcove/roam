@@ -140,20 +140,17 @@ export interface TestbedCaller {
   echo(message: string): Promise<string>;
   /**  Returns the message reversed. */
   reverse(message: string): Promise<string>;
-  /**  Client pushes numbers, server returns their sum.
+  /**  Client sends numbers, server returns their sum.
 
- Tests: client→server streaming (`Rx<T>` argument, scalar return).
- Caller creates `(tx, rx) = channel()`, passes `rx`, keeps `tx` to send. */
+ Tests: client→server streaming. Server receives via `Rx<T>`, returns scalar. */
   sum(numbers: Rx<number>): Promise<bigint>;
   /**  Server streams numbers back to client.
 
- Tests: server→client streaming (scalar argument, `Tx<T>` output).
- Caller creates `(tx, rx) = channel()`, passes `tx`, keeps `rx` to receive. */
+ Tests: server→client streaming. Server sends via `Tx<T>`. */
   generate(count: number, output: Tx<number>): Promise<void>;
   /**  Bidirectional: client sends strings, server echoes each back.
 
- Tests: bidirectional streaming (`Rx<T>` input + `Tx<T>` output).
- Caller creates two channels, passes receiving end for input, sending end for output. */
+ Tests: bidirectional streaming. Server receives via `Rx<T>`, sends via `Tx<T>`. */
   transform(input: Rx<string>, output: Tx<string>): Promise<void>;
   /**  Echo a point back. */
   echoPoint(point: Point): Promise<Point>;
@@ -203,10 +200,9 @@ export class TestbedClient<T extends MessageTransport = MessageTransport> implem
     return result;
   }
 
-  /**  Client pushes numbers, server returns their sum.
+  /**  Client sends numbers, server returns their sum.
 
- Tests: client→server streaming (`Rx<T>` argument, scalar return).
- Caller creates `(tx, rx) = channel()`, passes `rx`, keeps `tx` to send. */
+ Tests: client→server streaming. Server receives via `Rx<T>`, returns scalar. */
   async sum(numbers: Rx<number>): Promise<bigint> {
     const payload = encodeU64(numbers.streamId);
     const response = await this.conn.call(0x855b3a25d97bfefdn, payload);
@@ -218,8 +214,7 @@ export class TestbedClient<T extends MessageTransport = MessageTransport> implem
 
   /**  Server streams numbers back to client.
 
- Tests: server→client streaming (scalar argument, `Tx<T>` output).
- Caller creates `(tx, rx) = channel()`, passes `tx`, keeps `rx` to receive. */
+ Tests: server→client streaming. Server sends via `Tx<T>`. */
   async generate(count: number, output: Tx<number>): Promise<void> {
     const payload = concat(encodeU32(count), encodeU64(output.streamId));
     const response = await this.conn.call(0x54d2273d8cdb9c38n, payload);
@@ -231,8 +226,7 @@ export class TestbedClient<T extends MessageTransport = MessageTransport> implem
 
   /**  Bidirectional: client sends strings, server echoes each back.
 
- Tests: bidirectional streaming (`Rx<T>` input + `Tx<T>` output).
- Caller creates two channels, passes receiving end for input, sending end for output. */
+ Tests: bidirectional streaming. Server receives via `Rx<T>`, sends via `Tx<T>`. */
   async transform(input: Rx<string>, output: Tx<string>): Promise<void> {
     const payload = concat(encodeU64(input.streamId), encodeU64(output.streamId));
     const response = await this.conn.call(0x5d9895604eb18b19n, payload);
@@ -410,7 +404,7 @@ switch (_result_disc.value) {
 
   /**  Test tuple types. */
   async swapPair(pair: { 0: number; 1: string }): Promise<{ 0: string; 1: number }> {
-    const payload = concat(encodeI32(pair.0), encodeString(pair.1));
+    const payload = concat(encodeI32(pair[0]), encodeString(pair[1]));
     const response = await this.conn.call(0xacd19a29fe0d470cn, payload);
     const buf = response;
     let offset = decodeRpcResult(buf, 0);
@@ -426,9 +420,9 @@ const result = { 0: result_f0, 1: result_f1 };
 export interface TestbedHandler {
   echo(message: string): Promise<string> | string;
   reverse(message: string): Promise<string> | string;
-  sum(numbers: Tx<number>): Promise<bigint> | bigint;
-  generate(count: number, output: Rx<number>): Promise<void> | void;
-  transform(input: Tx<string>, output: Rx<string>): Promise<void> | void;
+  sum(numbers: Rx<number>): Promise<bigint> | bigint;
+  generate(count: number, output: Tx<number>): Promise<void> | void;
+  transform(input: Rx<string>, output: Tx<string>): Promise<void> | void;
   echoPoint(point: Point): Promise<Point> | Point;
   createPerson(name: string, age: number, email: string | null): Promise<Person> | Person;
   rectangleArea(rect: Rectangle): Promise<number> | number;
@@ -470,7 +464,7 @@ export const testbed_methodHandlers = new Map<bigint, MethodHandler<TestbedHandl
     try {
       const buf = payload;
       let offset = 0;
-      const _numbers_r = decodeU64(buf, offset); const numbers = { streamId: _numbers_r.value } as Push<number>; offset = _numbers_r.next; /* TODO: create real Push handle */
+      const _numbers_r = decodeU64(buf, offset); const numbers = { streamId: _numbers_r.value } as Rx<number>; offset = _numbers_r.next; /* TODO: create real Rx handle */
       if (offset !== buf.length) throw new Error("args: trailing bytes");
       const result = await handler.sum(numbers);
       return encodeResultOk(encodeI64(result));
@@ -483,7 +477,7 @@ export const testbed_methodHandlers = new Map<bigint, MethodHandler<TestbedHandl
       const buf = payload;
       let offset = 0;
       const _count_r = decodeU32(buf, offset); const count = _count_r.value; offset = _count_r.next;
-      const _output_r = decodeU64(buf, offset); const output = { streamId: _output_r.value } as Rx<number>; offset = _output_r.next; /* TODO: create real Rx handle */
+      const _output_r = decodeU64(buf, offset); const output = { streamId: _output_r.value } as Tx<number>; offset = _output_r.next; /* TODO: create real Tx handle */
       if (offset !== buf.length) throw new Error("args: trailing bytes");
       const result = await handler.generate(count, output);
       return encodeResultOk(new Uint8Array(0));
@@ -495,8 +489,8 @@ export const testbed_methodHandlers = new Map<bigint, MethodHandler<TestbedHandl
     try {
       const buf = payload;
       let offset = 0;
-      const _input_r = decodeU64(buf, offset); const input = { streamId: _input_r.value } as Push<string>; offset = _input_r.next; /* TODO: create real Push handle */
-      const _output_r = decodeU64(buf, offset); const output = { streamId: _output_r.value } as Rx<string>; offset = _output_r.next; /* TODO: create real Rx handle */
+      const _input_r = decodeU64(buf, offset); const input = { streamId: _input_r.value } as Rx<string>; offset = _input_r.next; /* TODO: create real Rx handle */
+      const _output_r = decodeU64(buf, offset); const output = { streamId: _output_r.value } as Tx<string>; offset = _output_r.next; /* TODO: create real Tx handle */
       if (offset !== buf.length) throw new Error("args: trailing bytes");
       const result = await handler.transform(input, output);
       return encodeResultOk(new Uint8Array(0));
@@ -707,7 +701,7 @@ const _pair_f1_r = decodeString(buf, offset); const pair_f1 = _pair_f1_r.value; 
 const pair = { 0: pair_f0, 1: pair_f1 };
       if (offset !== buf.length) throw new Error("args: trailing bytes");
       const result = await handler.swapPair(pair);
-      return encodeResultOk(concat(encodeString(result.0), encodeI32(result.1)));
+      return encodeResultOk(concat(encodeString(result[0]), encodeI32(result[1])));
     } catch (e) {
       return encodeResultErr(encodeInvalidPayload());
     }

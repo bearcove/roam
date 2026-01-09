@@ -9,6 +9,20 @@ use roam_schema::{
 
 use crate::render::{fq_name, hex_u64};
 
+/// Generate TypeScript field access expression.
+/// Uses bracket notation for numeric field names (tuple fields), dot notation otherwise.
+fn ts_field_access(expr: &str, field_name: &str) -> String {
+    if field_name
+        .chars()
+        .next()
+        .is_some_and(|c| c.is_ascii_digit())
+    {
+        format!("{expr}[{field_name}]")
+    } else {
+        format!("{expr}.{field_name}")
+    }
+}
+
 /// Collect all named types (structs and enums with a name) from a service.
 /// Returns a set of (name, Shape) pairs.
 fn collect_named_types(service: &ServiceDetail) -> Vec<(String, &'static Shape)> {
@@ -508,7 +522,7 @@ fn generate_client_impl(service: &ServiceDetail) -> String {
             // Parse the result (CallResult<T, RoamError>) - throws RpcError on failure
             out.push_str("    const buf = response;\n");
             out.push_str("    let offset = decodeRpcResult(buf, 0);\n");
-            // For client returns, use client-aware decode (inverts streaming types)
+            // For client returns, use client-aware decode
             let decode_stmt = generate_decode_stmt_client(method.return_type, "result", "offset");
             out.push_str(&format!("    {decode_stmt}\n"));
             out.push_str("    return result;\n");
@@ -580,13 +594,12 @@ fn generate_handler_interface(service: &ServiceDetail) -> String {
         let can_encode_return = is_fully_supported(method.return_type);
 
         if can_decode_args && can_encode_return {
-            // Decode all arguments (using server context for proper Tx/Rx inversion)
+            // Decode all arguments
             out.push_str("      const buf = payload;\n");
             out.push_str("      let offset = 0;\n");
             for arg in &method.args {
                 let arg_name = arg.name.to_lower_camel_case();
-                // Use server-side decode for proper Tx/Rx inversion
-                // r[impl streaming.caller-pov] - Schema is caller's perspective, server inverts.
+                // Use server-side decode
                 let decode_stmt = generate_decode_stmt_server(arg.ty, &arg_name, "offset");
                 out.push_str(&format!("      {decode_stmt}\n"));
             }
@@ -626,8 +639,8 @@ fn generate_handler_interface(service: &ServiceDetail) -> String {
 }
 
 /// Convert Shape to TypeScript type string for client arguments.
-/// Schema types are from CALLER's perspective (per spec r[streaming.caller-pov]).
-/// Caller uses types as-is: Tx = caller sends, Rx = caller receives.
+/// Schema is from server's perspective - no inversion needed.
+/// Client passes the same types that server receives.
 fn ts_type_client_arg(shape: &'static Shape) -> String {
     match classify_shape(shape) {
         ShapeKind::Tx { inner } => format!("Tx<{}>", ts_type_client_arg(inner)),
@@ -637,7 +650,7 @@ fn ts_type_client_arg(shape: &'static Shape) -> String {
 }
 
 /// Convert Shape to TypeScript type string for client returns.
-/// Schema types are from CALLER's perspective - no transformation needed.
+/// Schema is from server's perspective - no inversion needed.
 fn ts_type_client_return(shape: &'static Shape) -> String {
     match classify_shape(shape) {
         ShapeKind::Tx { inner } => format!("Tx<{}>", ts_type_client_return(inner)),
@@ -647,23 +660,21 @@ fn ts_type_client_return(shape: &'static Shape) -> String {
 }
 
 /// Convert Shape to TypeScript type string for server/handler arguments.
-/// Schema types are from caller's perspective, so we INVERT for handler.
-/// Caller's Tx (sends) becomes handler's Rx (receives).
-/// Caller's Rx (receives) becomes handler's Tx (sends).
+/// Schema is from server's perspective - no inversion needed.
+/// Rx means server receives, Tx means server sends.
 fn ts_type_server_arg(shape: &'static Shape) -> String {
     match classify_shape(shape) {
-        ShapeKind::Tx { inner } => format!("Rx<{}>", ts_type_server_arg(inner)),
-        ShapeKind::Rx { inner } => format!("Tx<{}>", ts_type_server_arg(inner)),
+        ShapeKind::Tx { inner } => format!("Tx<{}>", ts_type_server_arg(inner)),
+        ShapeKind::Rx { inner } => format!("Rx<{}>", ts_type_server_arg(inner)),
         _ => ts_type_base_named(shape),
     }
 }
 
-/// Convert Shape to TypeScript type string for server/handler returns.
-/// Schema types are from caller's perspective, so we INVERT for handler.
+/// Schema is from server's perspective - no inversion needed.
 fn ts_type_server_return(shape: &'static Shape) -> String {
     match classify_shape(shape) {
-        ShapeKind::Tx { inner } => format!("Rx<{}>", ts_type_server_return(inner)),
-        ShapeKind::Rx { inner } => format!("Tx<{}>", ts_type_server_return(inner)),
+        ShapeKind::Tx { inner } => format!("Tx<{}>", ts_type_server_return(inner)),
+        ShapeKind::Rx { inner } => format!("Rx<{}>", ts_type_server_return(inner)),
         _ => ts_type_base_named(shape),
     }
 }
@@ -743,7 +754,7 @@ fn generate_encode_expr(shape: &'static Shape, expr: &str) -> String {
             } else {
                 let parts: Vec<_> = fields
                     .iter()
-                    .map(|f| generate_encode_expr(f.shape(), &format!("{expr}.{}", f.name)))
+                    .map(|f| generate_encode_expr(f.shape(), &ts_field_access(expr, f.name)))
                     .collect();
                 format!("concat({})", parts.join(", "))
             }
@@ -766,7 +777,9 @@ fn generate_encode_expr(shape: &'static Shape, expr: &str) -> String {
                     VariantKind::Tuple { fields } | VariantKind::Struct { fields } => {
                         let field_encs: Vec<_> = fields
                             .iter()
-                            .map(|f| generate_encode_expr(f.shape(), &format!("{expr}.{}", f.name)))
+                            .map(|f| {
+                                generate_encode_expr(f.shape(), &ts_field_access(expr, f.name))
+                            })
                             .collect();
                         cases.push_str(&format!(
                             "return concat(encodeEnumVariant({i}), {});\n",
@@ -781,7 +794,7 @@ fn generate_encode_expr(shape: &'static Shape, expr: &str) -> String {
         }
         ShapeKind::Tx { .. } | ShapeKind::Rx { .. } => {
             // Streaming types encode as u64 stream ID (varint)
-            // r[impl streaming.type] - Tx/Rx serialize as stream_id on wire.
+            // r[impl streaming.type] - Tx/Rx serialize as channel_id on wire.
             format!("encodeU64({expr}.streamId)")
         }
         ShapeKind::Pointer { pointee } => generate_encode_expr(pointee, expr),
@@ -817,21 +830,21 @@ fn encode_scalar_expr(scalar: ScalarType, expr: &str) -> String {
 }
 
 /// Generate TypeScript code that decodes a value from a buffer for CLIENT context.
-/// Schema types are from caller's perspective - no inversion needed for client.
+/// Schema is from server's perspective - types match on both sides.
 fn generate_decode_stmt_client(shape: &'static Shape, var_name: &str, offset_var: &str) -> String {
     match classify_shape(shape) {
         ShapeKind::Tx { inner } => {
-            // Caller's Push (caller sends) - decode stream_id and create Push handle
-            // r[impl streaming.type] - Stream types decode as stream_id on wire.
-            // TODO: Need Connection access to create proper Push handle
+            // Caller's Tx (caller sends) - decode channel_id and create Tx handle
+            // r[impl streaming.type] - Channel types decode as channel_id on wire.
+            // TODO: Need Connection access to create proper Tx handle
             let inner_type = ts_type_client_return(inner);
             format!(
-                "const _{var_name}_r = decodeU64(buf, {offset_var}); const {var_name} = {{ streamId: _{var_name}_r.value }} as Push<{inner_type}>; {offset_var} = _{var_name}_r.next; /* TODO: create real Push handle */"
+                "const _{var_name}_r = decodeU64(buf, {offset_var}); const {var_name} = {{ streamId: _{var_name}_r.value }} as Tx<{inner_type}>; {offset_var} = _{var_name}_r.next; /* TODO: create real Tx handle */"
             )
         }
         ShapeKind::Rx { inner } => {
-            // Caller's Rx (caller receives) - decode stream_id and create Rx handle
-            // r[impl streaming.type] - Stream types decode as stream_id on wire.
+            // Caller's Rx (caller receives) - decode channel_id and create Rx handle
+            // r[impl streaming.type] - Channel types decode as channel_id on wire.
             // TODO: Need Connection access to create proper Rx handle
             let inner_type = ts_type_client_return(inner);
             format!(
@@ -844,27 +857,25 @@ fn generate_decode_stmt_client(shape: &'static Shape, var_name: &str, offset_var
 }
 
 /// Generate TypeScript code that decodes a value from a buffer for SERVER context.
-/// Schema types are from caller's perspective - server needs INVERTED types:
-/// - Schema Tx (caller sends) → server receives → Rx for server
-/// - Schema Rx (caller receives) → server sends → Tx for server
-///
-/// r[impl streaming.caller-pov] - Schema is from caller's perspective, server inverts.
+/// Schema is from server's perspective - no inversion needed.
+/// - Schema Tx → server sends via Tx
+/// - Schema Rx → server receives via Rx
 fn generate_decode_stmt_server(shape: &'static Shape, var_name: &str, offset_var: &str) -> String {
     match classify_shape(shape) {
         ShapeKind::Tx { inner } => {
-            // Schema Tx (caller sends) → server receives → Rx for server
-            // r[impl streaming.type] - Stream types decode as stream_id on wire.
+            // Schema Tx → server sends via Tx
+            // r[impl streaming.type] - Channel types decode as channel_id on wire.
             let inner_type = ts_type_server_arg(inner);
             format!(
-                "const _{var_name}_r = decodeU64(buf, {offset_var}); const {var_name} = {{ streamId: _{var_name}_r.value }} as Rx<{inner_type}>; {offset_var} = _{var_name}_r.next; /* TODO: create real Rx handle */"
+                "const _{var_name}_r = decodeU64(buf, {offset_var}); const {var_name} = {{ streamId: _{var_name}_r.value }} as Tx<{inner_type}>; {offset_var} = _{var_name}_r.next; /* TODO: create real Tx handle */"
             )
         }
         ShapeKind::Rx { inner } => {
-            // Schema Rx (caller receives) → server sends → Tx for server
-            // r[impl streaming.type] - Stream types decode as stream_id on wire.
+            // Schema Rx → server receives via Rx
+            // r[impl streaming.type] - Channel types decode as channel_id on wire.
             let inner_type = ts_type_server_arg(inner);
             format!(
-                "const _{var_name}_r = decodeU64(buf, {offset_var}); const {var_name} = {{ streamId: _{var_name}_r.value }} as Push<{inner_type}>; {offset_var} = _{var_name}_r.next; /* TODO: create real Push handle */"
+                "const _{var_name}_r = decodeU64(buf, {offset_var}); const {var_name} = {{ streamId: _{var_name}_r.value }} as Rx<{inner_type}>; {offset_var} = _{var_name}_r.next; /* TODO: create real Rx handle */"
             )
         }
         // For non-streaming types, use the regular decode

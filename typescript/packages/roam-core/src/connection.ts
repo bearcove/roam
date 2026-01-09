@@ -15,8 +15,8 @@ import {
   StreamError,
   type OutgoingPoll,
   Role,
-  Push,
-  Pull,
+  Tx,
+  Rx,
   OutgoingSender,
   ChannelReceiver,
 } from "./streaming/index.ts";
@@ -118,19 +118,12 @@ function encodeRequest(requestId: bigint, methodId: bigint, payload: Uint8Array)
 
 /** Encode a Data message. */
 function encodeData(streamId: bigint, payload: Uint8Array): Uint8Array {
-  return concat(
-    encodeVarint(MSG_DATA),
-    encodeVarint(streamId),
-    encodeBytes(payload),
-  );
+  return concat(encodeVarint(MSG_DATA), encodeVarint(streamId), encodeBytes(payload));
 }
 
 /** Encode a Close message. */
 function encodeClose(streamId: bigint): Uint8Array {
-  return concat(
-    encodeVarint(MSG_CLOSE),
-    encodeVarint(streamId),
-  );
+  return concat(encodeVarint(MSG_CLOSE), encodeVarint(streamId));
 }
 
 /** Trait for dispatching unary requests to a service. */
@@ -162,12 +155,7 @@ export class Connection<T extends MessageTransport = MessageTransport> {
   private streamRegistry: StreamRegistry;
   private nextRequestId: bigint = 1n;
 
-  constructor(
-    io: T,
-    role: Role,
-    negotiated: Negotiated,
-    ourHello: Hello,
-  ) {
+  constructor(io: T, role: Role, negotiated: Negotiated, ourHello: Hello) {
     this.io = io;
     this._role = role;
     this._negotiated = negotiated;
@@ -208,41 +196,41 @@ export class Connection<T extends MessageTransport = MessageTransport> {
   }
 
   /**
-   * Create a Push stream handle for sending data.
+   * Create a Tx channel handle for sending data.
    *
-   * Allocates a unique stream ID and registers the stream for outgoing data.
-   * The Push handle allows the caller to send values of type T.
+   * Allocates a unique channel ID and registers the channel for outgoing data.
+   * The Tx handle allows the caller to send values of type T.
    *
-   * r[impl streaming.allocation.caller] - Caller allocates stream IDs.
-   * r[impl streaming.type] - Push serializes as stream_id on wire.
+   * r[impl streaming.allocation.caller] - Caller allocates channel IDs.
+   * r[impl streaming.type] - Tx serializes as channel_id on wire.
    *
    * @param serialize - Function to serialize values to bytes
-   * @returns [Push handle, stream ID for wire encoding]
+   * @returns [Tx handle, channel ID for wire encoding]
    */
-  createPush<T>(serialize: (value: T) => Uint8Array): [Push<T>, bigint] {
+  createTx<T>(serialize: (value: T) => Uint8Array): [Tx<T>, bigint] {
     const streamId = this.streamAllocator.next();
     const sender = this.streamRegistry.registerOutgoing(streamId);
-    const push = new Push(sender, serialize);
-    return [push, streamId];
+    const tx = new Tx(sender, serialize);
+    return [tx, streamId];
   }
 
   /**
-   * Create a Pull stream handle for receiving data.
+   * Create a Rx channel handle for receiving data.
    *
-   * Allocates a unique stream ID and registers the stream for incoming data.
-   * The Pull handle allows the caller to receive values of type T.
+   * Allocates a unique channel ID and registers the channel for incoming data.
+   * The Rx handle allows the caller to receive values of type T.
    *
-   * r[impl streaming.allocation.caller] - Caller allocates stream IDs.
-   * r[impl streaming.type] - Pull serializes as stream_id on wire.
+   * r[impl streaming.allocation.caller] - Caller allocates channel IDs.
+   * r[impl streaming.type] - Rx serializes as channel_id on wire.
    *
    * @param deserialize - Function to deserialize bytes to values
-   * @returns [Pull handle, stream ID for wire encoding]
+   * @returns [Rx handle, channel ID for wire encoding]
    */
-  createPull<T>(deserialize: (bytes: Uint8Array) => T): [Pull<T>, bigint] {
+  createRx<T>(deserialize: (bytes: Uint8Array) => T): [Rx<T>, bigint] {
     const streamId = this.streamAllocator.next();
     const receiver = this.streamRegistry.registerIncoming(streamId);
-    const pull = new Pull(streamId, receiver, deserialize);
-    return [pull, streamId];
+    const rx = new Rx(streamId, receiver, deserialize);
+    return [rx, streamId];
   }
 
   /**
@@ -327,7 +315,11 @@ export class Connection<T extends MessageTransport = MessageTransport> {
    * @param timeoutMs - Timeout in milliseconds (default: 30000)
    * @returns The response payload
    */
-  async call(methodId: bigint, payload: Uint8Array, timeoutMs: number = 30000): Promise<Uint8Array> {
+  async call(
+    methodId: bigint,
+    payload: Uint8Array,
+    timeoutMs: number = 30000,
+  ): Promise<Uint8Array> {
     const requestId = this.nextRequestId++;
 
     // Send request
@@ -405,13 +397,16 @@ export class Connection<T extends MessageTransport = MessageTransport> {
         // value enum
         const vDisc = decodeVarintNumber(data, offset);
         offset = vDisc.next;
-        if (vDisc.value === 0) { // String
+        if (vDisc.value === 0) {
+          // String
           const sLen = decodeVarintNumber(data, offset);
           offset = sLen.next + sLen.value;
-        } else if (vDisc.value === 1) { // Bytes
+        } else if (vDisc.value === 1) {
+          // Bytes
           const bLen = decodeVarintNumber(data, offset);
           offset = bLen.next + bLen.value;
-        } else if (vDisc.value === 2) { // U64
+        } else if (vDisc.value === 2) {
+          // U64
           const u = decodeVarint(data, offset);
           offset = u.next;
         }
@@ -471,10 +466,7 @@ export class Connection<T extends MessageTransport = MessageTransport> {
     }
   }
 
-  private async handleMessage(
-    payload: Uint8Array,
-    dispatcher: ServiceDispatcher,
-  ): Promise<void> {
+  private async handleMessage(payload: Uint8Array, dispatcher: ServiceDispatcher): Promise<void> {
     let offset = 0;
     const d0 = decodeVarintNumber(payload, offset);
     const msgDisc = d0.value;
@@ -672,10 +664,7 @@ export async function helloExchangeAcceptor<T extends MessageTransport>(
   // r[impl message.hello.negotiation] - Effective limit is min of both peers.
   const negotiated: Negotiated = {
     maxPayloadSize: Math.min(ourHello.maxPayloadSize, peerHello.maxPayloadSize),
-    initialCredit: Math.min(
-      ourHello.initialStreamCredit,
-      peerHello.initialStreamCredit,
-    ),
+    initialCredit: Math.min(ourHello.initialStreamCredit, peerHello.initialStreamCredit),
   };
 
   return new Connection(io, Role.Acceptor, negotiated, ourHello);
@@ -699,16 +688,16 @@ export async function helloExchangeInitiator<T extends MessageTransport>(
 
   const negotiated: Negotiated = {
     maxPayloadSize: Math.min(ourHello.maxPayloadSize, peerHello.maxPayloadSize),
-    initialCredit: Math.min(
-      ourHello.initialStreamCredit,
-      peerHello.initialStreamCredit,
-    ),
+    initialCredit: Math.min(ourHello.initialStreamCredit, peerHello.initialStreamCredit),
   };
 
   return new Connection(io, Role.Initiator, negotiated, ourHello);
 }
 
-async function waitForPeerHello<T extends MessageTransport>(io: T, _ourHello: Hello): Promise<Hello> {
+async function waitForPeerHello<T extends MessageTransport>(
+  io: T,
+  _ourHello: Hello,
+): Promise<Hello> {
   while (true) {
     let payload: Uint8Array | null;
     try {
@@ -719,10 +708,7 @@ async function waitForPeerHello<T extends MessageTransport>(io: T, _ourHello: He
       if (raw.length >= 2 && raw[0] === 0x00 && raw[1] !== 0x00) {
         await io.send(encodeGoodbye("message.hello.unknown-version"));
         io.close();
-        throw ConnectionError.protocol(
-          "message.hello.unknown-version",
-          "unknown Hello variant",
-        );
+        throw ConnectionError.protocol("message.hello.unknown-version", "unknown Hello variant");
       }
       throw ConnectionError.io("failed to receive peer Hello");
     }
@@ -746,10 +732,7 @@ async function waitForPeerHello<T extends MessageTransport>(io: T, _ourHello: He
       if (helloVariant !== 0) {
         await io.send(encodeGoodbye("message.hello.unknown-version"));
         io.close();
-        throw ConnectionError.protocol(
-          "message.hello.unknown-version",
-          "unknown Hello variant",
-        );
+        throw ConnectionError.protocol("message.hello.unknown-version", "unknown Hello variant");
       }
 
       const maxPayload = decodeVarintNumber(payload, offset);

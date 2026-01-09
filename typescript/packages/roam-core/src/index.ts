@@ -11,27 +11,45 @@ export {
   // Decode result type
   type DecodeResult,
   // Primitives
-  encodeBool, decodeBool,
-  encodeU8, decodeU8,
-  encodeI8, decodeI8,
-  encodeU16, decodeU16,
-  encodeI16, decodeI16,
-  encodeU32, decodeU32,
-  encodeI32, decodeI32,
-  encodeU64, decodeU64,
-  encodeI64, decodeI64,
-  encodeF32, decodeF32,
-  encodeF64, decodeF64,
+  encodeBool,
+  decodeBool,
+  encodeU8,
+  decodeU8,
+  encodeI8,
+  decodeI8,
+  encodeU16,
+  decodeU16,
+  encodeI16,
+  decodeI16,
+  encodeU32,
+  decodeU32,
+  encodeI32,
+  decodeI32,
+  encodeU64,
+  decodeU64,
+  encodeI64,
+  decodeI64,
+  encodeF32,
+  decodeF32,
+  encodeF64,
+  decodeF64,
   // String and bytes
-  encodeString, decodeString,
-  encodeBytes, decodeBytes,
+  encodeString,
+  decodeString,
+  encodeBytes,
+  decodeBytes,
   // Containers
-  encodeOption, decodeOption,
-  encodeVec, decodeVec,
-  encodeTuple2, decodeTuple2,
-  encodeTuple3, decodeTuple3,
+  encodeOption,
+  decodeOption,
+  encodeVec,
+  decodeVec,
+  encodeTuple2,
+  decodeTuple2,
+  encodeTuple3,
+  decodeTuple3,
   // Enum support
-  encodeEnumVariant, decodeEnumVariant,
+  encodeEnumVariant,
+  decodeEnumVariant,
 } from "./postcard/index.ts";
 
 // Result encoding (for server-side responses)
@@ -44,12 +62,7 @@ import {
 export { encodeResultOk, encodeResultErr, encodeUnknownMethod, encodeInvalidPayload, RAPACE_ERROR };
 
 // RPC error types (for client-side error handling)
-export {
-  RpcError,
-  RpcErrorCode,
-  decodeRpcResult,
-  decodeUserError,
-} from "./postcard/rpc_error.ts";
+export { RpcError, RpcErrorCode, decodeRpcResult, decodeUserError } from "./postcard/rpc_error.ts";
 
 // Streaming types
 export {
@@ -60,12 +73,12 @@ export {
   StreamRegistry,
   OutgoingSender,
   ChannelReceiver,
-  Push,
-  Pull,
-  createRawPush,
-  createRawPull,
-  createTypedPush,
-  createTypedPull,
+  Tx,
+  Rx,
+  createRawTx,
+  createRawRx,
+  createTypedTx,
+  createTypedRx,
   type OutgoingMessage,
   type OutgoingPoll,
 } from "./streaming/index.ts";

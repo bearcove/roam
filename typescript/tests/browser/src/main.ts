@@ -82,7 +82,9 @@ async function testComplex(client: ComplexClient): Promise<void> {
   const point = { x: 42, y: -17 };
   const pointResult = await client.echoPoint(point);
   if (pointResult.x !== point.x || pointResult.y !== point.y) {
-    throw new Error(`echoPoint mismatch: expected ${JSON.stringify(point)}, got ${JSON.stringify(pointResult)}`);
+    throw new Error(
+      `echoPoint mismatch: expected ${JSON.stringify(point)}, got ${JSON.stringify(pointResult)}`,
+    );
   }
   addResult("echoPoint", true);
 
@@ -127,7 +129,9 @@ async function testComplex(client: ComplexClient): Promise<void> {
   log("Testing parseColor (unknown)...");
   const unknownColor = await client.parseColor("purple");
   if (unknownColor !== null) {
-    throw new Error(`parseColor (unknown) mismatch: expected null, got ${JSON.stringify(unknownColor)}`);
+    throw new Error(
+      `parseColor (unknown) mismatch: expected null, got ${JSON.stringify(unknownColor)}`,
+    );
   }
   addResult("parseColor (unknown)", true);
 
@@ -136,7 +140,9 @@ async function testComplex(client: ComplexClient): Promise<void> {
   const circleArea = await client.shapeArea({ tag: "Circle", radius: 2.0 });
   const expectedCircleArea = Math.PI * 4;
   if (Math.abs(circleArea - expectedCircleArea) > 0.0001) {
-    throw new Error(`shapeArea (Circle) mismatch: expected ${expectedCircleArea}, got ${circleArea}`);
+    throw new Error(
+      `shapeArea (Circle) mismatch: expected ${expectedCircleArea}, got ${circleArea}`,
+    );
   }
   addResult("shapeArea (Circle)", true);
 
@@ -202,7 +208,7 @@ async function testComplex(client: ComplexClient): Promise<void> {
       { tag: "Circle", radius: 5.0 },
       { tag: "Rectangle", width: 10.0, height: 20.0 },
     ],
-    { tag: "Blue" }
+    { tag: "Blue" },
   );
   if (canvas.name !== "MyCanvas") {
     throw new Error(`createCanvas name mismatch: got ${canvas.name}`);
@@ -218,22 +224,22 @@ async function testComplex(client: ComplexClient): Promise<void> {
 
 async function testStreaming(client: StreamingClient, conn: Connection): Promise<void> {
   // Test: sum - client-to-server streaming
-  // r[impl streaming.client-to-server] - Client sends stream, server returns scalar.
+  // r[impl streaming.client-to-server] - Client sends channel, server returns scalar.
   log("Testing sum (client-to-server streaming)...");
   {
-    // Create a Push stream for sending numbers
-    const [push, _streamId] = conn.createPush<number>((n) => encodeI32(n));
+    // Create a Tx channel for sending numbers
+    const [tx, _channelId] = conn.createTx<number>((n) => encodeI32(n));
 
     // Queue numbers to send
-    push.send(1);
-    push.send(2);
-    push.send(3);
-    push.send(4);
-    push.send(5);
-    push.close();
+    tx.send(1);
+    tx.send(2);
+    tx.send(3);
+    tx.send(4);
+    tx.send(5);
+    tx.close();
 
     // Make the RPC call - this flushes outgoing data and waits for response
-    const result = await client.sum(push);
+    const result = await client.sum(tx);
     if (result !== 15n) {
       throw new Error(`sum mismatch: expected 15n, got ${result}`);
     }
@@ -241,21 +247,21 @@ async function testStreaming(client: StreamingClient, conn: Connection): Promise
   }
 
   // Test: range - server-to-client streaming
-  // r[impl streaming.server-to-client] - Client sends scalar, server returns stream.
+  // r[impl streaming.server-to-client] - Client sends scalar, server returns channel.
   log("Testing range (server-to-client streaming)...");
   {
-    // Create a Pull stream for receiving numbers
-    const [pull, _streamId] = conn.createPull<number>((bytes) => {
+    // Create a Rx channel for receiving numbers
+    const [rx, _channelId] = conn.createRx<number>((bytes) => {
       const result = decodeU32(bytes, 0);
       return result.value;
     });
 
-    // Make the RPC call - server will send data via the Pull stream
-    await client.range(5, pull);
+    // Make the RPC call - server will send data via the Rx channel
+    await client.range(5, rx);
 
-    // Collect all values from the stream
+    // Collect all values from the channel
     const values: number[] = [];
-    for await (const n of pull) {
+    for await (const n of rx) {
       values.push(n);
     }
 
@@ -275,27 +281,27 @@ async function testStreaming(client: StreamingClient, conn: Connection): Promise
   // r[impl streaming.bidirectional] - Both sides stream simultaneously.
   log("Testing pipe (bidirectional streaming)...");
   {
-    // Create Push for sending strings
-    const [push, _pushId] = conn.createPush<string>((s) => encodeString(s));
+    // Create Tx for sending strings
+    const [tx, _txId] = conn.createTx<string>((s) => encodeString(s));
 
-    // Create Pull for receiving strings
-    const [pull, _pullId] = conn.createPull<string>((bytes) => {
+    // Create Rx for receiving strings
+    const [rx, _rxId] = conn.createRx<string>((bytes) => {
       const result = decodeString(bytes, 0);
       return result.value;
     });
 
     // Queue strings to send
-    push.send("hello");
-    push.send("world");
-    push.send("!");
-    push.close();
+    tx.send("hello");
+    tx.send("world");
+    tx.send("!");
+    tx.close();
 
     // Make the RPC call
-    await client.pipe(push, pull);
+    await client.pipe(tx, rx);
 
     // Collect echoed values
     const echoed: string[] = [];
-    for await (const s of pull) {
+    for await (const s of rx) {
       echoed.push(s);
     }
 
@@ -309,19 +315,19 @@ async function testStreaming(client: StreamingClient, conn: Connection): Promise
   }
 
   // Test: stats - client-to-server streaming with tuple result
-  log("Testing stats (aggregating stream)...");
+  log("Testing stats (aggregating channel)...");
   {
-    // Create a Push stream for sending numbers
-    const [push, _streamId] = conn.createPush<number>((n) => encodeI32(n));
+    // Create a Tx channel for sending numbers
+    const [tx, _channelId] = conn.createTx<number>((n) => encodeI32(n));
 
     // Queue numbers to send
-    push.send(10);
-    push.send(20);
-    push.send(30);
-    push.close();
+    tx.send(10);
+    tx.send(20);
+    tx.send(30);
+    tx.close();
 
     // Make the RPC call
-    const [sum, count, avg] = await client.stats(push);
+    const [sum, count, avg] = await client.stats(tx);
     if (sum !== 60n) {
       throw new Error(`stats sum mismatch: expected 60n, got ${sum}`);
     }
@@ -331,7 +337,7 @@ async function testStreaming(client: StreamingClient, conn: Connection): Promise
     if (Math.abs(avg - 20.0) > 0.0001) {
       throw new Error(`stats avg mismatch: expected 20.0, got ${avg}`);
     }
-    addResult("stats (aggregating stream)", true);
+    addResult("stats (aggregating channel)", true);
   }
 }
 

@@ -1,18 +1,18 @@
-// Pull stream handle - caller receives data from callee.
+// Rx stream handle - caller receives data from callee.
 
 import { type StreamId, StreamError } from "./types.ts";
 import { ChannelReceiver } from "./channel.ts";
 
 /**
- * Pull stream handle - caller receives data from callee.
+ * Rx stream handle - caller receives data from callee.
  *
- * r[impl streaming.caller-pov] - From caller's perspective, Pull means "I receive".
+ * r[impl streaming.caller-pov] - From caller's perspective, Rx means "I receive".
  * r[impl streaming.type] - Serializes as u64 stream ID on wire.
  * r[impl streaming.holder-semantics] - The holder receives from this stream.
  *
  * @template T - The type of values being received (needs a deserializer).
  */
-export class Pull<T> {
+export class Rx<T> {
   constructor(
     private _streamId: StreamId,
     private receiver: ChannelReceiver<Uint8Array>,
@@ -61,17 +61,24 @@ export class Pull<T> {
 }
 
 /**
- * Create a Pull stream with a simple passthrough (for raw bytes).
+ * Create an Rx stream with a simple passthrough (for raw bytes).
  */
-export function createRawPull(streamId: StreamId, receiver: ChannelReceiver<Uint8Array>): Pull<Uint8Array> {
-  return new Pull(streamId, receiver, (v) => v);
+export function createRawRx(
+  streamId: StreamId,
+  receiver: ChannelReceiver<Uint8Array>,
+): Rx<Uint8Array> {
+  return new Rx(streamId, receiver, (v) => v);
 }
 
 /**
- * Create a Pull stream with a typed deserializer.
+ * Create an Rx stream with a typed deserializer.
  *
- * r[impl streaming.type] - Pull serializes as stream_id on wire.
+ * r[impl streaming.type] - Rx serializes as stream_id on wire.
  */
-export function createTypedPull<T>(streamId: StreamId, receiver: ChannelReceiver<Uint8Array>, deserialize: (bytes: Uint8Array) => T): Pull<T> {
-  return new Pull(streamId, receiver, deserialize);
+export function createTypedRx<T>(
+  streamId: StreamId,
+  receiver: ChannelReceiver<Uint8Array>,
+  deserialize: (bytes: Uint8Array) => T,
+): Rx<T> {
+  return new Rx(streamId, receiver, deserialize);
 }

@@ -23,22 +23,19 @@ pub trait Testbed {
     // Streaming methods
     // ========================================================================
 
-    /// Client pushes numbers, server returns their sum.
+    /// Client sends numbers, server returns their sum.
     ///
-    /// Tests: client→server streaming (`Rx<T>` argument, scalar return).
-    /// Caller creates `(tx, rx) = channel()`, passes `rx`, keeps `tx` to send.
+    /// Tests: client→server streaming. Server receives via `Rx<T>`, returns scalar.
     async fn sum(&self, numbers: Rx<i32>) -> i64;
 
     /// Server streams numbers back to client.
     ///
-    /// Tests: server→client streaming (scalar argument, `Tx<T>` output).
-    /// Caller creates `(tx, rx) = channel()`, passes `tx`, keeps `rx` to receive.
+    /// Tests: server→client streaming. Server sends via `Tx<T>`.
     async fn generate(&self, count: u32, output: Tx<i32>);
 
     /// Bidirectional: client sends strings, server echoes each back.
     ///
-    /// Tests: bidirectional streaming (`Rx<T>` input + `Tx<T>` output).
-    /// Caller creates two channels, passes receiving end for input, sending end for output.
+    /// Tests: bidirectional streaming. Server receives via `Rx<T>`, sends via `Tx<T>`.
     async fn transform(&self, input: Rx<String>, output: Tx<String>);
 
     // ========================================================================
