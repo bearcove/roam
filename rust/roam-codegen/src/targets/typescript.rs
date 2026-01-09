@@ -312,7 +312,7 @@ pub fn generate_service(service: &ServiceDetail) -> String {
     out.push_str("// DO NOT EDIT - regenerate with `cargo xtask codegen --typescript`\n\n");
 
     // Import runtime primitives from @bearcove/roam-core
-    out.push_str("import type { MethodHandler, Connection, MessageTransport, DecodeResult } from \"@bearcove/roam-core\";\n");
+    out.push_str("import type { MethodHandler, Connection, MessageTransport, DecodeResult, MethodSchema } from \"@bearcove/roam-core\";\n");
     out.push_str("import {\n");
     out.push_str("  encodeResultOk, encodeResultErr, encodeInvalidPayload,\n");
     out.push_str("  concat, encodeVarint, decodeVarintNumber, decodeRpcResult,\n");
@@ -371,6 +371,9 @@ pub fn generate_service(service: &ServiceDetail) -> String {
 
     // Generate handler interface (for handling calls)
     out.push_str(&generate_handler_interface(service));
+
+    // Generate method schemas for runtime channel binding
+    out.push_str(&generate_method_schemas(service));
 
     out
 }
@@ -1516,4 +1519,140 @@ fn is_fully_supported(shape: &'static Shape) -> bool {
         ShapeKind::Result { .. } => false,
         ShapeKind::Opaque => false,
     }
+}
+
+// ============================================================================
+// Schema generation for runtime channel binding
+// ============================================================================
+
+/// Generate a TypeScript Schema object literal for a type.
+/// Used by the runtime binder to find and bind Tx/Rx channels.
+fn generate_schema(shape: &'static Shape) -> String {
+    // Check for bytes first (Vec<u8>)
+    if is_bytes(shape) {
+        return "{ kind: 'bytes' }".into();
+    }
+
+    match classify_shape(shape) {
+        ShapeKind::Scalar(scalar) => generate_scalar_schema(scalar),
+        ShapeKind::Tx { inner } => {
+            format!("{{ kind: 'tx', element: {} }}", generate_schema(inner))
+        }
+        ShapeKind::Rx { inner } => {
+            format!("{{ kind: 'rx', element: {} }}", generate_schema(inner))
+        }
+        ShapeKind::List { element } => {
+            format!("{{ kind: 'vec', element: {} }}", generate_schema(element))
+        }
+        ShapeKind::Option { inner } => {
+            format!("{{ kind: 'option', inner: {} }}", generate_schema(inner))
+        }
+        ShapeKind::Array { element, .. } | ShapeKind::Slice { element } => {
+            format!("{{ kind: 'vec', element: {} }}", generate_schema(element))
+        }
+        ShapeKind::Map { key, value } => {
+            format!(
+                "{{ kind: 'map', key: {}, value: {} }}",
+                generate_schema(key),
+                generate_schema(value)
+            )
+        }
+        ShapeKind::Set { element } => {
+            format!("{{ kind: 'vec', element: {} }}", generate_schema(element))
+        }
+        ShapeKind::Tuple { elements } => {
+            // Represent tuple as struct with numeric field names
+            let fields: Vec<_> = elements
+                .iter()
+                .enumerate()
+                .map(|(i, p)| format!("'{}': {}", i, generate_schema(p.shape)))
+                .collect();
+            format!("{{ kind: 'struct', fields: {{ {} }} }}", fields.join(", "))
+        }
+        ShapeKind::Struct(StructInfo { fields, .. }) => {
+            let field_schemas: Vec<_> = fields
+                .iter()
+                .map(|f| format!("'{}': {}", f.name, generate_schema(f.shape())))
+                .collect();
+            format!(
+                "{{ kind: 'struct', fields: {{ {} }} }}",
+                field_schemas.join(", ")
+            )
+        }
+        ShapeKind::Enum(EnumInfo { variants, .. }) => {
+            let variant_schemas: Vec<_> = variants
+                .iter()
+                .map(|v| {
+                    let field_schemas: Vec<_> = match classify_variant(v) {
+                        VariantKind::Unit => vec![],
+                        VariantKind::Newtype { inner } => vec![generate_schema(inner)],
+                        VariantKind::Tuple { fields } | VariantKind::Struct { fields } => {
+                            fields.iter().map(|f| generate_schema(f.shape())).collect()
+                        }
+                    };
+                    format!("'{}': [{}]", v.name, field_schemas.join(", "))
+                })
+                .collect();
+            format!(
+                "{{ kind: 'enum', variants: {{ {} }} }}",
+                variant_schemas.join(", ")
+            )
+        }
+        ShapeKind::Pointer { pointee } => generate_schema(pointee),
+        ShapeKind::Result { ok, err } => {
+            // Represent Result as enum with Ok/Err variants
+            format!(
+                "{{ kind: 'enum', variants: {{ 'Ok': [{}], 'Err': [{}] }} }}",
+                generate_schema(ok),
+                generate_schema(err)
+            )
+        }
+        ShapeKind::Opaque => "{ kind: 'bytes' }".into(),
+    }
+}
+
+/// Generate schema for scalar types.
+fn generate_scalar_schema(scalar: ScalarType) -> String {
+    match scalar {
+        ScalarType::Bool => "{ kind: 'bool' }".into(),
+        ScalarType::U8 => "{ kind: 'u8' }".into(),
+        ScalarType::U16 => "{ kind: 'u16' }".into(),
+        ScalarType::U32 => "{ kind: 'u32' }".into(),
+        ScalarType::U64 | ScalarType::USize | ScalarType::U128 => "{ kind: 'u64' }".into(),
+        ScalarType::I8 => "{ kind: 'i8' }".into(),
+        ScalarType::I16 => "{ kind: 'i16' }".into(),
+        ScalarType::I32 => "{ kind: 'i32' }".into(),
+        ScalarType::I64 | ScalarType::ISize | ScalarType::I128 => "{ kind: 'i64' }".into(),
+        ScalarType::F32 => "{ kind: 'f32' }".into(),
+        ScalarType::F64 => "{ kind: 'f64' }".into(),
+        ScalarType::Char | ScalarType::Str | ScalarType::String | ScalarType::CowStr => {
+            "{ kind: 'string' }".into()
+        }
+        ScalarType::Unit => "{ kind: 'struct', fields: {} }".into(),
+        _ => "{ kind: 'bytes' }".into(),
+    }
+}
+
+/// Generate method schemas for runtime channel binding.
+fn generate_method_schemas(service: &ServiceDetail) -> String {
+    let mut out = String::new();
+    let service_name_lower = service.name.to_lower_camel_case();
+
+    out.push_str("// Method schemas for runtime channel binding\n");
+    out.push_str(&format!(
+        "export const {service_name_lower}_schemas: Record<string, MethodSchema> = {{\n"
+    ));
+
+    for method in &service.methods {
+        let method_name = method.method_name.to_lower_camel_case();
+        let arg_schemas: Vec<_> = method.args.iter().map(|a| generate_schema(a.ty)).collect();
+
+        out.push_str(&format!(
+            "  {method_name}: {{ args: [{}] }},\n",
+            arg_schemas.join(", ")
+        ));
+    }
+
+    out.push_str("};\n\n");
+    out
 }
