@@ -874,13 +874,19 @@ public final class TestbedStreamingDispatcher {
             var offset = 0
             let count = try decodeU32(from: payload, offset: &offset)
             let outputChannelId = try decodeVarint(from: payload, offset: &offset)
+            fputs(
+                "[\(getpid())] dispatchgenerate: count=\(count), channelId=\(outputChannelId)\n",
+                stderr)
             let output = createServerTx(
                 channelId: outputChannelId, taskSender: taskSender, serialize: ({ encodeI32($0) }))
             try await handler.generate(count: count, output: output)
+            fputs("[\(getpid())] dispatchgenerate: handler done, closing channel\n", stderr)
             output.close()
+            fputs("[\(getpid())] dispatchgenerate: sending response\n", stderr)
             taskSender(
                 .response(requestId: requestId, payload: encodeResultOk((), encoder: { _ in [] })))
         } catch {
+            fputs("[\(getpid())] dispatchgenerate error: \(error)\n", stderr)
             taskSender(.response(requestId: requestId, payload: encodeInvalidPayloadError()))
         }
     }
