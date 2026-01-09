@@ -17,4 +17,5 @@ export {
 } from "./registry.ts";
 export { Tx, createServerTx } from "./tx.ts";
 export { Rx, createServerRx } from "./rx.ts";
+export { channel } from "./pair.ts";
 export { type TaskMessage, type TaskSender, type ChannelContext } from "./task.ts";

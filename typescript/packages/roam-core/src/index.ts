@@ -75,6 +75,7 @@ export {
   ChannelReceiver,
   Tx,
   Rx,
+  channel,
   createServerTx,
   createServerRx,
   type OutgoingMessage,
