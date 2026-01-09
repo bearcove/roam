@@ -3,55 +3,65 @@
 // These types describe the structure of method arguments so the runtime
 // binder can find and bind Tx/Rx channels.
 
+// TODO: move into its own package
+
 /** Primitive types that don't need binding. */
 export type PrimitiveKind =
-  | 'bool'
-  | 'u8' | 'u16' | 'u32' | 'u64'
-  | 'i8' | 'i16' | 'i32' | 'i64'
-  | 'f32' | 'f64'
-  | 'string' | 'bytes';
+  | "bool"
+  | "u8"
+  | "u16"
+  | "u32"
+  | "u64"
+  | "i8"
+  | "i16"
+  | "i32"
+  | "i64"
+  | "f32"
+  | "f64"
+  | "string"
+  | "bytes";
 
 /** Schema for Tx<T> - needs binding for outgoing data. */
 export interface TxSchema {
-  kind: 'tx';
+  kind: "tx";
   element: Schema;
 }
 
 /** Schema for Rx<T> - needs binding for incoming data. */
 export interface RxSchema {
-  kind: 'rx';
+  kind: "rx";
   element: Schema;
 }
 
 /** Schema for Vec<T>. */
 export interface VecSchema {
-  kind: 'vec';
+  kind: "vec";
   element: Schema;
 }
 
 /** Schema for Option<T>. */
 export interface OptionSchema {
-  kind: 'option';
+  kind: "option";
   inner: Schema;
 }
 
 /** Schema for HashMap<K, V>. */
 export interface MapSchema {
-  kind: 'map';
+  kind: "map";
   key: Schema;
   value: Schema;
 }
 
 /** Schema for a struct with named fields. */
 export interface StructSchema {
-  kind: 'struct';
+  kind: "struct";
   fields: Record<string, Schema>;
 }
 
 /** Schema for an enum with variants. */
 export interface EnumSchema {
-  kind: 'enum';
-  variants: Record<string, Schema[]>;  // variant name -> tuple of field schemas
+  kind: "enum";
+  variants: Record<string, Schema[]>; // variant name -> tuple of field schemas
 }
 
 /** Union of all schema types. */

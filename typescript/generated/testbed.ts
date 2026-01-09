@@ -131,8 +131,8 @@ export type ProcessMessageResponse = Message;
 export type GetPointsRequest = [number];
 export type GetPointsResponse = Point[];
 
-export type SwapPairRequest = [{ 0: number; 1: string }];
-export type SwapPairResponse = { 0: string; 1: number };
+export type SwapPairRequest = [[number, string]];
+export type SwapPairResponse = [string, number];
 
 // Caller interface for Testbed
 export interface TestbedCaller {
@@ -169,7 +169,7 @@ export interface TestbedCaller {
   /**  Return multiple points. */
   getPoints(count: number): Promise<Point[]>;
   /**  Test tuple types. */
-  swapPair(pair: { 0: number; 1: string }): Promise<{ 0: string; 1: number }>;
+  swapPair(pair: [number, string]): Promise<[string, number]>;
 }
 
 // Client implementation for Testbed
@@ -427,14 +427,14 @@ switch (_result_disc.value) {
   }
 
   /**  Test tuple types. */
-  async swapPair(pair: { 0: number; 1: string }): Promise<{ 0: string; 1: number }> {
+  async swapPair(pair: [number, string]): Promise<[string, number]> {
     const payload = concat(encodeI32(pair[0]), encodeString(pair[1]));
     const response = await this.conn.call(0xacd19a29fe0d470cn, payload);
     const buf = response;
     let offset = decodeRpcResult(buf, 0);
-    const _result_f0_r = decodeString(buf, offset); const result_f0 = _result_f0_r.value; offset = _result_f0_r.next;
-const _result_f1_r = decodeI32(buf, offset); const result_f1 = _result_f1_r.value; offset = _result_f1_r.next;
-const result = { 0: result_f0, 1: result_f1 };
+    const _result_0_r = decodeString(buf, offset); const result_0 = _result_0_r.value; offset = _result_0_r.next;
+const _result_1_r = decodeI32(buf, offset); const result_1 = _result_1_r.value; offset = _result_1_r.next;
+const result = [result_0, result_1] as const;
     return result;
   }
 
@@ -455,7 +455,7 @@ export interface TestbedHandler {
   createCanvas(name: string, shapes: Shape[], background: Color): Promise<Canvas> | Canvas;
   processMessage(msg: Message): Promise<Message> | Message;
   getPoints(count: number): Promise<Point[]> | Point[];
-  swapPair(pair: { 0: number; 1: string }): Promise<{ 0: string; 1: number }> | { 0: string; 1: number };
+  swapPair(pair: [number, string]): Promise<[string, number]> | [string, number];
 }
 
 // Method handlers for Testbed
@@ -706,9 +706,9 @@ switch (_msg_disc.value) {
     try {
       const buf = payload;
       let offset = 0;
-      const _pair_f0_r = decodeI32(buf, offset); const pair_f0 = _pair_f0_r.value; offset = _pair_f0_r.next;
-const _pair_f1_r = decodeString(buf, offset); const pair_f1 = _pair_f1_r.value; offset = _pair_f1_r.next;
-const pair = { 0: pair_f0, 1: pair_f1 };
+      const _pair_0_r = decodeI32(buf, offset); const pair_0 = _pair_0_r.value; offset = _pair_0_r.next;
+const _pair_1_r = decodeString(buf, offset); const pair_1 = _pair_1_r.value; offset = _pair_1_r.next;
+const pair = [pair_0, pair_1] as const;
       if (offset !== buf.length) throw new Error("args: trailing bytes");
       const result = await handler.swapPair(pair);
       return encodeResultOk(concat(encodeString(result[0]), encodeI32(result[1])));
@@ -991,9 +991,9 @@ switch (_msg_disc.value) {
     try {
       const buf = payload;
       let offset = 0;
-      const _pair_f0_r = decodeI32(buf, offset); const pair_f0 = _pair_f0_r.value; offset = _pair_f0_r.next;
-const _pair_f1_r = decodeString(buf, offset); const pair_f1 = _pair_f1_r.value; offset = _pair_f1_r.next;
-const pair = { 0: pair_f0, 1: pair_f1 };
+      const _pair_0_r = decodeI32(buf, offset); const pair_0 = _pair_0_r.value; offset = _pair_0_r.next;
+const _pair_1_r = decodeString(buf, offset); const pair_1 = _pair_1_r.value; offset = _pair_1_r.next;
+const pair = [pair_0, pair_1] as const;
       if (offset !== buf.length) throw new Error("args: trailing bytes");
       const result = await handler.swapPair(pair);
       taskSender({ kind: 'response', requestId, payload: encodeResultOk(concat(encodeString(result[0]), encodeI32(result[1]))) });
@@ -1017,7 +1017,7 @@ export const testbed_schemas: Record<string, MethodSchema> = {
   createCanvas: { args: [{ kind: 'string' }, { kind: 'vec', element: { kind: 'enum', variants: { 'Circle': [{ kind: 'f64' }], 'Rectangle': [{ kind: 'f64' }, { kind: 'f64' }], 'Point': [] } } }, { kind: 'enum', variants: { 'Red': [], 'Green': [], 'Blue': [] } }] },
   processMessage: { args: [{ kind: 'enum', variants: { 'Text': [{ kind: 'string' }], 'Number': [{ kind: 'i64' }], 'Data': [{ kind: 'bytes' }] } }] },
   getPoints: { args: [{ kind: 'u32' }] },
-  swapPair: { args: [{ kind: 'struct', fields: { '0': { kind: 'i32' }, '1': { kind: 'string' } } }] },
+  swapPair: { args: [{ kind: 'tuple', elements: [{ kind: 'i32' }, { kind: 'string' }] }] },
 };
 
 // Serializers for runtime channel binding

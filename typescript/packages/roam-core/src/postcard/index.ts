@@ -3,6 +3,8 @@
 // This module provides encoding/decoding functions compatible with Rust's
 // postcard format (https://postcard.rs/), which uses variable-length integers.
 
+// FIXME: move into its own package
+
 import { encodeVarint, decodeVarint, decodeVarintNumber } from "../binary/varint.ts";
 import { concat } from "../binary/bytes.ts";
 
@@ -208,10 +210,7 @@ export function decodeBytes(buf: Uint8Array, offset: number): DecodeResult<Uint8
 // ============================================================================
 
 /** Encode an Option<T>. */
-export function encodeOption<T>(
-  value: T | null,
-  encodeInner: (v: T) => Uint8Array,
-): Uint8Array {
+export function encodeOption<T>(value: T | null, encodeInner: (v: T) => Uint8Array): Uint8Array {
   if (value === null) {
     return Uint8Array.of(0);
   } else {
@@ -242,10 +241,7 @@ export function decodeOption<T>(
 // ============================================================================
 
 /** Encode a Vec<T>. */
-export function encodeVec<T>(
-  values: T[],
-  encodeItem: (v: T) => Uint8Array,
-): Uint8Array {
+export function encodeVec<T>(values: T[], encodeItem: (v: T) => Uint8Array): Uint8Array {
   const parts: Uint8Array[] = [encodeVarint(values.length)];
   for (const item of values) {
     parts.push(encodeItem(item));
