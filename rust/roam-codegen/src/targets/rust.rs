@@ -11,7 +11,7 @@ use facet_core::{ScalarType, Shape};
 use heck::{ToSnakeCase, ToUpperCamelCase};
 use roam_schema::{
     EnumInfo, MethodDetail, ServiceDetail, ShapeKind, StructInfo, VariantKind, classify_shape,
-    classify_variant, is_bytes, is_rx, is_tx,
+    classify_variant, is_bytes,
 };
 
 /// Extract the Ok and Err types from a Result<T, E> shape.
@@ -210,9 +210,9 @@ impl<'a> RustGenerator<'a> {
                 "                method_id::{const_name} => self.dispatch_{method_name}(payload, request_id, registry),"
             ));
         }
-        // Unknown method sends Response with encoded Result::Err(RoamError::UnknownMethod)
+        // Unknown method sends Response with RoamError::UnknownMethod
         dispatch_arms.push(
-            "                _ => { let task_tx = registry.task_tx(); Box::pin(async move { let _ = task_tx.send(::roam::session::TaskMessage::Response { request_id, payload: vec![1, 1] }).await; }) }"
+            "                _ => ::roam::session::dispatch_unknown_method(request_id, registry),"
                 .to_string(),
         );
         let dispatch_match = dispatch_arms.join("\n");
@@ -310,21 +310,8 @@ fn generate_client_method(client_impl: &mut Impl, method: &MethodDetail) {
 
 /// Generate a dispatch method for a single service method.
 ///
-/// All methods have the same signature:
-/// ```ignore
-/// fn dispatch_{method}(
-///     &self,
-///     payload: Vec<u8>,
-///     registry: &mut StreamRegistry,
-/// ) -> Pin<Box<dyn Future<Output = ()> + Send + 'static>>
-/// ```
-///
-/// The method:
-/// 1. Deserializes args from payload (Rx/Tx deserialize from u64 stream IDs)
-/// 2. Binds streams via registry.bind_streams() using Poke reflection
-/// 3. Clones handler into a boxed future
-/// 4. Calls the handler method and serializes the response
-/// 5. Awaits drain handles to ensure all Data messages are sent before Response
+/// Uses `dispatch_call` helper from roam-session to minimize generated code.
+/// The generated method just provides a closure that destructures args and calls the handler.
 fn generate_dispatch_method_fn(
     impl_block: &mut Impl,
     method: &MethodDetail,
@@ -333,7 +320,7 @@ fn generate_dispatch_method_fn(
     let method_name = method.method_name.to_snake_case();
     let dispatch_name = format!("dispatch_{method_name}");
 
-    // Build arg types - Rx/Tx types are used directly (they deserialize from u64 via proxy)
+    // Build arg types for the tuple type annotation
     let arg_types: Vec<String> = method
         .args
         .iter()
@@ -342,67 +329,32 @@ fn generate_dispatch_method_fn(
 
     let arg_names: Vec<String> = method.args.iter().map(|a| a.name.to_snake_case()).collect();
 
-    // Check if any streams are present (affects whether we need drain handles)
-    let has_streams = method.args.iter().any(|a| is_tx(a.ty) || is_rx(a.ty));
-
-    // Start building the function body as a string (easier for complex logic)
-    let mut body = String::new();
-
-    // Decode args - Rx<T> and Tx<T> deserialize from u64 via #[facet(proxy = u64)]
-    if method.args.is_empty() {
-        // No args - nothing to decode or bind
-        body.push_str("let task_tx = registry.task_tx();\n");
-        body.push_str("let handler = self.handler.clone();\n");
+    // Build the tuple type and destructure pattern
+    let tuple_type = if arg_types.is_empty() {
+        "()".to_string()
+    } else if arg_types.len() == 1 {
+        format!("({},)", arg_types[0])
     } else {
-        let tuple_type = arg_types.join(", ");
-        body.push_str(&format!(
-            "let mut args = match facet_postcard::from_slice::<({tuple_type})>(&payload) {{\n"
-        ));
-        body.push_str("    Ok(args) => args,\n");
-        body.push_str("    Err(_) => {\n");
-        body.push_str("        let task_tx = registry.task_tx();\n");
-        body.push_str("        return Box::pin(async move {\n");
-        body.push_str("            let _ = task_tx.send(::roam::session::TaskMessage::Response { request_id, payload: vec![1, 2] }).await;\n");
-        body.push_str("        });\n");
-        body.push_str("    }\n");
-        body.push_str("};\n");
+        format!("({})", arg_types.join(", "))
+    };
 
-        // Bind streams via registry using Poke reflection
-        if has_streams {
-            body.push_str("registry.bind_streams(&mut args);\n");
-        }
+    let destructure = if arg_names.is_empty() {
+        "_args".to_string()
+    } else if arg_names.len() == 1 {
+        format!("({},)", arg_names[0])
+    } else {
+        format!("({})", arg_names.join(", "))
+    };
 
-        // Destructure args tuple
-        let tuple_pattern = arg_names.join(", ");
-        body.push_str(&format!("let ({tuple_pattern}) = args;\n"));
+    let args_call = arg_names.join(", ");
 
-        body.push_str("let task_tx = registry.task_tx();\n");
-        body.push_str("let handler = self.handler.clone();\n");
-    }
-
-    // Build async block
-    let args_str = arg_names.join(", ");
-    body.push_str("Box::pin(async move {\n");
-
-    // Call handler
+    // Build the function body using dispatch_call helper
+    let mut body = String::new();
+    body.push_str("let handler = self.handler.clone();\n");
     body.push_str(&format!(
-        "    let result = handler.{method_name}({args_str}).await;\n"
+        "::roam::session::dispatch_call(payload, request_id, registry, move |{destructure}: {tuple_type}| async move {{\n"
     ));
-
-    // Encode response and send via task channel
-    // Note: Tx streams send Close automatically when dropped by the handler
-    body.push_str("    let payload = match result {\n");
-    body.push_str("        Ok(result) => {\n");
-    body.push_str("            let mut out = vec![0u8];\n");
-    body.push_str("            match facet_postcard::to_vec(&result) {\n");
-    body.push_str("                Ok(bytes) => out.extend(bytes),\n");
-    body.push_str("                Err(_) => return,\n");
-    body.push_str("            }\n");
-    body.push_str("            out\n");
-    body.push_str("        }\n");
-    body.push_str("        Err(_e) => vec![1, 1],\n");
-    body.push_str("    };\n");
-    body.push_str("    let _ = task_tx.send(::roam::session::TaskMessage::Response { request_id, payload }).await;\n");
+    body.push_str(&format!("    handler.{method_name}({args_call}).await\n"));
     body.push_str("})");
 
     // Generate the function

@@ -952,6 +952,116 @@ impl Default for RequestIdGenerator {
 }
 
 // ============================================================================
+// Dispatch Helper
+// ============================================================================
+
+/// Helper for dispatching RPC methods with minimal generated code.
+///
+/// This function handles the common dispatch pattern:
+/// 1. Deserialize args from payload
+/// 2. Bind any Tx/Rx streams via registry
+/// 3. Call the handler closure
+/// 4. Encode the result and send Response
+///
+/// The generated code just needs to provide a closure that calls the handler method.
+///
+/// # Type Parameters
+///
+/// - `A`: Args tuple type (must implement Facet for deserialization)
+/// - `R`: Result ok type (must implement Facet for serialization)
+/// - `E`: Result error type (must implement Facet for serialization)
+/// - `F`: Handler closure type
+/// - `Fut`: Future returned by handler
+///
+/// # Example
+///
+/// ```ignore
+/// fn dispatch_echo(&self, payload: Vec<u8>, request_id: u64, registry: &mut StreamRegistry)
+///     -> Pin<Box<dyn Future<Output = ()> + Send + 'static>>
+/// {
+///     let handler = self.handler.clone();
+///     dispatch_call(payload, request_id, registry, move |args: (String,)| async move {
+///         handler.echo(args.0).await
+///     })
+/// }
+/// ```
+pub fn dispatch_call<A, R, E, F, Fut>(
+    payload: Vec<u8>,
+    request_id: u64,
+    registry: &mut StreamRegistry,
+    handler: F,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'static>>
+where
+    A: Facet<'static> + Send,
+    R: Facet<'static> + Send,
+    E: Facet<'static> + Send,
+    F: FnOnce(A) -> Fut + Send + 'static,
+    Fut: std::future::Future<Output = Result<R, RoamError<E>>> + Send + 'static,
+{
+    // Deserialize args
+    let mut args: A = match facet_postcard::from_slice(&payload) {
+        Ok(args) => args,
+        Err(_) => {
+            let task_tx = registry.task_tx();
+            return Box::pin(async move {
+                // InvalidPayload error
+                let _ = task_tx
+                    .send(TaskMessage::Response {
+                        request_id,
+                        payload: vec![1, 2],
+                    })
+                    .await;
+            });
+        }
+    };
+
+    // Bind streams via reflection
+    registry.bind_streams(&mut args);
+
+    let task_tx = registry.task_tx();
+
+    Box::pin(async move {
+        let result = handler(args).await;
+        let payload = match result {
+            Ok(result) => {
+                let mut out = vec![0u8];
+                match facet_postcard::to_vec(&result) {
+                    Ok(bytes) => out.extend(bytes),
+                    Err(_) => return,
+                }
+                out
+            }
+            Err(_e) => vec![1, 1],
+        };
+        let _ = task_tx
+            .send(TaskMessage::Response {
+                request_id,
+                payload,
+            })
+            .await;
+    })
+}
+
+/// Send an "unknown method" error response.
+///
+/// Used by dispatchers when the method_id doesn't match any known method.
+pub fn dispatch_unknown_method(
+    request_id: u64,
+    registry: &mut StreamRegistry,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'static>> {
+    let task_tx = registry.task_tx();
+    Box::pin(async move {
+        // UnknownMethod error
+        let _ = task_tx
+            .send(TaskMessage::Response {
+                request_id,
+                payload: vec![1, 1],
+            })
+            .await;
+    })
+}
+
+// ============================================================================
 // Service Dispatcher
 // ============================================================================
 
