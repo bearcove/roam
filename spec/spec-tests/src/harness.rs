@@ -28,9 +28,9 @@ fn format_message(msg: &Message, direction: &str) -> String {
         Message::Hello(hello) => match hello {
             Hello::V1 {
                 max_payload_size,
-                initial_stream_credit,
+                initial_channel_credit,
             } => format!(
-                "{direction} Hello::V1 {{ max_payload: {max_payload_size}, credit: {initial_stream_credit} }}"
+                "{direction} Hello::V1 {{ max_payload: {max_payload_size}, credit: {initial_channel_credit} }}"
             ),
         },
         Message::Goodbye { reason } => format!("{direction} Goodbye {{ reason: {reason:?} }}"),
@@ -52,14 +52,17 @@ fn format_message(msg: &Message, direction: &str) -> String {
             payload.len()
         ),
         Message::Cancel { request_id } => format!("{direction} Cancel {{ id: {request_id} }}"),
-        Message::Data { stream_id, payload } => format!(
-            "{direction} Data {{ stream: {stream_id}, payload: {} bytes }}",
+        Message::Data {
+            channel_id,
+            payload,
+        } => format!(
+            "{direction} Data {{ stream: {channel_id}, payload: {} bytes }}",
             payload.len()
         ),
-        Message::Close { stream_id } => format!("{direction} Close {{ stream: {stream_id} }}"),
-        Message::Reset { stream_id } => format!("{direction} Reset {{ stream: {stream_id} }}"),
-        Message::Credit { stream_id, bytes } => {
-            format!("{direction} Credit {{ stream: {stream_id}, bytes: {bytes} }}")
+        Message::Close { channel_id } => format!("{direction} Close {{ stream: {channel_id} }}"),
+        Message::Reset { channel_id } => format!("{direction} Reset {{ stream: {channel_id} }}"),
+        Message::Credit { channel_id, bytes } => {
+            format!("{direction} Credit {{ stream: {channel_id}, bytes: {bytes} }}")
         }
     }
 }
@@ -90,7 +93,7 @@ pub fn run_async<T>(f: impl std::future::Future<Output = T>) -> T {
 pub fn our_hello(max_payload_size: u32) -> Hello {
     Hello::V1 {
         max_payload_size,
-        initial_stream_credit: 64 * 1024,
+        initial_channel_credit: 64 * 1024,
     }
 }
 

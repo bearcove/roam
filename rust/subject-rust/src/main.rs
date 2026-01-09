@@ -228,7 +228,7 @@ async fn run_client() -> Result<(), String> {
 
     let hello = Hello::V1 {
         max_payload_size: 1024 * 1024,
-        initial_stream_credit: 64 * 1024,
+        initial_channel_credit: 64 * 1024,
     };
 
     // We need a dispatcher even as client (for bidirectional calls)

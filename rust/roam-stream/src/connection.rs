@@ -11,7 +11,7 @@
 use std::collections::HashSet;
 use std::time::Duration;
 
-use roam_session::{Role, StreamError, StreamIdAllocator, StreamRegistry, TaskMessage};
+use roam_session::{ChannelError, ChannelIdAllocator, ChannelRegistry, Role, TaskMessage};
 use roam_wire::{Hello, Message};
 
 use crate::transport::MessageTransport;
@@ -62,8 +62,8 @@ pub struct Connection<T> {
     io: T,
     role: Role,
     negotiated: Negotiated,
-    stream_allocator: StreamIdAllocator,
-    stream_registry: StreamRegistry,
+    channel_allocator: ChannelIdAllocator,
+    channel_registry: ChannelRegistry,
     /// r[impl unary.request-id.in-flight] - Track requests awaiting response.
     in_flight_requests: HashSet<u64>,
     #[allow(dead_code)]
@@ -92,21 +92,21 @@ impl<T> Connection<T> {
     /// Get the stream ID allocator.
     ///
     /// r[impl streaming.allocation.caller] - Caller allocates ALL stream IDs.
-    pub fn stream_allocator(&self) -> &StreamIdAllocator {
-        &self.stream_allocator
+    pub fn channel_allocator(&self) -> &ChannelIdAllocator {
+        &self.channel_allocator
     }
 
     /// Validate a stream ID according to protocol rules.
     ///
     /// Returns the rule ID if validation fails.
-    pub fn validate_stream_id(&self, stream_id: u64) -> Result<(), &'static str> {
+    pub fn validate_channel_id(&self, channel_id: u64) -> Result<(), &'static str> {
         // r[impl streaming.id.zero-reserved] - Stream ID 0 is reserved.
-        if stream_id == 0 {
+        if channel_id == 0 {
             return Err("streaming.id.zero-reserved");
         }
 
         // r[impl streaming.unknown] - Unknown stream IDs are connection errors.
-        if !self.stream_registry.contains(stream_id) {
+        if !self.channel_registry.contains(channel_id) {
             return Err("streaming.unknown");
         }
 
@@ -116,8 +116,8 @@ impl<T> Connection<T> {
     /// Get a mutable reference to the stream registry.
     ///
     /// Used by dispatchers to register streams before processing requests.
-    pub fn stream_registry_mut(&mut self) -> &mut StreamRegistry {
-        &mut self.stream_registry
+    pub fn channel_registry_mut(&mut self) -> &mut ChannelRegistry {
+        &mut self.channel_registry
     }
 
     /// Validate payload size against negotiated limit.
@@ -179,10 +179,10 @@ where
                 // Using a single channel ensures Data/Close are sent before Response.
                 Some(msg) = self.task_rx.recv() => {
                     let wire_msg = match msg {
-                        TaskMessage::Data { stream_id, payload } => {
-                            Message::Data { stream_id, payload }
+                        TaskMessage::Data { channel_id, payload } => {
+                            Message::Data { channel_id, payload }
                         }
-                        TaskMessage::Close { stream_id } => Message::Close { stream_id },
+                        TaskMessage::Close { channel_id } => Message::Close { channel_id },
                         TaskMessage::Response { request_id, payload } => {
                             // r[impl streaming.call-complete] - Call completes when Response sent.
                             // r[impl streaming.lifecycle.response-closes-pulls] - Rx streams close with Response.
@@ -287,7 +287,7 @@ where
                 // The dispatch future sends Data/Close/Response via task_tx in order,
                 // ensuring Data and Close are sent before Response.
                 let handler_fut =
-                    dispatcher.dispatch(method_id, payload, request_id, &mut self.stream_registry);
+                    dispatcher.dispatch(method_id, payload, request_id, &mut self.channel_registry);
 
                 tokio::spawn(handler_fut);
             }
@@ -308,9 +308,12 @@ where
                 // TODO: Implement proper async request handling with cancellation support.
                 let _ = request_id;
             }
-            Message::Data { stream_id, payload } => {
+            Message::Data {
+                channel_id,
+                payload,
+            } => {
                 // r[impl streaming.id.zero-reserved] - Stream ID 0 is reserved.
-                if stream_id == 0 {
+                if channel_id == 0 {
                     return Err(self.goodbye("streaming.id.zero-reserved").await);
                 }
 
@@ -321,62 +324,62 @@ where
 
                 // r[impl streaming.data] - Route Data to registered stream.
                 // r[impl flow.stream.credit-overrun] - Check credit before routing.
-                match self.stream_registry.route_data(stream_id, payload).await {
+                match self.channel_registry.route_data(channel_id, payload).await {
                     Ok(()) => {}
-                    Err(StreamError::Unknown) => {
+                    Err(ChannelError::Unknown) => {
                         // r[impl streaming.unknown] - Unknown stream ID.
                         return Err(self.goodbye("streaming.unknown").await);
                     }
-                    Err(StreamError::DataAfterClose) => {
+                    Err(ChannelError::DataAfterClose) => {
                         // r[impl streaming.data-after-close] - Data after Close is error.
                         return Err(self.goodbye("streaming.data-after-close").await);
                     }
-                    Err(StreamError::CreditOverrun) => {
+                    Err(ChannelError::CreditOverrun) => {
                         // r[impl flow.stream.credit-overrun] - Data exceeded credit.
                         return Err(self.goodbye("flow.stream.credit-overrun").await);
                     }
                 }
             }
-            Message::Close { stream_id } => {
+            Message::Close { channel_id } => {
                 // r[impl streaming.id.zero-reserved] - Stream ID 0 is reserved.
-                if stream_id == 0 {
+                if channel_id == 0 {
                     return Err(self.goodbye("streaming.id.zero-reserved").await);
                 }
 
                 // r[impl streaming.close] - Close the stream.
-                if !self.stream_registry.contains(stream_id) {
+                if !self.channel_registry.contains(channel_id) {
                     return Err(self.goodbye("streaming.unknown").await);
                 }
-                self.stream_registry.close(stream_id);
+                self.channel_registry.close(channel_id);
             }
-            Message::Reset { stream_id } => {
+            Message::Reset { channel_id } => {
                 // r[impl streaming.id.zero-reserved] - Stream ID 0 is reserved.
-                if stream_id == 0 {
+                if channel_id == 0 {
                     return Err(self.goodbye("streaming.id.zero-reserved").await);
                 }
 
                 // r[impl streaming.reset] - Forcefully terminate stream.
                 // r[impl streaming.reset.effect] - Stream is terminated, ignore further messages.
                 // r[impl streaming.reset.credit] - Outstanding credit is lost on reset.
-                if !self.stream_registry.contains(stream_id) {
+                if !self.channel_registry.contains(channel_id) {
                     // Stream already terminated or unknown - ignore per reset.effect
                     return Ok(());
                 }
-                self.stream_registry.reset(stream_id);
+                self.channel_registry.reset(channel_id);
             }
-            Message::Credit { stream_id, bytes } => {
+            Message::Credit { channel_id, bytes } => {
                 // r[impl streaming.id.zero-reserved] - Stream ID 0 is reserved.
-                if stream_id == 0 {
+                if channel_id == 0 {
                     return Err(self.goodbye("streaming.id.zero-reserved").await);
                 }
 
                 // r[impl flow.stream.credit-grant] - Credit message grants more credit.
                 // r[impl flow.stream.credit-additive] - Credit accumulates.
                 // r[impl flow.stream.credit-prompt] - Process Credit without delay.
-                if !self.stream_registry.contains(stream_id) {
+                if !self.channel_registry.contains(channel_id) {
                     return Err(self.goodbye("streaming.unknown").await);
                 }
-                self.stream_registry.receive_credit(stream_id, bytes);
+                self.channel_registry.receive_credit(channel_id, bytes);
             }
         }
         Ok(())
@@ -423,14 +426,14 @@ where
     let (our_max, our_credit) = match &our_hello {
         Hello::V1 {
             max_payload_size,
-            initial_stream_credit,
-        } => (*max_payload_size, *initial_stream_credit),
+            initial_channel_credit,
+        } => (*max_payload_size, *initial_channel_credit),
     };
     let (peer_max, peer_credit) = match &peer_hello {
         Hello::V1 {
             max_payload_size,
-            initial_stream_credit,
-        } => (*max_payload_size, *initial_stream_credit),
+            initial_channel_credit,
+        } => (*max_payload_size, *initial_channel_credit),
     };
 
     let negotiated = Negotiated {
@@ -443,9 +446,9 @@ where
         io,
         role: Role::Acceptor,
         negotiated: negotiated.clone(),
-        stream_allocator: StreamIdAllocator::new(Role::Acceptor),
+        channel_allocator: ChannelIdAllocator::new(Role::Acceptor),
         // r[impl flow.stream.initial-credit] - Use negotiated credit for streams.
-        stream_registry: StreamRegistry::new_with_credit(negotiated.initial_credit, task_tx),
+        channel_registry: ChannelRegistry::new_with_credit(negotiated.initial_credit, task_tx),
         in_flight_requests: HashSet::new(),
         our_hello,
         task_rx,
@@ -504,14 +507,14 @@ where
     let (our_max, our_credit) = match &our_hello {
         Hello::V1 {
             max_payload_size,
-            initial_stream_credit,
-        } => (*max_payload_size, *initial_stream_credit),
+            initial_channel_credit,
+        } => (*max_payload_size, *initial_channel_credit),
     };
     let (peer_max, peer_credit) = match &peer_hello {
         Hello::V1 {
             max_payload_size,
-            initial_stream_credit,
-        } => (*max_payload_size, *initial_stream_credit),
+            initial_channel_credit,
+        } => (*max_payload_size, *initial_channel_credit),
     };
 
     let negotiated = Negotiated {
@@ -524,9 +527,9 @@ where
         io,
         role: Role::Initiator,
         negotiated: negotiated.clone(),
-        stream_allocator: StreamIdAllocator::new(Role::Initiator),
+        channel_allocator: ChannelIdAllocator::new(Role::Initiator),
         // r[impl flow.stream.initial-credit] - Use negotiated credit for streams.
-        stream_registry: StreamRegistry::new_with_credit(negotiated.initial_credit, task_tx),
+        channel_registry: ChannelRegistry::new_with_credit(negotiated.initial_credit, task_tx),
         in_flight_requests: HashSet::new(),
         our_hello,
         task_rx,

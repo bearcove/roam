@@ -234,18 +234,18 @@ impl Type {
     ///
     /// Note: This is a heuristic based on type names. Proper validation should
     /// happen at codegen time when we can resolve types properly.
-    pub fn contains_stream(&self) -> bool {
+    pub fn contains_channel(&self) -> bool {
         match self {
-            Type::Reference(TypeRef { inner, .. }) => inner.contains_stream(),
+            Type::Reference(TypeRef { inner, .. }) => inner.contains_channel(),
             Type::Tuple(TypeTuple(group)) => {
-                group.content.iter().any(|t| t.value.contains_stream())
+                group.content.iter().any(|t| t.value.contains_channel())
             }
             Type::PathWithGenerics(PathWithGenerics { path, args, .. }) => {
                 let seg = path.last_segment();
                 if seg == "Tx" || seg == "Rx" {
                     return true;
                 }
-                args.iter().any(|t| t.value.contains_stream())
+                args.iter().any(|t| t.value.contains_channel())
             }
             Type::Path(path) => {
                 let seg = path.last_segment();

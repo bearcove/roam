@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Session/state machine (handshake, request_id/stream_id routing, flow control)"
+description = "Session/state machine (handshake, request_id/channel_id routing, flow control)"
 
 [package.metadata]
 

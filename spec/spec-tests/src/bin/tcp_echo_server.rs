@@ -180,7 +180,7 @@ async fn handle_connection(stream: TcpStream) -> Result<(), Box<dyn std::error::
     // Send our Hello
     let our_hello = Hello::V1 {
         max_payload_size: 1024 * 1024,
-        initial_stream_credit: 64 * 1024,
+        initial_channel_credit: 64 * 1024,
     };
     io.send(&Message::Hello(our_hello)).await?;
 

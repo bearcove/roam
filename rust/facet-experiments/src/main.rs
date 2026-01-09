@@ -1,13 +1,13 @@
 //! Experiment: Testing container-level proxy for Tx/Rx serialization
 //!
 //! Goal: `Tx<T>` and `Rx<T>` should:
-//! - Have pokeable `stream_id` field (for Connection to set it)
+//! - Have pokeable `channel_id` field (for Connection to set it)
 //! - Have opaque fields for sender/receiver (they don't implement Facet)
 //! - Serialize as just a u64 via container-level proxy
 //!
 //! Results:
 //! 1. Partial opaque (only on non-Facet fields) works ✅
-//! 2. Can poke the stream_id field ✅
+//! 2. Can poke the channel_id field ✅
 //! 3. Container-level proxy for serialization - TESTING
 
 use std::marker::PhantomData;
@@ -28,7 +28,7 @@ pub struct TxProxy(pub u64);
 #[derive(Facet)]
 #[facet(proxy = TxProxy)]
 pub struct Tx<T: 'static> {
-    pub stream_id: u64,
+    pub channel_id: u64,
     #[facet(opaque)]
     sender: mpsc::Sender<Vec<u8>>,
     #[facet(opaque)]
@@ -40,7 +40,7 @@ pub struct Tx<T: 'static> {
 impl<T: 'static> TryFrom<&Tx<T>> for TxProxy {
     type Error = std::convert::Infallible;
     fn try_from(tx: &Tx<T>) -> Result<Self, Self::Error> {
-        Ok(TxProxy(tx.stream_id))
+        Ok(TxProxy(tx.channel_id))
     }
 }
 
@@ -51,7 +51,7 @@ impl<T: 'static> TryFrom<TxProxy> for Tx<T> {
     fn try_from(proxy: TxProxy) -> Result<Self, Self::Error> {
         let (sender, _rx) = mpsc::channel(1); // placeholder
         Ok(Tx {
-            stream_id: proxy.0,
+            channel_id: proxy.0,
             sender,
             _marker: PhantomData,
         })
@@ -66,7 +66,7 @@ impl<T: 'static> TryFrom<TxProxy> for Tx<T> {
 #[derive(Facet)]
 #[facet(proxy = u64)]
 pub struct Tx2<T: 'static> {
-    pub stream_id: u64,
+    pub channel_id: u64,
     #[facet(opaque)]
     sender: mpsc::Sender<Vec<u8>>,
     #[facet(opaque)]
@@ -78,7 +78,7 @@ pub struct Tx2<T: 'static> {
 impl<T: 'static> TryFrom<&Tx2<T>> for u64 {
     type Error = std::convert::Infallible;
     fn try_from(tx: &Tx2<T>) -> Result<Self, Self::Error> {
-        Ok(tx.stream_id)
+        Ok(tx.channel_id)
     }
 }
 
@@ -86,10 +86,10 @@ impl<T: 'static> TryFrom<&Tx2<T>> for u64 {
 #[allow(clippy::infallible_try_from)]
 impl<T: 'static> TryFrom<u64> for Tx2<T> {
     type Error = std::convert::Infallible;
-    fn try_from(stream_id: u64) -> Result<Self, Self::Error> {
+    fn try_from(channel_id: u64) -> Result<Self, Self::Error> {
         let (sender, _rx) = mpsc::channel(1); // placeholder
         Ok(Tx2 {
-            stream_id,
+            channel_id,
             sender,
             _marker: PhantomData,
         })
@@ -142,27 +142,27 @@ fn test_poke_tx() {
 
     let (sender, _rx) = mpsc::channel::<Vec<u8>>(1);
     let mut tx = Tx::<i32> {
-        stream_id: 0,
+        channel_id: 0,
         sender,
         _marker: PhantomData,
     };
 
-    println!("Initial stream_id: {}", tx.stream_id);
+    println!("Initial channel_id: {}", tx.channel_id);
 
     let poke = Poke::new(&mut tx);
 
     match poke.into_struct() {
-        Ok(mut poke_struct) => match poke_struct.field_by_name("stream_id") {
+        Ok(mut poke_struct) => match poke_struct.field_by_name("channel_id") {
             Ok(mut field_poke) => match field_poke.set(42u64) {
-                Ok(()) => println!("✅ Successfully poked stream_id = 42"),
+                Ok(()) => println!("✅ Successfully poked channel_id = 42"),
                 Err(e) => println!("❌ Failed to set value: {e}"),
             },
-            Err(e) => println!("❌ Cannot access field 'stream_id': {e}"),
+            Err(e) => println!("❌ Cannot access field 'channel_id': {e}"),
         },
         Err(e) => println!("❌ Cannot convert to PokeStruct: {e}"),
     }
 
-    println!("Final stream_id: {}", tx.stream_id);
+    println!("Final channel_id: {}", tx.channel_id);
 }
 
 fn test_poke_tx2() {
@@ -170,27 +170,27 @@ fn test_poke_tx2() {
 
     let (sender, _rx) = mpsc::channel::<Vec<u8>>(1);
     let mut tx = Tx2::<i32> {
-        stream_id: 0,
+        channel_id: 0,
         sender,
         _marker: PhantomData,
     };
 
-    println!("Initial stream_id: {}", tx.stream_id);
+    println!("Initial channel_id: {}", tx.channel_id);
 
     let poke = Poke::new(&mut tx);
 
     match poke.into_struct() {
-        Ok(mut poke_struct) => match poke_struct.field_by_name("stream_id") {
+        Ok(mut poke_struct) => match poke_struct.field_by_name("channel_id") {
             Ok(mut field_poke) => match field_poke.set(42u64) {
-                Ok(()) => println!("✅ Successfully poked stream_id = 42"),
+                Ok(()) => println!("✅ Successfully poked channel_id = 42"),
                 Err(e) => println!("❌ Failed to set value: {e}"),
             },
-            Err(e) => println!("❌ Cannot access field 'stream_id': {e}"),
+            Err(e) => println!("❌ Cannot access field 'channel_id': {e}"),
         },
         Err(e) => println!("❌ Cannot convert to PokeStruct: {e}"),
     }
 
-    println!("Final stream_id: {}", tx.stream_id);
+    println!("Final channel_id: {}", tx.channel_id);
 }
 
 fn test_json_roundtrip() {
@@ -198,23 +198,23 @@ fn test_json_roundtrip() {
 
     let (sender, _rx) = mpsc::channel::<Vec<u8>>(1);
     let original = Tx::<i32> {
-        stream_id: 42,
+        channel_id: 42,
         sender,
         _marker: PhantomData,
     };
 
-    println!("Original stream_id: {}", original.stream_id);
+    println!("Original channel_id: {}", original.channel_id);
 
     match facet_json::to_string(&original) {
         Ok(json) => {
             println!("Serialized JSON: {}", json);
             match facet_json::from_str::<Tx<i32>>(&json) {
                 Ok(deserialized) => {
-                    println!("Deserialized stream_id: {}", deserialized.stream_id);
-                    if original.stream_id == deserialized.stream_id {
+                    println!("Deserialized channel_id: {}", deserialized.channel_id);
+                    if original.channel_id == deserialized.channel_id {
                         println!("✅ JSON roundtrip successful!");
                     } else {
-                        println!("❌ JSON roundtrip failed - stream_ids differ");
+                        println!("❌ JSON roundtrip failed - channel_ids differ");
                     }
                 }
                 Err(e) => println!("❌ JSON deserialization failed: {e}"),
@@ -229,23 +229,23 @@ fn test_json_roundtrip_tx2() {
 
     let (sender, _rx) = mpsc::channel::<Vec<u8>>(1);
     let original = Tx2::<i32> {
-        stream_id: 42,
+        channel_id: 42,
         sender,
         _marker: PhantomData,
     };
 
-    println!("Original stream_id: {}", original.stream_id);
+    println!("Original channel_id: {}", original.channel_id);
 
     match facet_json::to_string(&original) {
         Ok(json) => {
             println!("Serialized JSON: {}", json);
             match facet_json::from_str::<Tx2<i32>>(&json) {
                 Ok(deserialized) => {
-                    println!("Deserialized stream_id: {}", deserialized.stream_id);
-                    if original.stream_id == deserialized.stream_id {
+                    println!("Deserialized channel_id: {}", deserialized.channel_id);
+                    if original.channel_id == deserialized.channel_id {
                         println!("✅ JSON roundtrip successful!");
                     } else {
-                        println!("❌ JSON roundtrip failed - stream_ids differ");
+                        println!("❌ JSON roundtrip failed - channel_ids differ");
                     }
                 }
                 Err(e) => println!("❌ JSON deserialization failed: {e}"),
@@ -260,12 +260,12 @@ fn test_postcard_roundtrip() {
 
     let (sender, _rx) = mpsc::channel::<Vec<u8>>(1);
     let original = Tx::<i32> {
-        stream_id: 42,
+        channel_id: 42,
         sender,
         _marker: PhantomData,
     };
 
-    println!("Original stream_id: {}", original.stream_id);
+    println!("Original channel_id: {}", original.channel_id);
 
     // Serialize
     match facet_postcard::to_vec(&original) {
@@ -275,11 +275,11 @@ fn test_postcard_roundtrip() {
             // Deserialize
             match facet_postcard::from_slice::<Tx<i32>>(&bytes) {
                 Ok(deserialized) => {
-                    println!("Deserialized stream_id: {}", deserialized.stream_id);
-                    if original.stream_id == deserialized.stream_id {
+                    println!("Deserialized channel_id: {}", deserialized.channel_id);
+                    if original.channel_id == deserialized.channel_id {
                         println!("✅ Postcard roundtrip successful!");
                     } else {
-                        println!("❌ Postcard roundtrip failed - stream_ids differ");
+                        println!("❌ Postcard roundtrip failed - channel_ids differ");
                     }
                 }
                 Err(e) => println!("❌ Postcard deserialization failed: {e}"),
@@ -303,15 +303,15 @@ fn test_tx_in_struct() {
     let request = StreamRequest {
         request_id: 100,
         data_stream: Tx {
-            stream_id: 42,
+            channel_id: 42,
             sender,
             _marker: PhantomData,
         },
     };
 
     println!(
-        "Original: request_id={}, data_stream.stream_id={}",
-        request.request_id, request.data_stream.stream_id
+        "Original: request_id={}, data_stream.channel_id={}",
+        request.request_id, request.data_stream.channel_id
     );
 
     // JSON
@@ -321,8 +321,8 @@ fn test_tx_in_struct() {
             match facet_json::from_str::<StreamRequest>(&json) {
                 Ok(deser) => {
                     println!(
-                        "✅ JSON roundtrip: request_id={}, data_stream.stream_id={}",
-                        deser.request_id, deser.data_stream.stream_id
+                        "✅ JSON roundtrip: request_id={}, data_stream.channel_id={}",
+                        deser.request_id, deser.data_stream.channel_id
                     );
                 }
                 Err(e) => println!("❌ JSON deser failed: {e}"),
@@ -336,7 +336,7 @@ fn test_tx_in_struct() {
     let request2 = StreamRequest {
         request_id: 100,
         data_stream: Tx {
-            stream_id: 42,
+            channel_id: 42,
             sender: sender2,
             _marker: PhantomData,
         },
@@ -348,8 +348,8 @@ fn test_tx_in_struct() {
             match facet_postcard::from_slice::<StreamRequest>(&bytes) {
                 Ok(deser) => {
                     println!(
-                        "✅ Postcard roundtrip: request_id={}, data_stream.stream_id={}",
-                        deser.request_id, deser.data_stream.stream_id
+                        "✅ Postcard roundtrip: request_id={}, data_stream.channel_id={}",
+                        deser.request_id, deser.data_stream.channel_id
                     );
                 }
                 Err(e) => println!("❌ Postcard deser failed: {e}"),
@@ -395,7 +395,7 @@ impl ReceiverSlot {
 #[derive(Facet)]
 #[facet(proxy = u64)]
 pub struct Rx3<T: 'static> {
-    pub stream_id: u64,
+    pub channel_id: u64,
     pub receiver: ReceiverSlot, // Now pokeable!
     #[facet(opaque)]
     _marker: PhantomData<T>,
@@ -406,7 +406,7 @@ pub struct Rx3<T: 'static> {
 impl<T: 'static> TryFrom<&Rx3<T>> for u64 {
     type Error = std::convert::Infallible;
     fn try_from(rx: &Rx3<T>) -> Result<Self, Self::Error> {
-        Ok(rx.stream_id)
+        Ok(rx.channel_id)
     }
 }
 
@@ -414,9 +414,9 @@ impl<T: 'static> TryFrom<&Rx3<T>> for u64 {
 #[allow(clippy::infallible_try_from)]
 impl<T: 'static> TryFrom<u64> for Rx3<T> {
     type Error = std::convert::Infallible;
-    fn try_from(stream_id: u64) -> Result<Self, Self::Error> {
+    fn try_from(channel_id: u64) -> Result<Self, Self::Error> {
         Ok(Rx3 {
-            stream_id,
+            channel_id,
             receiver: ReceiverSlot::empty(),
             _marker: PhantomData,
         })
@@ -431,32 +431,32 @@ fn test_poke_take_receiver() {
 
     // Create Rx3 with the receiver
     let mut rx3 = Rx3::<i32> {
-        stream_id: 0,
+        channel_id: 0,
         receiver: ReceiverSlot::new(rx),
         _marker: PhantomData,
     };
 
     println!(
-        "Initial: stream_id={}, receiver.is_some()={}",
-        rx3.stream_id,
+        "Initial: channel_id={}, receiver.is_some()={}",
+        rx3.channel_id,
         rx3.receiver.is_some()
     );
 
     // Now use Poke to:
-    // 1. Set stream_id
+    // 1. Set channel_id
     // 2. Take the receiver
 
     let poke = Poke::new(&mut rx3);
 
     match poke.into_struct() {
         Ok(mut poke_struct) => {
-            // Step 1: Set stream_id
-            match poke_struct.field_by_name("stream_id") {
+            // Step 1: Set channel_id
+            match poke_struct.field_by_name("channel_id") {
                 Ok(mut field_poke) => match field_poke.set(42u64) {
-                    Ok(()) => println!("✅ Poked stream_id = 42"),
-                    Err(e) => println!("❌ Failed to set stream_id: {e}"),
+                    Ok(()) => println!("✅ Poked channel_id = 42"),
+                    Err(e) => println!("❌ Failed to set channel_id: {e}"),
                 },
-                Err(e) => println!("❌ Cannot access stream_id: {e}"),
+                Err(e) => println!("❌ Cannot access channel_id: {e}"),
             }
 
             // Step 2: Get mutable reference to ReceiverSlot and .take()
@@ -479,8 +479,8 @@ fn test_poke_take_receiver() {
     }
 
     println!(
-        "Final: stream_id={}, receiver.is_some()={}",
-        rx3.stream_id,
+        "Final: channel_id={}, receiver.is_some()={}",
+        rx3.channel_id,
         rx3.receiver.is_some()
     );
 }
@@ -495,7 +495,7 @@ fn main() {
     inspect_shape::<Tx<i32>>("Tx<i32> (newtype proxy)");
     inspect_shape::<Tx2<i32>>("Tx2<i32> (direct u64 proxy)");
 
-    // Test poking (Connection needs this to set stream_id)
+    // Test poking (Connection needs this to set channel_id)
     test_poke_tx();
     test_poke_tx2();
 

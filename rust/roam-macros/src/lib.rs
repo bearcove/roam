@@ -67,16 +67,16 @@ pub fn service(_attr: TokenStream, item: TokenStream) -> TokenStream {
 }
 
 fn generate_service(parsed: &ServiceTrait) -> Result<TokenStream2, parser::Error> {
-    // Validate: no streams in error types
+    // Validate: no channels in error types
     for method in parsed.methods() {
         let return_type = method.return_type();
         if let Some((_, err_ty)) = return_type.as_result()
-            && err_ty.contains_stream()
+            && err_ty.contains_channel()
         {
             return Err(parser::Error::new(
                 proc_macro2::Span::call_site(),
                 format!(
-                    "method `{}` has Stream (Tx/Rx) in error type - streams are not allowed in error types",
+                    "method `{}` has Channel (Tx/Rx) in error type - channels are not allowed in error types",
                     method.name()
                 ),
             ));
@@ -293,7 +293,7 @@ fn generate_dispatcher(parsed: &ServiceTrait, roam: &TokenStream2) -> TokenStrea
                 method_id: u64,
                 payload: Vec<u8>,
                 request_id: u64,
-                registry: &mut #roam::session::StreamRegistry,
+                registry: &mut #roam::session::ChannelRegistry,
             ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'static>> {
                 #(#dispatch_arms)*
                 else {
@@ -346,7 +346,7 @@ fn generate_dispatch_method(method: &ServiceMethod, roam: &TokenStream2) -> Toke
             &self,
             payload: Vec<u8>,
             request_id: u64,
-            registry: &mut #roam::session::StreamRegistry,
+            registry: &mut #roam::session::ChannelRegistry,
         ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'static>> {
             let handler = self.handler.clone();
             #roam::session::dispatch_call(payload, request_id, registry, move |#destructure: #tuple_type| async move {

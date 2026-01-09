@@ -62,12 +62,12 @@ fn streaming_sum_client_to_server() {
         let method_id = method_id::sum();
 
         // Allocate stream ID (odd = initiator)
-        let stream_id: u64 = 1;
+        let channel_id: u64 = 1;
 
         // Send Request with stream ID as the payload
-        // Payload: tuple of (stream_id: u64)
+        // Payload: tuple of (channel_id: u64)
         let req_payload =
-            facet_postcard::to_vec(&(stream_id,)).map_err(|e| format!("postcard args: {e}"))?;
+            facet_postcard::to_vec(&(channel_id,)).map_err(|e| format!("postcard args: {e}"))?;
         let req = Message::Request {
             request_id: 1,
             method_id,
@@ -81,7 +81,7 @@ fn streaming_sum_client_to_server() {
             let data_payload =
                 facet_postcard::to_vec(&n).map_err(|e| format!("postcard data: {e}"))?;
             io.send(&Message::Data {
-                stream_id,
+                channel_id,
                 payload: data_payload,
             })
             .await
@@ -89,7 +89,7 @@ fn streaming_sum_client_to_server() {
         }
 
         // Send Close to end the stream
-        io.send(&Message::Close { stream_id })
+        io.send(&Message::Close { channel_id })
             .await
             .map_err(|e| e.to_string())?;
 
@@ -147,11 +147,11 @@ fn streaming_generate_server_to_client() {
         let method_id = method_id::generate();
 
         // Allocate stream ID (odd = initiator)
-        let stream_id: u64 = 1;
+        let channel_id: u64 = 1;
         let count: u32 = 5;
 
-        // Send Request with (count, stream_id)
-        let req_payload = facet_postcard::to_vec(&(count, stream_id))
+        // Send Request with (count, channel_id)
+        let req_payload = facet_postcard::to_vec(&(count, channel_id))
             .map_err(|e| format!("postcard args: {e}"))?;
         let req = Message::Request {
             request_id: 1,
@@ -178,9 +178,9 @@ fn streaming_generate_server_to_client() {
                 ))?;
 
             match msg {
-                Message::Data { stream_id: sid, payload } => {
-                    if sid != stream_id {
-                        return Err(format!("unexpected stream_id {sid}, expected {stream_id}"));
+                Message::Data { channel_id: sid, payload } => {
+                    if sid != channel_id {
+                        return Err(format!("unexpected channel_id {sid}, expected {channel_id}"));
                     }
                     // Data must arrive BEFORE Response
                     if got_response {
@@ -190,9 +190,9 @@ fn streaming_generate_server_to_client() {
                         .map_err(|e| format!("postcard data: {e}"))?;
                     received.push(n);
                 }
-                Message::Close { stream_id: sid } => {
-                    if sid != stream_id {
-                        return Err(format!("close stream_id mismatch: {sid}"));
+                Message::Close { channel_id: sid } => {
+                    if sid != channel_id {
+                        return Err(format!("close channel_id mismatch: {sid}"));
                     }
                     // Close must arrive BEFORE Response
                     if got_response {
@@ -243,11 +243,11 @@ fn streaming_transform_bidirectional() {
         let method_id = method_id::transform();
 
         // Allocate stream IDs (odd = initiator)
-        let input_stream_id: u64 = 1;
-        let output_stream_id: u64 = 3;
+        let input_channel_id: u64 = 1;
+        let output_channel_id: u64 = 3;
 
-        // Send Request with (input_stream_id, output_stream_id)
-        let req_payload = facet_postcard::to_vec(&(input_stream_id, output_stream_id))
+        // Send Request with (input_channel_id, output_channel_id)
+        let req_payload = facet_postcard::to_vec(&(input_channel_id, output_channel_id))
             .map_err(|e| format!("postcard args: {e}"))?;
         let req = Message::Request {
             request_id: 1,
@@ -266,7 +266,7 @@ fn streaming_transform_bidirectional() {
             let data_payload = facet_postcard::to_vec(&msg.to_string())
                 .map_err(|e| format!("postcard data: {e}"))?;
             io.send(&Message::Data {
-                stream_id: input_stream_id,
+                channel_id: input_channel_id,
                 payload: data_payload,
             })
             .await
@@ -280,10 +280,13 @@ fn streaming_transform_bidirectional() {
                 .ok_or_else(|| "expected Data from subject".to_string())?;
 
             match resp_msg {
-                Message::Data { stream_id, payload } => {
-                    if stream_id != output_stream_id {
+                Message::Data {
+                    channel_id,
+                    payload,
+                } => {
+                    if channel_id != output_channel_id {
                         return Err(format!(
-                            "unexpected stream_id {stream_id}, expected {output_stream_id}"
+                            "unexpected channel_id {channel_id}, expected {output_channel_id}"
                         ));
                     }
                     let s: String = facet_postcard::from_slice(&payload)
@@ -296,7 +299,7 @@ fn streaming_transform_bidirectional() {
 
         // Close input stream
         io.send(&Message::Close {
-            stream_id: input_stream_id,
+            channel_id: input_channel_id,
         })
         .await
         .map_err(|e| e.to_string())?;
@@ -313,10 +316,10 @@ fn streaming_transform_bidirectional() {
                 .ok_or_else(|| "expected Close/Response from subject".to_string())?;
 
             match msg {
-                Message::Close { stream_id } => {
-                    if stream_id != output_stream_id {
+                Message::Close { channel_id } => {
+                    if channel_id != output_channel_id {
                         return Err(format!(
-                            "close stream_id mismatch: {stream_id}, expected {output_stream_id}"
+                            "close channel_id mismatch: {channel_id}, expected {output_channel_id}"
                         ));
                     }
                     got_close = true;

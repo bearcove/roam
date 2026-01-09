@@ -20,7 +20,7 @@ pub use roam_frame::{Frame, MsgDesc, OwnedMessage, Payload};
 // ============================================================================
 
 /// Stream ID type.
-pub type StreamId = u64;
+pub type ChannelId = u64;
 
 /// Connection role - determines stream ID parity.
 ///
@@ -40,11 +40,11 @@ pub enum Role {
 ///
 /// r[impl streaming.id.uniqueness] - IDs are unique within a connection.
 /// r[impl streaming.id.parity] - Initiator uses odd, Acceptor uses even.
-pub struct StreamIdAllocator {
+pub struct ChannelIdAllocator {
     next: AtomicU64,
 }
 
-impl StreamIdAllocator {
+impl ChannelIdAllocator {
     /// Create a new allocator for the given role.
     pub fn new(role: Role) -> Self {
         let start = match role {
@@ -57,7 +57,7 @@ impl StreamIdAllocator {
     }
 
     /// Allocate the next stream ID.
-    pub fn next(&self) -> StreamId {
+    pub fn next(&self) -> ChannelId {
         self.next.fetch_add(2, Ordering::Relaxed)
     }
 }
@@ -106,7 +106,7 @@ impl SenderSlot {
 
     /// Set the sender in this slot.
     ///
-    /// Used by `StreamRegistry::bind_streams` to hydrate a deserialized `Tx<T>`
+    /// Used by `ChannelRegistry::bind_streams` to hydrate a deserialized `Tx<T>`
     /// with an actual channel sender.
     pub fn set(&mut self, tx: mpsc::Sender<Vec<u8>>) {
         self.inner = Some(tx);
@@ -157,7 +157,7 @@ impl TaskTxSlot {
 
     /// Set the task sender in this slot.
     ///
-    /// Used by `StreamRegistry::bind_streams` to hydrate a deserialized `Tx<T>`
+    /// Used by `ChannelRegistry::bind_streams` to hydrate a deserialized `Tx<T>`
     /// with the connection's task message channel.
     pub fn set(&mut self, tx: mpsc::Sender<TaskMessage>) {
         self.inner = Some(tx);
@@ -181,7 +181,7 @@ impl TaskTxSlot {
 /// # Facet Implementation
 ///
 /// Uses `#[facet(proxy = u64)]` so that:
-/// - `stream_id` is pokeable (Connection can walk args and set stream IDs)
+/// - `channel_id` is pokeable (Connection can walk args and set stream IDs)
 /// - Serializes as just a `u64` on the wire
 /// - `T` is exposed as a type parameter for codegen introspection
 ///
@@ -190,32 +190,32 @@ impl TaskTxSlot {
 /// - **Client side**: `sender` holds a channel to an intermediate drain task.
 ///   `ConnectionHandle::call` takes the receiver and drains it to wire.
 /// - **Server side**: `task_tx` holds a direct channel to the connection driver.
-///   `StreamRegistry::bind_streams` sets this, and `send()` writes `TaskMessage::Data`.
+///   `ChannelRegistry::bind_streams` sets this, and `send()` writes `TaskMessage::Data`.
 #[derive(Facet)]
 #[facet(proxy = u64)]
 pub struct Tx<T: 'static> {
     /// The unique stream ID for this stream.
     /// Public so Connection can poke it when binding streams.
-    pub stream_id: StreamId,
+    pub channel_id: ChannelId,
     /// Channel sender for outgoing data (client-side mode).
     /// Used when Tx is created via `roam::channel()`.
     pub sender: SenderSlot,
     /// Direct task message sender (server-side mode).
-    /// Used when Tx is hydrated by `StreamRegistry::bind_streams`.
+    /// Used when Tx is hydrated by `ChannelRegistry::bind_streams`.
     pub task_tx: TaskTxSlot,
     /// Phantom data for the element type.
     #[facet(opaque)]
     _marker: PhantomData<T>,
 }
 
-/// Serialization: `&Tx<T>` -> u64 (extracts stream_id)
+/// Serialization: `&Tx<T>` -> u64 (extracts channel_id)
 ///
 /// Uses TryFrom rather than From because facet's proxy mechanism requires TryFrom.
 #[allow(clippy::infallible_try_from)]
 impl<T: 'static> TryFrom<&Tx<T>> for u64 {
     type Error = Infallible;
     fn try_from(tx: &Tx<T>) -> Result<Self, Self::Error> {
-        Ok(tx.stream_id)
+        Ok(tx.channel_id)
     }
 }
 
@@ -228,10 +228,10 @@ impl<T: 'static> TryFrom<&Tx<T>> for u64 {
 #[allow(clippy::infallible_try_from)]
 impl<T: 'static> TryFrom<u64> for Tx<T> {
     type Error = Infallible;
-    fn try_from(stream_id: u64) -> Result<Self, Self::Error> {
+    fn try_from(channel_id: u64) -> Result<Self, Self::Error> {
         // Create a hollow Tx - no actual sender, Connection will bind later
         Ok(Tx {
-            stream_id,
+            channel_id,
             sender: SenderSlot::empty(),
             task_tx: TaskTxSlot::empty(),
             _marker: PhantomData,
@@ -241,22 +241,22 @@ impl<T: 'static> TryFrom<u64> for Tx<T> {
 
 impl<T: 'static> Tx<T> {
     /// Create a new Tx stream with the given ID and sender channel (client-side mode).
-    pub fn new(stream_id: StreamId, tx: mpsc::Sender<Vec<u8>>) -> Self {
+    pub fn new(channel_id: ChannelId, tx: mpsc::Sender<Vec<u8>>) -> Self {
         Self {
-            stream_id,
+            channel_id,
             sender: SenderSlot::new(tx),
             task_tx: TaskTxSlot::empty(),
             _marker: PhantomData,
         }
     }
 
-    /// Create an unbound Tx with a sender but stream_id 0.
+    /// Create an unbound Tx with a sender but channel_id 0.
     ///
     /// Used by `roam::channel()` to create a pair before binding.
-    /// Connection will poke the stream_id when binding.
+    /// Connection will poke the channel_id when binding.
     pub fn unbound(tx: mpsc::Sender<Vec<u8>>) -> Self {
         Self {
-            stream_id: 0,
+            channel_id: 0,
             sender: SenderSlot::new(tx),
             task_tx: TaskTxSlot::empty(),
             _marker: PhantomData,
@@ -264,8 +264,8 @@ impl<T: 'static> Tx<T> {
     }
 
     /// Get the stream ID.
-    pub fn stream_id(&self) -> StreamId {
-        self.stream_id
+    pub fn channel_id(&self) -> ChannelId {
+        self.channel_id
     }
 
     /// Send a value on this stream.
@@ -285,7 +285,7 @@ impl<T: 'static> Tx<T> {
         if let Some(task_tx) = self.task_tx.inner.as_ref() {
             task_tx
                 .send(TaskMessage::Data {
-                    stream_id: self.stream_id,
+                    channel_id: self.channel_id,
                     payload: bytes,
                 })
                 .await
@@ -307,11 +307,11 @@ impl<T: 'static> Drop for Tx<T> {
     fn drop(&mut self) {
         // Only send Close in server-side mode (task_tx is set)
         if let Some(task_tx) = self.task_tx.inner.take() {
-            let stream_id = self.stream_id;
+            let channel_id = self.channel_id;
             // Spawn a task to send the Close message
             // (we can't block in Drop, and send is async)
             tokio::spawn(async move {
-                let _ = task_tx.send(TaskMessage::Close { stream_id }).await;
+                let _ = task_tx.send(TaskMessage::Close { channel_id }).await;
             });
         }
         // Client-side mode: dropping the sender closes the channel,
@@ -386,7 +386,7 @@ impl ReceiverSlot {
 
     /// Set the receiver in this slot.
     ///
-    /// Used by `StreamRegistry::bind_streams` to hydrate a deserialized `Rx<T>`
+    /// Used by `ChannelRegistry::bind_streams` to hydrate a deserialized `Rx<T>`
     /// with an actual channel receiver.
     pub fn set(&mut self, rx: mpsc::Receiver<Vec<u8>>) {
         self.inner = Some(rx);
@@ -402,7 +402,7 @@ impl ReceiverSlot {
 /// # Facet Implementation
 ///
 /// Uses `#[facet(proxy = u64)]` so that:
-/// - `stream_id` is pokeable (Connection can walk args and set stream IDs)
+/// - `channel_id` is pokeable (Connection can walk args and set stream IDs)
 /// - Serializes as just a `u64` on the wire
 /// - `T` is exposed as a type parameter for codegen introspection
 ///
@@ -414,7 +414,7 @@ impl ReceiverSlot {
 pub struct Rx<T: 'static> {
     /// The unique stream ID for this stream.
     /// Public so Connection can poke it when binding streams.
-    pub stream_id: StreamId,
+    pub channel_id: ChannelId,
     /// Channel receiver for incoming data.
     /// Uses ReceiverSlot so it's pokeable (can .take() via Poke).
     pub receiver: ReceiverSlot,
@@ -423,14 +423,14 @@ pub struct Rx<T: 'static> {
     _marker: PhantomData<T>,
 }
 
-/// Serialization: `&Rx<T>` -> u64 (extracts stream_id)
+/// Serialization: `&Rx<T>` -> u64 (extracts channel_id)
 ///
 /// Uses TryFrom rather than From because facet's proxy mechanism requires TryFrom.
 #[allow(clippy::infallible_try_from)]
 impl<T: 'static> TryFrom<&Rx<T>> for u64 {
     type Error = Infallible;
     fn try_from(rx: &Rx<T>) -> Result<Self, Self::Error> {
-        Ok(rx.stream_id)
+        Ok(rx.channel_id)
     }
 }
 
@@ -443,10 +443,10 @@ impl<T: 'static> TryFrom<&Rx<T>> for u64 {
 #[allow(clippy::infallible_try_from)]
 impl<T: 'static> TryFrom<u64> for Rx<T> {
     type Error = Infallible;
-    fn try_from(stream_id: u64) -> Result<Self, Self::Error> {
+    fn try_from(channel_id: u64) -> Result<Self, Self::Error> {
         // Create a hollow Rx - no actual receiver, Connection will bind later
         Ok(Rx {
-            stream_id,
+            channel_id,
             receiver: ReceiverSlot::empty(),
             _marker: PhantomData,
         })
@@ -455,29 +455,29 @@ impl<T: 'static> TryFrom<u64> for Rx<T> {
 
 impl<T: 'static> Rx<T> {
     /// Create a new Rx stream with the given ID and receiver channel.
-    pub fn new(stream_id: StreamId, rx: mpsc::Receiver<Vec<u8>>) -> Self {
+    pub fn new(channel_id: ChannelId, rx: mpsc::Receiver<Vec<u8>>) -> Self {
         Self {
-            stream_id,
+            channel_id,
             receiver: ReceiverSlot::new(rx),
             _marker: PhantomData,
         }
     }
 
-    /// Create an unbound Rx with a receiver but stream_id 0.
+    /// Create an unbound Rx with a receiver but channel_id 0.
     ///
     /// Used by `roam::channel()` to create a pair before binding.
-    /// Connection will poke the stream_id when binding.
+    /// Connection will poke the channel_id when binding.
     pub fn unbound(rx: mpsc::Receiver<Vec<u8>>) -> Self {
         Self {
-            stream_id: 0,
+            channel_id: 0,
             receiver: ReceiverSlot::new(rx),
             _marker: PhantomData,
         }
     }
 
     /// Get the stream ID.
-    pub fn stream_id(&self) -> StreamId {
-        self.stream_id
+    pub fn channel_id(&self) -> ChannelId {
+        self.channel_id
     }
 
     /// Receive the next value from this stream.
@@ -529,7 +529,7 @@ impl std::error::Error for RxError {}
 
 /// Create an unbound channel pair for streaming RPC.
 ///
-/// Returns `(Tx<T>, Rx<T>)` with `stream_id: 0`. The `ConnectionHandle::call`
+/// Returns `(Tx<T>, Rx<T>)` with `channel_id: 0`. The `ConnectionHandle::call`
 /// method will walk the args, find `Rx<T>` or `Tx<T>` fields, assign stream IDs,
 /// and take the internal channel handles to register with the stream registry.
 ///
@@ -568,11 +568,11 @@ use std::collections::{HashMap, HashSet};
 pub enum TaskMessage {
     /// Send a Data message on a stream.
     Data {
-        stream_id: StreamId,
+        channel_id: ChannelId,
         payload: Vec<u8>,
     },
     /// Send a Close message to end a stream.
-    Close { stream_id: StreamId },
+    Close { channel_id: ChannelId },
     /// Send a Response message (call completed).
     Response { request_id: u64, payload: Vec<u8> },
 }
@@ -584,16 +584,16 @@ pub enum TaskMessage {
 /// and send Data/Close messages via `task_tx`.
 ///
 /// r[impl streaming.unknown] - Unknown stream IDs cause Goodbye.
-pub struct StreamRegistry {
+pub struct ChannelRegistry {
     /// Streams where we receive Data messages (backing `Rx<T>` or `Tx<T>` handles on our side).
-    /// Key: stream_id, Value: sender to route Data payloads to the handle.
-    incoming: HashMap<StreamId, mpsc::Sender<Vec<u8>>>,
+    /// Key: channel_id, Value: sender to route Data payloads to the handle.
+    incoming: HashMap<ChannelId, mpsc::Sender<Vec<u8>>>,
 
     /// Stream IDs that have been closed.
     /// Used to detect data-after-close violations.
     ///
     /// r[impl streaming.data-after-close] - Track closed streams.
-    closed: HashSet<StreamId>,
+    closed: HashSet<ChannelId>,
 
     // ========================================================================
     // Flow Control
@@ -602,13 +602,13 @@ pub struct StreamRegistry {
     /// r[impl flow.stream.all-transports] - Flow control applies to all transports.
     /// This is the credit we've granted to the peer - bytes they can still send us.
     /// Decremented when we receive Data, incremented when we send Credit.
-    incoming_credit: HashMap<StreamId, u32>,
+    incoming_credit: HashMap<ChannelId, u32>,
 
     /// r[impl flow.stream.credit-based] - Credit tracking for outgoing streams.
     /// r[impl flow.stream.all-transports] - Flow control applies to all transports.
     /// This is the credit peer granted us - bytes we can still send them.
     /// Decremented when we send Data, incremented when we receive Credit.
-    outgoing_credit: HashMap<StreamId, u32>,
+    outgoing_credit: HashMap<ChannelId, u32>,
 
     /// Initial credit to grant new streams.
     /// r[impl flow.stream.initial-credit] - Each stream starts with this credit.
@@ -620,7 +620,7 @@ pub struct StreamRegistry {
     task_tx: mpsc::Sender<TaskMessage>,
 }
 
-impl StreamRegistry {
+impl ChannelRegistry {
     /// Create a new registry with the given initial credit and task message channel.
     ///
     /// The `task_tx` is used by spawned tasks to send Data/Close/Response messages
@@ -656,14 +656,14 @@ impl StreamRegistry {
 
     /// Register an incoming stream.
     ///
-    /// The connection layer will route Data messages for this stream_id to the sender.
+    /// The connection layer will route Data messages for this channel_id to the sender.
     /// Used for both `Rx<T>` (caller receives from callee) and `Tx<T>` (callee sends to caller).
     ///
     /// r[impl flow.stream.initial-credit] - Stream starts with initial credit.
-    pub fn register_incoming(&mut self, stream_id: StreamId, tx: mpsc::Sender<Vec<u8>>) {
-        self.incoming.insert(stream_id, tx);
+    pub fn register_incoming(&mut self, channel_id: ChannelId, tx: mpsc::Sender<Vec<u8>>) {
+        self.incoming.insert(channel_id, tx);
         // Grant initial credit - peer can send us this many bytes
-        self.incoming_credit.insert(stream_id, self.initial_credit);
+        self.incoming_credit.insert(channel_id, self.initial_credit);
     }
 
     /// Register credit tracking for an outgoing stream.
@@ -672,16 +672,16 @@ impl StreamRegistry {
     /// This only sets up credit tracking for the stream.
     ///
     /// r[impl flow.stream.initial-credit] - Stream starts with initial credit.
-    pub fn register_outgoing_credit(&mut self, stream_id: StreamId) {
+    pub fn register_outgoing_credit(&mut self, channel_id: ChannelId) {
         // Assume peer grants us initial credit - we can send them this many bytes
-        self.outgoing_credit.insert(stream_id, self.initial_credit);
+        self.outgoing_credit.insert(channel_id, self.initial_credit);
     }
 
     /// Route a Data message payload to the appropriate incoming stream.
     ///
-    /// Returns Ok(()) if routed successfully, Err(StreamError) otherwise.
+    /// Returns Ok(()) if routed successfully, Err(ChannelError) otherwise.
     ///
-    /// r[impl streaming.data] - Data messages routed by stream_id.
+    /// r[impl streaming.data] - Data messages routed by channel_id.
     /// r[impl streaming.data-after-close] - Reject data on closed streams.
     /// r[impl flow.stream.credit-overrun] - Reject if data exceeds remaining credit.
     /// r[impl flow.stream.credit-consume] - Deduct bytes from remaining credit.
@@ -691,20 +691,20 @@ impl StreamRegistry {
     /// The actual send must be done by the caller to avoid holding locks across await.
     pub fn prepare_route_data(
         &mut self,
-        stream_id: StreamId,
+        channel_id: ChannelId,
         payload: Vec<u8>,
-    ) -> Result<(mpsc::Sender<Vec<u8>>, Vec<u8>), StreamError> {
+    ) -> Result<(mpsc::Sender<Vec<u8>>, Vec<u8>), ChannelError> {
         // Check for data-after-close
-        if self.closed.contains(&stream_id) {
-            return Err(StreamError::DataAfterClose);
+        if self.closed.contains(&channel_id) {
+            return Err(ChannelError::DataAfterClose);
         }
 
         // Check credit before routing
         // r[impl flow.stream.credit-overrun] - Reject if exceeds credit
         let payload_len = payload.len() as u32;
-        if let Some(credit) = self.incoming_credit.get_mut(&stream_id) {
+        if let Some(credit) = self.incoming_credit.get_mut(&channel_id) {
             if payload_len > *credit {
-                return Err(StreamError::CreditOverrun);
+                return Err(ChannelError::CreditOverrun);
             }
             // r[impl flow.stream.credit-consume] - Deduct from credit
             *credit -= payload_len;
@@ -712,28 +712,28 @@ impl StreamRegistry {
         // Note: if no credit entry exists, the stream may not be registered yet
         // (e.g., Rx stream created by callee). In that case, skip credit check.
 
-        if let Some(tx) = self.incoming.get(&stream_id) {
+        if let Some(tx) = self.incoming.get(&channel_id) {
             Ok((tx.clone(), payload))
         } else {
-            Err(StreamError::Unknown)
+            Err(ChannelError::Unknown)
         }
     }
 
     /// Route a Data message payload to the appropriate incoming stream.
     ///
-    /// Returns Ok(()) if routed successfully, Err(StreamError) otherwise.
+    /// Returns Ok(()) if routed successfully, Err(ChannelError) otherwise.
     ///
-    /// r[impl streaming.data] - Data messages routed by stream_id.
+    /// r[impl streaming.data] - Data messages routed by channel_id.
     /// r[impl streaming.data-after-close] - Reject data on closed streams.
     /// r[impl flow.stream.credit-overrun] - Reject if data exceeds remaining credit.
     /// r[impl flow.stream.credit-consume] - Deduct bytes from remaining credit.
     /// r[impl flow.stream.byte-accounting] - Credit measured in payload bytes.
     pub async fn route_data(
         &mut self,
-        stream_id: StreamId,
+        channel_id: ChannelId,
         payload: Vec<u8>,
-    ) -> Result<(), StreamError> {
-        let (tx, payload) = self.prepare_route_data(stream_id, payload)?;
+    ) -> Result<(), ChannelError> {
+        let (tx, payload) = self.prepare_route_data(channel_id, payload)?;
         // If send fails, the Rx<T> was dropped - that's okay, just drop the data
         let _ = tx.send(payload).await;
         Ok(())
@@ -745,30 +745,30 @@ impl StreamRegistry {
     ///
     /// r[impl streaming.close] - Close terminates the stream.
     /// r[impl flow.stream.close-exempt] - Close doesn't consume credit.
-    pub fn close(&mut self, stream_id: StreamId) {
-        self.incoming.remove(&stream_id);
-        self.incoming_credit.remove(&stream_id);
-        self.outgoing_credit.remove(&stream_id);
-        self.closed.insert(stream_id);
+    pub fn close(&mut self, channel_id: ChannelId) {
+        self.incoming.remove(&channel_id);
+        self.incoming_credit.remove(&channel_id);
+        self.outgoing_credit.remove(&channel_id);
+        self.closed.insert(channel_id);
     }
 
     /// Reset a stream (remove from registry, discard credit).
     ///
     /// r[impl streaming.reset] - Reset terminates the stream abruptly.
     /// r[impl streaming.reset.credit] - Outstanding credit is lost on reset.
-    pub fn reset(&mut self, stream_id: StreamId) {
-        self.incoming.remove(&stream_id);
-        self.incoming_credit.remove(&stream_id);
-        self.outgoing_credit.remove(&stream_id);
-        self.closed.insert(stream_id);
+    pub fn reset(&mut self, channel_id: ChannelId) {
+        self.incoming.remove(&channel_id);
+        self.incoming_credit.remove(&channel_id);
+        self.outgoing_credit.remove(&channel_id);
+        self.closed.insert(channel_id);
     }
 
     /// Receive a Credit message - add credit for an outgoing stream.
     ///
     /// r[impl flow.stream.credit-grant] - Credit message adds to available credit.
     /// r[impl flow.stream.credit-additive] - Credit accumulates additively.
-    pub fn receive_credit(&mut self, stream_id: StreamId, bytes: u32) {
-        if let Some(credit) = self.outgoing_credit.get_mut(&stream_id) {
+    pub fn receive_credit(&mut self, channel_id: ChannelId, bytes: u32) {
+        if let Some(credit) = self.outgoing_credit.get_mut(&channel_id) {
             // r[impl flow.stream.credit-additive] - Add to existing credit
             *credit = credit.saturating_add(bytes);
         }
@@ -776,23 +776,23 @@ impl StreamRegistry {
     }
 
     /// Check if a stream ID is registered (either incoming or outgoing credit).
-    pub fn contains(&self, stream_id: StreamId) -> bool {
-        self.incoming.contains_key(&stream_id) || self.outgoing_credit.contains_key(&stream_id)
+    pub fn contains(&self, channel_id: ChannelId) -> bool {
+        self.incoming.contains_key(&channel_id) || self.outgoing_credit.contains_key(&channel_id)
     }
 
     /// Check if a stream ID is registered as incoming.
-    pub fn contains_incoming(&self, stream_id: StreamId) -> bool {
-        self.incoming.contains_key(&stream_id)
+    pub fn contains_incoming(&self, channel_id: ChannelId) -> bool {
+        self.incoming.contains_key(&channel_id)
     }
 
     /// Check if a stream ID has outgoing credit registered.
-    pub fn contains_outgoing(&self, stream_id: StreamId) -> bool {
-        self.outgoing_credit.contains_key(&stream_id)
+    pub fn contains_outgoing(&self, channel_id: ChannelId) -> bool {
+        self.outgoing_credit.contains_key(&channel_id)
     }
 
     /// Check if a stream has been closed.
-    pub fn is_closed(&self, stream_id: StreamId) -> bool {
-        self.closed.contains(&stream_id)
+    pub fn is_closed(&self, channel_id: ChannelId) -> bool {
+        self.closed.contains(&channel_id)
     }
 
     /// Get the number of active outgoing streams (by credit tracking).
@@ -803,15 +803,15 @@ impl StreamRegistry {
     /// Get remaining credit for an outgoing stream.
     ///
     /// Returns None if stream is not registered.
-    pub fn outgoing_credit(&self, stream_id: StreamId) -> Option<u32> {
-        self.outgoing_credit.get(&stream_id).copied()
+    pub fn outgoing_credit(&self, channel_id: ChannelId) -> Option<u32> {
+        self.outgoing_credit.get(&channel_id).copied()
     }
 
     /// Get remaining credit we've granted for an incoming stream.
     ///
     /// Returns None if stream is not registered.
-    pub fn incoming_credit(&self, stream_id: StreamId) -> Option<u32> {
-        self.incoming_credit.get(&stream_id).copied()
+    pub fn incoming_credit(&self, channel_id: ChannelId) -> Option<u32> {
+        self.incoming_credit.get(&channel_id).copied()
     }
 
     /// Bind streams in deserialized args for server-side dispatch.
@@ -869,9 +869,9 @@ impl StreamRegistry {
     /// Creates a channel, sets the receiver slot, registers the sender for routing.
     fn bind_rx_stream(&mut self, poke: facet::Poke<'_, '_>) {
         if let Ok(mut ps) = poke.into_struct() {
-            // Get the stream_id that was deserialized from the wire
-            let stream_id = if let Ok(stream_id_field) = ps.field_by_name("stream_id")
-                && let Ok(id_ref) = stream_id_field.get::<StreamId>()
+            // Get the channel_id that was deserialized from the wire
+            let channel_id = if let Ok(channel_id_field) = ps.field_by_name("channel_id")
+                && let Ok(id_ref) = channel_id_field.get::<ChannelId>()
             {
                 *id_ref
             } else {
@@ -888,7 +888,7 @@ impl StreamRegistry {
             }
 
             // Register for incoming data routing
-            self.register_incoming(stream_id, tx);
+            self.register_incoming(channel_id, tx);
         }
     }
 
@@ -911,7 +911,7 @@ impl StreamRegistry {
 
 /// Error when routing stream data.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum StreamError {
+pub enum ChannelError {
     /// Stream ID not found in registry.
     Unknown,
     /// Data received after stream was closed.
@@ -976,7 +976,7 @@ impl Default for RequestIdGenerator {
 /// # Example
 ///
 /// ```ignore
-/// fn dispatch_echo(&self, payload: Vec<u8>, request_id: u64, registry: &mut StreamRegistry)
+/// fn dispatch_echo(&self, payload: Vec<u8>, request_id: u64, registry: &mut ChannelRegistry)
 ///     -> Pin<Box<dyn Future<Output = ()> + Send + 'static>>
 /// {
 ///     let handler = self.handler.clone();
@@ -988,7 +988,7 @@ impl Default for RequestIdGenerator {
 pub fn dispatch_call<A, R, E, F, Fut>(
     payload: Vec<u8>,
     request_id: u64,
-    registry: &mut StreamRegistry,
+    registry: &mut ChannelRegistry,
     handler: F,
 ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'static>>
 where
@@ -1047,7 +1047,7 @@ where
 /// Used by dispatchers when the method_id doesn't match any known method.
 pub fn dispatch_unknown_method(
     request_id: u64,
-    registry: &mut StreamRegistry,
+    registry: &mut ChannelRegistry,
 ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'static>> {
     let task_tx = registry.task_tx();
     Box::pin(async move {
@@ -1092,7 +1092,7 @@ pub trait ServiceDispatcher: Send + Sync {
         method_id: u64,
         payload: Vec<u8>,
         request_id: u64,
-        registry: &mut StreamRegistry,
+        registry: &mut ChannelRegistry,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'static>>;
 }
 
@@ -1129,7 +1129,7 @@ where
         method_id: u64,
         payload: Vec<u8>,
         request_id: u64,
-        registry: &mut StreamRegistry,
+        registry: &mut ChannelRegistry,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'static>> {
         if self.first_methods.contains(&method_id) {
             self.first
@@ -1230,10 +1230,10 @@ struct HandleShared {
     /// Request ID generator.
     request_ids: RequestIdGenerator,
     /// Stream ID allocator.
-    stream_ids: StreamIdAllocator,
+    channel_ids: ChannelIdAllocator,
     /// Stream registry for routing incoming data.
     /// Protected by a mutex since handles may create streams concurrently.
-    stream_registry: std::sync::Mutex<StreamRegistry>,
+    channel_registry: std::sync::Mutex<ChannelRegistry>,
 }
 
 /// Handle for making outgoing RPC calls.
@@ -1263,13 +1263,13 @@ impl ConnectionHandle {
         initial_credit: u32,
         task_tx: mpsc::Sender<TaskMessage>,
     ) -> Self {
-        let stream_registry = StreamRegistry::new_with_credit(initial_credit, task_tx);
+        let channel_registry = ChannelRegistry::new_with_credit(initial_credit, task_tx);
         Self {
             shared: Arc::new(HandleShared {
                 command_tx,
                 request_ids: RequestIdGenerator::new(),
-                stream_ids: StreamIdAllocator::new(role),
-                stream_registry: std::sync::Mutex::new(stream_registry),
+                channel_ids: ChannelIdAllocator::new(role),
+                channel_registry: std::sync::Mutex::new(channel_registry),
             }),
         }
     }
@@ -1353,14 +1353,14 @@ impl ConnectionHandle {
     /// Bind an Rx<T> stream - caller passes receiver, keeps sender.
     /// We take the receiver and spawn a drain task.
     fn bind_rx_stream(&self, poke: facet::Poke<'_, '_>) {
-        let stream_id = self.alloc_stream_id();
+        let channel_id = self.alloc_channel_id();
 
         if let Ok(mut ps) = poke.into_struct() {
-            // Set stream_id field by getting mutable access to the u64
-            if let Ok(mut stream_id_field) = ps.field_by_name("stream_id")
-                && let Ok(id_ref) = stream_id_field.get_mut::<StreamId>()
+            // Set channel_id field by getting mutable access to the u64
+            if let Ok(mut channel_id_field) = ps.field_by_name("channel_id")
+                && let Ok(id_ref) = channel_id_field.get_mut::<ChannelId>()
             {
-                *id_ref = stream_id;
+                *id_ref = channel_id;
             }
 
             // Take the receiver from ReceiverSlot
@@ -1369,18 +1369,18 @@ impl ConnectionHandle {
                 && let Some(mut rx) = slot.take()
             {
                 // Spawn task to drain rx and send Data messages
-                let task_tx = self.shared.stream_registry.lock().unwrap().task_tx();
+                let task_tx = self.shared.channel_registry.lock().unwrap().task_tx();
                 tokio::spawn(async move {
                     while let Some(data) = rx.recv().await {
                         let _ = task_tx
                             .send(TaskMessage::Data {
-                                stream_id,
+                                channel_id,
                                 payload: data,
                             })
                             .await;
                     }
                     // Stream ended, send Close
-                    let _ = task_tx.send(TaskMessage::Close { stream_id }).await;
+                    let _ = task_tx.send(TaskMessage::Close { channel_id }).await;
                 });
             }
         }
@@ -1389,14 +1389,14 @@ impl ConnectionHandle {
     /// Bind a Tx<T> stream - caller passes sender, keeps receiver.
     /// We take the sender and register for incoming Data routing.
     fn bind_tx_stream(&self, poke: facet::Poke<'_, '_>) {
-        let stream_id = self.alloc_stream_id();
+        let channel_id = self.alloc_channel_id();
 
         if let Ok(mut ps) = poke.into_struct() {
-            // Set stream_id field by getting mutable access to the u64
-            if let Ok(mut stream_id_field) = ps.field_by_name("stream_id")
-                && let Ok(id_ref) = stream_id_field.get_mut::<StreamId>()
+            // Set channel_id field by getting mutable access to the u64
+            if let Ok(mut channel_id_field) = ps.field_by_name("channel_id")
+                && let Ok(id_ref) = channel_id_field.get_mut::<ChannelId>()
             {
-                *id_ref = stream_id;
+                *id_ref = channel_id;
             }
 
             // Take the sender from SenderSlot
@@ -1405,7 +1405,7 @@ impl ConnectionHandle {
                 && let Some(tx) = slot.take()
             {
                 // Register for incoming Data routing
-                self.register_incoming(stream_id, tx);
+                self.register_incoming(channel_id, tx);
             }
         }
     }
@@ -1437,76 +1437,84 @@ impl ConnectionHandle {
     /// Allocate a stream ID for an outgoing stream.
     ///
     /// Used internally when binding streams during call().
-    pub fn alloc_stream_id(&self) -> StreamId {
-        self.shared.stream_ids.next()
+    pub fn alloc_channel_id(&self) -> ChannelId {
+        self.shared.channel_ids.next()
     }
 
     /// Register an incoming stream (we receive data from peer).
     ///
     /// Used when schema has `Tx<T>` (callee sends to caller) - we receive that data.
-    pub fn register_incoming(&self, stream_id: StreamId, tx: mpsc::Sender<Vec<u8>>) {
+    pub fn register_incoming(&self, channel_id: ChannelId, tx: mpsc::Sender<Vec<u8>>) {
         self.shared
-            .stream_registry
+            .channel_registry
             .lock()
             .unwrap()
-            .register_incoming(stream_id, tx);
+            .register_incoming(channel_id, tx);
     }
 
     /// Register credit tracking for an outgoing stream.
     ///
     /// The actual receiver is owned by the driver, not the registry.
-    pub fn register_outgoing_credit(&self, stream_id: StreamId) {
+    pub fn register_outgoing_credit(&self, channel_id: ChannelId) {
         self.shared
-            .stream_registry
+            .channel_registry
             .lock()
             .unwrap()
-            .register_outgoing_credit(stream_id);
+            .register_outgoing_credit(channel_id);
     }
 
     /// Route incoming stream data to the appropriate Rx.
     pub async fn route_data(
         &self,
-        stream_id: StreamId,
+        channel_id: ChannelId,
         payload: Vec<u8>,
-    ) -> Result<(), StreamError> {
+    ) -> Result<(), ChannelError> {
         // Get the sender while holding the lock, then release before await
         let (tx, payload) = self
             .shared
-            .stream_registry
+            .channel_registry
             .lock()
             .unwrap()
-            .prepare_route_data(stream_id, payload)?;
+            .prepare_route_data(channel_id, payload)?;
         // Send without holding the lock
         let _ = tx.send(payload).await;
         Ok(())
     }
 
     /// Close an incoming stream.
-    pub fn close_stream(&self, stream_id: StreamId) {
-        self.shared.stream_registry.lock().unwrap().close(stream_id);
+    pub fn close_channel(&self, channel_id: ChannelId) {
+        self.shared
+            .channel_registry
+            .lock()
+            .unwrap()
+            .close(channel_id);
     }
 
     /// Reset a stream.
-    pub fn reset_stream(&self, stream_id: StreamId) {
-        self.shared.stream_registry.lock().unwrap().reset(stream_id);
+    pub fn reset_channel(&self, channel_id: ChannelId) {
+        self.shared
+            .channel_registry
+            .lock()
+            .unwrap()
+            .reset(channel_id);
     }
 
     /// Check if a stream exists.
-    pub fn contains_stream(&self, stream_id: StreamId) -> bool {
+    pub fn contains_channel(&self, channel_id: ChannelId) -> bool {
         self.shared
-            .stream_registry
+            .channel_registry
             .lock()
             .unwrap()
-            .contains(stream_id)
+            .contains(channel_id)
     }
 
     /// Receive credit for an outgoing stream.
-    pub fn receive_credit(&self, stream_id: StreamId, bytes: u32) {
+    pub fn receive_credit(&self, channel_id: ChannelId, bytes: u32) {
         self.shared
-            .stream_registry
+            .channel_registry
             .lock()
             .unwrap()
-            .receive_credit(stream_id, bytes);
+            .receive_credit(channel_id, bytes);
     }
 }
 
@@ -1549,8 +1557,8 @@ mod tests {
 
     // r[verify streaming.id.parity]
     #[test]
-    fn stream_id_allocator_initiator_uses_odd_ids() {
-        let alloc = StreamIdAllocator::new(Role::Initiator);
+    fn channel_id_allocator_initiator_uses_odd_ids() {
+        let alloc = ChannelIdAllocator::new(Role::Initiator);
         assert_eq!(alloc.next(), 1);
         assert_eq!(alloc.next(), 3);
         assert_eq!(alloc.next(), 5);
@@ -1559,8 +1567,8 @@ mod tests {
 
     // r[verify streaming.id.parity]
     #[test]
-    fn stream_id_allocator_acceptor_uses_even_ids() {
-        let alloc = StreamIdAllocator::new(Role::Acceptor);
+    fn channel_id_allocator_acceptor_uses_even_ids() {
+        let alloc = ChannelIdAllocator::new(Role::Acceptor);
         assert_eq!(alloc.next(), 2);
         assert_eq!(alloc.next(), 4);
         assert_eq!(alloc.next(), 6);
@@ -1591,9 +1599,9 @@ mod tests {
     }
 
     /// Create a test registry with a dummy task channel.
-    fn test_registry() -> StreamRegistry {
+    fn test_registry() -> ChannelRegistry {
         let (task_tx, _task_rx) = mpsc::channel(10);
-        StreamRegistry::new(task_tx)
+        ChannelRegistry::new(task_tx)
     }
 
     // r[verify streaming.data-after-close]
@@ -1608,13 +1616,13 @@ mod tests {
 
         // Data after close should fail
         let result = registry.route_data(42, b"data".to_vec()).await;
-        assert_eq!(result, Err(StreamError::DataAfterClose));
+        assert_eq!(result, Err(ChannelError::DataAfterClose));
     }
 
     // r[verify streaming.data]
     // r[verify streaming.unknown]
     #[tokio::test]
-    async fn stream_registry_routes_data_to_registered_stream() {
+    async fn channel_registry_routes_data_to_registered_stream() {
         let mut registry = test_registry();
 
         // Register a stream
@@ -1633,7 +1641,7 @@ mod tests {
 
     // r[verify streaming.close]
     #[tokio::test]
-    async fn stream_registry_close_terminates_stream() {
+    async fn channel_registry_close_terminates_stream() {
         let mut registry = test_registry();
         let (tx, mut rx) = mpsc::channel::<Vec<u8>>(10);
         registry.register_incoming(42, tx);

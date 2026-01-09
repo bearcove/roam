@@ -10,8 +10,8 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use roam_session::{
-    CallError, ConnectionHandle, HandleCommand, Role, ServiceDispatcher, StreamError,
-    StreamRegistry, TaskMessage,
+    CallError, ChannelError, ChannelRegistry, ConnectionHandle, HandleCommand, Role,
+    ServiceDispatcher, TaskMessage,
 };
 use roam_wire::{Hello, Message};
 use tokio::sync::{mpsc, oneshot};
@@ -37,7 +37,7 @@ pub struct Driver<T, D> {
     command_rx: mpsc::Receiver<HandleCommand>,
 
     /// Server-side stream registry (for incoming Tx/Rx from requests we serve).
-    server_stream_registry: StreamRegistry,
+    server_channel_registry: ChannelRegistry,
 
     /// Pending responses for outgoing calls we made.
     /// request_id → oneshot sender for the response.
@@ -79,7 +79,7 @@ where
             negotiated,
             handle,
             command_rx,
-            server_stream_registry: StreamRegistry::new_with_credit(initial_credit, task_tx),
+            server_channel_registry: ChannelRegistry::new_with_credit(initial_credit, task_tx),
             pending_responses: HashMap::new(),
             in_flight_server_requests: std::collections::HashSet::new(),
             task_rx,
@@ -120,8 +120,14 @@ where
     /// All messages (Data/Close/Response) go through a single channel to preserve ordering.
     async fn handle_task_message(&mut self, msg: TaskMessage) -> Result<(), ConnectionError> {
         let wire_msg = match msg {
-            TaskMessage::Data { stream_id, payload } => Message::Data { stream_id, payload },
-            TaskMessage::Close { stream_id } => Message::Close { stream_id },
+            TaskMessage::Data {
+                channel_id,
+                payload,
+            } => Message::Data {
+                channel_id,
+                payload,
+            },
+            TaskMessage::Close { channel_id } => Message::Close { channel_id },
             TaskMessage::Response {
                 request_id,
                 payload,
@@ -236,17 +242,20 @@ where
             Message::Cancel { request_id: _ } => {
                 // TODO: Implement cancellation
             }
-            Message::Data { stream_id, payload } => {
-                self.handle_data(stream_id, payload).await?;
+            Message::Data {
+                channel_id,
+                payload,
+            } => {
+                self.handle_data(channel_id, payload).await?;
             }
-            Message::Close { stream_id } => {
-                self.handle_close(stream_id).await?;
+            Message::Close { channel_id } => {
+                self.handle_close(channel_id).await?;
             }
-            Message::Reset { stream_id } => {
-                self.handle_reset(stream_id)?;
+            Message::Reset { channel_id } => {
+                self.handle_reset(channel_id)?;
             }
-            Message::Credit { stream_id, bytes } => {
-                self.handle_credit(stream_id, bytes)?;
+            Message::Credit { channel_id, bytes } => {
+                self.handle_credit(channel_id, bytes)?;
             }
         }
         Ok(())
@@ -283,7 +292,7 @@ where
             method_id,
             payload,
             request_id,
-            &mut self.server_stream_registry,
+            &mut self.server_channel_registry,
         );
         tokio::spawn(handler_fut);
         Ok(())
@@ -292,10 +301,10 @@ where
     /// Handle incoming Data message.
     async fn handle_data(
         &mut self,
-        stream_id: u64,
+        channel_id: u64,
         payload: Vec<u8>,
     ) -> Result<(), ConnectionError> {
-        if stream_id == 0 {
+        if channel_id == 0 {
             return Err(self.goodbye("streaming.id.zero-reserved").await);
         }
 
@@ -304,39 +313,39 @@ where
         }
 
         // Try server registry first, then client registry
-        let result = if self.server_stream_registry.contains_incoming(stream_id) {
-            self.server_stream_registry
-                .route_data(stream_id, payload)
+        let result = if self.server_channel_registry.contains_incoming(channel_id) {
+            self.server_channel_registry
+                .route_data(channel_id, payload)
                 .await
-        } else if self.handle.contains_stream(stream_id) {
-            self.handle.route_data(stream_id, payload).await
+        } else if self.handle.contains_channel(channel_id) {
+            self.handle.route_data(channel_id, payload).await
         } else {
-            Err(StreamError::Unknown)
+            Err(ChannelError::Unknown)
         };
 
         match result {
             Ok(()) => Ok(()),
-            Err(StreamError::Unknown) => Err(self.goodbye("streaming.unknown").await),
-            Err(StreamError::DataAfterClose) => {
+            Err(ChannelError::Unknown) => Err(self.goodbye("streaming.unknown").await),
+            Err(ChannelError::DataAfterClose) => {
                 Err(self.goodbye("streaming.data-after-close").await)
             }
-            Err(StreamError::CreditOverrun) => {
+            Err(ChannelError::CreditOverrun) => {
                 Err(self.goodbye("flow.stream.credit-overrun").await)
             }
         }
     }
 
     /// Handle incoming Close message.
-    async fn handle_close(&mut self, stream_id: u64) -> Result<(), ConnectionError> {
-        if stream_id == 0 {
+    async fn handle_close(&mut self, channel_id: u64) -> Result<(), ConnectionError> {
+        if channel_id == 0 {
             return Err(self.goodbye("streaming.id.zero-reserved").await);
         }
 
         // Try server registry first, then client registry
-        if self.server_stream_registry.contains(stream_id) {
-            self.server_stream_registry.close(stream_id);
-        } else if self.handle.contains_stream(stream_id) {
-            self.handle.close_stream(stream_id);
+        if self.server_channel_registry.contains(channel_id) {
+            self.server_channel_registry.close(channel_id);
+        } else if self.handle.contains_channel(channel_id) {
+            self.handle.close_channel(channel_id);
         } else {
             return Err(self.goodbye("streaming.unknown").await);
         }
@@ -344,34 +353,35 @@ where
     }
 
     /// Handle incoming Reset message.
-    fn handle_reset(&mut self, stream_id: u64) -> Result<(), ConnectionError> {
-        if stream_id == 0 {
+    fn handle_reset(&mut self, channel_id: u64) -> Result<(), ConnectionError> {
+        if channel_id == 0 {
             // For Reset, we don't send Goodbye for zero - just return error
             // Actually spec says we MUST send Goodbye
             // But we can't await here... let's make this async
         }
 
         // Try both registries - Reset on unknown stream is not an error
-        if self.server_stream_registry.contains(stream_id) {
-            self.server_stream_registry.reset(stream_id);
-        } else if self.handle.contains_stream(stream_id) {
-            self.handle.reset_stream(stream_id);
+        if self.server_channel_registry.contains(channel_id) {
+            self.server_channel_registry.reset(channel_id);
+        } else if self.handle.contains_channel(channel_id) {
+            self.handle.reset_channel(channel_id);
         }
         // Unknown stream for Reset is ignored per spec
         Ok(())
     }
 
     /// Handle incoming Credit message.
-    fn handle_credit(&mut self, stream_id: u64, bytes: u32) -> Result<(), ConnectionError> {
-        if stream_id == 0 {
+    fn handle_credit(&mut self, channel_id: u64, bytes: u32) -> Result<(), ConnectionError> {
+        if channel_id == 0 {
             // Same issue as Reset - need async for Goodbye
         }
 
         // Try both registries
-        if self.server_stream_registry.contains(stream_id) {
-            self.server_stream_registry.receive_credit(stream_id, bytes);
-        } else if self.handle.contains_stream(stream_id) {
-            self.handle.receive_credit(stream_id, bytes);
+        if self.server_channel_registry.contains(channel_id) {
+            self.server_channel_registry
+                .receive_credit(channel_id, bytes);
+        } else if self.handle.contains_channel(channel_id) {
+            self.handle.receive_credit(channel_id, bytes);
         }
         // Unknown stream for Credit - should be error but we'd need async
         Ok(())
@@ -433,14 +443,14 @@ where
     let (our_max, our_credit) = match &our_hello {
         Hello::V1 {
             max_payload_size,
-            initial_stream_credit,
-        } => (*max_payload_size, *initial_stream_credit),
+            initial_channel_credit,
+        } => (*max_payload_size, *initial_channel_credit),
     };
     let (peer_max, peer_credit) = match &peer_hello {
         Hello::V1 {
             max_payload_size,
-            initial_stream_credit,
-        } => (*max_payload_size, *initial_stream_credit),
+            initial_channel_credit,
+        } => (*max_payload_size, *initial_channel_credit),
     };
 
     let negotiated = Negotiated {
@@ -506,14 +516,14 @@ where
     let (our_max, our_credit) = match &our_hello {
         Hello::V1 {
             max_payload_size,
-            initial_stream_credit,
-        } => (*max_payload_size, *initial_stream_credit),
+            initial_channel_credit,
+        } => (*max_payload_size, *initial_channel_credit),
     };
     let (peer_max, peer_credit) = match &peer_hello {
         Hello::V1 {
             max_payload_size,
-            initial_stream_credit,
-        } => (*max_payload_size, *initial_stream_credit),
+            initial_channel_credit,
+        } => (*max_payload_size, *initial_channel_credit),
     };
 
     let negotiated = Negotiated {
