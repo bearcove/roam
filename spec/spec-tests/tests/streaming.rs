@@ -59,7 +59,7 @@ fn streaming_sum_client_to_server() {
         hello_exchange(&mut io).await?;
 
         // Get the method ID for `sum(numbers: Rx<i32>) -> i64`
-        let method_id = method_id::SUM;
+        let method_id = method_id::sum();
 
         // Allocate stream ID (odd = initiator)
         let stream_id: u64 = 1;
@@ -144,7 +144,7 @@ fn streaming_generate_server_to_client() {
         hello_exchange(&mut io).await?;
 
         // Get the method ID for `generate(count: u32, output: Tx<i32>)`
-        let method_id = method_id::GENERATE;
+        let method_id = method_id::generate();
 
         // Allocate stream ID (odd = initiator)
         let stream_id: u64 = 1;
@@ -240,7 +240,7 @@ fn streaming_transform_bidirectional() {
         hello_exchange(&mut io).await?;
 
         // Get the method ID for `transform(input: Rx<String>, output: Tx<String>)`
-        let method_id = method_id::TRANSFORM;
+        let method_id = method_id::transform();
 
         // Allocate stream IDs (odd = initiator)
         let input_stream_id: u64 = 1;

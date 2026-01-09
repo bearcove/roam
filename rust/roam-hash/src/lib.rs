@@ -299,6 +299,36 @@ pub fn method_id_from_detail(detail: &MethodDetail) -> u64 {
     method_id(&detail.service_name, &detail.method_name, sig)
 }
 
+/// Compute method ID from shapes at runtime.
+///
+/// This is the runtime equivalent of the codegen-time method ID computation.
+/// Can be used to compute method IDs lazily and cache them.
+///
+/// # Example
+///
+/// ```ignore
+/// use std::sync::LazyLock;
+/// use facet::Facet;
+///
+/// static ECHO_METHOD_ID: LazyLock<u64> = LazyLock::new(|| {
+///     method_id_from_shapes(
+///         "Testbed",
+///         "echo",
+///         &[<String as Facet>::SHAPE],
+///         <String as Facet>::SHAPE,
+///     )
+/// });
+/// ```
+pub fn method_id_from_shapes(
+    service_name: &str,
+    method_name: &str,
+    args: &[&'static Shape],
+    return_type: &'static Shape,
+) -> u64 {
+    let sig = signature_hash(args, return_type);
+    method_id(service_name, method_name, sig)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

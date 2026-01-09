@@ -47,8 +47,6 @@ fn format_handler_return_type(return_shape: &'static Shape) -> String {
     format!("Result<{ok_type_str}, RoamError<{err_type_str}>>")
 }
 
-use crate::render::hex_u64;
-
 /// Options for Rust code generation.
 #[derive(Debug, Clone, Default)]
 pub struct RustCodegenOptions {
@@ -115,16 +113,52 @@ impl<'a> RustGenerator<'a> {
     }
 
     fn generate_method_ids(&mut self) {
-        // method_id module is now scoped within the service module, so no prefix needed
+        // Generate method ID functions that compute IDs at runtime and cache them
         self.scope
-            .raw("    /// Method IDs for this service.\n    pub mod method_id {");
+            .raw("    /// Method IDs for this service (computed lazily at runtime).\n    pub mod method_id {");
+        self.scope.raw("        use std::sync::LazyLock;");
+
+        let service_name = &self.service.name;
 
         for method in &self.service.methods {
-            let id = crate::method_id(method);
-            let const_name = method.method_name.to_snake_case().to_uppercase();
+            let method_name = &method.method_name;
+            let fn_name = method_name.to_snake_case();
+
+            // Build the args array for method_id_from_shapes
+            // Use rust_type_absolute since we're inside mod method_id {}
+            let arg_shapes: Vec<String> = method
+                .args
+                .iter()
+                .map(|arg| {
+                    format!(
+                        "<{} as ::roam::facet::Facet>::SHAPE",
+                        rust_type_absolute(arg.ty)
+                    )
+                })
+                .collect();
+            let args_array = if arg_shapes.is_empty() {
+                "&[]".to_string()
+            } else {
+                format!("&[{}]", arg_shapes.join(", "))
+            };
+
+            let return_shape = format!(
+                "<{} as ::roam::facet::Facet>::SHAPE",
+                rust_type_absolute(method.return_type)
+            );
+
             self.scope.raw(format!(
-                "        pub const {const_name}: u64 = {};",
-                hex_u64(id)
+                r#"        pub fn {fn_name}() -> u64 {{
+            static ID: LazyLock<u64> = LazyLock::new(|| {{
+                ::roam::hash::method_id_from_shapes(
+                    "{service_name}",
+                    "{method_name}",
+                    {args_array},
+                    {return_shape},
+                )
+            }});
+            *ID
+        }}"#
             ));
         }
 
@@ -201,21 +235,27 @@ impl<'a> RustGenerator<'a> {
     }
 
     fn generate_service_dispatcher_impl(&mut self, dispatcher_name: &str, service_trait: &str) {
-        // Generate dispatch arms - each method gets dispatched to dispatch_{method_name}
-        let mut dispatch_arms = Vec::new();
-        for method in &self.service.methods {
+        // Generate dispatch using if-else chain (method IDs are computed at runtime)
+        let mut dispatch_body = String::new();
+
+        for (i, method) in self.service.methods.iter().enumerate() {
             let method_name = method.method_name.to_snake_case();
-            let const_name = method_name.to_uppercase();
-            dispatch_arms.push(format!(
-                "                method_id::{const_name} => self.dispatch_{method_name}(payload, request_id, registry),"
+            let keyword = if i == 0 { "if" } else { "} else if" };
+            dispatch_body.push_str(&format!(
+                "            {keyword} method_id == method_id::{method_name}() {{\n                self.dispatch_{method_name}(payload, request_id, registry)\n"
             ));
         }
-        // Unknown method sends Response with RoamError::UnknownMethod
-        dispatch_arms.push(
-            "                _ => ::roam::session::dispatch_unknown_method(request_id, registry),"
-                .to_string(),
-        );
-        let dispatch_match = dispatch_arms.join("\n");
+
+        // Unknown method fallback
+        if self.service.methods.is_empty() {
+            dispatch_body.push_str(
+                "            ::roam::session::dispatch_unknown_method(request_id, registry)\n",
+            );
+        } else {
+            dispatch_body.push_str(
+                "            } else {\n                ::roam::session::dispatch_unknown_method(request_id, registry)\n            }\n",
+            );
+        }
 
         // Always need Clone since we spawn tasks
         self.scope.raw(format!(
@@ -231,10 +271,7 @@ impl<'a> RustGenerator<'a> {
             request_id: u64,
             registry: &mut ::roam::session::StreamRegistry,
         ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'static>> {{
-            match method_id {{
-{dispatch_match}
-            }}
-        }}
+{dispatch_body}        }}
     }}"#
         ));
     }
@@ -270,7 +307,6 @@ impl<'a> RustGenerator<'a> {
 
 fn generate_client_method(client_impl: &mut Impl, method: &MethodDetail) {
     let method_name = method.method_name.to_snake_case();
-    let const_name = method_name.to_uppercase();
 
     // Build the return type
     let return_type = format_client_return_type(method.return_type);
@@ -303,7 +339,7 @@ fn generate_client_method(client_impl: &mut Impl, method: &MethodDetail) {
 
     fn_def.line(format!("let mut args = {tuple_expr};"));
     fn_def.line(format!(
-        "let payload = self.handle.call(method_id::{const_name}, &mut args).await?;"
+        "let payload = self.handle.call(method_id::{method_name}(), &mut args).await?;"
     ));
     fn_def.line("::roam::session::CallError::decode_response(&payload)");
 }
@@ -426,6 +462,111 @@ fn format_client_return_type(return_shape: &'static Shape) -> String {
         .map(rust_type_base)
         .unwrap_or_else(|| "Never".to_string());
     format!("Result<Result<{ok_type_str}, RoamError<{err_type_str}>>, ::roam::session::CallError>")
+}
+
+/// Convert Shape to Rust type with absolute paths.
+///
+/// Used in `mod method_id {}` which is nested inside the service module,
+/// so we need `super::super::` for user types and `::roam::session::` for Tx/Rx.
+fn rust_type_absolute(shape: &'static Shape) -> String {
+    if is_bytes(shape) {
+        return "::std::vec::Vec<u8>".into();
+    }
+
+    match classify_shape(shape) {
+        ShapeKind::Scalar(scalar) => rust_scalar_type(scalar),
+        ShapeKind::List { element } => {
+            format!("::std::vec::Vec<{}>", rust_type_absolute(element))
+        }
+        ShapeKind::Option { inner } => {
+            format!("::std::option::Option<{}>", rust_type_absolute(inner))
+        }
+        ShapeKind::Array { element, len } => {
+            format!("[{}; {}]", rust_type_absolute(element), len)
+        }
+        ShapeKind::Map { key, value } => {
+            format!(
+                "::std::collections::HashMap<{}, {}>",
+                rust_type_absolute(key),
+                rust_type_absolute(value)
+            )
+        }
+        ShapeKind::Set { element } => {
+            format!(
+                "::std::collections::HashSet<{}>",
+                rust_type_absolute(element)
+            )
+        }
+        ShapeKind::Tuple { elements } => {
+            let inner = elements
+                .iter()
+                .map(|p| rust_type_absolute(p.shape))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("({inner})")
+        }
+        ShapeKind::Tx { inner } => {
+            format!("::roam::session::Tx<{}>", rust_type_absolute(inner))
+        }
+        ShapeKind::Rx { inner } => {
+            format!("::roam::session::Rx<{}>", rust_type_absolute(inner))
+        }
+        ShapeKind::Struct(StructInfo {
+            name: Some(name), ..
+        }) => {
+            // Named struct - super::super:: to exit method_id module and service module
+            format!("super::super::{name}")
+        }
+        ShapeKind::Struct(StructInfo {
+            name: None, fields, ..
+        }) => {
+            let inner = fields
+                .iter()
+                .map(|f| rust_type_absolute(f.shape()))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("({inner})")
+        }
+        ShapeKind::Enum(EnumInfo {
+            name: Some(name), ..
+        }) => {
+            format!("super::super::{name}")
+        }
+        ShapeKind::Result { ok, err } => {
+            format!(
+                "::std::result::Result<{}, {}>",
+                rust_type_absolute(ok),
+                rust_type_absolute(err)
+            )
+        }
+        ShapeKind::Enum(EnumInfo {
+            name: None,
+            variants,
+        }) => {
+            if variants.len() == 2 {
+                let ok_variant = variants.iter().find(|v| v.name == "Ok");
+                let err_variant = variants.iter().find(|v| v.name == "Err");
+
+                if let (Some(ok_v), Some(err_v)) = (ok_variant, err_variant)
+                    && let (
+                        VariantKind::Newtype { inner: ok_ty },
+                        VariantKind::Newtype { inner: err_ty },
+                    ) = (classify_variant(ok_v), classify_variant(err_v))
+                {
+                    return format!(
+                        "::std::result::Result<{}, {}>",
+                        rust_type_absolute(ok_ty),
+                        rust_type_absolute(err_ty)
+                    );
+                }
+            }
+            let variant_names: Vec<_> = variants.iter().map(|v| v.name).collect();
+            format!("/* enum({}) */", variant_names.join("|"))
+        }
+        ShapeKind::Pointer { pointee } => rust_type_absolute(pointee),
+        ShapeKind::Slice { element } => format!("&[{}]", rust_type_absolute(element)),
+        ShapeKind::Opaque => "/* opaque */".into(),
+    }
 }
 
 /// Convert Shape to base Rust type (non-streaming).
@@ -879,7 +1020,7 @@ mod tests {
         assert!(code.contains("CalculatorDispatcher"));
         assert!(code.contains("fn add("));
         assert!(code.contains("pub mod method_id"));
-        assert!(code.contains("pub const ADD: u64"));
+        assert!(code.contains("pub fn add() -> u64"));
     }
 
     #[test]

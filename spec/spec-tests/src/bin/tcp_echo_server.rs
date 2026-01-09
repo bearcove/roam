@@ -243,50 +243,50 @@ async fn dispatch_method(
     let service = TestbedService;
 
     // Unary methods - RoamError<Never> always succeeds since Never is uninhabited
-    if method_id == testbed::method_id::ECHO {
+    if method_id == testbed::method_id::echo() {
         let args: (String,) = facet_postcard::from_slice(payload)?;
         return encode_ok(&service.echo(args.0).await.unwrap());
     }
-    if method_id == testbed::method_id::REVERSE {
+    if method_id == testbed::method_id::reverse() {
         let args: (String,) = facet_postcard::from_slice(payload)?;
         return encode_ok(&service.reverse(args.0).await.unwrap());
     }
 
     // Complex type methods
-    if method_id == testbed::method_id::ECHO_POINT {
+    if method_id == testbed::method_id::echo_point() {
         let args: (spec_proto::Point,) = facet_postcard::from_slice(payload)?;
         return encode_ok(&service.echo_point(args.0).await.unwrap());
     }
-    if method_id == testbed::method_id::CREATE_PERSON {
+    if method_id == testbed::method_id::create_person() {
         let args: (String, u8, Option<String>) = facet_postcard::from_slice(payload)?;
         return encode_ok(&service.create_person(args.0, args.1, args.2).await.unwrap());
     }
-    if method_id == testbed::method_id::RECTANGLE_AREA {
+    if method_id == testbed::method_id::rectangle_area() {
         let args: (spec_proto::Rectangle,) = facet_postcard::from_slice(payload)?;
         return encode_ok(&service.rectangle_area(args.0).await.unwrap());
     }
-    if method_id == testbed::method_id::PARSE_COLOR {
+    if method_id == testbed::method_id::parse_color() {
         let args: (String,) = facet_postcard::from_slice(payload)?;
         return encode_ok(&service.parse_color(args.0).await.unwrap());
     }
-    if method_id == testbed::method_id::SHAPE_AREA {
+    if method_id == testbed::method_id::shape_area() {
         let args: (spec_proto::Shape,) = facet_postcard::from_slice(payload)?;
         return encode_ok(&service.shape_area(args.0).await.unwrap());
     }
-    if method_id == testbed::method_id::GET_POINTS {
+    if method_id == testbed::method_id::get_points() {
         let args: (u32,) = facet_postcard::from_slice(payload)?;
         return encode_ok(&service.get_points(args.0).await.unwrap());
     }
-    if method_id == testbed::method_id::SWAP_PAIR {
+    if method_id == testbed::method_id::swap_pair() {
         let args: ((i32, String),) = facet_postcard::from_slice(payload)?;
         return encode_ok(&service.swap_pair(args.0).await.unwrap());
     }
-    if method_id == testbed::method_id::CREATE_CANVAS {
+    if method_id == testbed::method_id::create_canvas() {
         let args: (String, Vec<spec_proto::Shape>, spec_proto::Color) =
             facet_postcard::from_slice(payload)?;
         return encode_ok(&service.create_canvas(args.0, args.1, args.2).await.unwrap());
     }
-    if method_id == testbed::method_id::PROCESS_MESSAGE {
+    if method_id == testbed::method_id::process_message() {
         let args: (spec_proto::Message,) = facet_postcard::from_slice(payload)?;
         return encode_ok(&service.process_message(args.0).await.unwrap());
     }
