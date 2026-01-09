@@ -316,15 +316,15 @@ fn generate_client_method(client_impl: &mut Impl, method: &MethodDetail) {
 ///     &self,
 ///     payload: Vec<u8>,
 ///     registry: &mut StreamRegistry,
-/// ) -> Pin<Box<dyn Future<Output = Result<Vec<u8>, String>> + Send + 'static>>
+/// ) -> Pin<Box<dyn Future<Output = ()> + Send + 'static>>
 /// ```
 ///
 /// The method:
-/// 1. Deserializes args from payload (streams as u64 IDs)
-/// 2. Binds any streams via the registry
+/// 1. Deserializes args from payload (Rx/Tx deserialize from u64 stream IDs)
+/// 2. Binds streams via registry.bind_streams() using Poke reflection
 /// 3. Clones handler into a boxed future
 /// 4. Calls the handler method and serializes the response
-/// 5. For Tx<T> args: waits for drain tasks to complete before returning
+/// 5. Awaits drain handles to ensure all Data messages are sent before Response
 fn generate_dispatch_method_fn(
     impl_block: &mut Impl,
     method: &MethodDetail,
@@ -333,40 +333,30 @@ fn generate_dispatch_method_fn(
     let method_name = method.method_name.to_snake_case();
     let dispatch_name = format!("dispatch_{method_name}");
 
-    // Build wire arg types - streams become u64
-    let wire_arg_types: Vec<String> = method
+    // Build arg types - Rx/Tx types are used directly (they deserialize from u64 via proxy)
+    let arg_types: Vec<String> = method
         .args
         .iter()
-        .map(|arg| {
-            if is_tx(arg.ty) || is_rx(arg.ty) {
-                "u64".to_string()
-            } else {
-                rust_type_server_arg(arg.ty)
-            }
-        })
+        .map(|arg| rust_type_server_arg(arg.ty))
         .collect();
 
     let arg_names: Vec<String> = method.args.iter().map(|a| a.name.to_snake_case()).collect();
 
-    // Collect Tx arg names for drain task handling
-    let tx_arg_names: Vec<String> = method
-        .args
-        .iter()
-        .filter(|a| is_tx(a.ty))
-        .map(|a| a.name.to_snake_case())
-        .collect();
+    // Check if any streams are present (affects whether we need drain handles)
+    let has_streams = method.args.iter().any(|a| is_tx(a.ty) || is_rx(a.ty));
 
     // Start building the function body as a string (easier for complex logic)
     let mut body = String::new();
 
-    // Decode args
+    // Decode args - Rx<T> and Tx<T> deserialize from u64 via #[facet(proxy = u64)]
     if method.args.is_empty() {
-        // No args - nothing to decode
+        // No args - nothing to decode or bind
+        body.push_str("let task_tx = registry.task_tx();\n");
+        body.push_str("let handler = self.handler.clone();\n");
     } else {
-        let tuple_pattern = arg_names.join(", ");
-        let tuple_type = wire_arg_types.join(", ");
+        let tuple_type = arg_types.join(", ");
         body.push_str(&format!(
-            "let ({tuple_pattern}) = match facet_postcard::from_slice::<({tuple_type})>(&payload) {{\n"
+            "let mut args = match facet_postcard::from_slice::<({tuple_type})>(&payload) {{\n"
         ));
         body.push_str("    Ok(args) => args,\n");
         body.push_str("    Err(_) => {\n");
@@ -376,84 +366,32 @@ fn generate_dispatch_method_fn(
         body.push_str("        });\n");
         body.push_str("    }\n");
         body.push_str("};\n");
-    }
 
-    // Bind streams via registry
-    for arg in &method.args {
-        let arg_name = arg.name.to_snake_case();
-        if is_rx(arg.ty) {
-            // Rx<T> = server receives from client
-            let inner_type = arg
-                .ty
-                .type_params
-                .first()
-                .map(|p| rust_type_base(p.shape))
-                .unwrap_or_else(|| "()".to_string());
-            body.push_str(&format!(
-                "let ({arg_name}_tx, {arg_name}_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(64);\n"
-            ));
-            body.push_str(&format!(
-                "registry.register_incoming({arg_name}, {arg_name}_tx);\n"
-            ));
-            body.push_str(&format!(
-                "let {arg_name} = Rx::<{inner_type}>::new({arg_name}, {arg_name}_rx);\n"
-            ));
-        } else if is_tx(arg.ty) {
-            // Tx<T> = server sends to client
-            // Create channel and Tx handle. Drain task is spawned inside the async block
-            // so we can join on it before returning.
-            let inner_type = arg
-                .ty
-                .type_params
-                .first()
-                .map(|p| rust_type_base(p.shape))
-                .unwrap_or_else(|| "()".to_string());
-            body.push_str(&format!(
-                "let ({arg_name}_tx, {arg_name}_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(64);\n"
-            ));
-            body.push_str(&format!("let {arg_name}_stream_id = {arg_name};\n"));
-            body.push_str(&format!(
-                "let {arg_name} = Tx::<{inner_type}>::new({arg_name}_stream_id, {arg_name}_tx);\n"
-            ));
+        // Bind streams via registry using Poke reflection
+        if has_streams {
+            body.push_str("let drain_handles = registry.bind_streams(&mut args);\n");
         }
+
+        // Destructure args tuple
+        let tuple_pattern = arg_names.join(", ");
+        body.push_str(&format!("let ({tuple_pattern}) = args;\n"));
+
+        body.push_str("let task_tx = registry.task_tx();\n");
+        body.push_str("let handler = self.handler.clone();\n");
     }
-
-    // Get task_tx - always needed to send Response, also used for Tx drain tasks
-    body.push_str("let task_tx = registry.task_tx();\n");
-
-    // Clone handler for 'static future
-    body.push_str("let handler = self.handler.clone();\n");
 
     // Build async block
     let args_str = arg_names.join(", ");
     body.push_str("Box::pin(async move {\n");
 
-    // Spawn drain tasks for each Tx arg and collect JoinHandles
-    for tx_arg in &tx_arg_names {
-        body.push_str(&format!("    let {tx_arg}_drain = {{\n"));
-        body.push_str(&format!("        let mut rx = {tx_arg}_rx;\n"));
-        body.push_str(&format!("        let stream_id = {tx_arg}_stream_id;\n"));
-        body.push_str("        let tx = task_tx.clone();\n");
-        body.push_str("        tokio::spawn(async move {\n");
-        body.push_str("            while let Some(data) = rx.recv().await {\n");
-        body.push_str("                let _ = tx.send(::roam::session::TaskMessage::Data { stream_id, payload: data }).await;\n");
-        body.push_str("            }\n");
-        body.push_str("            let _ = tx.send(::roam::session::TaskMessage::Close { stream_id }).await;\n");
-        body.push_str("        })\n");
-        body.push_str("    };\n");
-    }
-
-    // Call handler (Tx handles are moved into handler and dropped when it completes,
-    // which closes the channel and signals the drain tasks to finish)
+    // Call handler
     body.push_str(&format!(
         "    let result = handler.{method_name}({args_str}).await;\n"
     ));
 
-    // Wait for all drain tasks to complete before encoding response.
-    // The handler has finished and dropped its Tx handles, so the drain tasks
-    // will see channel closure and finish sending Close messages.
-    for tx_arg in &tx_arg_names {
-        body.push_str(&format!("    let _ = {tx_arg}_drain.await;\n"));
+    // Wait for all drain tasks to complete before encoding response
+    if has_streams && !method.args.is_empty() {
+        body.push_str("    for h in drain_handles { let _ = h.await; }\n");
     }
 
     // Encode response and send via task channel
@@ -476,7 +414,6 @@ fn generate_dispatch_method_fn(
     dispatch_fn.arg_ref_self();
     dispatch_fn.arg("payload", "Vec<u8>");
     dispatch_fn.arg("request_id", "u64");
-    // Always need registry to get task_tx for sending Response
     dispatch_fn.arg("registry", "&mut ::roam::session::StreamRegistry");
     dispatch_fn.ret("std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'static>>");
     dispatch_fn.line(body);

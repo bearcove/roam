@@ -103,6 +103,14 @@ impl SenderSlot {
     pub fn is_none(&self) -> bool {
         self.inner.is_none()
     }
+
+    /// Set the sender in this slot.
+    ///
+    /// Used by `StreamRegistry::bind_streams` to hydrate a deserialized `Tx<T>`
+    /// with an actual channel sender.
+    pub fn set(&mut self, tx: mpsc::Sender<Vec<u8>>) {
+        self.inner = Some(tx);
+    }
 }
 
 /// Tx stream handle - caller sends data to callee.
@@ -271,6 +279,14 @@ impl ReceiverSlot {
     /// Check if the slot is empty.
     pub fn is_none(&self) -> bool {
         self.inner.is_none()
+    }
+
+    /// Set the receiver in this slot.
+    ///
+    /// Used by `StreamRegistry::bind_streams` to hydrate a deserialized `Rx<T>`
+    /// with an actual channel receiver.
+    pub fn set(&mut self, rx: mpsc::Receiver<Vec<u8>>) {
+        self.inner = Some(rx);
     }
 }
 
@@ -693,6 +709,144 @@ impl StreamRegistry {
     /// Returns None if stream is not registered.
     pub fn incoming_credit(&self, stream_id: StreamId) -> Option<u32> {
         self.incoming_credit.get(&stream_id).copied()
+    }
+
+    /// Bind streams in deserialized args for server-side dispatch.
+    ///
+    /// Walks the args using Poke reflection to find any `Rx<T>` or `Tx<T>` fields.
+    /// For each stream found:
+    /// - Creates a channel
+    /// - Sets the sender/receiver slot via Poke
+    /// - For `Rx<T>`: registers the sender for incoming data routing
+    /// - For `Tx<T>`: spawns a drain task that sends Data/Close messages
+    ///
+    /// Returns JoinHandles for any Tx drain tasks that must be awaited after
+    /// the handler completes (to ensure all Data messages are sent before Response).
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let mut args = facet_postcard::from_slice::<(Rx<i32>, Tx<String>)>(&payload)?;
+    /// let drain_handles = registry.bind_streams(&mut args);
+    /// let (input, output) = args;
+    /// // ... call handler with input, output ...
+    /// for h in drain_handles { h.await; }
+    /// ```
+    pub fn bind_streams<T: Facet<'static>>(
+        &mut self,
+        args: &mut T,
+    ) -> Vec<tokio::task::JoinHandle<()>> {
+        let mut handles = Vec::new();
+        let poke = facet::Poke::new(args);
+        self.bind_streams_recursive(poke, &mut handles);
+        handles
+    }
+
+    /// Recursively walk a Poke value looking for Rx/Tx streams to bind.
+    fn bind_streams_recursive(
+        &mut self,
+        poke: facet::Poke<'_, '_>,
+        handles: &mut Vec<tokio::task::JoinHandle<()>>,
+    ) {
+        let shape = poke.shape();
+
+        // Check if this is an Rx or Tx type
+        if shape.module_path == Some("roam_session") {
+            if shape.type_identifier == "Rx" {
+                self.bind_rx_stream(poke);
+                return;
+            } else if shape.type_identifier == "Tx" {
+                self.bind_tx_stream(poke, handles);
+                return;
+            }
+        }
+
+        // Recurse into struct/tuple fields
+        // (Tuples are represented as structs with numeric field indices in facet)
+        if let Ok(mut ps) = poke.into_struct() {
+            let field_count = ps.field_count();
+            for i in 0..field_count {
+                if let Ok(field_poke) = ps.field(i) {
+                    self.bind_streams_recursive(field_poke, handles);
+                }
+            }
+        }
+        // TODO: Handle enums, arrays, etc. if needed
+    }
+
+    /// Bind an Rx<T> stream for server-side dispatch.
+    ///
+    /// Server receives data from client on this stream.
+    /// Creates a channel, sets the receiver slot, registers the sender for routing.
+    fn bind_rx_stream(&mut self, poke: facet::Poke<'_, '_>) {
+        if let Ok(mut ps) = poke.into_struct() {
+            // Get the stream_id that was deserialized from the wire
+            let stream_id = if let Ok(stream_id_field) = ps.field_by_name("stream_id")
+                && let Ok(id_ref) = stream_id_field.get::<StreamId>()
+            {
+                *id_ref
+            } else {
+                return;
+            };
+
+            // Create channel and set receiver slot
+            let (tx, rx) = mpsc::channel::<Vec<u8>>(64);
+
+            if let Ok(mut receiver_field) = ps.field_by_name("receiver")
+                && let Ok(slot) = receiver_field.get_mut::<ReceiverSlot>()
+            {
+                slot.set(rx);
+            }
+
+            // Register for incoming data routing
+            self.register_incoming(stream_id, tx);
+        }
+    }
+
+    /// Bind a Tx<T> stream for server-side dispatch.
+    ///
+    /// Server sends data to client on this stream.
+    /// Creates a channel, sets the sender slot, spawns a drain task.
+    fn bind_tx_stream(
+        &mut self,
+        poke: facet::Poke<'_, '_>,
+        handles: &mut Vec<tokio::task::JoinHandle<()>>,
+    ) {
+        if let Ok(mut ps) = poke.into_struct() {
+            // Get the stream_id that was deserialized from the wire
+            let stream_id = if let Ok(stream_id_field) = ps.field_by_name("stream_id")
+                && let Ok(id_ref) = stream_id_field.get::<StreamId>()
+            {
+                *id_ref
+            } else {
+                return;
+            };
+
+            // Create channel and set sender slot
+            let (tx, mut rx) = mpsc::channel::<Vec<u8>>(64);
+
+            if let Ok(mut sender_field) = ps.field_by_name("sender")
+                && let Ok(slot) = sender_field.get_mut::<SenderSlot>()
+            {
+                slot.set(tx);
+            }
+
+            // Spawn drain task to send Data messages to the wire
+            let task_tx = self.task_tx.clone();
+            let handle = tokio::spawn(async move {
+                while let Some(data) = rx.recv().await {
+                    let _ = task_tx
+                        .send(TaskMessage::Data {
+                            stream_id,
+                            payload: data,
+                        })
+                        .await;
+                }
+                // Stream ended (handler dropped the Tx), send Close
+                let _ = task_tx.send(TaskMessage::Close { stream_id }).await;
+            });
+            handles.push(handle);
+        }
     }
 }
 
