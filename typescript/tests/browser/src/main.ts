@@ -1,21 +1,17 @@
 // Browser test client for roam WebSocket
 //
 // This test connects to a Rust WebSocket server and makes RPC calls
-// using generated client code for Echo and Complex services.
+// using generated client code for the Testbed service.
 
 import { WsTransport, connectWs } from "@bearcove/roam-ws";
+import { helloExchangeInitiator, defaultHello, Connection, channel } from "@bearcove/roam-core";
 import {
-  helloExchangeInitiator,
-  defaultHello,
-  Connection,
-  encodeI32,
-  decodeU32,
-  encodeString,
-  decodeString,
-} from "@bearcove/roam-core";
-import { EchoClient } from "@bearcove/roam-generated/echo.ts";
-import { ComplexClient } from "@bearcove/roam-generated/complex.ts";
-import { StreamingClient } from "@bearcove/roam-generated/streaming.ts";
+  TestbedClient,
+  type Point,
+  type Color,
+  type Shape,
+  type Message,
+} from "@bearcove/roam-generated/testbed.ts";
 
 // Make test results available to Playwright
 declare global {
@@ -55,7 +51,7 @@ function addResult(name: string, passed: boolean, error?: string) {
   }
 }
 
-async function testEcho(client: EchoClient): Promise<void> {
+async function testEcho(client: TestbedClient): Promise<void> {
   // Test 1: echo - using generated client
   log("Testing echo...");
   const echoMessage = "Hello from browser!";
@@ -76,7 +72,7 @@ async function testEcho(client: EchoClient): Promise<void> {
   addResult("reverse", true);
 }
 
-async function testComplex(client: ComplexClient): Promise<void> {
+async function testComplex(client: TestbedClient): Promise<void> {
   // Test: echoPoint - struct encoding/decoding
   log("Testing echoPoint...");
   const point = { x: 42, y: -17 };
@@ -179,7 +175,7 @@ async function testComplex(client: ComplexClient): Promise<void> {
 
   // Test: swapPair - tuple types
   log("Testing swapPair...");
-  const swapped = await client.swapPair([42, "hello"]);
+  const swapped = await client.swapPair({ 0: 42, 1: "hello" });
   if (swapped[0] !== "hello" || swapped[1] !== 42) {
     throw new Error(`swapPair mismatch: expected ["hello", 42], got ${JSON.stringify(swapped)}`);
   }
@@ -222,42 +218,42 @@ async function testComplex(client: ComplexClient): Promise<void> {
   addResult("createCanvas", true);
 }
 
-async function testStreaming(client: StreamingClient, conn: Connection): Promise<void> {
+async function testStreaming(client: TestbedClient): Promise<void> {
   // Test: sum - client-to-server streaming
-  // r[impl streaming.client-to-server] - Client sends channel, server returns scalar.
+  // Client sends numbers via Tx, server returns their sum
   log("Testing sum (client-to-server streaming)...");
   {
-    // Create a Tx channel for sending numbers
-    const [tx, _channelId] = conn.createTx<number>((n) => encodeI32(n));
+    // Create unbound channel pair
+    const [tx, rx] = channel<number>();
 
-    // Queue numbers to send
-    tx.send(1);
-    tx.send(2);
-    tx.send(3);
-    tx.send(4);
-    tx.send(5);
+    // Start the call first - this binds the channels
+    const resultPromise = client.sum(rx);
+
+    // Now send data through the bound channel
+    await tx.send(1);
+    await tx.send(2);
+    await tx.send(3);
+    await tx.send(4);
+    await tx.send(5);
     tx.close();
 
-    // Make the RPC call - this flushes outgoing data and waits for response
-    const result = await client.sum(tx);
+    // Wait for response
+    const result = await resultPromise;
     if (result !== 15n) {
       throw new Error(`sum mismatch: expected 15n, got ${result}`);
     }
     addResult("sum (client-to-server)", true);
   }
 
-  // Test: range - server-to-client streaming
-  // r[impl streaming.server-to-client] - Client sends scalar, server returns channel.
-  log("Testing range (server-to-client streaming)...");
+  // Test: generate - server-to-client streaming
+  // Client sends count, server streams numbers back via Tx
+  log("Testing generate (server-to-client streaming)...");
   {
-    // Create a Rx channel for receiving numbers
-    const [rx, _channelId] = conn.createRx<number>((bytes) => {
-      const result = decodeU32(bytes, 0);
-      return result.value;
-    });
+    // Create unbound channel pair
+    const [tx, rx] = channel<number>();
 
-    // Make the RPC call - server will send data via the Rx channel
-    await client.range(5, rx);
+    // Make the call - server will stream data via tx's paired rx
+    await client.generate(5, tx);
 
     // Collect all values from the channel
     const values: number[] = [];
@@ -266,78 +262,50 @@ async function testStreaming(client: StreamingClient, conn: Connection): Promise
     }
 
     if (values.length !== 5) {
-      throw new Error(`range length mismatch: expected 5, got ${values.length}`);
+      throw new Error(`generate length mismatch: expected 5, got ${values.length}`);
     }
     const expected = [0, 1, 2, 3, 4];
     for (let i = 0; i < 5; i++) {
       if (values[i] !== expected[i]) {
-        throw new Error(`range[${i}] mismatch: expected ${expected[i]}, got ${values[i]}`);
+        throw new Error(`generate[${i}] mismatch: expected ${expected[i]}, got ${values[i]}`);
       }
     }
-    addResult("range (server-to-client)", true);
+    addResult("generate (server-to-client)", true);
   }
 
-  // Test: pipe - bidirectional streaming
-  // r[impl streaming.bidirectional] - Both sides stream simultaneously.
-  log("Testing pipe (bidirectional streaming)...");
+  // Test: transform - bidirectional streaming
+  // Client sends strings, server echoes each back
+  log("Testing transform (bidirectional streaming)...");
   {
-    // Create Tx for sending strings
-    const [tx, _txId] = conn.createTx<string>((s) => encodeString(s));
+    // Create two channel pairs - one for sending, one for receiving
+    const [inputTx, inputRx] = channel<string>();
+    const [outputTx, outputRx] = channel<string>();
 
-    // Create Rx for receiving strings
-    const [rx, _rxId] = conn.createRx<string>((bytes) => {
-      const result = decodeString(bytes, 0);
-      return result.value;
-    });
+    // Start the call
+    const callPromise = client.transform(inputRx, outputTx);
 
-    // Queue strings to send
-    tx.send("hello");
-    tx.send("world");
-    tx.send("!");
-    tx.close();
-
-    // Make the RPC call
-    await client.pipe(tx, rx);
+    // Send strings
+    await inputTx.send("hello");
+    await inputTx.send("world");
+    await inputTx.send("!");
+    inputTx.close();
 
     // Collect echoed values
     const echoed: string[] = [];
-    for await (const s of rx) {
+    for await (const s of outputRx) {
       echoed.push(s);
     }
 
+    // Wait for call to complete
+    await callPromise;
+
     if (echoed.length !== 3) {
-      throw new Error(`pipe length mismatch: expected 3, got ${echoed.length}`);
+      throw new Error(`transform length mismatch: expected 3, got ${echoed.length}`);
     }
     if (echoed[0] !== "hello" || echoed[1] !== "world" || echoed[2] !== "!") {
-      throw new Error(`pipe mismatch: got ${JSON.stringify(echoed)}`);
+      throw new Error(`transform mismatch: got ${JSON.stringify(echoed)}`);
     }
-    addResult("pipe (bidirectional)", true);
-  }
-
-  // Test: stats - client-to-server streaming with tuple result
-  log("Testing stats (aggregating channel)...");
-  {
-    // Create a Tx channel for sending numbers
-    const [tx, _channelId] = conn.createTx<number>((n) => encodeI32(n));
-
-    // Queue numbers to send
-    tx.send(10);
-    tx.send(20);
-    tx.send(30);
-    tx.close();
-
-    // Make the RPC call
-    const [sum, count, avg] = await client.stats(tx);
-    if (sum !== 60n) {
-      throw new Error(`stats sum mismatch: expected 60n, got ${sum}`);
-    }
-    if (count !== 3n) {
-      throw new Error(`stats count mismatch: expected 3n, got ${count}`);
-    }
-    if (Math.abs(avg - 20.0) > 0.0001) {
-      throw new Error(`stats avg mismatch: expected 20.0, got ${avg}`);
-    }
-    addResult("stats (aggregating channel)", true);
+    addResult("transform (bidirectional)", true);
   }
 }
 
@@ -352,19 +320,17 @@ async function runTests(wsUrl: string): Promise<void> {
     const conn = await helloExchangeInitiator(transport, defaultHello());
     log(`Hello exchange complete. Negotiated maxPayloadSize: ${conn.negotiated().maxPayloadSize}`);
 
-    // Create generated clients
-    const echoClient = new EchoClient(conn);
-    const complexClient = new ComplexClient(conn);
-    const streamingClient = new StreamingClient(conn);
+    // Create generated client
+    const client = new TestbedClient(conn);
 
     // Run Echo tests
-    await testEcho(echoClient);
+    await testEcho(client);
 
     // Run Complex tests
-    await testComplex(complexClient);
+    await testComplex(client);
 
     // Run Streaming tests
-    await testStreaming(streamingClient, conn);
+    await testStreaming(client);
 
     conn.getIo().close();
     log("All tests passed!");
