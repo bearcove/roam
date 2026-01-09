@@ -1,9 +1,8 @@
 /// Swift subject binary for the roam compliance suite.
 ///
-/// This demonstrates the minimal code needed to implement a roam service
-/// using the roam-runtime transport library.
+/// This uses the roam-runtime library to validate that the Swift implementation
+/// is compliant with the roam protocol spec.
 
-import Dispatch
 import Foundation
 import RoamRuntime
 
@@ -11,10 +10,6 @@ import RoamRuntime
 
 /// Implementation of the Testbed service.
 struct TestbedService: TestbedHandler {
-
-    // ========================================================================
-    // Unary methods
-    // ========================================================================
 
     func echo(message: String) async throws -> String {
         log("echo called: \(message)")
@@ -25,10 +20,6 @@ struct TestbedService: TestbedHandler {
         log("reverse called: \(message)")
         return String(message.reversed())
     }
-
-    // ========================================================================
-    // Streaming methods
-    // ========================================================================
 
     func sum(numbers: Rx<Int32>) async throws -> Int64 {
         log("sum called, starting to receive numbers")
@@ -58,10 +49,6 @@ struct TestbedService: TestbedHandler {
         }
         log("transform complete")
     }
-
-    // ========================================================================
-    // Complex type methods
-    // ========================================================================
 
     func echoPoint(point: Point) async throws -> Point {
         return point
@@ -155,57 +142,33 @@ final class TestbedDispatcherAdapter: ServiceDispatcher, @unchecked Sendable {
 // MARK: - Logging
 
 func log(_ message: String) {
-    FileHandle.standardError.write(
-        "[\(ProcessInfo.processInfo.processIdentifier)] \(message)\n".data(using: .utf8)!)
+    let data = "[\(ProcessInfo.processInfo.processIdentifier)] \(message)\n".data(using: .utf8)!
+    FileHandle.standardError.write(data)
 }
 
 // MARK: - Server Mode
 
 /// In "server" mode, the subject acts as the RPC server (handler).
 /// But it CONNECTS TO the test harness (specified by PEER_ADDR).
-/// This is confusing terminology but matches how the Rust subject works.
 func runServer() async throws {
     guard let addr = ProcessInfo.processInfo.environment["PEER_ADDR"] else {
-        throw SubjectError.connectFailed
+        log("PEER_ADDR not set")
+        throw SubjectError.missingEnv
     }
 
     log("connecting to \(addr)")
 
     // Parse host:port
     let parts = addr.split(separator: ":")
-    guard parts.count == 2,
-        let port = UInt16(parts[1])
-    else {
-        throw SubjectError.connectFailed
+    guard parts.count == 2, let port = Int(parts[1]) else {
+        log("invalid PEER_ADDR format")
+        throw SubjectError.invalidAddr
     }
     let host = String(parts[0])
 
-    // Create socket
-    let fd = socket(AF_INET, SOCK_STREAM, 0)
-    guard fd >= 0 else {
-        throw SubjectError.socketCreationFailed
-    }
-
-    // Connect
-    var serverAddr = sockaddr_in()
-    serverAddr.sin_family = sa_family_t(AF_INET)
-    serverAddr.sin_port = port.bigEndian
-    inet_pton(AF_INET, host, &serverAddr.sin_addr)
-
-    let connectResult = withUnsafePointer(to: &serverAddr) { addrPtr in
-        addrPtr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sockaddrPtr in
-            Darwin.connect(fd, sockaddrPtr, socklen_t(MemoryLayout<sockaddr_in>.size))
-        }
-    }
-    guard connectResult == 0 else {
-        close(fd)
-        throw SubjectError.connectFailed
-    }
-
+    // Use roam-runtime's connect function
+    let transport = try await connect(host: host, port: port)
     log("connected")
-
-    // Create transport
-    let transport = SocketTransport(fd: fd)
 
     // Establish connection as acceptor (we're the server/handler, but we connected)
     let hello = Hello.v1(maxPayloadSize: 1024 * 1024, initialChannelCredit: 64 * 1024)
@@ -226,141 +189,27 @@ func runServer() async throws {
     log("driver finished")
 }
 
-// MARK: - Socket Transport
-
-/// Simple synchronous socket transport for stdio-based testing.
-final class SocketTransport: MessageTransport, @unchecked Sendable {
-    private let fd: Int32
-    private var readBuffer: [UInt8] = []
-
-    init(fd: Int32) {
-        self.fd = fd
-    }
-
-    func send(_ message: RoamRuntime.Message) async throws {
-        let encoded = message.encode()
-        var framed = cobsEncode(encoded)
-        framed.append(0)  // Frame delimiter
-
-        var written = 0
-        while written < framed.count {
-            let result = Darwin.write(fd, &framed[written], framed.count - written)
-            if result < 0 {
-                throw TransportError.connectionClosed
-            }
-            written += result
-        }
-    }
-
-    func recv() async throws -> RoamRuntime.Message? {
-        // Read until we get a complete frame (zero delimiter)
-        while true {
-            if let zeroIndex = readBuffer.firstIndex(of: 0) {
-                let frame = Array(readBuffer[..<zeroIndex])
-                readBuffer.removeFirst(zeroIndex + 1)
-
-                if frame.isEmpty {
-                    continue
-                }
-
-                let decoded = try cobsDecode(frame)
-                return try RoamRuntime.Message.decode(from: Data(decoded))
-            }
-
-            // Read more data
-            var chunk = [UInt8](repeating: 0, count: 4096)
-            let result = Darwin.read(fd, &chunk, chunk.count)
-            if result <= 0 {
-                return nil  // EOF
-            }
-            readBuffer.append(contentsOf: chunk[..<result])
-        }
-    }
-
-    func close() async throws {
-        Darwin.close(fd)
-    }
-}
-
-// MARK: - Errors
-
-enum SubjectError: Error {
-    case socketCreationFailed
-    case bindFailed
-    case listenFailed
-    case acceptFailed
-    case connectFailed
-}
-
-// MARK: - Main Entry Point
-
-@main
-struct SubjectMain {
-    static func main() async {
-        let mode = ProcessInfo.processInfo.environment["SUBJECT_MODE"] ?? "server"
-        log("subject-swift starting in \(mode) mode")
-
-        do {
-            switch mode {
-            case "server":
-                try await runServer()
-            case "client":
-                try await runClient()
-            default:
-                log("unknown SUBJECT_MODE: \(mode)")
-                exit(1)
-            }
-        } catch {
-            log("error: \(error)")
-            exit(1)
-        }
-    }
-}
-
 // MARK: - Client Mode
 
 func runClient() async throws {
     guard let addr = ProcessInfo.processInfo.environment["PEER_ADDR"] else {
-        throw SubjectError.connectFailed
+        log("PEER_ADDR not set")
+        throw SubjectError.missingEnv
     }
 
     log("connecting to \(addr)")
 
     // Parse host:port
     let parts = addr.split(separator: ":")
-    guard parts.count == 2,
-        let port = UInt16(parts[1])
-    else {
-        throw SubjectError.connectFailed
+    guard parts.count == 2, let port = Int(parts[1]) else {
+        log("invalid PEER_ADDR format")
+        throw SubjectError.invalidAddr
     }
     let host = String(parts[0])
 
-    // Create socket
-    let fd = socket(AF_INET, SOCK_STREAM, 0)
-    guard fd >= 0 else {
-        throw SubjectError.socketCreationFailed
-    }
-
-    // Connect
-    var serverAddr = sockaddr_in()
-    serverAddr.sin_family = sa_family_t(AF_INET)
-    serverAddr.sin_port = port.bigEndian
-    inet_pton(AF_INET, host, &serverAddr.sin_addr)
-
-    let connectResult = withUnsafePointer(to: &serverAddr) { addrPtr in
-        addrPtr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sockaddrPtr in
-            Darwin.connect(fd, sockaddrPtr, socklen_t(MemoryLayout<sockaddr_in>.size))
-        }
-    }
-    guard connectResult == 0 else {
-        close(fd)
-        throw SubjectError.connectFailed
-    }
-
+    // Use roam-runtime's connect function
+    let transport = try await connect(host: host, port: port)
     log("connected")
-
-    // Create transport
-    let transport = SocketTransport(fd: fd)
 
     // Establish connection as initiator
     let hello = Hello.v1(maxPayloadSize: 1024 * 1024, initialChannelCredit: 64 * 1024)
@@ -398,5 +247,37 @@ func runClient() async throws {
 
     default:
         log("unknown CLIENT_SCENARIO: \(scenario)")
+    }
+}
+
+// MARK: - Errors
+
+enum SubjectError: Error {
+    case missingEnv
+    case invalidAddr
+}
+
+// MARK: - Main Entry Point
+
+@main
+struct SubjectMain {
+    static func main() async {
+        let mode = ProcessInfo.processInfo.environment["SUBJECT_MODE"] ?? "server"
+        log("subject-swift starting in \(mode) mode")
+
+        do {
+            switch mode {
+            case "server":
+                try await runServer()
+            case "client":
+                try await runClient()
+            default:
+                log("unknown SUBJECT_MODE: \(mode)")
+                exit(1)
+            }
+        } catch {
+            log("error: \(error)")
+            exit(1)
+        }
     }
 }

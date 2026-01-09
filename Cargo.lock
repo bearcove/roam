@@ -308,6 +308,15 @@ checksum = "a1d728cc89cf3aee9ff92b05e62b19ee65a02b5702cff7d5a377e32c6ae29d8d"
 
 [[package]]
 name = "cobs"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0fa961b519f0b462e3a3b4a34b64d119eeaca1d59af726fe450bbba07a9fc0a1"
+dependencies = [
+ "thiserror",
+]
+
+[[package]]
+name = "cobs"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b4ef0193218d365c251b5b9297f9911a908a8ddd2ebd3a36cc5d0ef0f63aee9e"
@@ -1429,7 +1438,8 @@ version = "0.5.0"
 name = "roam-stream"
 version = "0.5.0"
 dependencies = [
- "cobs",
+ "cobs 0.5.0",
+ "ctor",
  "facet-postcard",
  "roam-session",
  "roam-wire",
@@ -1451,6 +1461,7 @@ dependencies = [
 name = "roam-wire"
 version = "0.5.0"
 dependencies = [
+ "cobs 0.3.0",
  "facet",
  "facet-postcard",
 ]
@@ -1594,7 +1605,7 @@ dependencies = [
 name = "spec-tests"
 version = "0.1.0"
 dependencies = [
- "cobs",
+ "cobs 0.5.0",
  "ctor",
  "facet",
  "facet-postcard",

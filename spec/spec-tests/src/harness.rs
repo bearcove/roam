@@ -257,9 +257,13 @@ pub async fn run_as_server<D: roam::session::ServiceDispatcher>(
     let io = StreamCobsFramed::new(stream);
     let hello = our_hello(1024 * 1024);
 
-    let (_handle, driver) = establish_acceptor(io, hello, dispatcher)
-        .await
-        .map_err(|e| format!("handshake failed: {e:?}"))?;
+    let (_handle, driver) = tokio::time::timeout(
+        Duration::from_secs(5),
+        establish_acceptor(io, hello, dispatcher),
+    )
+    .await
+    .map_err(|_| "handshake timed out after 5s".to_string())?
+    .map_err(|e| format!("handshake failed: {e:?}"))?;
 
     // Run the driver until completion
     let result = driver.run().await;

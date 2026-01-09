@@ -2,6 +2,20 @@ import Foundation
 import NIO
 import NIOCore
 import NIOPosix
+import os
+
+// MARK: - Debug Logging
+
+/// Logger for roam-runtime debug output.
+/// Enable with ROAM_DEBUG=1 environment variable.
+private let debugEnabled = ProcessInfo.processInfo.environment["ROAM_DEBUG"] != nil
+private let logger = Logger(subsystem: "com.bearcove.roam", category: "transport")
+
+func debugLog(_ message: @autoclosure () -> String) {
+    if debugEnabled {
+        logger.debug("\(message())")
+    }
+}
 
 // MARK: - Transport Protocol
 

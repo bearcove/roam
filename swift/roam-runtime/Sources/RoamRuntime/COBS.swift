@@ -8,6 +8,11 @@
 /// The output will contain no zero bytes. A zero byte should be
 /// appended as a frame delimiter after sending.
 public func cobsEncode(_ data: [UInt8]) -> [UInt8] {
+    // Empty input produces empty output
+    guard !data.isEmpty else {
+        return []
+    }
+
     var output: [UInt8] = []
     output.reserveCapacity(data.count + data.count / 254 + 1)
 
