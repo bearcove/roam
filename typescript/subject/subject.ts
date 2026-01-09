@@ -172,9 +172,6 @@ async function runServer() {
 }
 
 async function runClient() {
-  const { TestbedClient } = await import("@bearcove/roam-generated/testbed.ts");
-  const { encodeI32 } = await import("@bearcove/roam-core");
-
   const addr = process.env.PEER_ADDR;
   if (!addr) {
     throw new Error("PEER_ADDR env var not set");

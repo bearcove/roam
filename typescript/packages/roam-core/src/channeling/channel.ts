@@ -29,6 +29,7 @@ export function createChannel<T>(capacity = 64): Channel<T> {
   };
 
   return {
+    // FIXME: this should return a promise for backpressure reasons
     send(value: T): boolean {
       if (state.closed) {
         return false;
@@ -46,6 +47,8 @@ export function createChannel<T>(capacity = 64): Channel<T> {
         state.buffer.push(value);
         return true;
       }
+
+      // FIXME: send should never drop
 
       // Buffer full - drop (like try_send)
       return false;

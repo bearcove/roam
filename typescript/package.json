@@ -6,6 +6,7 @@
     "check": "pnpm -r run check"
   },
   "devDependencies": {
-    "@types/node": "^22"
+    "@types/node": "^22",
+    "@typescript/native-preview": "7.0.0-dev.20260109.1"
   }
 }

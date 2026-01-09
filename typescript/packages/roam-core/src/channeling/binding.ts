@@ -114,6 +114,9 @@ function bindValue(
     }
 
     case "vec": {
+      // FIXME: perf: we know the full schema, therefore, we know
+      // whether there's even a _possibility_ of there being a Tx/Rx
+      // nested in the map. we should check that before iterating the entire vec...
       const arr = value as unknown[];
       for (const item of arr) {
         bindValue(schema.element, item, allocator, registry, serializers);
@@ -122,6 +125,9 @@ function bindValue(
     }
 
     case "option": {
+      // FIXME: perf: we know the full schema, therefore, we know
+      // whether there's even a _possibility_ of there being a Tx/Rx
+      // nested in the option
       if (value !== null && value !== undefined) {
         bindValue(schema.inner, value, allocator, registry, serializers);
       }
@@ -130,6 +136,9 @@ function bindValue(
 
     case "map": {
       const map = value as Map<unknown, unknown>;
+      // FIXME: perf: we know the full schema, therefore, we know
+      // whether there's even a _possibility_ of there being a Tx/Rx
+      // nested in the map. we should check that before iterating the entire map...
       for (const [k, v] of map) {
         bindValue(schema.key, k, allocator, registry, serializers);
         bindValue(schema.value, v, allocator, registry, serializers);
@@ -138,6 +147,9 @@ function bindValue(
     }
 
     case "struct": {
+      // FIXME: perf: we know the full schema, therefore, we know
+      // whether there's even a _possibility_ of there being a Tx/Rx
+      // nested in any of the fields here
       const obj = value as Record<string, unknown>;
       for (const [fieldName, fieldSchema] of Object.entries(schema.fields)) {
         if (fieldName in obj) {
@@ -148,6 +160,10 @@ function bindValue(
     }
 
     case "enum": {
+      // FIXME: perf: we know the full schema, therefore, we know
+      // whether there's even a _possibility_ of there being a Tx/Rx
+      // nested in any of the fields here
+
       // Enum value should be { variant: string, fields: unknown[] }
       const enumVal = value as { variant: string; fields?: unknown[] };
       const variantSchemas = schema.variants[enumVal.variant];
