@@ -63,13 +63,12 @@ If you find yourself:
 ## Architecture Reminder
 
 **Rust:**
-- `#[service]` proc macro → Only generates `ServiceDetail` (metadata)
-- `build.rs` + `roam-codegen` → Generates Dispatcher, Handler trait, method IDs, everything else
+- `#[service]` proc macro → Generates everything: trait, Dispatcher, Client, method IDs, `service_detail()`
 
-**TypeScript:**
-- `roam-codegen --typescript` → Should generate server handlers AND client callers
+**Other languages (TypeScript, Go, Swift, etc.):**
+- `roam-codegen` → Generates client/server code from `ServiceDetail`
 
-If either codegen is missing functionality, FIX THE CODEGEN.
+If any codegen is missing functionality, FIX THE CODEGEN.
 
 ## Final Note
 
