@@ -18,8 +18,8 @@ import {
   encodeTuple2, decodeTuple2, encodeTuple3, decodeTuple3,
   encodeEnumVariant, decodeEnumVariant,
 } from "@bearcove/roam-core";
-import { Tx, Rx, createServerTx, createServerRx } from "@bearcove/roam-core";
-import type { ChannelId, ChannelRegistry, TaskSender } from "@bearcove/roam-core";
+import { Tx, Rx, createServerTx, createServerRx, bindChannels } from "@bearcove/roam-core";
+import type { ChannelId, ChannelRegistry, TaskSender, BindingSerializers, Schema } from "@bearcove/roam-core";
 
 export const METHOD_ID = {
   echo: 0x9aabc4ba61fd5df3n,
@@ -204,6 +204,14 @@ export class TestbedClient<T extends MessageTransport = MessageTransport> implem
 
  Tests: client→server streaming. Server receives via `Rx<T>`, returns scalar. */
   async sum(numbers: Rx<number>): Promise<bigint> {
+    // Bind any Tx/Rx channels in arguments
+    bindChannels(
+      testbed_schemas.sum.args,
+      [numbers],
+      this.conn.getChannelAllocator(),
+      this.conn.getChannelRegistry(),
+      testbed_serializers,
+    );
     const payload = encodeU64(numbers.channelId);
     const response = await this.conn.call(0x855b3a25d97bfefdn, payload);
     const buf = response;
@@ -216,6 +224,14 @@ export class TestbedClient<T extends MessageTransport = MessageTransport> implem
 
  Tests: server→client streaming. Server sends via `Tx<T>`. */
   async generate(count: number, output: Tx<number>): Promise<void> {
+    // Bind any Tx/Rx channels in arguments
+    bindChannels(
+      testbed_schemas.generate.args,
+      [count, output],
+      this.conn.getChannelAllocator(),
+      this.conn.getChannelRegistry(),
+      testbed_serializers,
+    );
     const payload = concat(encodeU32(count), encodeU64(output.channelId));
     const response = await this.conn.call(0x54d2273d8cdb9c38n, payload);
     const buf = response;
@@ -228,6 +244,14 @@ export class TestbedClient<T extends MessageTransport = MessageTransport> implem
 
  Tests: bidirectional streaming. Server receives via `Rx<T>`, sends via `Tx<T>`. */
   async transform(input: Rx<string>, output: Tx<string>): Promise<void> {
+    // Bind any Tx/Rx channels in arguments
+    bindChannels(
+      testbed_schemas.transform.args,
+      [input, output],
+      this.conn.getChannelAllocator(),
+      this.conn.getChannelRegistry(),
+      testbed_serializers,
+    );
     const payload = concat(encodeU64(input.channelId), encodeU64(output.channelId));
     const response = await this.conn.call(0x5d9895604eb18b19n, payload);
     const buf = response;
@@ -994,5 +1018,45 @@ export const testbed_schemas: Record<string, MethodSchema> = {
   processMessage: { args: [{ kind: 'enum', variants: { 'Text': [{ kind: 'string' }], 'Number': [{ kind: 'i64' }], 'Data': [{ kind: 'bytes' }] } }] },
   getPoints: { args: [{ kind: 'u32' }] },
   swapPair: { args: [{ kind: 'struct', fields: { '0': { kind: 'i32' }, '1': { kind: 'string' } } }] },
+};
+
+// Serializers for runtime channel binding
+export const testbed_serializers: BindingSerializers = {
+  getTxSerializer(schema: Schema): (value: unknown) => Uint8Array {
+    switch (schema.kind) {
+      case 'bool': return (v) => encodeBool(v as boolean);
+      case 'u8': return (v) => encodeU8(v as number);
+      case 'i8': return (v) => encodeI8(v as number);
+      case 'u16': return (v) => encodeU16(v as number);
+      case 'i16': return (v) => encodeI16(v as number);
+      case 'u32': return (v) => encodeU32(v as number);
+      case 'i32': return (v) => encodeI32(v as number);
+      case 'u64': return (v) => encodeU64(v as bigint);
+      case 'i64': return (v) => encodeI64(v as bigint);
+      case 'f32': return (v) => encodeF32(v as number);
+      case 'f64': return (v) => encodeF64(v as number);
+      case 'string': return (v) => encodeString(v as string);
+      case 'bytes': return (v) => encodeBytes(v as Uint8Array);
+      default: throw new Error(`Unsupported schema kind for Tx: ${schema.kind}`);
+    }
+  },
+  getRxDeserializer(schema: Schema): (bytes: Uint8Array) => unknown {
+    switch (schema.kind) {
+      case 'bool': return (b) => decodeBool(b, 0).value;
+      case 'u8': return (b) => decodeU8(b, 0).value;
+      case 'i8': return (b) => decodeI8(b, 0).value;
+      case 'u16': return (b) => decodeU16(b, 0).value;
+      case 'i16': return (b) => decodeI16(b, 0).value;
+      case 'u32': return (b) => decodeU32(b, 0).value;
+      case 'i32': return (b) => decodeI32(b, 0).value;
+      case 'u64': return (b) => decodeU64(b, 0).value;
+      case 'i64': return (b) => decodeI64(b, 0).value;
+      case 'f32': return (b) => decodeF32(b, 0).value;
+      case 'f64': return (b) => decodeF64(b, 0).value;
+      case 'string': return (b) => decodeString(b, 0).value;
+      case 'bytes': return (b) => decodeBytes(b, 0).value;
+      default: throw new Error(`Unsupported schema kind for Rx: ${schema.kind}`);
+    }
+  },
 };
 

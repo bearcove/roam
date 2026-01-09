@@ -339,10 +339,10 @@ pub fn generate_service(service: &ServiceDetail) -> String {
 
     if has_streaming {
         out.push_str(
-            "import { Tx, Rx, createServerTx, createServerRx } from \"@bearcove/roam-core\";\n",
+            "import { Tx, Rx, createServerTx, createServerRx, bindChannels } from \"@bearcove/roam-core\";\n",
         );
         out.push_str(
-            "import type { ChannelId, ChannelRegistry, TaskSender } from \"@bearcove/roam-core\";\n",
+            "import type { ChannelId, ChannelRegistry, TaskSender, BindingSerializers, Schema } from \"@bearcove/roam-core\";\n",
         );
     }
     out.push('\n');
@@ -454,6 +454,7 @@ fn generate_caller_interface(service: &ServiceDetail) -> String {
 fn generate_client_impl(service: &ServiceDetail) -> String {
     let mut out = String::new();
     let service_name = service.name.to_upper_camel_case();
+    let service_name_lower = service.name.to_lower_camel_case();
 
     out.push_str(&format!("// Client implementation for {service_name}\n"));
     out.push_str(&format!(
@@ -467,6 +468,9 @@ fn generate_client_impl(service: &ServiceDetail) -> String {
     for method in &service.methods {
         let method_name = method.method_name.to_lower_camel_case();
         let id = crate::method_id(method);
+
+        // Check if this method has streaming args (Tx or Rx)
+        let has_streaming_args = method.args.iter().any(|a| is_tx(a.ty) || is_rx(a.ty));
 
         // Build args list
         let args = method
@@ -497,6 +501,21 @@ fn generate_client_impl(service: &ServiceDetail) -> String {
         ));
 
         if can_encode_args && can_decode_return {
+            // If method has streaming args, bind channels first
+            if has_streaming_args {
+                // Build args array for binding
+                let arg_names: Vec<_> = method
+                    .args
+                    .iter()
+                    .map(|a| a.name.to_lower_camel_case())
+                    .collect();
+                out.push_str(&format!("    // Bind any Tx/Rx channels in arguments\n"));
+                out.push_str(&format!(
+                    "    bindChannels(\n      {service_name_lower}_schemas.{method_name}.args,\n      [{}],\n      this.conn.getChannelAllocator(),\n      this.conn.getChannelRegistry(),\n      {service_name_lower}_serializers,\n    );\n",
+                    arg_names.join(", ")
+                ));
+            }
+
             // Generate payload encoding
             if method.args.is_empty() {
                 out.push_str("    const payload = new Uint8Array(0);\n");
@@ -534,7 +553,7 @@ fn generate_client_impl(service: &ServiceDetail) -> String {
             out.push_str(&format!("    {decode_stmt}\n"));
             out.push_str("    return result;\n");
         } else {
-            // Streaming or unsupported - throw error
+            // Unsupported - throw error
             out.push_str(
                 "    throw new Error(\"Not yet implemented: encoding/decoding for this method\");\n",
             );
@@ -1652,6 +1671,78 @@ fn generate_method_schemas(service: &ServiceDetail) -> String {
             arg_schemas.join(", ")
         ));
     }
+
+    out.push_str("};\n\n");
+
+    // Check if any method uses streaming
+    let has_streaming = service.methods.iter().any(|m| {
+        m.args.iter().any(|a| is_tx(a.ty) || is_rx(a.ty))
+            || is_tx(m.return_type)
+            || is_rx(m.return_type)
+    });
+
+    // Generate serializers for channel binding (only if streaming is used)
+    if has_streaming {
+        out.push_str(&generate_binding_serializers(service));
+    }
+
+    out
+}
+
+/// Generate BindingSerializers for runtime channel binding.
+/// These provide encode/decode functions based on schema element types.
+fn generate_binding_serializers(service: &ServiceDetail) -> String {
+    let mut out = String::new();
+    let service_name_lower = service.name.to_lower_camel_case();
+
+    out.push_str("// Serializers for runtime channel binding\n");
+    out.push_str(&format!(
+        "export const {service_name_lower}_serializers: BindingSerializers = {{\n"
+    ));
+
+    // getTxSerializer: given element schema, return a serializer function
+    out.push_str("  getTxSerializer(schema: Schema): (value: unknown) => Uint8Array {\n");
+    out.push_str("    switch (schema.kind) {\n");
+    out.push_str("      case 'bool': return (v) => encodeBool(v as boolean);\n");
+    out.push_str("      case 'u8': return (v) => encodeU8(v as number);\n");
+    out.push_str("      case 'i8': return (v) => encodeI8(v as number);\n");
+    out.push_str("      case 'u16': return (v) => encodeU16(v as number);\n");
+    out.push_str("      case 'i16': return (v) => encodeI16(v as number);\n");
+    out.push_str("      case 'u32': return (v) => encodeU32(v as number);\n");
+    out.push_str("      case 'i32': return (v) => encodeI32(v as number);\n");
+    out.push_str("      case 'u64': return (v) => encodeU64(v as bigint);\n");
+    out.push_str("      case 'i64': return (v) => encodeI64(v as bigint);\n");
+    out.push_str("      case 'f32': return (v) => encodeF32(v as number);\n");
+    out.push_str("      case 'f64': return (v) => encodeF64(v as number);\n");
+    out.push_str("      case 'string': return (v) => encodeString(v as string);\n");
+    out.push_str("      case 'bytes': return (v) => encodeBytes(v as Uint8Array);\n");
+    out.push_str(
+        "      default: throw new Error(`Unsupported schema kind for Tx: ${schema.kind}`);\n",
+    );
+    out.push_str("    }\n");
+    out.push_str("  },\n");
+
+    // getRxDeserializer: given element schema, return a deserializer function
+    out.push_str("  getRxDeserializer(schema: Schema): (bytes: Uint8Array) => unknown {\n");
+    out.push_str("    switch (schema.kind) {\n");
+    out.push_str("      case 'bool': return (b) => decodeBool(b, 0).value;\n");
+    out.push_str("      case 'u8': return (b) => decodeU8(b, 0).value;\n");
+    out.push_str("      case 'i8': return (b) => decodeI8(b, 0).value;\n");
+    out.push_str("      case 'u16': return (b) => decodeU16(b, 0).value;\n");
+    out.push_str("      case 'i16': return (b) => decodeI16(b, 0).value;\n");
+    out.push_str("      case 'u32': return (b) => decodeU32(b, 0).value;\n");
+    out.push_str("      case 'i32': return (b) => decodeI32(b, 0).value;\n");
+    out.push_str("      case 'u64': return (b) => decodeU64(b, 0).value;\n");
+    out.push_str("      case 'i64': return (b) => decodeI64(b, 0).value;\n");
+    out.push_str("      case 'f32': return (b) => decodeF32(b, 0).value;\n");
+    out.push_str("      case 'f64': return (b) => decodeF64(b, 0).value;\n");
+    out.push_str("      case 'string': return (b) => decodeString(b, 0).value;\n");
+    out.push_str("      case 'bytes': return (b) => decodeBytes(b, 0).value;\n");
+    out.push_str(
+        "      default: throw new Error(`Unsupported schema kind for Rx: ${schema.kind}`);\n",
+    );
+    out.push_str("    }\n");
+    out.push_str("  },\n");
 
     out.push_str("};\n\n");
     out
