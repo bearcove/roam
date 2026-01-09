@@ -15,6 +15,7 @@ import type {
 } from "@bearcove/roam-generated/testbed.ts";
 import {
   testbed_streamingHandlers,
+  TestbedClient,
   type ChannelingMethodHandler,
 } from "@bearcove/roam-generated/testbed.ts";
 import { Server } from "@bearcove/roam-tcp";
@@ -24,6 +25,7 @@ import {
   type TaskSender,
   type Tx,
   type Rx,
+  channel,
   encodeResultErr,
   encodeInvalidPayload,
   encodeUnknownMethod,
@@ -192,18 +194,47 @@ async function runClient() {
       break;
     }
     case "sum": {
-      // Client-to-server streaming: will be implemented in Phase 7
-      // using channel<T>() and the new binding system
-      console.error("sum scenario: not yet implemented (Phase 7)");
+      // Client-to-server streaming: create channel, start call, then send
+      const [tx, rx] = channel<number>();
+
+      // Start the call first - this binds the channels
+      const resultPromise = client.sum(rx);
+
+      // Now send data through the bound Tx
+      for (let i = 1; i <= 5; i++) {
+        console.error(`sending ${i}`);
+        await tx.send(i);
+      }
+      console.error("closing tx");
+      tx.close();
+
+      // Wait for result
+      const result = await resultPromise;
+      console.error(`sum result: ${result}`);
       break;
     }
     case "generate": {
-      console.error("generate scenario: not yet implemented");
+      // Server-to-client streaming: create channel, call, receive
+      const [tx, rx] = channel<number>();
+
+      // Start the call - server will send through our Rx
+      await client.generate(5, tx);
+
+      // Receive values from Rx
+      const received: number[] = [];
+      for await (const n of rx) {
+        console.error(`received ${n}`);
+        received.push(n);
+      }
+      console.error(`generate received: [${received.join(", ")}]`);
       break;
     }
     default:
       throw new Error(`unknown CLIENT_SCENARIO: ${scenario}`);
   }
+
+  // Close the connection to allow process to exit
+  conn.getIo().close();
 }
 
 async function main() {

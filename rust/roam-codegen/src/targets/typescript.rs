@@ -509,7 +509,7 @@ fn generate_client_impl(service: &ServiceDetail) -> String {
                     .iter()
                     .map(|a| a.name.to_lower_camel_case())
                     .collect();
-                out.push_str(&format!("    // Bind any Tx/Rx channels in arguments\n"));
+                out.push_str("    // Bind any Tx/Rx channels in arguments\n");
                 out.push_str(&format!(
                     "    bindChannels(\n      {service_name_lower}_schemas.{method_name}.args,\n      [{}],\n      this.conn.getChannelAllocator(),\n      this.conn.getChannelRegistry(),\n      {service_name_lower}_serializers,\n    );\n",
                     arg_names.join(", ")
@@ -692,9 +692,7 @@ fn generate_streaming_handlers(service: &ServiceDetail) -> String {
     out.push_str(&format!(
         "// Streaming method handler type for {service_name}\n"
     ));
-    out.push_str(&format!(
-        "export type ChannelingMethodHandler<H> = (\n  handler: H,\n  payload: Uint8Array,\n  requestId: bigint,\n  registry: ChannelRegistry,\n  taskSender: TaskSender,\n) => Promise<void>;\n\n"
-    ));
+    out.push_str("export type ChannelingMethodHandler<H> = (\n  handler: H,\n  payload: Uint8Array,\n  requestId: bigint,\n  registry: ChannelRegistry,\n  taskSender: TaskSender,\n) => Promise<void>;\n\n");
 
     // Generate streaming handlers map
     out.push_str(&format!(

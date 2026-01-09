@@ -59,32 +59,52 @@ function bindValue(
 ): void {
   switch (schema.kind) {
     // Primitives - nothing to bind
-    case 'bool':
-    case 'u8': case 'u16': case 'u32': case 'u64':
-    case 'i8': case 'i16': case 'i32': case 'i64':
-    case 'f32': case 'f64':
-    case 'string':
-    case 'bytes':
+    case "bool":
+    case "u8":
+    case "u16":
+    case "u32":
+    case "u64":
+    case "i8":
+    case "i16":
+    case "i32":
+    case "i64":
+    case "f32":
+    case "f64":
+    case "string":
+    case "bytes":
       return;
 
-    case 'tx': {
+    case "tx": {
+      // Schema Tx in args means: server sends, client receives
+      // So from client's perspective, this is INCOMING data
+      // We need to bind the paired Rx (which client reads from)
       const tx = value as Tx<unknown>;
       if (!tx.isBound) {
         const channelId = allocator.next();
-        const serialize = serializers.getTxSerializer(schema.element);
-        tx.bind(channelId, registry, serialize);
+
+        // Just set the channel ID on Tx (for wire encoding)
+        // Don't register as outgoing - client doesn't send on this channel
+        tx.setChannelIdOnly(channelId);
+
+        // Bind the paired Rx for receiving (this is what client reads from)
+        if (tx._pair && !tx._pair.isBound) {
+          const deserialize = serializers.getRxDeserializer(schema.element);
+          tx._pair.bind(channelId, registry, deserialize);
+        }
       }
       return;
     }
 
-    case 'rx': {
+    case "rx": {
+      // Schema Rx in args means: server receives, client sends
+      // So from client's perspective, this is OUTGOING data
       const rx = value as Rx<unknown>;
       if (!rx.isBound) {
         const channelId = allocator.next();
         const deserialize = serializers.getRxDeserializer(schema.element);
         rx.bind(channelId, registry, deserialize);
 
-        // Also bind the paired Tx if present
+        // Bind the paired Tx for sending (this is what client writes to)
         if (rx._pair && !rx._pair.isBound) {
           const txSerialize = serializers.getTxSerializer(schema.element);
           rx._pair.bind(channelId, registry, txSerialize);
@@ -93,7 +113,7 @@ function bindValue(
       return;
     }
 
-    case 'vec': {
+    case "vec": {
       const arr = value as unknown[];
       for (const item of arr) {
         bindValue(schema.element, item, allocator, registry, serializers);
@@ -101,14 +121,14 @@ function bindValue(
       return;
     }
 
-    case 'option': {
+    case "option": {
       if (value !== null && value !== undefined) {
         bindValue(schema.inner, value, allocator, registry, serializers);
       }
       return;
     }
 
-    case 'map': {
+    case "map": {
       const map = value as Map<unknown, unknown>;
       for (const [k, v] of map) {
         bindValue(schema.key, k, allocator, registry, serializers);
@@ -117,7 +137,7 @@ function bindValue(
       return;
     }
 
-    case 'struct': {
+    case "struct": {
       const obj = value as Record<string, unknown>;
       for (const [fieldName, fieldSchema] of Object.entries(schema.fields)) {
         if (fieldName in obj) {
@@ -127,7 +147,7 @@ function bindValue(
       return;
     }
 
-    case 'enum': {
+    case "enum": {
       // Enum value should be { variant: string, fields: unknown[] }
       const enumVal = value as { variant: string; fields?: unknown[] };
       const variantSchemas = schema.variants[enumVal.variant];

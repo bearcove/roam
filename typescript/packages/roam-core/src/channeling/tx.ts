@@ -88,9 +88,10 @@ export class Tx<T> {
   }
 
   /**
-   * Bind this Tx to a channel ID and registry.
+   * Bind this Tx to a channel ID and registry for SENDING.
    *
-   * Called by the runtime binder when the paired Rx is passed to a method.
+   * Called by the runtime binder when this Tx's paired Rx is passed to a method
+   * (schema Rx = client sends, server receives).
    *
    * @param channelId - The allocated channel ID
    * @param registry - The channel registry to register with
@@ -105,6 +106,23 @@ export class Tx<T> {
     const outgoing = registry.registerOutgoing(channelId);
     this.sender = { mode: "client", sender: outgoing };
     this.serialize = serialize;
+    this._consumed = true;
+  }
+
+  /**
+   * Set just the channel ID without registering for sending.
+   *
+   * Used when this Tx is passed as an argument to a method
+   * (schema Tx = server sends, client receives).
+   * The client doesn't send on this channel - it just needs the ID for encoding.
+   *
+   * @param channelId - The allocated channel ID
+   */
+  setChannelIdOnly(channelId: ChannelId): void {
+    if (this._consumed) {
+      throw ChannelError.alreadyConsumed("Tx");
+    }
+    this._channelId = channelId;
     this._consumed = true;
   }
 
