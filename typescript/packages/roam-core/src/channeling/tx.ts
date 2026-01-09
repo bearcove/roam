@@ -1,11 +1,11 @@
-// Tx stream handle - caller sends data to callee.
+// Tx channel handle - caller sends data to callee.
 
-import { type StreamId, StreamError } from "./types.ts";
+import { type ChannelId, ChannelError } from "./types.ts";
 import { OutgoingSender } from "./registry.ts";
 import { type TaskSender } from "./task.ts";
 
 /**
- * Sender abstraction for Tx streams.
+ * Sender abstraction for Tx channels.
  *
  * Supports two modes:
  * - Client-side: uses OutgoingSender (buffered channel to drain task)
@@ -13,14 +13,14 @@ import { type TaskSender } from "./task.ts";
  */
 type TxSender =
   | { mode: "client"; sender: OutgoingSender }
-  | { mode: "server"; channelId: StreamId; taskSender: TaskSender };
+  | { mode: "server"; channelId: ChannelId; taskSender: TaskSender };
 
 /**
- * Tx stream handle - caller sends data to callee.
+ * Tx channel handle - caller sends data to callee.
  *
  * r[impl streaming.caller-pov] - From caller's perspective, Tx means "I send".
- * r[impl streaming.type] - Serializes as u64 stream ID on wire.
- * r[impl streaming.holder-semantics] - The holder sends on this stream.
+ * r[impl streaming.type] - Serializes as u64 channel ID on wire.
+ * r[impl streaming.holder-semantics] - The holder sends on this channel.
  *
  * # Two modes of operation
  *
@@ -33,22 +33,22 @@ type TxSender =
  */
 export class Tx<T> {
   private closed = false;
-  private _streamId: StreamId;
+  private _channelId: ChannelId;
   private sender: TxSender;
   private serialize: (value: T) => Uint8Array;
 
   /** Create a client-side Tx with an OutgoingSender. */
   constructor(sender: OutgoingSender, serialize: (value: T) => Uint8Array);
   /** Create a server-side Tx with a TaskSender. */
-  constructor(channelId: StreamId, taskSender: TaskSender, serialize: (value: T) => Uint8Array);
+  constructor(channelId: ChannelId, taskSender: TaskSender, serialize: (value: T) => Uint8Array);
   constructor(
-    senderOrChannelId: OutgoingSender | StreamId,
+    senderOrChannelId: OutgoingSender | ChannelId,
     serializeOrTaskSender: ((value: T) => Uint8Array) | TaskSender,
     maybeSerialize?: (value: T) => Uint8Array,
   ) {
     if (typeof senderOrChannelId === "bigint") {
       // Server-side constructor
-      this._streamId = senderOrChannelId;
+      this._channelId = senderOrChannelId;
       this.sender = {
         mode: "server",
         channelId: senderOrChannelId,
@@ -57,37 +57,37 @@ export class Tx<T> {
       this.serialize = maybeSerialize!;
     } else {
       // Client-side constructor
-      this._streamId = senderOrChannelId.streamId;
+      this._channelId = senderOrChannelId.channelId;
       this.sender = { mode: "client", sender: senderOrChannelId };
       this.serialize = serializeOrTaskSender as (value: T) => Uint8Array;
     }
   }
 
-  /** Get the stream ID. */
-  get streamId(): StreamId {
-    return this._streamId;
+  /** Get the channel ID. */
+  get channelId(): ChannelId {
+    return this._channelId;
   }
 
   /**
-   * Send a value on this stream.
+   * Send a value on this channel.
    *
    * r[impl streaming.data] - Data messages carry serialized values.
    */
   send(value: T): void {
     if (this.closed) {
-      throw StreamError.closed();
+      throw ChannelError.closed();
     }
 
     let bytes: Uint8Array;
     try {
       bytes = this.serialize(value);
     } catch (e) {
-      throw StreamError.serialize(e);
+      throw ChannelError.serialize(e);
     }
 
     if (this.sender.mode === "client") {
       if (!this.sender.sender.sendData(bytes)) {
-        throw StreamError.closed();
+        throw ChannelError.closed();
       }
     } else {
       // Server-side: send directly via task channel
@@ -100,7 +100,7 @@ export class Tx<T> {
   }
 
   /**
-   * Close this stream.
+   * Close this channel.
    *
    * r[impl streaming.lifecycle.caller-closes-pushes] - Caller sends Close when done.
    */
@@ -124,16 +124,16 @@ export class Tx<T> {
 // For now, users should call close() explicitly or use try/finally.
 
 /**
- * Create a Tx stream with a simple passthrough (for raw bytes).
+ * Create a Tx channel with a simple passthrough (for raw bytes).
  */
 export function createRawTx(sender: OutgoingSender): Tx<Uint8Array> {
   return new Tx(sender, (v) => v);
 }
 
 /**
- * Create a Tx stream with a typed serializer (client-side).
+ * Create a Tx channel with a typed serializer (client-side).
  *
- * r[impl streaming.type] - Tx serializes as stream_id on wire.
+ * r[impl streaming.type] - Tx serializes as channel_id on wire.
  */
 export function createTypedTx<T>(
   sender: OutgoingSender,
@@ -143,18 +143,18 @@ export function createTypedTx<T>(
 }
 
 /**
- * Create a server-side Tx stream that sends directly via the task channel.
+ * Create a server-side Tx channel that sends directly via the task channel.
  *
  * Used by generated dispatch code to hydrate Tx arguments.
  * When the handler calls tx.send(), Data messages go directly to the driver.
  * When the handler is done and calls tx.close(), a Close message is sent.
  *
- * @param channelId - The stream ID from the wire (allocated by caller)
+ * @param channelId - The channel ID from the wire (allocated by caller)
  * @param taskSender - Callback to send TaskMessage to driver
  * @param serialize - Function to serialize values to bytes
  */
 export function createServerTx<T>(
-  channelId: StreamId,
+  channelId: ChannelId,
   taskSender: TaskSender,
   serialize: (value: T) => Uint8Array,
 ): Tx<T> {

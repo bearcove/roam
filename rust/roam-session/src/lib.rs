@@ -27,7 +27,7 @@ pub type ChannelId = u64;
 /// The initiator is whoever opened the connection (e.g. connected to a TCP socket,
 /// or opened an SHM channel). The acceptor is whoever accepted/received the connection.
 ///
-/// r[impl streaming.id.parity]
+/// r[impl channeling.id.parity]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Role {
     /// Initiator uses odd stream IDs (1, 3, 5, ...).

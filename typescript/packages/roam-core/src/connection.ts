@@ -10,9 +10,9 @@
 import { concat, encodeBytes, encodeString } from "./binary/bytes.ts";
 import { decodeVarint, decodeVarintNumber, encodeVarint } from "./binary/varint.ts";
 import {
-  StreamRegistry,
-  StreamIdAllocator,
-  StreamError,
+  ChannelRegistry,
+  ChannelIdAllocator,
+  ChannelError,
   type OutgoingPoll,
   Role,
   Tx,
@@ -22,7 +22,7 @@ import {
   type TaskMessage,
   type TaskSender,
   createChannel,
-} from "./streaming/index.ts";
+} from "./channeling/index.ts";
 import { type MessageTransport } from "./transport.ts";
 
 // Note: Role is exported from streaming/index.ts in roam-core's main export
@@ -172,7 +172,7 @@ export interface StreamingDispatcher {
     methodId: bigint,
     payload: Uint8Array,
     requestId: bigint,
-    registry: StreamRegistry,
+    registry: ChannelRegistry,
     taskSender: TaskSender,
   ): Promise<void>;
 }
@@ -188,8 +188,8 @@ export class Connection<T extends MessageTransport = MessageTransport> {
   private _role: Role;
   private _negotiated: Negotiated;
   private ourHello: Hello;
-  private streamAllocator: StreamIdAllocator;
-  private streamRegistry: StreamRegistry;
+  private channelAllocator: ChannelIdAllocator;
+  private channelRegistry: ChannelRegistry;
   private nextRequestId: bigint = 1n;
 
   constructor(io: T, role: Role, negotiated: Negotiated, ourHello: Hello) {
@@ -197,8 +197,8 @@ export class Connection<T extends MessageTransport = MessageTransport> {
     this._role = role;
     this._negotiated = negotiated;
     this.ourHello = ourHello;
-    this.streamAllocator = new StreamIdAllocator(role);
-    this.streamRegistry = new StreamRegistry();
+    this.channelAllocator = new ChannelIdAllocator(role);
+    this.channelRegistry = new ChannelRegistry();
   }
 
   /** Get the underlying transport. */
@@ -217,19 +217,19 @@ export class Connection<T extends MessageTransport = MessageTransport> {
   }
 
   /**
-   * Get the stream ID allocator.
+   * Get the channel ID allocator.
    *
-   * r[impl streaming.allocation.caller] - Caller allocates ALL stream IDs.
+   * r[impl streaming.allocation.caller] - Caller allocates ALL channel IDs.
    */
-  getStreamAllocator(): StreamIdAllocator {
-    return this.streamAllocator;
+  getChannelAllocator(): ChannelIdAllocator {
+    return this.channelAllocator;
   }
 
   /**
-   * Get the stream registry.
+   * Get the channel registry.
    */
-  getStreamRegistry(): StreamRegistry {
-    return this.streamRegistry;
+  getChannelRegistry(): ChannelRegistry {
+    return this.channelRegistry;
   }
 
   /**
@@ -245,10 +245,10 @@ export class Connection<T extends MessageTransport = MessageTransport> {
    * @returns [Tx handle, channel ID for wire encoding]
    */
   createTx<T>(serialize: (value: T) => Uint8Array): [Tx<T>, bigint] {
-    const streamId = this.streamAllocator.next();
-    const sender = this.streamRegistry.registerOutgoing(streamId);
+    const channelId = this.channelAllocator.next();
+    const sender = this.channelRegistry.registerOutgoing(channelId);
     const tx = new Tx(sender, serialize);
-    return [tx, streamId];
+    return [tx, channelId];
   }
 
   /**
@@ -264,10 +264,10 @@ export class Connection<T extends MessageTransport = MessageTransport> {
    * @returns [Rx handle, channel ID for wire encoding]
    */
   createRx<T>(deserialize: (bytes: Uint8Array) => T): [Rx<T>, bigint] {
-    const streamId = this.streamAllocator.next();
-    const receiver = this.streamRegistry.registerIncoming(streamId);
-    const rx = new Rx(streamId, receiver, deserialize);
-    return [rx, streamId];
+    const channelId = this.channelAllocator.next();
+    const receiver = this.channelRegistry.registerIncoming(channelId);
+    const rx = new Rx(channelId, receiver, deserialize);
+    return [rx, channelId];
   }
 
   /**
@@ -287,18 +287,18 @@ export class Connection<T extends MessageTransport = MessageTransport> {
   }
 
   /**
-   * Validate a stream ID according to protocol rules.
+   * Validate a channel ID according to protocol rules.
    *
    * Returns the rule ID if validation fails.
    */
-  validateStreamId(streamId: bigint): string | null {
-    // r[impl streaming.id.zero-reserved] - Stream ID 0 is reserved.
-    if (streamId === 0n) {
+  validateChannelId(channelId: bigint): string | null {
+    // r[impl streaming.id.zero-reserved] - Channel ID 0 is reserved.
+    if (channelId === 0n) {
       return "streaming.id.zero-reserved";
     }
 
-    // r[impl streaming.unknown] - Unknown stream IDs are connection errors.
-    if (!this.streamRegistry.contains(streamId)) {
+    // r[impl streaming.unknown] - Unknown channel IDs are connection errors.
+    if (!this.channelRegistry.contains(channelId)) {
       return "streaming.unknown";
     }
 
@@ -306,24 +306,24 @@ export class Connection<T extends MessageTransport = MessageTransport> {
   }
 
   /**
-   * Send all pending outgoing stream messages.
+   * Send all pending outgoing channel messages.
    *
-   * Drains the outgoing stream channels and sends Data/Close messages
+   * Drains the outgoing channels and sends Data/Close messages
    * to the peer. Call this periodically or after processing requests.
    *
-   * r[impl streaming.data] - Send Data messages for outgoing streams.
-   * r[impl streaming.close] - Send Close messages when streams end.
+   * r[impl streaming.data] - Send Data messages for outgoing channels.
+   * r[impl streaming.close] - Send Close messages when channels end.
    */
   async flushOutgoing(): Promise<void> {
     while (true) {
-      const poll = await this.streamRegistry.waitOutgoing();
+      const poll = await this.channelRegistry.waitOutgoing();
       if (poll.kind === "pending" || poll.kind === "done") {
         break;
       }
       if (poll.kind === "data") {
-        await this.io.send(encodeData(poll.streamId, poll.payload));
+        await this.io.send(encodeData(poll.channelId, poll.payload));
       } else if (poll.kind === "close") {
-        await this.io.send(encodeClose(poll.streamId));
+        await this.io.send(encodeClose(poll.channelId));
       }
     }
   }
@@ -393,7 +393,7 @@ export class Connection<T extends MessageTransport = MessageTransport> {
         const dataPayload = data.subarray(offset, offset + pLen.value);
         // Route to registered stream
         try {
-          this.streamRegistry.routeData(sid.value, dataPayload);
+          this.channelRegistry.routeData(sid.value, dataPayload);
         } catch {
           // Ignore stream errors during call - connection still valid
         }
@@ -403,8 +403,8 @@ export class Connection<T extends MessageTransport = MessageTransport> {
       if (msgDisc === MSG_CLOSE) {
         // Close { stream_id }
         const sid = decodeVarint(data, offset);
-        if (this.streamRegistry.contains(sid.value)) {
-          this.streamRegistry.close(sid.value);
+        if (this.channelRegistry.contains(sid.value)) {
+          this.channelRegistry.close(sid.value);
         }
         continue;
       }
@@ -673,7 +673,7 @@ export class Connection<T extends MessageTransport = MessageTransport> {
         methodId,
         payloadBytes,
         requestId,
-        this.streamRegistry,
+        this.channelRegistry,
         taskSender,
       );
     }
@@ -694,9 +694,9 @@ export class Connection<T extends MessageTransport = MessageTransport> {
       offset = pLen.next;
       const dataPayload = payload.subarray(offset, offset + pLen.value);
       try {
-        this.streamRegistry.routeData(sid.value, dataPayload);
+        this.channelRegistry.routeData(sid.value, dataPayload);
       } catch (e) {
-        if (e instanceof StreamError) {
+        if (e instanceof ChannelError) {
           if (e.kind === "unknown") {
             throw ConnectionError.protocol("streaming.unknown", "unknown stream ID");
           }
@@ -714,10 +714,10 @@ export class Connection<T extends MessageTransport = MessageTransport> {
       if (sid.value === 0n) {
         throw ConnectionError.protocol("streaming.id.zero-reserved", "stream ID 0 is reserved");
       }
-      if (!this.streamRegistry.contains(sid.value)) {
+      if (!this.channelRegistry.contains(sid.value)) {
         throw ConnectionError.protocol("streaming.unknown", "unknown stream ID");
       }
-      this.streamRegistry.close(sid.value);
+      this.channelRegistry.close(sid.value);
       return undefined;
     }
 
@@ -726,10 +726,10 @@ export class Connection<T extends MessageTransport = MessageTransport> {
       if (sid.value === 0n) {
         throw ConnectionError.protocol("streaming.id.zero-reserved", "stream ID 0 is reserved");
       }
-      if (!this.streamRegistry.contains(sid.value)) {
+      if (!this.channelRegistry.contains(sid.value)) {
         throw ConnectionError.protocol("streaming.unknown", "unknown stream ID");
       }
-      this.streamRegistry.close(sid.value);
+      this.channelRegistry.close(sid.value);
       return undefined;
     }
 
@@ -738,7 +738,7 @@ export class Connection<T extends MessageTransport = MessageTransport> {
       if (sid.value === 0n) {
         throw ConnectionError.protocol("streaming.id.zero-reserved", "stream ID 0 is reserved");
       }
-      if (!this.streamRegistry.contains(sid.value)) {
+      if (!this.channelRegistry.contains(sid.value)) {
         throw ConnectionError.protocol("streaming.unknown", "unknown stream ID");
       }
       return undefined;
@@ -893,9 +893,9 @@ export class Connection<T extends MessageTransport = MessageTransport> {
 
       // r[impl streaming.data] - Route Data to registered stream.
       try {
-        this.streamRegistry.routeData(sid.value, dataPayload);
+        this.channelRegistry.routeData(sid.value, dataPayload);
       } catch (e) {
-        if (e instanceof StreamError) {
+        if (e instanceof ChannelError) {
           if (e.kind === "unknown") {
             // r[impl streaming.unknown] - Unknown stream ID.
             throw await this.goodbye("streaming.unknown");
@@ -920,10 +920,10 @@ export class Connection<T extends MessageTransport = MessageTransport> {
       }
 
       // r[impl streaming.close] - Close the stream.
-      if (!this.streamRegistry.contains(sid.value)) {
+      if (!this.channelRegistry.contains(sid.value)) {
         throw await this.goodbye("streaming.unknown");
       }
-      this.streamRegistry.close(sid.value);
+      this.channelRegistry.close(sid.value);
       return;
     }
 
@@ -939,10 +939,10 @@ export class Connection<T extends MessageTransport = MessageTransport> {
       // r[impl streaming.reset] - Forcefully terminate stream.
       // For now, treat same as Close.
       // TODO: Signal error to Pull<T> instead of clean close.
-      if (!this.streamRegistry.contains(sid.value)) {
+      if (!this.channelRegistry.contains(sid.value)) {
         throw await this.goodbye("streaming.unknown");
       }
-      this.streamRegistry.close(sid.value);
+      this.channelRegistry.close(sid.value);
       return;
     }
 
@@ -957,7 +957,7 @@ export class Connection<T extends MessageTransport = MessageTransport> {
 
       // TODO: Implement flow control.
       // For now, validate stream exists but ignore credit.
-      if (!this.streamRegistry.contains(sid.value)) {
+      if (!this.channelRegistry.contains(sid.value)) {
         throw await this.goodbye("streaming.unknown");
       }
       return;

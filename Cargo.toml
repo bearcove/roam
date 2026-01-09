@@ -4,7 +4,6 @@ members = [
     # New Rust implementation
     "rust/roam",
     "rust/roam-wire",
-    "rust/roam-codec",
     "rust/roam-frame",
     "rust/roam-session",
     "rust/roam-hash",
@@ -20,15 +19,12 @@ members = [
     "spec/spec-proto",
     "spec/spec-tests",
     "xtask",
-    # Experiments
-    "rust/facet-experiments",
 ]
 exclude = ["fuzz"]
 
 default-members = [
     "rust/roam",
     "rust/roam-wire",
-    "rust/roam-codec",
     "rust/roam-frame",
     "rust/roam-session",
     "rust/roam-hash",

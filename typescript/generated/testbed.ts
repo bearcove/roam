@@ -19,7 +19,7 @@ import {
   encodeEnumVariant, decodeEnumVariant,
 } from "@bearcove/roam-core";
 import { Tx, Rx, createServerTx, createServerRx } from "@bearcove/roam-core";
-import type { StreamId, StreamRegistry, TaskSender } from "@bearcove/roam-core";
+import type { ChannelId, ChannelRegistry, TaskSender } from "@bearcove/roam-core";
 
 export const METHOD_ID = {
   echo: 0x9aabc4ba61fd5df3n,
@@ -204,7 +204,7 @@ export class TestbedClient<T extends MessageTransport = MessageTransport> implem
 
  Tests: client→server streaming. Server receives via `Rx<T>`, returns scalar. */
   async sum(numbers: Rx<number>): Promise<bigint> {
-    const payload = encodeU64(numbers.streamId);
+    const payload = encodeU64(numbers.channelId);
     const response = await this.conn.call(0x855b3a25d97bfefdn, payload);
     const buf = response;
     let offset = decodeRpcResult(buf, 0);
@@ -216,7 +216,7 @@ export class TestbedClient<T extends MessageTransport = MessageTransport> implem
 
  Tests: server→client streaming. Server sends via `Tx<T>`. */
   async generate(count: number, output: Tx<number>): Promise<void> {
-    const payload = concat(encodeU32(count), encodeU64(output.streamId));
+    const payload = concat(encodeU32(count), encodeU64(output.channelId));
     const response = await this.conn.call(0x54d2273d8cdb9c38n, payload);
     const buf = response;
     let offset = decodeRpcResult(buf, 0);
@@ -228,7 +228,7 @@ export class TestbedClient<T extends MessageTransport = MessageTransport> implem
 
  Tests: bidirectional streaming. Server receives via `Rx<T>`, sends via `Tx<T>`. */
   async transform(input: Rx<string>, output: Tx<string>): Promise<void> {
-    const payload = concat(encodeU64(input.streamId), encodeU64(output.streamId));
+    const payload = concat(encodeU64(input.channelId), encodeU64(output.channelId));
     const response = await this.conn.call(0x5d9895604eb18b19n, payload);
     const buf = response;
     let offset = decodeRpcResult(buf, 0);
@@ -695,16 +695,16 @@ const pair = { 0: pair_f0, 1: pair_f1 };
 ]);
 
 // Streaming method handler type for Testbed
-export type StreamingMethodHandler<H> = (
+export type ChannelingMethodHandler<H> = (
   handler: H,
   payload: Uint8Array,
   requestId: bigint,
-  registry: StreamRegistry,
+  registry: ChannelRegistry,
   taskSender: TaskSender,
 ) => Promise<void>;
 
 // Streaming method handlers for Testbed
-export const testbed_streamingHandlers = new Map<bigint, StreamingMethodHandler<TestbedHandler>>([
+export const testbed_streamingHandlers = new Map<bigint, ChannelingMethodHandler<TestbedHandler>>([
   [0x9aabc4ba61fd5df3n, async (handler, payload, requestId, registry, taskSender) => {
     try {
       const buf = payload;

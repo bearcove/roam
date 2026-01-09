@@ -15,12 +15,12 @@ import type {
 } from "@bearcove/roam-generated/testbed.ts";
 import {
   testbed_streamingHandlers,
-  type StreamingMethodHandler,
+  type ChannelingMethodHandler,
 } from "@bearcove/roam-generated/testbed.ts";
 import { Server } from "@bearcove/roam-tcp";
 import {
   type StreamingDispatcher,
-  type StreamRegistry,
+  type ChannelRegistry,
   type TaskSender,
   type Tx,
   type Rx,
@@ -136,7 +136,7 @@ class TestbedService implements TestbedHandler {
 // Streaming dispatcher that uses the generated streaming handlers
 class TestbedStreamingDispatcher implements StreamingDispatcher {
   private service = new TestbedService();
-  private handlers: Map<bigint, StreamingMethodHandler<TestbedHandler>>;
+  private handlers: Map<bigint, ChannelingMethodHandler<TestbedHandler>>;
 
   constructor() {
     this.handlers = testbed_streamingHandlers;
@@ -146,7 +146,7 @@ class TestbedStreamingDispatcher implements StreamingDispatcher {
     methodId: bigint,
     payload: Uint8Array,
     requestId: bigint,
-    registry: StreamRegistry,
+    registry: ChannelRegistry,
     taskSender: TaskSender,
   ): Promise<void> {
     const handler = this.handlers.get(methodId);

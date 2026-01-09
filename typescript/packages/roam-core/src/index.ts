@@ -64,13 +64,13 @@ export { encodeResultOk, encodeResultErr, encodeUnknownMethod, encodeInvalidPayl
 // RPC error types (for client-side error handling)
 export { RpcError, RpcErrorCode, decodeRpcResult, decodeUserError } from "./postcard/rpc_error.ts";
 
-// Streaming types
+// Channel types
 export {
-  type StreamId,
+  type ChannelId,
   Role,
-  StreamError,
-  StreamIdAllocator,
-  StreamRegistry,
+  ChannelError,
+  ChannelIdAllocator,
+  ChannelRegistry,
   OutgoingSender,
   ChannelReceiver,
   Tx,
@@ -85,8 +85,8 @@ export {
   type OutgoingPoll,
   type TaskMessage,
   type TaskSender,
-  type StreamContext,
-} from "./streaming/index.ts";
+  type ChannelContext,
+} from "./channeling/index.ts";
 
 // Transport abstraction
 export { type MessageTransport } from "./transport.ts";

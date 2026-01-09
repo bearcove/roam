@@ -342,7 +342,7 @@ pub fn generate_service(service: &ServiceDetail) -> String {
             "import { Tx, Rx, createServerTx, createServerRx } from \"@bearcove/roam-core\";\n",
         );
         out.push_str(
-            "import type { StreamId, StreamRegistry, TaskSender } from \"@bearcove/roam-core\";\n",
+            "import type { ChannelId, ChannelRegistry, TaskSender } from \"@bearcove/roam-core\";\n",
         );
     }
     out.push('\n');
@@ -671,7 +671,7 @@ fn generate_streaming_handlers(service: &ServiceDetail) -> String {
         "// Streaming method handler type for {service_name}\n"
     ));
     out.push_str(&format!(
-        "export type StreamingMethodHandler<H> = (\n  handler: H,\n  payload: Uint8Array,\n  requestId: bigint,\n  registry: StreamRegistry,\n  taskSender: TaskSender,\n) => Promise<void>;\n\n"
+        "export type ChannelingMethodHandler<H> = (\n  handler: H,\n  payload: Uint8Array,\n  requestId: bigint,\n  registry: ChannelRegistry,\n  taskSender: TaskSender,\n) => Promise<void>;\n\n"
     ));
 
     // Generate streaming handlers map
@@ -679,7 +679,7 @@ fn generate_streaming_handlers(service: &ServiceDetail) -> String {
         "// Streaming method handlers for {service_name}\n"
     ));
     out.push_str(&format!(
-        "export const {service_name_lower}_streamingHandlers = new Map<bigint, StreamingMethodHandler<{service_name}Handler>>([\n"
+        "export const {service_name_lower}_streamingHandlers = new Map<bigint, ChannelingMethodHandler<{service_name}Handler>>([\n"
     ));
 
     for method in &service.methods {
@@ -1039,7 +1039,7 @@ fn generate_encode_expr(shape: &'static Shape, expr: &str) -> String {
         ShapeKind::Tx { .. } | ShapeKind::Rx { .. } => {
             // Streaming types encode as u64 stream ID (varint)
             // r[impl streaming.type] - Tx/Rx serialize as channel_id on wire.
-            format!("encodeU64({expr}.streamId)")
+            format!("encodeU64({expr}.channelId)")
         }
         ShapeKind::Pointer { pointee } => generate_encode_expr(pointee, expr),
         ShapeKind::Result { .. } => {
@@ -1083,7 +1083,7 @@ fn generate_decode_stmt_client(shape: &'static Shape, var_name: &str, offset_var
             // TODO: Need Connection access to create proper Tx handle
             let inner_type = ts_type_client_return(inner);
             format!(
-                "const _{var_name}_r = decodeU64(buf, {offset_var}); const {var_name} = {{ streamId: _{var_name}_r.value }} as Tx<{inner_type}>; {offset_var} = _{var_name}_r.next; /* TODO: create real Tx handle */"
+                "const _{var_name}_r = decodeU64(buf, {offset_var}); const {var_name} = {{ channelId: _{var_name}_r.value }} as Tx<{inner_type}>; {offset_var} = _{var_name}_r.next; /* TODO: create real Tx handle */"
             )
         }
         ShapeKind::Rx { inner } => {
@@ -1092,7 +1092,7 @@ fn generate_decode_stmt_client(shape: &'static Shape, var_name: &str, offset_var
             // TODO: Need Connection access to create proper Rx handle
             let inner_type = ts_type_client_return(inner);
             format!(
-                "const _{var_name}_r = decodeU64(buf, {offset_var}); const {var_name} = {{ streamId: _{var_name}_r.value }} as Rx<{inner_type}>; {offset_var} = _{var_name}_r.next; /* TODO: create real Rx handle */"
+                "const _{var_name}_r = decodeU64(buf, {offset_var}); const {var_name} = {{ channelId: _{var_name}_r.value }} as Rx<{inner_type}>; {offset_var} = _{var_name}_r.next; /* TODO: create real Rx handle */"
             )
         }
         // For non-streaming types, use the regular decode
@@ -1111,7 +1111,7 @@ fn generate_decode_stmt_server(shape: &'static Shape, var_name: &str, offset_var
             // r[impl streaming.type] - Channel types decode as channel_id on wire.
             let inner_type = ts_type_server_arg(inner);
             format!(
-                "const _{var_name}_r = decodeU64(buf, {offset_var}); const {var_name} = {{ streamId: _{var_name}_r.value }} as Tx<{inner_type}>; {offset_var} = _{var_name}_r.next; /* TODO: create real Tx handle */"
+                "const _{var_name}_r = decodeU64(buf, {offset_var}); const {var_name} = {{ channelId: _{var_name}_r.value }} as Tx<{inner_type}>; {offset_var} = _{var_name}_r.next; /* TODO: create real Tx handle */"
             )
         }
         ShapeKind::Rx { inner } => {
@@ -1119,7 +1119,7 @@ fn generate_decode_stmt_server(shape: &'static Shape, var_name: &str, offset_var
             // r[impl streaming.type] - Channel types decode as channel_id on wire.
             let inner_type = ts_type_server_arg(inner);
             format!(
-                "const _{var_name}_r = decodeU64(buf, {offset_var}); const {var_name} = {{ streamId: _{var_name}_r.value }} as Rx<{inner_type}>; {offset_var} = _{var_name}_r.next; /* TODO: create real Rx handle */"
+                "const _{var_name}_r = decodeU64(buf, {offset_var}); const {var_name} = {{ channelId: _{var_name}_r.value }} as Rx<{inner_type}>; {offset_var} = _{var_name}_r.next; /* TODO: create real Rx handle */"
             )
         }
         // For non-streaming types, use the regular decode
@@ -1282,13 +1282,13 @@ fn generate_decode_stmt(shape: &'static Shape, var_name: &str, offset_var: &str)
         ShapeKind::Tx { inner } => {
             let inner_type = ts_type_base_named(inner);
             format!(
-                "const _{var_name}_r = decodeU64(buf, {offset_var}); const {var_name} = {{ streamId: _{var_name}_r.value }} as Tx<{inner_type}>; {offset_var} = _{var_name}_r.next;"
+                "const _{var_name}_r = decodeU64(buf, {offset_var}); const {var_name} = {{ channelId: _{var_name}_r.value }} as Tx<{inner_type}>; {offset_var} = _{var_name}_r.next;"
             )
         }
         ShapeKind::Rx { inner } => {
             let inner_type = ts_type_base_named(inner);
             format!(
-                "const _{var_name}_r = decodeU64(buf, {offset_var}); const {var_name} = {{ streamId: _{var_name}_r.value }} as Rx<{inner_type}>; {offset_var} = _{var_name}_r.next;"
+                "const _{var_name}_r = decodeU64(buf, {offset_var}); const {var_name} = {{ channelId: _{var_name}_r.value }} as Rx<{inner_type}>; {offset_var} = _{var_name}_r.next;"
             )
         }
         ShapeKind::Pointer { pointee } => generate_decode_stmt(pointee, var_name, offset_var),

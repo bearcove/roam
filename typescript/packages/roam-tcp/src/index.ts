@@ -17,13 +17,13 @@ export {
   defaultHello,
 } from "@bearcove/roam-core";
 
-// Re-export streaming types from core for convenience
+// Re-export channel types from core for convenience
 export {
-  type StreamId,
+  type ChannelId,
   Role,
-  StreamError,
-  StreamIdAllocator,
-  StreamRegistry,
+  ChannelError,
+  ChannelIdAllocator,
+  ChannelRegistry,
   OutgoingSender,
   Tx,
   Rx,
