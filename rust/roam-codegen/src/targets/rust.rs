@@ -369,7 +369,7 @@ fn generate_dispatch_method_fn(
 
         // Bind streams via registry using Poke reflection
         if has_streams {
-            body.push_str("let drain_handles = registry.bind_streams(&mut args);\n");
+            body.push_str("registry.bind_streams(&mut args);\n");
         }
 
         // Destructure args tuple
@@ -389,12 +389,8 @@ fn generate_dispatch_method_fn(
         "    let result = handler.{method_name}({args_str}).await;\n"
     ));
 
-    // Wait for all drain tasks to complete before encoding response
-    if has_streams && !method.args.is_empty() {
-        body.push_str("    for h in drain_handles { let _ = h.await; }\n");
-    }
-
     // Encode response and send via task channel
+    // Note: Tx streams send Close automatically when dropped by the handler
     body.push_str("    let payload = match result {\n");
     body.push_str("        Ok(result) => {\n");
     body.push_str("            let mut out = vec![0u8];\n");
