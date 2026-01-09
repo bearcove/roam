@@ -192,54 +192,9 @@ async function runClient() {
       break;
     }
     case "sum": {
-      // Client-to-server streaming: create Tx, send numbers, then call sum
-      const [tx, _streamId] = conn.createTx<number>((v) => encodeI32(v));
-
-      // Send numbers asynchronously
-      const sendTask = (async () => {
-        for (let i = 1; i <= 5; i++) {
-          console.error(`sending ${i}`);
-          tx.send(i);
-        }
-        console.error("closing tx");
-        tx.close();
-      })();
-
-      // The Rx on server side uses our Tx's stream ID
-      // We need to create an Rx with the same stream ID for the client API
-      // Actually, we need to pass tx to sum - but sum takes Rx, not Tx!
-      // Looking at the generated code, sum takes Rx and uses rx.streamId
-      // For client->server streaming, the client creates a Tx and the
-      // generated client code expects an Rx (which has the streamId)
-      //
-      // Wait - looking at the Rust client, it creates a channel pair (tx, rx)
-      // and passes rx to sum. Let me check the roam channel API...
-      //
-      // For now, let me check if there's a createChannel or similar
-      // Actually looking at the generated client code:
-      //   async sum(numbers: Rx<number>): Promise<bigint> {
-      //     const payload = encodeU64(numbers.streamId);
-      // It just needs the streamId. So I need to create an Rx that shares
-      // the stream ID with the Tx I'll use to send data.
-      //
-      // The issue is createTx returns Tx, createRx returns Rx, and they have
-      // different stream IDs. For client->server streaming, we need both
-      // to share the same ID.
-      //
-      // Looking at connection.ts more carefully - the Tx writes to the
-      // registry's outgoing channel, and Rx reads from incoming.
-      // For client->server streaming on the client side:
-      // - Client creates Tx to send data (outgoing)
-      // - Client needs to encode the stream ID in the request
-      // - Server creates Rx with that stream ID to receive
-      //
-      // So I need createTx for the actual sending, but I need to pass
-      // something with .streamId to the generated client method.
-      // Let me just create a fake Rx with the right stream ID.
-
-      // Actually simpler - just call with the tx.streamId exposed somehow
-      // For now, let's skip the streaming client tests or implement properly
-      console.error("sum scenario: not yet implemented");
+      // Client-to-server streaming: will be implemented in Phase 7
+      // using channel<T>() and the new binding system
+      console.error("sum scenario: not yet implemented (Phase 7)");
       break;
     }
     case "generate": {

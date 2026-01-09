@@ -13,15 +13,9 @@ import {
   ChannelRegistry,
   ChannelIdAllocator,
   ChannelError,
-  type OutgoingPoll,
   Role,
-  Tx,
-  Rx,
-  OutgoingSender,
-  ChannelReceiver,
   type TaskMessage,
   type TaskSender,
-  createChannel,
 } from "./channeling/index.ts";
 import { type MessageTransport } from "./transport.ts";
 
@@ -230,44 +224,6 @@ export class Connection<T extends MessageTransport = MessageTransport> {
    */
   getChannelRegistry(): ChannelRegistry {
     return this.channelRegistry;
-  }
-
-  /**
-   * Create a Tx channel handle for sending data.
-   *
-   * Allocates a unique channel ID and registers the channel for outgoing data.
-   * The Tx handle allows the caller to send values of type T.
-   *
-   * r[impl streaming.allocation.caller] - Caller allocates channel IDs.
-   * r[impl streaming.type] - Tx serializes as channel_id on wire.
-   *
-   * @param serialize - Function to serialize values to bytes
-   * @returns [Tx handle, channel ID for wire encoding]
-   */
-  createTx<T>(serialize: (value: T) => Uint8Array): [Tx<T>, bigint] {
-    const channelId = this.channelAllocator.next();
-    const sender = this.channelRegistry.registerOutgoing(channelId);
-    const tx = new Tx(sender, serialize);
-    return [tx, channelId];
-  }
-
-  /**
-   * Create a Rx channel handle for receiving data.
-   *
-   * Allocates a unique channel ID and registers the channel for incoming data.
-   * The Rx handle allows the caller to receive values of type T.
-   *
-   * r[impl streaming.allocation.caller] - Caller allocates channel IDs.
-   * r[impl streaming.type] - Rx serializes as channel_id on wire.
-   *
-   * @param deserialize - Function to deserialize bytes to values
-   * @returns [Rx handle, channel ID for wire encoding]
-   */
-  createRx<T>(deserialize: (bytes: Uint8Array) => T): [Rx<T>, bigint] {
-    const channelId = this.channelAllocator.next();
-    const receiver = this.channelRegistry.registerIncoming(channelId);
-    const rx = new Rx(channelId, receiver, deserialize);
-    return [rx, channelId];
   }
 
   /**

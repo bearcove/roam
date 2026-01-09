@@ -15,7 +15,14 @@ export type Role = (typeof Role)[keyof typeof Role];
 /** Error types for channel operations. */
 export class ChannelError extends Error {
   constructor(
-    public kind: "unknown" | "dataAfterClose" | "closed" | "serialize" | "deserialize",
+    public kind:
+      | "unknown"
+      | "dataAfterClose"
+      | "closed"
+      | "serialize"
+      | "deserialize"
+      | "notBound"
+      | "alreadyConsumed",
     message: string,
   ) {
     super(message);
@@ -40,5 +47,19 @@ export class ChannelError extends Error {
 
   static deserialize(cause: unknown): ChannelError {
     return new ChannelError("deserialize", `deserialize error: ${cause}`);
+  }
+
+  static notBound(handle: "Tx" | "Rx"): ChannelError {
+    return new ChannelError(
+      "notBound",
+      `${handle} not bound - pass the other end to a method first`,
+    );
+  }
+
+  static alreadyConsumed(handle: "Tx" | "Rx"): ChannelError {
+    return new ChannelError(
+      "alreadyConsumed",
+      `${handle} already consumed - channels can only be used once`,
+    );
   }
 }
