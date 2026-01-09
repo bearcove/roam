@@ -83,6 +83,19 @@ export {
   type TaskMessage,
   type TaskSender,
   type ChannelContext,
+  // Schema types and binding
+  type PrimitiveKind,
+  type TxSchema,
+  type RxSchema,
+  type VecSchema,
+  type OptionSchema,
+  type MapSchema,
+  type StructSchema,
+  type EnumSchema,
+  type Schema,
+  type MethodSchema,
+  bindChannels,
+  type BindingSerializers,
 } from "./channeling/index.ts";
 
 // Transport abstraction
