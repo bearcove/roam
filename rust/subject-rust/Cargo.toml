@@ -18,7 +18,3 @@ spec-proto = { path = "../../spec/spec-proto" }
 tokio = { workspace = true, features = ["rt"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
-
-[build-dependencies]
-spec-proto = { path = "../../spec/spec-proto" }
-roam-codegen = { path = "../roam-codegen" }

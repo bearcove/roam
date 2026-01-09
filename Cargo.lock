@@ -317,15 +317,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "codegen"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ff61280aed771c3070e7dcc9e050c66f1eb1e3b96431ba66f9f74641d02fc41d"
-dependencies = [
- "indexmap 1.9.3",
-]
-
-[[package]]
 name = "colorchoice"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -979,7 +970,7 @@ source = "git+https://github.com/facet-rs/facet?branch=main#4a1d001682b576274444
 dependencies = [
  "facet-core 0.42.0 (git+https://github.com/facet-rs/facet?branch=main)",
  "facet-reflect 0.42.0 (git+https://github.com/facet-rs/facet?branch=main)",
- "indexmap 2.12.1",
+ "indexmap",
 ]
 
 [[package]]
@@ -1072,7 +1063,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e629b9b98ef3dd8afe6ca2bd0f89306cec16d43d907889945bc5d6687f2f13c7"
 dependencies = [
  "fallible-iterator",
- "indexmap 2.12.1",
+ "indexmap",
  "stable_deref_trait",
 ]
 
@@ -1084,12 +1075,6 @@ checksum = "47d60b12902ba28e2730cd37e95b8c9223af2808df9e902d4df49588d1470606"
 dependencies = [
  "byteorder",
 ]
-
-[[package]]
-name = "hashbrown"
-version = "0.12.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8a9ee70c43aaf417c914396645a0fa852624801b24ebb7ae78fe8272889ac888"
 
 [[package]]
 name = "hashbrown"
@@ -1140,16 +1125,6 @@ name = "impls"
 version = "1.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7a46645bbd70538861a90d0f26c31537cdf1e44aae99a794fb75a664b70951bc"
-
-[[package]]
-name = "indexmap"
-version = "1.9.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bd070e393353796e801d209ad339e89596eb4c8d430d18ede6a1cced8fafbd99"
-dependencies = [
- "autocfg",
- "hashbrown 0.12.3",
-]
 
 [[package]]
 name = "indexmap"
@@ -1526,7 +1501,6 @@ version = "0.5.0"
 name = "roam-codegen"
 version = "0.5.0"
 dependencies = [
- "codegen",
  "facet 0.42.0 (git+https://github.com/facet-rs/facet?branch=main)",
  "facet-core 0.42.0 (git+https://github.com/facet-rs/facet?branch=main)",
  "heck",
@@ -1813,7 +1787,6 @@ name = "subject-rust"
 version = "0.1.0"
 dependencies = [
  "roam",
- "roam-codegen",
  "roam-stream",
  "spec-proto",
  "tokio",

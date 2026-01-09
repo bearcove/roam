@@ -7,11 +7,14 @@ use roam::session::{Rx, Tx};
 use roam_stream::Server;
 use tracing::{debug, error, info, instrument};
 
-// Re-export types from spec_proto for use in generated code
+// Re-export types from spec_proto
 pub use spec_proto::{Canvas, Color, Message, Person, Point, Rectangle, Shape};
 
-// Include generated code (testbed::Testbed, testbed::TestbedDispatcher, etc.)
-include!(concat!(env!("OUT_DIR"), "/generated.rs"));
+// Re-export generated service items from spec-proto as a `testbed` module
+mod testbed {
+    pub use roam::session::{Never, RoamError};
+    pub use spec_proto::{Testbed, TestbedClient, TestbedDispatcher};
+}
 
 // Service implementation using generated Testbed trait
 #[derive(Clone)]
