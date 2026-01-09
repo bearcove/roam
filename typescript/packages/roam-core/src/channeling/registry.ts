@@ -1,13 +1,7 @@
 // Channel registry for managing active channels on a connection.
 
 import { type ChannelId, ChannelError } from "./types.ts";
-import {
-  createChannel,
-  type Channel,
-  ChannelSender,
-  ChannelReceiver,
-  createChannelPair,
-} from "./channel.ts";
+import { createChannel, type Channel, ChannelSender, ChannelReceiver } from "./channel.ts";
 
 /** Message sent on an outgoing channel. */
 export type OutgoingMessage = { kind: "data"; payload: Uint8Array } | { kind: "close" };

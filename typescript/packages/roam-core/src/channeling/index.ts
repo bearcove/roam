@@ -2,13 +2,7 @@
 
 export { type ChannelId, Role, ChannelError } from "./types.ts";
 export { ChannelIdAllocator } from "./allocator.ts";
-export {
-  createChannel,
-  createChannelPair,
-  ChannelSender,
-  ChannelReceiver,
-  type Channel,
-} from "./channel.ts";
+export { createChannel, ChannelSender, ChannelReceiver, type Channel } from "./channel.ts";
 export {
   ChannelRegistry,
   OutgoingSender,

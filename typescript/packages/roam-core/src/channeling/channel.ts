@@ -116,11 +116,3 @@ export class ChannelReceiver<T> {
     return this.channel.isClosed();
   }
 }
-
-/**
- * Create a sender/receiver pair.
- */
-export function createChannelPair<T>(capacity = 64): [ChannelSender<T>, ChannelReceiver<T>] {
-  const channel = createChannel<T>(capacity);
-  return [new ChannelSender(channel), new ChannelReceiver(channel)];
-}
