@@ -308,11 +308,15 @@ impl<T: 'static> Drop for Tx<T> {
         // Only send Close in server-side mode (task_tx is set)
         if let Some(task_tx) = self.task_tx.inner.take() {
             let channel_id = self.channel_id;
-            // Spawn a task to send the Close message
-            // (we can't block in Drop, and send is async)
-            tokio::spawn(async move {
-                let _ = task_tx.send(TaskMessage::Close { channel_id }).await;
-            });
+            // Use try_send for synchronous Close delivery.
+            // This ensures Close is queued before Response in dispatch_call.
+            // If the channel is full, we still need to send Close, so spawn as fallback.
+            if task_tx.try_send(TaskMessage::Close { channel_id }).is_err() {
+                // Channel full or closed - spawn as fallback
+                tokio::spawn(async move {
+                    let _ = task_tx.send(TaskMessage::Close { channel_id }).await;
+                });
+            }
         }
         // Client-side mode: dropping the sender closes the channel,
         // which signals the drain task to finish and send Close
