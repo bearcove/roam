@@ -61,9 +61,9 @@ import { encodeResultOk, encodeResultErr } from "../../roam-postcard/src/result.
 import {
   encodeUnknownMethod,
   encodeInvalidPayload,
-  RAPACE_ERROR,
-} from "../../roam-postcard/src/rapace_error.ts";
-export { encodeResultOk, encodeResultErr, encodeUnknownMethod, encodeInvalidPayload, RAPACE_ERROR };
+  ROAM_ERROR,
+} from "../../roam-postcard/src/roam_error.ts";
+export { encodeResultOk, encodeResultErr, encodeUnknownMethod, encodeInvalidPayload, ROAM_ERROR };
 
 // RPC error types (for client-side error handling)
 export {

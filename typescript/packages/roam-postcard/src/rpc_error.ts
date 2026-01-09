@@ -1,8 +1,8 @@
-// RPC error types matching the RAPACE spec
+// RPC error types matching the Roam spec
 // r[impl core.error.roam-error] - RoamError wraps call results
 // r[impl unary.error.protocol] - Protocol errors use discriminants 1-3
 
-import { decodeVarintNumber, type DecodeResult } from "../../roam-core/src/postcard/index.ts";
+import { decodeVarintNumber, type DecodeResult } from "@bearcove/roam-postcard";
 
 /** RAPACE error discriminants */
 export const RpcErrorCode = {
