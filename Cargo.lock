@@ -1774,7 +1774,6 @@ dependencies = [
  "facet 0.42.0 (git+https://github.com/facet-rs/facet?branch=main)",
  "facet-postcard 0.42.0 (git+https://github.com/facet-rs/facet?branch=main)",
  "roam",
- "roam-codegen",
  "roam-hash",
  "roam-schema",
  "roam-stream",
