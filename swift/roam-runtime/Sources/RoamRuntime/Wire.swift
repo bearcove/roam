@@ -214,7 +214,7 @@ func decodeMetadata(from data: Data, offset: inout Int) throws -> [(String, Meta
 
 // MARK: - Errors
 
-public enum WireError: Error {
+public enum WireError: Error, Equatable {
     case truncated
     case unknownHelloVariant
     case unknownMessageVariant
