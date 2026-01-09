@@ -22,6 +22,10 @@ importers:
         version: link:../packages/roam-core
 
   typescript/packages/roam-core:
+    dependencies:
+      '@bearcove/roam-postcard':
+        specifier: workspace:*
+        version: link:../roam-postcard
     devDependencies:
       vitest:
         specifier: ^2.1.0

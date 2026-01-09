@@ -54,7 +54,7 @@ export {
   // Enum support
   encodeEnumVariant,
   decodeEnumVariant,
-} from "@bearcove/roam-postcard/index.ts";
+} from "@bearcove/roam-postcard";
 
 // Result encoding (for server-side responses)
 import { encodeResultOk, encodeResultErr } from "../../roam-postcard/src/result.ts";
