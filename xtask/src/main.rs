@@ -232,7 +232,12 @@ fn codegen_typescript(workspace_root: &std::path::Path) -> Result<(), Box<dyn st
 }
 
 fn codegen_swift(workspace_root: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
-    let out_dir = workspace_root.join("swift").join("generated");
+    // Output directly to subject sources
+    let out_dir = workspace_root
+        .join("swift")
+        .join("subject")
+        .join("Sources")
+        .join("subject-swift");
     std::fs::create_dir_all(&out_dir)?;
 
     let testbed = spec_proto::testbed_service_detail();

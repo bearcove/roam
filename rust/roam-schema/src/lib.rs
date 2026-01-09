@@ -194,10 +194,12 @@ pub enum ShapeKind<'a> {
     Struct(StructInfo<'a>),
     /// Named or anonymous enum
     Enum(EnumInfo<'a>),
-    /// Tuple (including unit)
+    /// Tuple (including unit) - from type_params
     Tuple {
         elements: &'a [facet_core::TypeParam],
     },
+    /// Tuple struct - from struct fields (anonymous tuple like (i32, String))
+    TupleStruct { fields: &'a [facet_core::Field] },
     /// Tx stream (caller → callee)
     Tx { inner: &'static Shape },
     /// Rx stream (callee → caller)
@@ -308,6 +310,12 @@ pub fn classify_shape(shape: &'static Shape) -> ShapeKind<'static> {
     // Check user-defined types (structs, enums)
     match shape.ty {
         Type::User(UserType::Struct(struct_type)) => {
+            // Check for tuple structs first - tuple element shapes are in fields, not type_params
+            if struct_type.kind == StructKind::Tuple {
+                return ShapeKind::TupleStruct {
+                    fields: struct_type.fields,
+                };
+            }
             // Extract name from type_identifier (e.g., "my_crate::MyStruct" -> "MyStruct")
             let name = extract_type_name(shape.type_identifier);
             return ShapeKind::Struct(StructInfo {
@@ -330,15 +338,6 @@ pub fn classify_shape(shape: &'static Shape) -> ShapeKind<'static> {
             }
         }
         _ => {}
-    }
-
-    // Check for tuple via StructKind::Tuple
-    if let Type::User(UserType::Struct(st)) = shape.ty
-        && st.kind == StructKind::Tuple
-    {
-        return ShapeKind::Tuple {
-            elements: shape.type_params,
-        };
     }
 
     ShapeKind::Opaque

@@ -234,6 +234,7 @@ fn java_type(shape: &'static Shape) -> String {
         ShapeKind::Result { ok, err } => {
             format!("Result<{}, {}>", java_type(ok), java_type(err))
         }
+        ShapeKind::TupleStruct { .. } => "Object".into(), // Anonymous tuple
         ShapeKind::Opaque => "Object".into(),
     }
 }

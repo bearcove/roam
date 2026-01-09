@@ -680,6 +680,16 @@ fn go_type_base(shape: &'static Shape) -> String {
                 go_type_base(err)
             )
         }
+        ShapeKind::TupleStruct { fields } => {
+            // Anonymous tuple struct - use struct with indexed fields
+            let inner = fields
+                .iter()
+                .enumerate()
+                .map(|(i, f)| format!("F{} {}", i, go_type_base(f.shape())))
+                .collect::<Vec<_>>()
+                .join("; ");
+            format!("struct {{ {inner} }}")
+        }
         ShapeKind::Opaque => "interface{}".into(),
     }
 }

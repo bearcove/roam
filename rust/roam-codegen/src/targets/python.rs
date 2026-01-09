@@ -216,6 +216,14 @@ fn py_type(shape: &'static Shape) -> String {
         ShapeKind::Result { ok, err } => {
             format!("Result[{}, {}]", py_type(ok), py_type(err))
         }
+        ShapeKind::TupleStruct { fields } => {
+            let inner = fields
+                .iter()
+                .map(|f| py_type(f.shape()))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("tuple[{inner}]")
+        }
         ShapeKind::Opaque => "object".into(),
     }
 }

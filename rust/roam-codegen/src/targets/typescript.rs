@@ -255,6 +255,14 @@ fn ts_type_base_named(shape: &'static Shape) -> String {
                 ts_type_base_named(err)
             )
         }
+        ShapeKind::TupleStruct { fields } => {
+            let inner = fields
+                .iter()
+                .map(|f| ts_type_base_named(f.shape()))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("[{inner}]")
+        }
         ShapeKind::Opaque => "unknown".into(),
     }
 }
@@ -1065,6 +1073,14 @@ fn generate_encode_expr(shape: &'static Shape, expr: &str) -> String {
         ShapeKind::Result { .. } => {
             "/* Result type encoding not yet implemented */ new Uint8Array(0)".to_string()
         }
+        ShapeKind::TupleStruct { fields } => {
+            let field_encodes: Vec<String> = fields
+                .iter()
+                .enumerate()
+                .map(|(i, f)| generate_encode_expr(f.shape(), &format!("{expr}[{i}]")))
+                .collect();
+            format!("concat({})", field_encodes.join(", "))
+        }
         ShapeKind::Opaque => "/* unsupported type */ new Uint8Array(0)".to_string(),
     }
 }
@@ -1315,6 +1331,24 @@ fn generate_decode_stmt(shape: &'static Shape, var_name: &str, offset_var: &str)
         ShapeKind::Result { .. } => {
             format!("const {var_name} = undefined; /* Result type decoding not yet implemented */")
         }
+        ShapeKind::TupleStruct { fields } => {
+            let mut stmts = Vec::new();
+            for (i, f) in fields.iter().enumerate() {
+                stmts.push(generate_decode_stmt(
+                    f.shape(),
+                    &format!("{var_name}_{i}"),
+                    offset_var,
+                ));
+            }
+            let tuple_elements: Vec<String> = (0..fields.len())
+                .map(|i| format!("{var_name}_{i}"))
+                .collect();
+            stmts.push(format!(
+                "const {var_name} = [{}] as const;",
+                tuple_elements.join(", ")
+            ));
+            stmts.join("\n")
+        }
         ShapeKind::Opaque => format!("const {var_name} = undefined; /* unsupported type */"),
     }
 }
@@ -1519,6 +1553,7 @@ fn is_fully_supported(shape: &'static Shape) -> bool {
         | ShapeKind::Slice { element } => is_fully_supported(element),
         ShapeKind::Map { key, value } => is_fully_supported(key) && is_fully_supported(value),
         ShapeKind::Tuple { elements } => elements.iter().all(|p| is_fully_supported(p.shape)),
+        ShapeKind::TupleStruct { fields } => fields.iter().all(|f| is_fully_supported(f.shape())),
         ShapeKind::Struct(StructInfo { fields, .. }) => {
             fields.iter().all(|f| is_fully_supported(f.shape()))
         }
@@ -1623,6 +1658,10 @@ fn generate_schema(shape: &'static Shape) -> String {
                 generate_schema(ok),
                 generate_schema(err)
             )
+        }
+        ShapeKind::TupleStruct { fields } => {
+            let inner: Vec<String> = fields.iter().map(|f| generate_schema(f.shape())).collect();
+            format!("{{ kind: 'tuple', elements: [{}] }}", inner.join(", "))
         }
         ShapeKind::Opaque => "{ kind: 'bytes' }".into(),
     }

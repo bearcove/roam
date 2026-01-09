@@ -82,6 +82,20 @@ pub fn generate_service(service: &ServiceDetail) -> String {
     out.push_str(&format!("// MARK: - {service_name} Dispatcher\n\n"));
     out.push_str(&generate_dispatcher(service));
 
+    // Generate streaming dispatcher
+    out.push_str(&format!(
+        "// MARK: - {service_name} Streaming Dispatcher\n\n"
+    ));
+    out.push_str(&generate_streaming_dispatcher(service));
+
+    // Generate method schemas for runtime channel binding
+    out.push_str(&format!("// MARK: - {service_name} Method Schemas\n\n"));
+    out.push_str(&generate_method_schemas(service));
+
+    // Generate serializers for runtime channel binding
+    out.push_str(&format!("// MARK: - {service_name} Serializers\n\n"));
+    out.push_str(&generate_serializers(service));
+
     out
 }
 
@@ -252,13 +266,20 @@ fn generate_named_types(named_types: &[(String, &'static Shape)]) -> String {
 // Protocol Generation
 // ============================================================================
 
+/// Format a doc string for Swift, handling multi-line comments.
+fn format_doc(doc: &str, indent: &str) -> String {
+    doc.lines()
+        .map(|line| format!("{indent}/// {line}\n"))
+        .collect()
+}
+
 /// Generate caller protocol (for making calls to the service).
 fn generate_caller_protocol(service: &ServiceDetail) -> String {
     let mut out = String::new();
     let service_name = service.name.to_upper_camel_case();
 
     if let Some(doc) = &service.doc {
-        out.push_str(&format!("/// {doc}\n"));
+        out.push_str(&format_doc(doc, ""));
     }
     out.push_str(&format!("public protocol {service_name}Caller {{\n"));
 
@@ -266,7 +287,7 @@ fn generate_caller_protocol(service: &ServiceDetail) -> String {
         let method_name = method.method_name.to_lower_camel_case();
 
         if let Some(doc) = &method.doc {
-            out.push_str(&format!("    /// {doc}\n"));
+            out.push_str(&format_doc(doc, "    "));
         }
 
         let args: Vec<String> = method
@@ -282,10 +303,8 @@ fn generate_caller_protocol(service: &ServiceDetail) -> String {
             .collect();
 
         let ret_type = swift_type_client_return(method.return_type);
-        let has_streaming =
-            method.args.iter().any(|a| is_stream(a.ty)) || is_stream(method.return_type);
 
-        if has_streaming || ret_type == "Void" {
+        if ret_type == "Void" {
             out.push_str(&format!(
                 "    func {method_name}({}) async throws\n",
                 args.join(", ")
@@ -308,7 +327,7 @@ fn generate_handler_protocol(service: &ServiceDetail) -> String {
     let service_name = service.name.to_upper_camel_case();
 
     if let Some(doc) = &service.doc {
-        out.push_str(&format!("/// Handler for: {doc}\n"));
+        out.push_str(&format_doc(doc, ""));
     }
     out.push_str(&format!("public protocol {service_name}Handler {{\n"));
 
@@ -316,7 +335,7 @@ fn generate_handler_protocol(service: &ServiceDetail) -> String {
         let method_name = method.method_name.to_lower_camel_case();
 
         if let Some(doc) = &method.doc {
-            out.push_str(&format!("    /// {doc}\n"));
+            out.push_str(&format_doc(doc, "    "));
         }
 
         // Server perspective - invert Tx/Rx
@@ -333,10 +352,8 @@ fn generate_handler_protocol(service: &ServiceDetail) -> String {
             .collect();
 
         let ret_type = swift_type_server_return(method.return_type);
-        let has_streaming =
-            method.args.iter().any(|a| is_stream(a.ty)) || is_stream(method.return_type);
 
-        if has_streaming || ret_type == "Void" {
+        if ret_type == "Void" {
             out.push_str(&format!(
                 "    func {method_name}({}) async throws\n",
                 args.join(", ")
@@ -391,12 +408,22 @@ fn generate_client_impl(service: &ServiceDetail) -> String {
             method.args.iter().any(|a| is_stream(a.ty)) || is_stream(method.return_type);
 
         if has_streaming {
-            out.push_str(&format!(
-                "    public func {method_name}({}) async throws {{\n",
-                args.join(", ")
+            if ret_type == "Void" {
+                out.push_str(&format!(
+                    "    public func {method_name}({}) async throws {{\n",
+                    args.join(", ")
+                ));
+            } else {
+                out.push_str(&format!(
+                    "    public func {method_name}({}) async throws -> {ret_type} {{\n",
+                    args.join(", ")
+                ));
+            }
+            out.push_str(&generate_streaming_client_body(
+                method,
+                &service_name,
+                &method_id_name,
             ));
-            out.push_str("        // TODO: Implement streaming call\n");
-            out.push_str("        throw RoamError.notImplemented\n");
             out.push_str("    }\n\n");
         } else if ret_type == "Void" {
             out.push_str(&format!(
@@ -525,26 +552,546 @@ fn generate_dispatcher(service: &ServiceDetail) -> String {
 // Code Generation Helpers
 // ============================================================================
 
-/// Generate code to encode method arguments.
-fn generate_encode_args(args: &[roam_schema::ArgDetail]) -> String {
-    let mut out = String::new();
-
-    if args.is_empty() {
-        out.push_str("        let payload = Data()\n");
-        return out;
-    }
-
-    out.push_str("        var encoder = RoamEncoder()\n");
-    for arg in args {
-        let arg_name = arg.name.to_lower_camel_case();
-        out.push_str(&format!("        try encoder.encode({arg_name})\n"));
-    }
-    out.push_str("        let payload = encoder.data\n");
-
-    out
+/// Generate a Swift decode statement for a given shape.
+/// Returns code that decodes from `payload` at `offset` into a variable named `var_name`.
+fn generate_decode_stmt(shape: &'static Shape, var_name: &str, indent: &str) -> String {
+    generate_decode_stmt_from(shape, var_name, indent, "payload")
 }
 
-/// Generate code to decode method arguments.
+/// Generate a Swift decode statement for a given shape from a specific data variable.
+/// Returns code that decodes from `data_var` at `offset` into a variable named `var_name`.
+fn generate_decode_stmt_from(
+    shape: &'static Shape,
+    var_name: &str,
+    indent: &str,
+    data_var: &str,
+) -> String {
+    // Check for bytes first
+    if is_bytes(shape) {
+        return format!(
+            "{indent}let {var_name} = try decodeBytes(from: {data_var}, offset: &offset)\n"
+        );
+    }
+
+    match classify_shape(shape) {
+        ShapeKind::Scalar(scalar) => {
+            let decode_fn = swift_decode_fn(scalar);
+            format!("{indent}let {var_name} = try {decode_fn}(from: {data_var}, offset: &offset)\n")
+        }
+        ShapeKind::List { element }
+        | ShapeKind::Slice { element }
+        | ShapeKind::Array { element, .. } => {
+            let inner_decode = generate_decode_closure(element);
+            format!(
+                "{indent}let {var_name} = try decodeVec(from: {data_var}, offset: &offset, decoder: {inner_decode})\n"
+            )
+        }
+        ShapeKind::Option { inner } => {
+            let inner_decode = generate_decode_closure(inner);
+            format!(
+                "{indent}let {var_name} = try decodeOption(from: {data_var}, offset: &offset, decoder: {inner_decode})\n"
+            )
+        }
+        ShapeKind::Tuple { elements } if elements.len() == 2 => {
+            let a_decode = generate_decode_closure(elements[0].shape);
+            let b_decode = generate_decode_closure(elements[1].shape);
+            format!(
+                "{indent}let {var_name} = try decodeTuple2(from: {data_var}, offset: &offset, decoderA: {a_decode}, decoderB: {b_decode})\n"
+            )
+        }
+        ShapeKind::TupleStruct { fields } if fields.len() == 2 => {
+            let a_decode = generate_decode_closure(fields[0].shape());
+            let b_decode = generate_decode_closure(fields[1].shape());
+            format!(
+                "{indent}let {var_name} = try decodeTuple2(from: {data_var}, offset: &offset, decoderA: {a_decode}, decoderB: {b_decode})\n"
+            )
+        }
+        ShapeKind::Struct(StructInfo {
+            name: Some(name),
+            fields,
+            ..
+        }) => {
+            // Named struct - decode fields inline and construct
+            let mut out = String::new();
+            for f in fields.iter() {
+                let field_name = f.name.to_lower_camel_case();
+                out.push_str(&generate_decode_stmt_from(
+                    f.shape(),
+                    &format!("_{var_name}_{field_name}"),
+                    indent,
+                    data_var,
+                ));
+            }
+            let field_inits: Vec<String> = fields
+                .iter()
+                .map(|f| {
+                    let field_name = f.name.to_lower_camel_case();
+                    format!("{field_name}: _{var_name}_{field_name}")
+                })
+                .collect();
+            out.push_str(&format!(
+                "{indent}let {var_name} = {name}({})\n",
+                field_inits.join(", ")
+            ));
+            out
+        }
+        ShapeKind::Enum(EnumInfo {
+            name: Some(name),
+            variants,
+            ..
+        }) => {
+            // Named enum - decode discriminant then decode variant
+            let mut out = String::new();
+            out.push_str(&format!(
+                "{indent}let _{var_name}_disc = try decodeU8(from: {data_var}, offset: &offset)\n"
+            ));
+            out.push_str(&format!("{indent}let {var_name}: {name}\n"));
+            out.push_str(&format!("{indent}switch _{var_name}_disc {{\n"));
+            for (i, v) in variants.iter().enumerate() {
+                out.push_str(&format!("{indent}case {i}:\n"));
+                match classify_variant(v) {
+                    VariantKind::Unit => {
+                        out.push_str(&format!(
+                            "{indent}    {var_name} = .{}\n",
+                            v.name.to_lower_camel_case()
+                        ));
+                    }
+                    VariantKind::Newtype { inner } => {
+                        out.push_str(&generate_decode_stmt_from(
+                            inner,
+                            &format!("_{var_name}_val"),
+                            &format!("{indent}    "),
+                            data_var,
+                        ));
+                        out.push_str(&format!(
+                            "{indent}    {var_name} = .{}(_{var_name}_val)\n",
+                            v.name.to_lower_camel_case()
+                        ));
+                    }
+                    VariantKind::Tuple { fields } => {
+                        for (j, f) in fields.iter().enumerate() {
+                            out.push_str(&generate_decode_stmt_from(
+                                f.shape(),
+                                &format!("_{var_name}_f{j}"),
+                                &format!("{indent}    "),
+                                data_var,
+                            ));
+                        }
+                        let args: Vec<String> = (0..fields.len())
+                            .map(|j| format!("_{var_name}_f{j}"))
+                            .collect();
+                        out.push_str(&format!(
+                            "{indent}    {var_name} = .{}({})\n",
+                            v.name.to_lower_camel_case(),
+                            args.join(", ")
+                        ));
+                    }
+                    VariantKind::Struct { fields } => {
+                        for f in fields.iter() {
+                            let field_name = f.name.to_lower_camel_case();
+                            out.push_str(&generate_decode_stmt_from(
+                                f.shape(),
+                                &format!("_{var_name}_{field_name}"),
+                                &format!("{indent}    "),
+                                data_var,
+                            ));
+                        }
+                        let args: Vec<String> = fields
+                            .iter()
+                            .map(|f| {
+                                let field_name = f.name.to_lower_camel_case();
+                                format!("{field_name}: _{var_name}_{field_name}")
+                            })
+                            .collect();
+                        out.push_str(&format!(
+                            "{indent}    {var_name} = .{}({})\n",
+                            v.name.to_lower_camel_case(),
+                            args.join(", ")
+                        ));
+                    }
+                }
+            }
+            out.push_str(&format!("{indent}default:\n"));
+            out.push_str(&format!(
+                "{indent}    throw RoamError.decodeError(\"unknown enum variant\")\n"
+            ));
+            out.push_str(&format!("{indent}}}\n"));
+            out
+        }
+        ShapeKind::Pointer { pointee } => generate_decode_stmt(pointee, var_name, indent),
+        _ => {
+            // Fallback for unsupported types
+            format!("{indent}let {var_name}: Any = () // unsupported type\n")
+        }
+    }
+}
+
+/// Generate a Swift decode closure for use with decodeVec, decodeOption, etc.
+fn generate_decode_closure(shape: &'static Shape) -> String {
+    if is_bytes(shape) {
+        return "{ data, off in try decodeBytes(from: data, offset: &off) }".into();
+    }
+
+    match classify_shape(shape) {
+        ShapeKind::Scalar(scalar) => {
+            let decode_fn = swift_decode_fn(scalar);
+            format!("{{ data, off in try {decode_fn}(from: data, offset: &off) }}")
+        }
+        ShapeKind::List { element } | ShapeKind::Slice { element } => {
+            let inner = generate_decode_closure(element);
+            format!("{{ data, off in try decodeVec(from: data, offset: &off, decoder: {inner}) }}")
+        }
+        ShapeKind::Option { inner } => {
+            let inner_closure = generate_decode_closure(inner);
+            format!(
+                "{{ data, off in try decodeOption(from: data, offset: &off, decoder: {inner_closure}) }}"
+            )
+        }
+        ShapeKind::Tuple { elements } if elements.len() == 2 => {
+            let a_decode = generate_decode_closure(elements[0].shape);
+            let b_decode = generate_decode_closure(elements[1].shape);
+            format!(
+                "{{ data, off in try decodeTuple2(from: data, offset: &off, decoderA: {a_decode}, decoderB: {b_decode}) }}"
+            )
+        }
+        ShapeKind::TupleStruct { fields } if fields.len() == 2 => {
+            let a_decode = generate_decode_closure(fields[0].shape());
+            let b_decode = generate_decode_closure(fields[1].shape());
+            format!(
+                "{{ data, off in try decodeTuple2(from: data, offset: &off, decoderA: {a_decode}, decoderB: {b_decode}) }}"
+            )
+        }
+        ShapeKind::Struct(StructInfo {
+            name: Some(name),
+            fields,
+            ..
+        }) => {
+            // Generate inline struct decode closure
+            let mut code = "{ data, off in\n".to_string();
+            for f in fields.iter() {
+                let field_name = f.name.to_lower_camel_case();
+                let decode_call = generate_inline_decode(f.shape(), "data", "off");
+                code.push_str(&format!("    let _{field_name} = try {decode_call}\n"));
+            }
+            let field_inits: Vec<String> = fields
+                .iter()
+                .map(|f| {
+                    let field_name = f.name.to_lower_camel_case();
+                    format!("{field_name}: _{field_name}")
+                })
+                .collect();
+            code.push_str(&format!(
+                "    return {name}({})\n}}",
+                field_inits.join(", ")
+            ));
+            code
+        }
+        ShapeKind::Enum(EnumInfo {
+            name: Some(name),
+            variants,
+            ..
+        }) => {
+            // Generate inline enum decode closure
+            let mut code = format!(
+                "{{ data, off in\n    let disc = try decodeU8(from: data, offset: &off)\n    let result: {name}\n    switch disc {{\n"
+            );
+            for (i, v) in variants.iter().enumerate() {
+                code.push_str(&format!("    case {i}:\n"));
+                match classify_variant(v) {
+                    VariantKind::Unit => {
+                        code.push_str(&format!(
+                            "        result = .{}\n",
+                            v.name.to_lower_camel_case()
+                        ));
+                    }
+                    VariantKind::Newtype { inner } => {
+                        let inner_decode = generate_inline_decode(inner, "data", "off");
+                        code.push_str(&format!(
+                            "        let val = try {inner_decode}\n        result = .{}(val)\n",
+                            v.name.to_lower_camel_case()
+                        ));
+                    }
+                    VariantKind::Tuple { fields } => {
+                        for (j, f) in fields.iter().enumerate() {
+                            let inner_decode = generate_inline_decode(f.shape(), "data", "off");
+                            code.push_str(&format!("        let f{j} = try {inner_decode}\n"));
+                        }
+                        let args: Vec<String> =
+                            (0..fields.len()).map(|j| format!("f{j}")).collect();
+                        code.push_str(&format!(
+                            "        result = .{}({})\n",
+                            v.name.to_lower_camel_case(),
+                            args.join(", ")
+                        ));
+                    }
+                    VariantKind::Struct { fields } => {
+                        for f in fields.iter() {
+                            let field_name = f.name.to_lower_camel_case();
+                            let inner_decode = generate_inline_decode(f.shape(), "data", "off");
+                            code.push_str(&format!(
+                                "        let _{field_name} = try {inner_decode}\n"
+                            ));
+                        }
+                        let args: Vec<String> = fields
+                            .iter()
+                            .map(|f| {
+                                let field_name = f.name.to_lower_camel_case();
+                                format!("{field_name}: _{field_name}")
+                            })
+                            .collect();
+                        code.push_str(&format!(
+                            "        result = .{}({})\n",
+                            v.name.to_lower_camel_case(),
+                            args.join(", ")
+                        ));
+                    }
+                }
+            }
+            code.push_str("    default:\n        throw RoamError.decodeError(\"unknown enum variant\")\n    }\n    return result\n}");
+            code
+        }
+        ShapeKind::Pointer { pointee } => generate_decode_closure(pointee),
+        _ => "{ _, _ in throw RoamError.decodeError(\"unsupported type\") }".into(),
+    }
+}
+
+/// Generate inline decode expression (for use in closures).
+fn generate_inline_decode(shape: &'static Shape, data_var: &str, offset_var: &str) -> String {
+    if is_bytes(shape) {
+        return format!("decodeBytes(from: {data_var}, offset: &{offset_var})");
+    }
+
+    match classify_shape(shape) {
+        ShapeKind::Scalar(scalar) => {
+            let decode_fn = swift_decode_fn(scalar);
+            format!("{decode_fn}(from: {data_var}, offset: &{offset_var})")
+        }
+        ShapeKind::List { element } | ShapeKind::Slice { element } => {
+            let inner = generate_decode_closure(element);
+            format!("decodeVec(from: {data_var}, offset: &{offset_var}, decoder: {inner})")
+        }
+        ShapeKind::Option { inner } => {
+            let inner_closure = generate_decode_closure(inner);
+            format!(
+                "decodeOption(from: {data_var}, offset: &{offset_var}, decoder: {inner_closure})"
+            )
+        }
+        ShapeKind::Pointer { pointee } => generate_inline_decode(pointee, data_var, offset_var),
+        _ => format!("{{ throw RoamError.decodeError(\"unsupported\") }}()"),
+    }
+}
+
+/// Get the Swift decode function name for a scalar type.
+fn swift_decode_fn(scalar: ScalarType) -> &'static str {
+    match scalar {
+        ScalarType::Bool => "decodeBool",
+        ScalarType::U8 => "decodeU8",
+        ScalarType::I8 => "decodeI8",
+        ScalarType::U16 => "decodeU16",
+        ScalarType::I16 => "decodeI16",
+        ScalarType::U32 => "decodeU32",
+        ScalarType::I32 => "decodeI32",
+        ScalarType::U64 | ScalarType::USize => "decodeVarint",
+        ScalarType::I64 | ScalarType::ISize => "decodeI64",
+        ScalarType::F32 => "decodeF32",
+        ScalarType::F64 => "decodeF64",
+        ScalarType::Char | ScalarType::Str | ScalarType::CowStr | ScalarType::String => {
+            "decodeString"
+        }
+        ScalarType::Unit => "{ _, _ in () }",
+        _ => "decodeBytes", // fallback
+    }
+}
+
+/// Generate a Swift encode expression for a given shape and value.
+fn generate_encode_expr(shape: &'static Shape, value: &str) -> String {
+    if is_bytes(shape) {
+        return format!("encodeBytes(Array({value}))");
+    }
+
+    match classify_shape(shape) {
+        ShapeKind::Scalar(scalar) => {
+            let encode_fn = swift_encode_fn(scalar);
+            format!("{encode_fn}({value})")
+        }
+        ShapeKind::List { element }
+        | ShapeKind::Slice { element }
+        | ShapeKind::Array { element, .. } => {
+            let inner_encode = generate_encode_closure(element);
+            format!("encodeVec({value}, encoder: {inner_encode})")
+        }
+        ShapeKind::Option { inner } => {
+            let inner_encode = generate_encode_closure(inner);
+            format!("encodeOption({value}, encoder: {inner_encode})")
+        }
+        ShapeKind::Tuple { elements } if elements.len() == 2 => {
+            let a_encode = generate_encode_closure(elements[0].shape);
+            let b_encode = generate_encode_closure(elements[1].shape);
+            format!("{a_encode}({value}.0) + {b_encode}({value}.1)")
+        }
+        ShapeKind::TupleStruct { fields } if fields.len() == 2 => {
+            let a_encode = generate_encode_closure(fields[0].shape());
+            let b_encode = generate_encode_closure(fields[1].shape());
+            format!("{a_encode}({value}.0) + {b_encode}({value}.1)")
+        }
+        ShapeKind::Struct(StructInfo { fields, .. }) => {
+            // Encode each field and concatenate
+            let field_encodes: Vec<String> = fields
+                .iter()
+                .map(|f| {
+                    let field_name = f.name.to_lower_camel_case();
+                    generate_encode_expr(f.shape(), &format!("{value}.{field_name}"))
+                })
+                .collect();
+            if field_encodes.is_empty() {
+                "[]".into()
+            } else {
+                field_encodes.join(" + ")
+            }
+        }
+        ShapeKind::Pointer { pointee } => generate_encode_expr(pointee, value),
+        _ => "[]".into(), // fallback
+    }
+}
+
+/// Generate a Swift encode closure for use with encodeVec, encodeOption, etc.
+fn generate_encode_closure(shape: &'static Shape) -> String {
+    if is_bytes(shape) {
+        return "{ encodeBytes(Array($0)) }".into();
+    }
+
+    match classify_shape(shape) {
+        ShapeKind::Scalar(scalar) => {
+            let encode_fn = swift_encode_fn(scalar);
+            format!("{{ {encode_fn}($0) }}")
+        }
+        ShapeKind::List { element } | ShapeKind::Slice { element } => {
+            let inner = generate_encode_closure(element);
+            format!("{{ encodeVec($0, encoder: {inner}) }}")
+        }
+        ShapeKind::Option { inner } => {
+            let inner_closure = generate_encode_closure(inner);
+            format!("{{ encodeOption($0, encoder: {inner_closure}) }}")
+        }
+        ShapeKind::Tuple { elements } if elements.len() == 2 => {
+            let a_encode = generate_encode_closure(elements[0].shape);
+            let b_encode = generate_encode_closure(elements[1].shape);
+            format!("{{ {a_encode}($0.0) + {b_encode}($0.1) }}")
+        }
+        ShapeKind::TupleStruct { fields } if fields.len() == 2 => {
+            let a_encode = generate_encode_closure(fields[0].shape());
+            let b_encode = generate_encode_closure(fields[1].shape());
+            format!("{{ {a_encode}($0.0) + {b_encode}($0.1) }}")
+        }
+        ShapeKind::Struct(StructInfo { fields, .. }) => {
+            // Generate inline struct encode closure
+            let field_encodes: Vec<String> = fields
+                .iter()
+                .map(|f| {
+                    let field_name = f.name.to_lower_camel_case();
+                    generate_encode_expr(f.shape(), &format!("$0.{field_name}"))
+                })
+                .collect();
+            if field_encodes.is_empty() {
+                "{ _ in [] }".into()
+            } else {
+                format!("{{ {} }}", field_encodes.join(" + "))
+            }
+        }
+        ShapeKind::Enum(EnumInfo {
+            name: Some(_name),
+            variants,
+            ..
+        }) => {
+            // Generate inline enum encode closure with switch
+            let mut code = "{ v in\n    switch v {\n".to_string();
+            for (i, v) in variants.iter().enumerate() {
+                let variant_name = v.name.to_lower_camel_case();
+                match classify_variant(v) {
+                    VariantKind::Unit => {
+                        code.push_str(&format!(
+                            "    case .{variant_name}:\n        return [UInt8({i})]\n"
+                        ));
+                    }
+                    VariantKind::Newtype { inner } => {
+                        let inner_encode = generate_encode_expr(inner, "val");
+                        code.push_str(&format!(
+                            "    case .{variant_name}(let val):\n        return [UInt8({i})] + {inner_encode}\n"
+                        ));
+                    }
+                    VariantKind::Tuple { fields } => {
+                        let bindings: Vec<String> =
+                            (0..fields.len()).map(|j| format!("f{j}")).collect();
+                        let field_encodes: Vec<String> = fields
+                            .iter()
+                            .enumerate()
+                            .map(|(j, f)| generate_encode_expr(f.shape(), &format!("f{j}")))
+                            .collect();
+                        code.push_str(&format!(
+                            "    case .{variant_name}({}):\n        return [UInt8({i})] + {}\n",
+                            bindings
+                                .iter()
+                                .map(|b| format!("let {b}"))
+                                .collect::<Vec<_>>()
+                                .join(", "),
+                            field_encodes.join(" + ")
+                        ));
+                    }
+                    VariantKind::Struct { fields } => {
+                        let bindings: Vec<String> = fields
+                            .iter()
+                            .map(|f| f.name.to_lower_camel_case())
+                            .collect();
+                        let field_encodes: Vec<String> = fields
+                            .iter()
+                            .map(|f| {
+                                let field_name = f.name.to_lower_camel_case();
+                                generate_encode_expr(f.shape(), &field_name)
+                            })
+                            .collect();
+                        code.push_str(&format!(
+                            "    case .{variant_name}({}):\n        return [UInt8({i})] + {}\n",
+                            bindings
+                                .iter()
+                                .map(|b| format!("let {b}"))
+                                .collect::<Vec<_>>()
+                                .join(", "),
+                            field_encodes.join(" + ")
+                        ));
+                    }
+                }
+            }
+            code.push_str("    }\n}");
+            code
+        }
+        ShapeKind::Pointer { pointee } => generate_encode_closure(pointee),
+        _ => "{ _ in [] }".into(), // fallback
+    }
+}
+
+/// Get the Swift encode function name for a scalar type.
+fn swift_encode_fn(scalar: ScalarType) -> &'static str {
+    match scalar {
+        ScalarType::Bool => "encodeBool",
+        ScalarType::U8 => "encodeU8",
+        ScalarType::I8 => "encodeI8",
+        ScalarType::U16 => "encodeU16",
+        ScalarType::I16 => "encodeI16",
+        ScalarType::U32 => "encodeU32",
+        ScalarType::I32 => "encodeI32",
+        ScalarType::U64 | ScalarType::USize => "encodeVarint",
+        ScalarType::I64 | ScalarType::ISize => "encodeI64",
+        ScalarType::F32 => "encodeF32",
+        ScalarType::F64 => "encodeF64",
+        ScalarType::Char | ScalarType::Str | ScalarType::CowStr | ScalarType::String => {
+            "encodeString"
+        }
+        ScalarType::Unit => "{ _ in [] }",
+        _ => "encodeBytes", // fallback
+    }
+}
+
+/// Generate code to decode method arguments (for dispatcher).
 fn generate_decode_args(args: &[roam_schema::ArgDetail]) -> String {
     let mut out = String::new();
 
@@ -553,35 +1100,119 @@ fn generate_decode_args(args: &[roam_schema::ArgDetail]) -> String {
         return out;
     }
 
-    out.push_str("        var decoder = RoamDecoder(data: payload)\n");
+    out.push_str("        var offset = 0\n");
     for arg in args {
         let arg_name = arg.name.to_lower_camel_case();
-        let arg_type = swift_type_server_arg(arg.ty);
-        out.push_str(&format!(
-            "        let {arg_name}: {arg_type} = try decoder.decode()\n"
-        ));
+        out.push_str(&generate_decode_stmt(arg.ty, &arg_name, "        "));
     }
 
     out
 }
 
-/// Generate code to decode return value.
-fn generate_decode_return(_shape: &'static Shape, swift_type: &str) -> String {
+/// Generate code to encode return value (for dispatcher).
+fn generate_encode_return(shape: &'static Shape) -> String {
+    let encode_closure = generate_encode_closure(shape);
+    format!("        return Data(encodeResultOk(result, encoder: {encode_closure}))\n")
+}
+
+/// Generate code to encode method arguments (for client).
+fn generate_encode_args(args: &[roam_schema::ArgDetail]) -> String {
     let mut out = String::new();
-    out.push_str("        var decoder = RoamDecoder(data: response)\n");
-    out.push_str(&format!(
-        "        let result: {swift_type} = try decoder.decode()\n"
+
+    if args.is_empty() {
+        out.push_str("        let payload = Data()\n");
+        return out;
+    }
+
+    out.push_str("        var payloadBytes: [UInt8] = []\n");
+    for arg in args {
+        let arg_name = arg.name.to_lower_camel_case();
+        let encode_expr = generate_encode_expr(arg.ty, &arg_name);
+        out.push_str(&format!("        payloadBytes += {encode_expr}\n"));
+    }
+    out.push_str("        let payload = Data(payloadBytes)\n");
+
+    out
+}
+
+/// Generate code to decode return value (for client).
+fn generate_decode_return(shape: &'static Shape, _swift_type: &str) -> String {
+    let mut out = String::new();
+    out.push_str("        var offset = 0\n");
+    // Use generate_decode_stmt_from which takes a data_var parameter
+    out.push_str(&generate_decode_stmt_from(
+        shape, "result", "        ", "response",
     ));
     out.push_str("        return result\n");
     out
 }
 
-/// Generate code to encode return value.
-fn generate_encode_return(_shape: &'static Shape) -> String {
+/// Generate client body for streaming methods.
+/// This binds channels, encodes channel IDs, and makes the call.
+fn generate_streaming_client_body(
+    method: &MethodDetail,
+    service_name: &str,
+    method_id_name: &str,
+) -> String {
     let mut out = String::new();
-    out.push_str("        var encoder = RoamEncoder()\n");
-    out.push_str("        try encoder.encode(result)\n");
-    out.push_str("        return encoder.data\n");
+    let service_name_lower = service_name.to_lower_camel_case();
+
+    // Bind channels
+    let arg_names: Vec<String> = method
+        .args
+        .iter()
+        .map(|a| a.name.to_lower_camel_case())
+        .collect();
+
+    out.push_str("        // Bind channels using schema\n");
+    out.push_str("        await bindChannels(\n");
+    out.push_str(&format!(
+        "            schemas: {service_name_lower}_schemas[\"{method_id_name}\"]!.args,\n"
+    ));
+    out.push_str(&format!("            args: [{}],\n", arg_names.join(", ")));
+    out.push_str("            allocator: connection.channelAllocator,\n");
+    out.push_str("            incomingRegistry: connection.incomingChannelRegistry,\n");
+    out.push_str("            taskSender: connection.taskSender,\n");
+    out.push_str(&format!(
+        "            serializers: {service_name}Serializers()\n"
+    ));
+    out.push_str("        )\n\n");
+
+    // Encode payload (channel IDs for Tx/Rx, values for regular args)
+    out.push_str("        // Encode payload with channel IDs\n");
+    out.push_str("        var payloadBytes: [UInt8] = []\n");
+    for arg in &method.args {
+        let arg_name = arg.name.to_lower_camel_case();
+        if is_tx(arg.ty) || is_rx(arg.ty) {
+            out.push_str(&format!(
+                "        payloadBytes += encodeVarint({arg_name}.channelId)\n"
+            ));
+        } else {
+            let encode_expr = generate_encode_expr(arg.ty, &arg_name);
+            out.push_str(&format!("        payloadBytes += {encode_expr}\n"));
+        }
+    }
+    out.push_str("        let payload = Data(payloadBytes)\n\n");
+
+    // Make the call
+    let ret_type = swift_type_client_return(method.return_type);
+    if ret_type == "Void" {
+        out.push_str(&format!(
+            "        _ = try await connection.call(methodId: {service_name}MethodId.{method_id_name}, payload: payload)\n"
+        ));
+    } else {
+        out.push_str(&format!(
+            "        let response = try await connection.call(methodId: {service_name}MethodId.{method_id_name}, payload: payload)\n"
+        ));
+        out.push_str("        var offset = 0\n");
+        out.push_str(&generate_decode_stmt(
+            method.return_type,
+            "result",
+            "        ",
+        ));
+        out.push_str("        return result\n");
+    }
+
     out
 }
 
@@ -647,6 +1278,15 @@ fn swift_type_base(shape: &'static Shape) -> String {
                 .join(", ");
             format!("({inner})")
         }
+        ShapeKind::TupleStruct { fields } => {
+            let inner = fields
+                .iter()
+                .map(|f| swift_type_base(f.shape()))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("({inner})")
+        }
+        // r[impl channeling.type] - Tx/Rx are roam types for channels
         ShapeKind::Tx { inner } => format!("Tx<{}>", swift_type_base(inner)),
         ShapeKind::Rx { inner } => format!("Rx<{}>", swift_type_base(inner)),
         ShapeKind::Struct(StructInfo {
@@ -702,20 +1342,22 @@ fn swift_type_base(shape: &'static Shape) -> String {
 /// Convert Shape to Swift type for client arguments.
 /// Schema types are from CALLER's perspective (per spec r[streaming.caller-pov]).
 /// Caller uses types as-is: Tx = caller sends, Rx = caller receives.
+/// Uses UnboundTx/UnboundRx which get bound at call time via bindChannels().
 fn swift_type_client_arg(shape: &'static Shape) -> String {
     match classify_shape(shape) {
-        ShapeKind::Tx { inner } => format!("Tx<{}>", swift_type_base(inner)),
-        ShapeKind::Rx { inner } => format!("Rx<{}>", swift_type_base(inner)),
+        ShapeKind::Tx { inner } => format!("UnboundTx<{}>", swift_type_base(inner)),
+        ShapeKind::Rx { inner } => format!("UnboundRx<{}>", swift_type_base(inner)),
         _ => swift_type_base(shape),
     }
 }
 
 /// Convert Shape to Swift type for client returns.
 /// Schema types are from CALLER's perspective - no transformation needed.
+/// Uses UnboundTx/UnboundRx which get bound at call time via bindChannels().
 fn swift_type_client_return(shape: &'static Shape) -> String {
     match classify_shape(shape) {
-        ShapeKind::Tx { inner } => format!("Tx<{}>", swift_type_base(inner)),
-        ShapeKind::Rx { inner } => format!("Rx<{}>", swift_type_base(inner)),
+        ShapeKind::Tx { inner } => format!("UnboundTx<{}>", swift_type_base(inner)),
+        ShapeKind::Rx { inner } => format!("UnboundRx<{}>", swift_type_base(inner)),
         ShapeKind::Scalar(ScalarType::Unit) => "Void".into(),
         ShapeKind::Tuple { elements: [] } => "Void".into(),
         _ => swift_type_base(shape),
@@ -723,29 +1365,527 @@ fn swift_type_client_return(shape: &'static Shape) -> String {
 }
 
 /// Convert Shape to Swift type for server/handler arguments.
-/// Schema types are from caller's perspective, so we INVERT for handler.
-/// Caller's Tx (sends) becomes handler's Rx (receives).
-/// Caller's Rx (receives) becomes handler's Tx (sends).
-///
-/// r[impl streaming.caller-pov] - Schema is from caller's perspective, server inverts.
+/// Schema types match the Rust handler types - no inversion needed.
+/// Schema Rx = handler receives via Rx
+/// Schema Tx = handler sends via Tx
 fn swift_type_server_arg(shape: &'static Shape) -> String {
     match classify_shape(shape) {
-        ShapeKind::Tx { inner } => format!("Rx<{}>", swift_type_base(inner)),
-        ShapeKind::Rx { inner } => format!("Tx<{}>", swift_type_base(inner)),
+        ShapeKind::Tx { inner } => format!("Tx<{}>", swift_type_base(inner)),
+        ShapeKind::Rx { inner } => format!("Rx<{}>", swift_type_base(inner)),
         _ => swift_type_base(shape),
     }
 }
 
 /// Convert Shape to Swift type for server/handler returns.
-/// Schema types are from caller's perspective, so we INVERT for handler.
+/// Schema types match the Rust handler types - no inversion needed.
 fn swift_type_server_return(shape: &'static Shape) -> String {
     match classify_shape(shape) {
-        ShapeKind::Tx { inner } => format!("Rx<{}>", swift_type_base(inner)),
-        ShapeKind::Rx { inner } => format!("Tx<{}>", swift_type_base(inner)),
+        ShapeKind::Tx { inner } => format!("Tx<{}>", swift_type_base(inner)),
+        ShapeKind::Rx { inner } => format!("Rx<{}>", swift_type_base(inner)),
         ShapeKind::Scalar(ScalarType::Unit) => "Void".into(),
         ShapeKind::Tuple { elements: [] } => "Void".into(),
         _ => swift_type_base(shape),
     }
+}
+
+// ============================================================================
+// Streaming Dispatcher
+// ============================================================================
+
+/// Generate streaming dispatcher for handling incoming calls with channel support.
+fn generate_streaming_dispatcher(service: &ServiceDetail) -> String {
+    let mut out = String::new();
+    let service_name = service.name.to_upper_camel_case();
+
+    out.push_str(&format!(
+        "public final class {service_name}StreamingDispatcher {{\n"
+    ));
+    out.push_str(&format!("    private let handler: {service_name}Handler\n"));
+    out.push_str("    private let registry: IncomingChannelRegistry\n");
+    out.push_str("    private let taskSender: TaskSender\n\n");
+    out.push_str(&format!(
+        "    public init(handler: {service_name}Handler, registry: IncomingChannelRegistry, taskSender: @escaping TaskSender) {{\n"
+    ));
+    out.push_str("        self.handler = handler\n");
+    out.push_str("        self.registry = registry\n");
+    out.push_str("        self.taskSender = taskSender\n");
+    out.push_str("    }\n\n");
+
+    out.push_str(
+        "    public func dispatch(methodId: UInt64, requestId: UInt64, payload: Data) async {\n",
+    );
+    out.push_str("        switch methodId {\n");
+
+    for method in &service.methods {
+        let method_name = method.method_name.to_lower_camel_case();
+        let method_id_name = method.method_name.to_lower_camel_case();
+
+        out.push_str(&format!(
+            "        case {service_name}MethodId.{method_id_name}:\n"
+        ));
+        out.push_str(&format!(
+            "            await dispatch{method_name}(requestId: requestId, payload: payload)\n"
+        ));
+    }
+
+    out.push_str("        default:\n");
+    out.push_str(
+        "            taskSender(.response(requestId: requestId, payload: encodeUnknownMethodError()))\n",
+    );
+    out.push_str("        }\n");
+    out.push_str("    }\n\n");
+
+    // Generate preregisterChannels method to mark channel IDs as known before dispatch
+    out.push_str("    /// Pre-register channel IDs from a request payload.\n");
+    out.push_str("    /// Call this synchronously before spawning the dispatch task to avoid\n");
+    out.push_str("    /// race conditions where Data arrives before channels are registered.\n");
+    out.push_str("    public func preregisterChannels(methodId: UInt64, payload: Data) async {\n");
+    out.push_str("        switch methodId {\n");
+
+    for method in &service.methods {
+        let method_id_name = method.method_name.to_lower_camel_case();
+        let has_rx_args = method.args.iter().any(|a| is_rx(a.ty));
+
+        if has_rx_args {
+            out.push_str(&format!(
+                "        case {service_name}MethodId.{method_id_name}:\n"
+            ));
+            out.push_str("            do {\n");
+            out.push_str("                var offset = 0\n");
+
+            // Parse channel IDs and mark them as known
+            for arg in &method.args {
+                let arg_name = arg.name.to_lower_camel_case();
+                if is_rx(arg.ty) {
+                    // Schema Rx = client sends, server receives → need to preregister
+                    out.push_str(&format!(
+                        "                let {arg_name}ChannelId = try decodeVarint(from: payload, offset: &offset)\n"
+                    ));
+                    out.push_str(&format!(
+                        "                await registry.markKnown({arg_name}ChannelId)\n"
+                    ));
+                } else if is_tx(arg.ty) {
+                    // Schema Tx = server sends → just skip the varint
+                    out.push_str(&format!(
+                        "                _ = try decodeVarint(from: payload, offset: &offset) // {arg_name}\n"
+                    ));
+                } else {
+                    // Non-streaming arg - skip it based on type
+                    out.push_str(&generate_skip_arg(&arg_name, arg.ty));
+                }
+            }
+
+            out.push_str("            } catch {\n");
+            out.push_str("                // Ignore parse errors - dispatch will handle them\n");
+            out.push_str("            }\n");
+        }
+    }
+
+    out.push_str("        default:\n");
+    out.push_str("            break\n");
+    out.push_str("        }\n");
+    out.push_str("    }\n\n");
+
+    // Generate individual dispatch methods
+    for method in &service.methods {
+        let method_name = method.method_name.to_lower_camel_case();
+        let has_streaming =
+            method.args.iter().any(|a| is_stream(a.ty)) || is_stream(method.return_type);
+
+        out.push_str(&format!(
+            "    private func dispatch{method_name}(requestId: UInt64, payload: Data) async {{\n"
+        ));
+        out.push_str("        do {\n");
+        out.push_str("            var offset = 0\n");
+
+        // Decode arguments - for streaming, decode channel IDs and create Tx/Rx
+        for arg in &method.args {
+            let arg_name = arg.name.to_lower_camel_case();
+            out.push_str(&generate_streaming_decode_arg(&arg_name, arg.ty));
+        }
+
+        // Call handler
+        let arg_names: Vec<String> = method
+            .args
+            .iter()
+            .map(|a| {
+                format!(
+                    "{}: {}",
+                    a.name.to_lower_camel_case(),
+                    a.name.to_lower_camel_case()
+                )
+            })
+            .collect();
+
+        let ret_type = swift_type_server_return(method.return_type);
+
+        if has_streaming {
+            // For streaming methods, close any Tx channels after handler completes
+            if ret_type == "Void" {
+                out.push_str(&format!(
+                    "            try await handler.{method_name}({})\n",
+                    arg_names.join(", ")
+                ));
+            } else {
+                out.push_str(&format!(
+                    "            let result = try await handler.{method_name}({})\n",
+                    arg_names.join(", ")
+                ));
+            }
+
+            // Close any Tx channels (server sends via Tx, which corresponds to schema Tx)
+            for arg in &method.args {
+                if is_tx(arg.ty) {
+                    // Schema Tx = client receives, server sends via Tx → close Tx after sending
+                    let arg_name = arg.name.to_lower_camel_case();
+                    out.push_str(&format!("            {arg_name}.close()\n"));
+                }
+            }
+
+            // Send response
+            if ret_type == "Void" {
+                out.push_str(
+                    "            taskSender(.response(requestId: requestId, payload: encodeResultOk((), encoder: { _ in [] })))\n",
+                );
+            } else {
+                out.push_str(&generate_streaming_encode_return(method.return_type));
+            }
+        } else {
+            // Non-streaming method
+            if ret_type == "Void" {
+                out.push_str(&format!(
+                    "            try await handler.{method_name}({})\n",
+                    arg_names.join(", ")
+                ));
+                out.push_str(
+                    "            taskSender(.response(requestId: requestId, payload: encodeResultOk((), encoder: { _ in [] })))\n",
+                );
+            } else {
+                out.push_str(&format!(
+                    "            let result = try await handler.{method_name}({})\n",
+                    arg_names.join(", ")
+                ));
+                out.push_str(&generate_streaming_encode_return(method.return_type));
+            }
+        }
+
+        out.push_str("        } catch {\n");
+        out.push_str(
+            "            taskSender(.response(requestId: requestId, payload: encodeInvalidPayloadError()))\n",
+        );
+        out.push_str("        }\n");
+        out.push_str("    }\n\n");
+    }
+
+    out.push_str("}\n\n");
+    out
+}
+
+/// Generate code to decode a single argument for streaming dispatch.
+/// For Tx/Rx types, this creates server-side channels.
+///
+/// Schema perspective (what's passed as the argument):
+/// - Schema Rx = client passes Rx, sends via paired Tx → server receives via Rx
+/// - Schema Tx = client passes Tx, receives via paired Rx → server sends via Tx
+fn generate_streaming_decode_arg(name: &str, shape: &'static Shape) -> String {
+    let mut out = String::new();
+
+    match classify_shape(shape) {
+        ShapeKind::Rx { inner } => {
+            // Schema Rx = client passes Rx to method, sends via paired Tx
+            // Server needs to receive → create server Rx
+            //
+            // Each Data message payload contains exactly one element, so we decode
+            // starting at offset 0 each time.
+            let inline_decode = generate_inline_decode(inner, "Data(bytes)", "off");
+            out.push_str(&format!(
+                "            let {name}ChannelId = try decodeVarint(from: payload, offset: &offset)\n"
+            ));
+            out.push_str(&format!(
+                "            let {name}Receiver = await registry.register({name}ChannelId)\n"
+            ));
+            out.push_str(&format!(
+                "            let {name} = createServerRx(channelId: {name}ChannelId, receiver: {name}Receiver, deserialize: {{ bytes in\n"
+            ));
+            out.push_str(&format!(
+                "                var off = 0\n                return try {inline_decode}\n"
+            ));
+            out.push_str("            })\n");
+        }
+        ShapeKind::Tx { inner } => {
+            // Schema Tx = client passes Tx to method, receives via paired Rx
+            // Server needs to send → create server Tx
+            let encode_closure = generate_encode_closure(inner);
+            out.push_str(&format!(
+                "            let {name}ChannelId = try decodeVarint(from: payload, offset: &offset)\n"
+            ));
+            out.push_str(&format!(
+                "            let {name} = createServerTx(channelId: {name}ChannelId, taskSender: taskSender, serialize: ({encode_closure}))\n"
+            ));
+        }
+        _ => {
+            // Non-streaming argument - use standard decode
+            out.push_str(&generate_decode_stmt(shape, name, "            "));
+        }
+    }
+
+    out
+}
+
+/// Generate code to encode return value for streaming dispatch.
+fn generate_streaming_encode_return(shape: &'static Shape) -> String {
+    let encode_closure = generate_encode_closure(shape);
+    format!(
+        "            taskSender(.response(requestId: requestId, payload: encodeResultOk(result, encoder: {encode_closure})))\n"
+    )
+}
+
+/// Generate code to skip over an argument during preregistration.
+/// Used when we only need to parse channel IDs but need to skip other args.
+fn generate_skip_arg(name: &str, shape: &'static Shape) -> String {
+    let mut out = String::new();
+
+    if is_bytes(shape) {
+        out.push_str(&format!(
+            "                _ = try decodeBytes(from: payload, offset: &offset) // {name}\n"
+        ));
+        return out;
+    }
+
+    match classify_shape(shape) {
+        ShapeKind::Scalar(scalar) => {
+            let skip_code = match scalar {
+                ScalarType::Bool => "offset += 1",
+                ScalarType::U8 | ScalarType::I8 => "offset += 1",
+                ScalarType::U16 | ScalarType::I16 => "offset += 2",
+                ScalarType::U32 | ScalarType::I32 => {
+                    "_ = try decodeVarint(from: payload, offset: &offset)"
+                }
+                ScalarType::U64 | ScalarType::I64 => {
+                    "_ = try decodeVarint(from: payload, offset: &offset)"
+                }
+                ScalarType::F32 => "offset += 4",
+                ScalarType::F64 => "offset += 8",
+                ScalarType::Unit => "",
+                ScalarType::Char => "_ = try decodeVarint(from: payload, offset: &offset)",
+                _ => "// unknown scalar type",
+            };
+            if !skip_code.is_empty() {
+                out.push_str(&format!("                {skip_code} // {name}\n"));
+            }
+        }
+        ShapeKind::List { .. } | ShapeKind::Slice { .. } | ShapeKind::Array { .. } => {
+            out.push_str(&format!(
+                "                _ = try decodeBytes(from: payload, offset: &offset) // {name} (skipped)\n"
+            ));
+        }
+        ShapeKind::Option { .. } => {
+            // Options are complex - for now just skip with a comment
+            out.push_str(&format!("                // TODO: skip option {name}\n"));
+        }
+        ShapeKind::Struct(StructInfo { fields, .. }) => {
+            // For structs, recursively skip each field
+            for field in fields {
+                let field_name = format!("{}.{}", name, field.name);
+                out.push_str(&generate_skip_arg(&field_name, field.shape()));
+            }
+        }
+        _ => {
+            out.push_str(&format!("                // TODO: skip {name}\n"));
+        }
+    }
+
+    out
+}
+
+// ============================================================================
+// Method Schemas
+// ============================================================================
+
+/// Generate method schemas for runtime channel binding.
+fn generate_method_schemas(service: &ServiceDetail) -> String {
+    let mut out = String::new();
+    let service_name = service.name.to_lower_camel_case();
+
+    out.push_str(&format!(
+        "public let {service_name}_schemas: [String: MethodSchema] = [\n"
+    ));
+
+    for method in &service.methods {
+        let method_name = method.method_name.to_lower_camel_case();
+        out.push_str(&format!("    \"{method_name}\": MethodSchema(args: ["));
+
+        let schemas: Vec<String> = method.args.iter().map(|a| shape_to_schema(a.ty)).collect();
+        out.push_str(&schemas.join(", "));
+
+        out.push_str("]),\n");
+    }
+
+    out.push_str("]\n\n");
+    out
+}
+
+/// Convert a Shape to its Swift Schema representation.
+fn shape_to_schema(shape: &'static Shape) -> String {
+    if is_bytes(shape) {
+        return ".bytes".into();
+    }
+
+    match classify_shape(shape) {
+        ShapeKind::Scalar(scalar) => match scalar {
+            ScalarType::Bool => ".bool".into(),
+            ScalarType::U8 => ".u8".into(),
+            ScalarType::U16 => ".u16".into(),
+            ScalarType::U32 => ".u32".into(),
+            ScalarType::U64 => ".u64".into(),
+            ScalarType::I8 => ".i8".into(),
+            ScalarType::I16 => ".i16".into(),
+            ScalarType::I32 => ".i32".into(),
+            ScalarType::I64 => ".i64".into(),
+            ScalarType::F32 => ".f32".into(),
+            ScalarType::F64 => ".f64".into(),
+            ScalarType::Str | ScalarType::CowStr | ScalarType::String => ".string".into(),
+            ScalarType::Unit => ".tuple(elements: [])".into(),
+            _ => ".bytes".into(), // fallback
+        },
+        ShapeKind::List { element } | ShapeKind::Slice { element } => {
+            format!(".vec(element: {})", shape_to_schema(element))
+        }
+        ShapeKind::Option { inner } => {
+            format!(".option(inner: {})", shape_to_schema(inner))
+        }
+        ShapeKind::Map { key, value } => {
+            format!(
+                ".map(key: {}, value: {})",
+                shape_to_schema(key),
+                shape_to_schema(value)
+            )
+        }
+        ShapeKind::Tx { inner } => {
+            format!(".tx(element: {})", shape_to_schema(inner))
+        }
+        ShapeKind::Rx { inner } => {
+            format!(".rx(element: {})", shape_to_schema(inner))
+        }
+        ShapeKind::Tuple { elements } => {
+            let inner: Vec<String> = elements.iter().map(|p| shape_to_schema(p.shape)).collect();
+            format!(".tuple(elements: [{}])", inner.join(", "))
+        }
+        ShapeKind::Struct(StructInfo { fields, .. }) => {
+            let field_strs: Vec<String> = fields
+                .iter()
+                .map(|f| format!("(\"{}\", {})", f.name, shape_to_schema(f.shape())))
+                .collect();
+            format!(".struct(fields: [{}])", field_strs.join(", "))
+        }
+        ShapeKind::Enum(EnumInfo { variants, .. }) => {
+            let variant_strs: Vec<String> = variants
+                .iter()
+                .map(|v| {
+                    let fields: Vec<String> = match classify_variant(v) {
+                        VariantKind::Unit => vec![],
+                        VariantKind::Newtype { inner } => vec![shape_to_schema(inner)],
+                        VariantKind::Tuple { fields } | VariantKind::Struct { fields } => {
+                            fields.iter().map(|f| shape_to_schema(f.shape())).collect()
+                        }
+                    };
+                    format!("(\"{}\", [{}])", v.name, fields.join(", "))
+                })
+                .collect();
+            format!(".enum(variants: [{}])", variant_strs.join(", "))
+        }
+        _ => ".bytes".into(), // fallback for unknown types
+    }
+}
+
+// ============================================================================
+// Serializers
+// ============================================================================
+
+/// Generate serializers for runtime channel binding.
+fn generate_serializers(service: &ServiceDetail) -> String {
+    let mut out = String::new();
+    let service_name_upper = service.name.to_upper_camel_case();
+
+    out.push_str(&format!(
+        "public struct {service_name_upper}Serializers: BindingSerializers {{\n"
+    ));
+    out.push_str("    public init() {}\n\n");
+
+    // txSerializer
+    out.push_str(
+        "    public func txSerializer(for schema: Schema) -> @Sendable (Any) -> [UInt8] {\n",
+    );
+    out.push_str("        switch schema {\n");
+    out.push_str("        case .bool: return { encodeBool($0 as! Bool) }\n");
+    out.push_str("        case .u8: return { encodeU8($0 as! UInt8) }\n");
+    out.push_str("        case .i8: return { encodeI8($0 as! Int8) }\n");
+    out.push_str("        case .u16: return { encodeU16($0 as! UInt16) }\n");
+    out.push_str("        case .i16: return { encodeI16($0 as! Int16) }\n");
+    out.push_str("        case .u32: return { encodeU32($0 as! UInt32) }\n");
+    out.push_str("        case .i32: return { encodeI32($0 as! Int32) }\n");
+    out.push_str("        case .u64: return { encodeVarint($0 as! UInt64) }\n");
+    out.push_str("        case .i64: return { encodeI64($0 as! Int64) }\n");
+    out.push_str("        case .f32: return { encodeF32($0 as! Float) }\n");
+    out.push_str("        case .f64: return { encodeF64($0 as! Double) }\n");
+    out.push_str("        case .string: return { encodeString($0 as! String) }\n");
+    out.push_str("        case .bytes: return { [UInt8]($0 as! Data) }\n");
+    out.push_str(
+        "        default: fatalError(\"Unsupported schema for Tx serialization: \\(schema)\")\n",
+    );
+    out.push_str("        }\n");
+    out.push_str("    }\n\n");
+
+    // rxDeserializer
+    out.push_str(
+        "    public func rxDeserializer(for schema: Schema) -> @Sendable ([UInt8]) throws -> Any {\n",
+    );
+    out.push_str("        switch schema {\n");
+    out.push_str(
+        "        case .bool: return { var o = 0; return try decodeBool(from: Data($0), offset: &o) }\n",
+    );
+    out.push_str(
+        "        case .u8: return { var o = 0; return try decodeU8(from: Data($0), offset: &o) }\n",
+    );
+    out.push_str(
+        "        case .i8: return { var o = 0; return try decodeI8(from: Data($0), offset: &o) }\n",
+    );
+    out.push_str(
+        "        case .u16: return { var o = 0; return try decodeU16(from: Data($0), offset: &o) }\n",
+    );
+    out.push_str(
+        "        case .i16: return { var o = 0; return try decodeI16(from: Data($0), offset: &o) }\n",
+    );
+    out.push_str(
+        "        case .u32: return { var o = 0; return try decodeU32(from: Data($0), offset: &o) }\n",
+    );
+    out.push_str(
+        "        case .i32: return { var o = 0; return try decodeI32(from: Data($0), offset: &o) }\n",
+    );
+    out.push_str(
+        "        case .u64: return { var o = 0; return try decodeVarint(from: Data($0), offset: &o) }\n",
+    );
+    out.push_str(
+        "        case .i64: return { var o = 0; return try decodeI64(from: Data($0), offset: &o) }\n",
+    );
+    out.push_str(
+        "        case .f32: return { var o = 0; return try decodeF32(from: Data($0), offset: &o) }\n",
+    );
+    out.push_str(
+        "        case .f64: return { var o = 0; return try decodeF64(from: Data($0), offset: &o) }\n",
+    );
+    out.push_str(
+        "        case .string: return { var o = 0; return try decodeString(from: Data($0), offset: &o) }\n",
+    );
+    out.push_str("        case .bytes: return { Data($0) }\n");
+    out.push_str(
+        "        default: fatalError(\"Unsupported schema for Rx deserialization: \\(schema)\")\n",
+    );
+    out.push_str("        }\n");
+    out.push_str("    }\n");
+    out.push_str("}\n\n");
+
+    out
 }
 
 #[cfg(test)]
