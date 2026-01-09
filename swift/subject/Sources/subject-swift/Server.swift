@@ -1,4 +1,5 @@
 import Foundation
+import RoamRuntime
 
 /// Server helper for running as a spec-test subject.
 public struct Server {
