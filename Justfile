@@ -8,7 +8,7 @@ rust *args:
     SUBJECT_CMD="./target/debug/subject-rust" cargo nextest run -p spec-tests {{ quote(args) }}
 
 ts-typecheck:
-    echo "TODO: re-enable typecheck (as a workspace script if possible?)"
+    pnpm check
 
 ts-codegen:
     cargo xtask codegen --typescript
