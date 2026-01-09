@@ -13,6 +13,7 @@ export {
   helloExchangeAcceptor,
   helloExchangeInitiator,
   type ServiceDispatcher,
+  type StreamingDispatcher,
   defaultHello,
 } from "@bearcove/roam-core";
 
@@ -30,4 +31,6 @@ export {
   createRawRx,
   type OutgoingMessage,
   type OutgoingPoll,
+  type TaskMessage,
+  type TaskSender,
 } from "@bearcove/roam-core";

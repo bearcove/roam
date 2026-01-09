@@ -79,8 +79,13 @@ export {
   createRawRx,
   createTypedTx,
   createTypedRx,
+  createServerTx,
+  createServerRx,
   type OutgoingMessage,
   type OutgoingPoll,
+  type TaskMessage,
+  type TaskSender,
+  type StreamContext,
 } from "./streaming/index.ts";
 
 // Transport abstraction
@@ -92,6 +97,7 @@ export {
   ConnectionError,
   type Negotiated,
   type ServiceDispatcher,
+  type StreamingDispatcher,
   helloExchangeAcceptor,
   helloExchangeInitiator,
   defaultHello,

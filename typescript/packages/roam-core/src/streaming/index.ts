@@ -15,5 +15,6 @@ export {
   type OutgoingMessage,
   type OutgoingPoll,
 } from "./registry.ts";
-export { Tx, createRawTx, createTypedTx } from "./tx.ts";
-export { Rx, createRawRx, createTypedRx } from "./rx.ts";
+export { Tx, createRawTx, createTypedTx, createServerTx } from "./tx.ts";
+export { Rx, createRawRx, createTypedRx, createServerRx } from "./rx.ts";
+export { type TaskMessage, type TaskSender, type StreamContext } from "./task.ts";

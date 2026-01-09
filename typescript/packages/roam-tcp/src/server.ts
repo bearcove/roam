@@ -9,6 +9,7 @@ import {
   helloExchangeAcceptor,
   helloExchangeInitiator,
   type ServiceDispatcher,
+  type StreamingDispatcher,
 } from "@bearcove/roam-core";
 
 /** Configuration for the server. */
@@ -95,6 +96,32 @@ export class Server {
     const conn = await this.connect(addr);
     try {
       await conn.run(dispatcher);
+    } catch (e) {
+      if (e instanceof ConnectionError && e.kind === "closed") {
+        // Clean shutdown
+        return;
+      }
+      throw e;
+    }
+  }
+
+  /**
+   * Run a single connection with a streaming dispatcher.
+   *
+   * This connects to the peer (from PEER_ADDR env var), performs handshake,
+   * and runs the streaming message loop until the connection closes.
+   *
+   * Use this when your service has streaming methods (Tx/Rx arguments).
+   */
+  async runSubjectStreaming(dispatcher: StreamingDispatcher): Promise<void> {
+    const addr = process.env.PEER_ADDR;
+    if (!addr) {
+      throw ConnectionError.dispatch("PEER_ADDR env var not set");
+    }
+
+    const conn = await this.connect(addr);
+    try {
+      await conn.runStreaming(dispatcher);
     } catch (e) {
       if (e instanceof ConnectionError && e.kind === "closed") {
         // Clean shutdown

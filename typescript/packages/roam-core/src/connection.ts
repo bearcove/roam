@@ -19,6 +19,9 @@ import {
   Rx,
   OutgoingSender,
   ChannelReceiver,
+  type TaskMessage,
+  type TaskSender,
+  createChannel,
 } from "./streaming/index.ts";
 import { type MessageTransport } from "./transport.ts";
 
@@ -138,6 +141,40 @@ export interface ServiceDispatcher {
    * - Serializing the response
    */
   dispatchUnary(methodId: bigint, payload: Uint8Array): Promise<Uint8Array>;
+}
+
+/**
+ * Streaming-aware service dispatcher.
+ *
+ * Unlike ServiceDispatcher which returns a response directly, this interface
+ * sends responses (and streaming Data/Close messages) via a TaskSender callback.
+ * This ensures proper ordering: all Data/Close messages are sent before Response.
+ */
+export interface StreamingDispatcher {
+  /**
+   * Dispatch a request that may involve streaming.
+   *
+   * The dispatcher is responsible for:
+   * - Looking up the method by method_id
+   * - Deserializing arguments from payload
+   * - Creating Rx/Tx handles for stream arguments using the registry
+   * - Calling the service method
+   * - Sending Data/Close messages for any Tx streams via taskSender
+   * - Sending the Response message via taskSender when done
+   *
+   * @param methodId - The method ID to dispatch
+   * @param payload - The request payload
+   * @param requestId - The request ID for the response
+   * @param registry - Stream registry for binding stream arguments
+   * @param taskSender - Callback to send TaskMessage (Data/Close/Response)
+   */
+  dispatch(
+    methodId: bigint,
+    payload: Uint8Array,
+    requestId: bigint,
+    registry: StreamRegistry,
+    taskSender: TaskSender,
+  ): Promise<void>;
 }
 
 /**
@@ -423,6 +460,291 @@ export class Connection<T extends MessageTransport = MessageTransport> {
       }
       // Otherwise continue waiting (might be response to different pipelined request)
     }
+  }
+
+  /**
+   * Run the message loop with a streaming-aware dispatcher.
+   *
+   * This is the main event loop that:
+   * - Receives messages from the peer
+   * - Validates them according to protocol rules
+   * - Dispatches requests to the service with stream binding
+   * - Collects TaskMessages and sends them in order (Data/Close before Response)
+   *
+   * r[impl unary.pipelining.allowed] - Handle requests as they arrive.
+   * r[impl unary.pipelining.independence] - Each request handled independently.
+   */
+  async runStreaming(dispatcher: StreamingDispatcher): Promise<void> {
+    // Queue for task messages from handlers - handlers push, we flush
+    const taskQueue: TaskMessage[] = [];
+
+    // Track in-flight handler promises
+    const inFlightHandlers: Set<Promise<void>> = new Set();
+
+    // Signal for when a handler produces output or completes (to wake up the event loop)
+    let wakeupResolve: (() => void) | null = null;
+    const signalWakeup = () => {
+      if (wakeupResolve) {
+        wakeupResolve();
+        wakeupResolve = null;
+      }
+    };
+
+    // Task sender that queues messages and signals wakeup
+    const taskSender: TaskSender = (msg) => {
+      taskQueue.push(msg);
+      signalWakeup(); // Wake up the event loop to flush
+    };
+
+    // Helper to flush task queue to wire
+    const flushTaskQueue = async () => {
+      while (taskQueue.length > 0) {
+        const msg = taskQueue.shift()!;
+        switch (msg.kind) {
+          case "data":
+            await this.io.send(encodeData(msg.channelId, msg.payload));
+            break;
+          case "close":
+            await this.io.send(encodeClose(msg.channelId));
+            break;
+          case "response":
+            await this.io.send(encodeResponse(msg.requestId, msg.payload));
+            break;
+        }
+      }
+    };
+
+    // Pending receive promise (reused across iterations)
+    let pendingRecv: Promise<
+      { kind: "message"; payload: Uint8Array | null } | { kind: "error"; error: unknown }
+    > | null = null;
+
+    while (true) {
+      // Flush any pending task messages from handlers
+      await flushTaskQueue();
+
+      // Start receiving if we don't have a pending receive
+      if (!pendingRecv) {
+        pendingRecv = this.io
+          .recvTimeout(30000)
+          .then((payload) => ({ kind: "message" as const, payload }))
+          .catch((error) => ({ kind: "error" as const, error }));
+      }
+
+      // Create a promise that resolves when a handler produces output or completes
+      const wakeupPromise = new Promise<void>((resolve) => {
+        wakeupResolve = resolve;
+      });
+
+      // Always race between recv and wakeup (for task queue flushing)
+      let recvResult:
+        | { kind: "message"; payload: Uint8Array | null }
+        | { kind: "error"; error: unknown }
+        | null = null;
+
+      const raceResult = await Promise.race([
+        pendingRecv.then((r) => ({ source: "recv" as const, result: r })),
+        wakeupPromise.then(() => ({ source: "wakeup" as const })),
+      ]);
+
+      if (raceResult.source === "wakeup") {
+        // Wakeup signal (handler output or completion) - loop again to flush and continue
+        continue;
+      }
+      recvResult = raceResult.result;
+
+      // Clear pending recv since we consumed it
+      pendingRecv = null;
+
+      if (recvResult.kind === "error") {
+        const raw = this.io.lastDecoded;
+        if (raw.length >= 2 && raw[0] === 0x00 && raw[1] !== 0x00) {
+          throw await this.goodbye("message.hello.unknown-version");
+        }
+        throw ConnectionError.io(String(recvResult.error));
+      }
+
+      const payload = recvResult.payload;
+      if (!payload) {
+        // Connection closed - wait for all in-flight handlers to complete
+        await Promise.all(inFlightHandlers);
+        await flushTaskQueue();
+        return;
+      }
+
+      try {
+        const handlerPromise = this.handleStreamingMessage(payload, dispatcher, taskSender);
+
+        // If this returned a handler promise, track it
+        if (handlerPromise) {
+          inFlightHandlers.add(handlerPromise);
+          handlerPromise.finally(() => {
+            inFlightHandlers.delete(handlerPromise);
+            signalWakeup();
+          });
+        }
+      } catch (e) {
+        if (e instanceof ConnectionError) {
+          // For protocol errors, send Goodbye before closing
+          if (e.kind === "protocol" && e.ruleId) {
+            throw await this.goodbye(e.ruleId);
+          }
+          throw e;
+        }
+        throw await this.goodbye("message.decode-error");
+      }
+    }
+  }
+
+  /**
+   * Handle a message in streaming mode.
+   *
+   * Returns a Promise for Request messages (the handler running concurrently),
+   * or undefined for other message types that are processed synchronously.
+   */
+  private handleStreamingMessage(
+    payload: Uint8Array,
+    dispatcher: StreamingDispatcher,
+    taskSender: TaskSender,
+  ): Promise<void> | undefined {
+    let offset = 0;
+    const d0 = decodeVarintNumber(payload, offset);
+    const msgDisc = d0.value;
+    offset = d0.next;
+
+    if (msgDisc === MSG_HELLO) {
+      return undefined; // Duplicate Hello after exchange - ignore
+    }
+
+    if (msgDisc === MSG_GOODBYE) {
+      throw ConnectionError.closed();
+    }
+
+    if (msgDisc === MSG_REQUEST) {
+      // Request { request_id, method_id, metadata, payload }
+      let tmp = decodeVarint(payload, offset);
+      const requestId = tmp.value;
+      offset = tmp.next;
+
+      tmp = decodeVarint(payload, offset);
+      const methodId = tmp.value;
+      offset = tmp.next;
+
+      // Skip metadata
+      const mdLen = decodeVarintNumber(payload, offset);
+      offset = mdLen.next;
+      for (let i = 0; i < mdLen.value; i++) {
+        const kLen = decodeVarintNumber(payload, offset);
+        offset = kLen.next + kLen.value;
+        const vDisc = decodeVarintNumber(payload, offset);
+        offset = vDisc.next;
+        if (vDisc.value === 0) {
+          const sLen = decodeVarintNumber(payload, offset);
+          offset = sLen.next + sLen.value;
+        } else if (vDisc.value === 1) {
+          const bLen = decodeVarintNumber(payload, offset);
+          offset = bLen.next + bLen.value;
+        } else if (vDisc.value === 2) {
+          const u = decodeVarint(payload, offset);
+          offset = u.next;
+        } else {
+          throw new Error("unknown MetadataValue");
+        }
+      }
+
+      // payload: bytes
+      const pLen = decodeVarintNumber(payload, offset);
+      offset = pLen.next;
+
+      // r[impl flow.unary.payload-limit] - Validate payload size
+      const payloadViolation = this.validatePayloadSize(pLen.value);
+      if (payloadViolation) {
+        throw ConnectionError.protocol(payloadViolation, "payload exceeds max size");
+      }
+
+      const start = offset;
+      const end = start + pLen.value;
+      if (end > payload.length) throw new Error("request payload overrun");
+      const payloadBytes = payload.subarray(start, end);
+
+      // Dispatch with streaming support - return the promise, don't await it!
+      // This allows the handler to run concurrently while we continue receiving messages.
+      return dispatcher.dispatch(
+        methodId,
+        payloadBytes,
+        requestId,
+        this.streamRegistry,
+        taskSender,
+      );
+    }
+
+    // Handle other message types (Data, Close, etc.) synchronously
+    if (msgDisc === MSG_RESPONSE) {
+      return undefined;
+    }
+
+    if (msgDisc === MSG_DATA) {
+      const sid = decodeVarint(payload, offset);
+      offset = sid.next;
+      if (sid.value === 0n) {
+        // Can't send goodbye synchronously - throw protocol error
+        throw ConnectionError.protocol("streaming.id.zero-reserved", "stream ID 0 is reserved");
+      }
+      const pLen = decodeVarintNumber(payload, offset);
+      offset = pLen.next;
+      const dataPayload = payload.subarray(offset, offset + pLen.value);
+      try {
+        this.streamRegistry.routeData(sid.value, dataPayload);
+      } catch (e) {
+        if (e instanceof StreamError) {
+          if (e.kind === "unknown") {
+            throw ConnectionError.protocol("streaming.unknown", "unknown stream ID");
+          }
+          if (e.kind === "dataAfterClose") {
+            throw ConnectionError.protocol("streaming.data-after-close", "data after close");
+          }
+        }
+        throw e;
+      }
+      return undefined;
+    }
+
+    if (msgDisc === MSG_CLOSE) {
+      const sid = decodeVarint(payload, offset);
+      if (sid.value === 0n) {
+        throw ConnectionError.protocol("streaming.id.zero-reserved", "stream ID 0 is reserved");
+      }
+      if (!this.streamRegistry.contains(sid.value)) {
+        throw ConnectionError.protocol("streaming.unknown", "unknown stream ID");
+      }
+      this.streamRegistry.close(sid.value);
+      return undefined;
+    }
+
+    if (msgDisc === MSG_RESET) {
+      const sid = decodeVarint(payload, offset);
+      if (sid.value === 0n) {
+        throw ConnectionError.protocol("streaming.id.zero-reserved", "stream ID 0 is reserved");
+      }
+      if (!this.streamRegistry.contains(sid.value)) {
+        throw ConnectionError.protocol("streaming.unknown", "unknown stream ID");
+      }
+      this.streamRegistry.close(sid.value);
+      return undefined;
+    }
+
+    if (msgDisc === MSG_CREDIT) {
+      const sid = decodeVarint(payload, offset);
+      if (sid.value === 0n) {
+        throw ConnectionError.protocol("streaming.id.zero-reserved", "stream ID 0 is reserved");
+      }
+      if (!this.streamRegistry.contains(sid.value)) {
+        throw ConnectionError.protocol("streaming.unknown", "unknown stream ID");
+      }
+      return undefined;
+    }
+
+    return undefined; // Unknown message type - ignore
   }
 
   /**

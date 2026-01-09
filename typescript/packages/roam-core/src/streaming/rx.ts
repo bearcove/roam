@@ -4,6 +4,15 @@ import { type StreamId, StreamError } from "./types.ts";
 import { ChannelReceiver } from "./channel.ts";
 
 /**
+ * Receiver abstraction for Rx streams.
+ *
+ * Both client and server side use the same ChannelReceiver,
+ * but the channel is set up differently:
+ * - Client side: Created via Connection.createRx(), data routed from incoming messages
+ * - Server side: Created in dispatch, channel registered for incoming Data routing
+ */
+
+/**
  * Rx stream handle - caller receives data from callee.
  *
  * r[impl streaming.caller-pov] - From caller's perspective, Rx means "I receive".
@@ -76,6 +85,24 @@ export function createRawRx(
  * r[impl streaming.type] - Rx serializes as stream_id on wire.
  */
 export function createTypedRx<T>(
+  streamId: StreamId,
+  receiver: ChannelReceiver<Uint8Array>,
+  deserialize: (bytes: Uint8Array) => T,
+): Rx<T> {
+  return new Rx(streamId, receiver, deserialize);
+}
+
+/**
+ * Create a server-side Rx stream.
+ *
+ * Used by generated dispatch code to hydrate Rx arguments.
+ * The channel is registered with the stream registry for Data routing.
+ *
+ * @param streamId - The stream ID from the wire (allocated by caller)
+ * @param receiver - Channel receiver for incoming Data payloads
+ * @param deserialize - Function to deserialize bytes to values
+ */
+export function createServerRx<T>(
   streamId: StreamId,
   receiver: ChannelReceiver<Uint8Array>,
   deserialize: (bytes: Uint8Array) => T,

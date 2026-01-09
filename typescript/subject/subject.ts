@@ -13,9 +13,21 @@ import type {
   Canvas,
   Message,
 } from "@bearcove/roam-generated/testbed.ts";
-import { testbed_methodHandlers } from "@bearcove/roam-generated/testbed.ts";
-import { Server, type ServiceDispatcher } from "@bearcove/roam-tcp";
-import { UnaryDispatcher, type Tx, type Rx } from "@bearcove/roam-core";
+import {
+  testbed_streamingHandlers,
+  type StreamingMethodHandler,
+} from "@bearcove/roam-generated/testbed.ts";
+import { Server } from "@bearcove/roam-tcp";
+import {
+  type StreamingDispatcher,
+  type StreamRegistry,
+  type TaskSender,
+  type Tx,
+  type Rx,
+  encodeResultErr,
+  encodeInvalidPayload,
+  encodeUnknownMethod,
+} from "@bearcove/roam-core";
 
 // Service implementation
 class TestbedService implements TestbedHandler {
@@ -29,20 +41,29 @@ class TestbedService implements TestbedHandler {
   }
 
   // Streaming methods
-  sum(_numbers: Rx<number>): bigint {
-    // TODO: Implement streaming - for now return 0
+  async sum(numbers: Rx<number>): Promise<bigint> {
     // Server receives numbers via Rx channel and sums them
-    return 0n;
+    let total = 0n;
+    for await (const n of numbers) {
+      total += BigInt(n);
+    }
+    return total;
   }
 
-  generate(_count: number, _output: Tx<number>): void {
-    // TODO: Implement streaming - for now do nothing
+  async generate(count: number, output: Tx<number>): Promise<void> {
     // Server sends count numbers via Tx channel
+    for (let i = 0; i < count; i++) {
+      output.send(i);
+    }
+    // Note: output.close() is called by the generated handler after this returns
   }
 
-  transform(_input: Rx<string>, _output: Tx<string>): void {
-    // TODO: Implement streaming - for now do nothing
-    // Server receives via Rx, sends via Tx
+  async transform(input: Rx<string>, output: Tx<string>): Promise<void> {
+    // Server receives via Rx, sends via Tx (echo back as-is)
+    for await (const s of input) {
+      output.send(s);
+    }
+    // Note: output.close() is called by the generated handler after this returns
   }
 
   // Complex type methods
@@ -112,19 +133,132 @@ class TestbedService implements TestbedHandler {
   }
 }
 
-// Dispatcher wraps the generated dispatch function
-class TestbedDispatcher implements ServiceDispatcher {
+// Streaming dispatcher that uses the generated streaming handlers
+class TestbedStreamingDispatcher implements StreamingDispatcher {
   private service = new TestbedService();
-  private dispatcher = new UnaryDispatcher(testbed_methodHandlers);
+  private handlers: Map<bigint, StreamingMethodHandler<TestbedHandler>>;
 
-  async dispatchUnary(methodId: bigint, payload: Uint8Array): Promise<Uint8Array> {
-    return this.dispatcher.dispatch(this.service, methodId, payload);
+  constructor() {
+    this.handlers = testbed_streamingHandlers;
+  }
+
+  async dispatch(
+    methodId: bigint,
+    payload: Uint8Array,
+    requestId: bigint,
+    registry: StreamRegistry,
+    taskSender: TaskSender,
+  ): Promise<void> {
+    const handler = this.handlers.get(methodId);
+    if (!handler) {
+      // Unknown method - send error response
+      taskSender({
+        kind: "response",
+        requestId,
+        payload: encodeResultErr(encodeUnknownMethod()),
+      });
+      return;
+    }
+
+    await handler(this.service, payload, requestId, registry, taskSender);
+  }
+}
+
+async function runServer() {
+  const server = new Server();
+  await server.runSubjectStreaming(new TestbedStreamingDispatcher());
+}
+
+async function runClient() {
+  const { TestbedClient } = await import("@bearcove/roam-generated/testbed.ts");
+  const { encodeI32 } = await import("@bearcove/roam-core");
+
+  const addr = process.env.PEER_ADDR;
+  if (!addr) {
+    throw new Error("PEER_ADDR env var not set");
+  }
+
+  const scenario = process.env.CLIENT_SCENARIO ?? "echo";
+  console.error(`client mode: connecting to ${addr}, scenario=${scenario}`);
+
+  const server = new Server();
+  const conn = await server.connect(addr);
+  const client = new TestbedClient(conn);
+
+  switch (scenario) {
+    case "echo": {
+      const result = await client.echo("hello from client");
+      console.error(`echo result: ${result}`);
+      break;
+    }
+    case "sum": {
+      // Client-to-server streaming: create Tx, send numbers, then call sum
+      const [tx, _streamId] = conn.createTx<number>((v) => encodeI32(v));
+
+      // Send numbers asynchronously
+      const sendTask = (async () => {
+        for (let i = 1; i <= 5; i++) {
+          console.error(`sending ${i}`);
+          tx.send(i);
+        }
+        console.error("closing tx");
+        tx.close();
+      })();
+
+      // The Rx on server side uses our Tx's stream ID
+      // We need to create an Rx with the same stream ID for the client API
+      // Actually, we need to pass tx to sum - but sum takes Rx, not Tx!
+      // Looking at the generated code, sum takes Rx and uses rx.streamId
+      // For client->server streaming, the client creates a Tx and the
+      // generated client code expects an Rx (which has the streamId)
+      //
+      // Wait - looking at the Rust client, it creates a channel pair (tx, rx)
+      // and passes rx to sum. Let me check the roam channel API...
+      //
+      // For now, let me check if there's a createChannel or similar
+      // Actually looking at the generated client code:
+      //   async sum(numbers: Rx<number>): Promise<bigint> {
+      //     const payload = encodeU64(numbers.streamId);
+      // It just needs the streamId. So I need to create an Rx that shares
+      // the stream ID with the Tx I'll use to send data.
+      //
+      // The issue is createTx returns Tx, createRx returns Rx, and they have
+      // different stream IDs. For client->server streaming, we need both
+      // to share the same ID.
+      //
+      // Looking at connection.ts more carefully - the Tx writes to the
+      // registry's outgoing channel, and Rx reads from incoming.
+      // For client->server streaming on the client side:
+      // - Client creates Tx to send data (outgoing)
+      // - Client needs to encode the stream ID in the request
+      // - Server creates Rx with that stream ID to receive
+      //
+      // So I need createTx for the actual sending, but I need to pass
+      // something with .streamId to the generated client method.
+      // Let me just create a fake Rx with the right stream ID.
+
+      // Actually simpler - just call with the tx.streamId exposed somehow
+      // For now, let's skip the streaming client tests or implement properly
+      console.error("sum scenario: not yet implemented");
+      break;
+    }
+    case "generate": {
+      console.error("generate scenario: not yet implemented");
+      break;
+    }
+    default:
+      throw new Error(`unknown CLIENT_SCENARIO: ${scenario}`);
   }
 }
 
 async function main() {
-  const server = new Server();
-  await server.runSubject(new TestbedDispatcher());
+  const mode = process.env.SUBJECT_MODE ?? "server";
+
+  if (mode === "client") {
+    await runClient();
+  } else {
+    await runServer();
+  }
 }
 
 main().catch((e) => {

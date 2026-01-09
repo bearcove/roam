@@ -338,8 +338,12 @@ pub fn generate_service(service: &ServiceDetail) -> String {
     });
 
     if has_streaming {
-        out.push_str("import { Tx, Rx } from \"@bearcove/roam-core\";\n");
-        out.push_str("import type { StreamId } from \"@bearcove/roam-core\";\n");
+        out.push_str(
+            "import { Tx, Rx, createServerTx, createServerRx } from \"@bearcove/roam-core\";\n",
+        );
+        out.push_str(
+            "import type { StreamId, StreamRegistry, TaskSender } from \"@bearcove/roam-core\";\n",
+        );
     }
     out.push('\n');
 
@@ -575,13 +579,25 @@ fn generate_handler_interface(service: &ServiceDetail) -> String {
 
     out.push_str("}\n\n");
 
-    // Generate method handlers map
+    // Check if any method uses streaming
+    let has_streaming = service.methods.iter().any(|m| {
+        m.args.iter().any(|a| is_tx(a.ty) || is_rx(a.ty))
+            || is_tx(m.return_type)
+            || is_rx(m.return_type)
+    });
+
+    // Generate unary method handlers map (for non-streaming or backward compatibility)
     out.push_str(&format!("// Method handlers for {service_name}\n"));
     out.push_str(&format!("export const {}_methodHandlers = new Map<bigint, MethodHandler<{service_name}Handler>>([\n", service_name.to_lower_camel_case()));
 
     for method in &service.methods {
         let method_name = method.method_name.to_lower_camel_case();
         let id = crate::method_id(method);
+
+        // Check if this method uses streaming
+        let method_has_streaming = method.args.iter().any(|a| is_tx(a.ty) || is_rx(a.ty))
+            || is_tx(method.return_type)
+            || is_rx(method.return_type);
 
         out.push_str(&format!(
             "  [{}n, async (handler, payload) => {{\n",
@@ -593,13 +609,12 @@ fn generate_handler_interface(service: &ServiceDetail) -> String {
         let can_decode_args = method.args.iter().all(|a| is_fully_supported(a.ty));
         let can_encode_return = is_fully_supported(method.return_type);
 
-        if can_decode_args && can_encode_return {
-            // Decode all arguments
+        if can_decode_args && can_encode_return && !method_has_streaming {
+            // Non-streaming method - decode and call directly
             out.push_str("      const buf = payload;\n");
             out.push_str("      let offset = 0;\n");
             for arg in &method.args {
                 let arg_name = arg.name.to_lower_camel_case();
-                // Use server-side decode
                 let decode_stmt = generate_decode_stmt_server(arg.ty, &arg_name, "offset");
                 out.push_str(&format!("      {decode_stmt}\n"));
             }
@@ -607,7 +622,6 @@ fn generate_handler_interface(service: &ServiceDetail) -> String {
                 "      if (offset !== buf.length) throw new Error(\"args: trailing bytes\");\n",
             );
 
-            // Call handler
             let arg_names = method
                 .args
                 .iter()
@@ -618,12 +632,13 @@ fn generate_handler_interface(service: &ServiceDetail) -> String {
                 "      const result = await handler.{method_name}({arg_names});\n"
             ));
 
-            // Encode response
             let encode_expr = generate_encode_expr(method.return_type, "result");
             out.push_str(&format!("      return encodeResultOk({encode_expr});\n"));
         } else {
-            // Streaming or unsupported - return error
-            out.push_str("      // TODO: implement encoding/decoding for streaming types\n");
+            // Streaming method - must use streaming dispatcher
+            out.push_str(
+                "      // Streaming method - use streamingDispatch() instead of unary dispatch\n",
+            );
             out.push_str("      return encodeResultErr(encodeInvalidPayload());\n");
         }
 
@@ -633,9 +648,238 @@ fn generate_handler_interface(service: &ServiceDetail) -> String {
         out.push_str("  }],\n");
     }
 
+    out.push_str("]);\n\n");
+
+    // Generate streaming method handlers if any method uses streaming
+    if has_streaming {
+        out.push_str(&generate_streaming_handlers(service));
+    }
+
+    out
+}
+
+/// Generate streaming method handlers.
+///
+/// These handlers receive the registry and taskSender to properly bind streams.
+fn generate_streaming_handlers(service: &ServiceDetail) -> String {
+    let mut out = String::new();
+    let service_name = service.name.to_upper_camel_case();
+    let service_name_lower = service.name.to_lower_camel_case();
+
+    // Type for streaming method handler
+    out.push_str(&format!(
+        "// Streaming method handler type for {service_name}\n"
+    ));
+    out.push_str(&format!(
+        "export type StreamingMethodHandler<H> = (\n  handler: H,\n  payload: Uint8Array,\n  requestId: bigint,\n  registry: StreamRegistry,\n  taskSender: TaskSender,\n) => Promise<void>;\n\n"
+    ));
+
+    // Generate streaming handlers map
+    out.push_str(&format!(
+        "// Streaming method handlers for {service_name}\n"
+    ));
+    out.push_str(&format!(
+        "export const {service_name_lower}_streamingHandlers = new Map<bigint, StreamingMethodHandler<{service_name}Handler>>([\n"
+    ));
+
+    for method in &service.methods {
+        let method_name = method.method_name.to_lower_camel_case();
+        let id = crate::method_id(method);
+
+        out.push_str(&format!(
+            "  [{}n, async (handler, payload, requestId, registry, taskSender) => {{\n",
+            hex_u64(id)
+        ));
+        out.push_str("    try {\n");
+        out.push_str("      const buf = payload;\n");
+        out.push_str("      let offset = 0;\n");
+
+        // Decode all arguments with proper stream binding
+        for arg in &method.args {
+            let arg_name = arg.name.to_lower_camel_case();
+            let decode_stmt = generate_decode_stmt_server_streaming(
+                arg.ty,
+                &arg_name,
+                "offset",
+                "registry",
+                "taskSender",
+            );
+            out.push_str(&format!("      {decode_stmt}\n"));
+        }
+        out.push_str(
+            "      if (offset !== buf.length) throw new Error(\"args: trailing bytes\");\n",
+        );
+
+        // Call handler
+        let arg_names = method
+            .args
+            .iter()
+            .map(|a| a.name.to_lower_camel_case())
+            .collect::<Vec<_>>()
+            .join(", ");
+        out.push_str(&format!(
+            "      const result = await handler.{method_name}({arg_names});\n"
+        ));
+
+        // Close any Tx streams that were passed as arguments
+        for arg in &method.args {
+            if is_tx(arg.ty) {
+                let arg_name = arg.name.to_lower_camel_case();
+                out.push_str(&format!("      {arg_name}.close();\n"));
+            }
+        }
+
+        // Encode and send response via taskSender
+        let encode_expr = generate_encode_expr(method.return_type, "result");
+        out.push_str(&format!(
+            "      taskSender({{ kind: 'response', requestId, payload: encodeResultOk({encode_expr}) }});\n"
+        ));
+
+        out.push_str("    } catch (e) {\n");
+        out.push_str(
+            "      taskSender({ kind: 'response', requestId, payload: encodeResultErr(encodeInvalidPayload()) });\n",
+        );
+        out.push_str("    }\n");
+        out.push_str("  }],\n");
+    }
+
     out.push_str("]);\n");
 
     out
+}
+
+/// Generate decode statement for server-side streaming context.
+/// Creates real Tx/Rx handles using the registry and taskSender.
+fn generate_decode_stmt_server_streaming(
+    shape: &'static Shape,
+    var_name: &str,
+    offset_var: &str,
+    registry_var: &str,
+    task_sender_var: &str,
+) -> String {
+    match classify_shape(shape) {
+        ShapeKind::Tx { inner } => {
+            // Server sends data to client via Tx
+            // Decode channel_id, create server-side Tx with taskSender
+            let inner_type = ts_type_server_arg(inner);
+            let encode_fn = generate_encode_fn_inline(inner);
+            format!(
+                "const _{var_name}_r = decodeU64(buf, {offset_var}); \
+                 const {var_name} = createServerTx<{inner_type}>(_{var_name}_r.value, {task_sender_var}, {encode_fn}); \
+                 {offset_var} = _{var_name}_r.next;"
+            )
+        }
+        ShapeKind::Rx { inner } => {
+            // Server receives data from client via Rx
+            // Decode channel_id, register for incoming (creates channel), create Rx with receiver
+            let inner_type = ts_type_server_arg(inner);
+            let decode_fn = generate_decode_fn_inline(inner);
+            format!(
+                "const _{var_name}_r = decodeU64(buf, {offset_var}); \
+                 const _{var_name}_receiver = {registry_var}.registerIncoming(_{var_name}_r.value); \
+                 const {var_name} = createServerRx<{inner_type}>(_{var_name}_r.value, _{var_name}_receiver, {decode_fn}); \
+                 {offset_var} = _{var_name}_r.next;"
+            )
+        }
+        // For non-streaming types, use the regular decode
+        _ => generate_decode_stmt(shape, var_name, offset_var),
+    }
+}
+
+/// Generate an inline encode function for a type.
+fn generate_encode_fn_inline(shape: &'static Shape) -> String {
+    // Check for bytes first
+    if is_bytes(shape) {
+        return "(v: Uint8Array) => v".into();
+    }
+
+    match classify_shape(shape) {
+        ShapeKind::Scalar(scalar) => encode_scalar_fn_inline(scalar),
+        ShapeKind::Struct(StructInfo { fields, .. }) => {
+            if fields.is_empty() {
+                return "(v: any) => new Uint8Array(0)".into();
+            }
+            let parts: Vec<_> = fields
+                .iter()
+                .map(|f| generate_encode_expr(f.shape(), &format!("v.{}", f.name)))
+                .collect();
+            if parts.len() == 1 {
+                format!("(v: any) => {}", parts[0])
+            } else {
+                format!("(v: any) => concat({})", parts.join(", "))
+            }
+        }
+        _ => {
+            // Fallback: generate inline encode expression
+            let encode_expr = generate_encode_expr(shape, "v");
+            format!("(v: any) => {encode_expr}")
+        }
+    }
+}
+
+/// Generate inline encode function for scalars.
+fn encode_scalar_fn_inline(scalar: ScalarType) -> String {
+    match scalar {
+        ScalarType::Bool => "(v: boolean) => encodeBool(v)".into(),
+        ScalarType::U8 => "(v: number) => encodeU8(v)".into(),
+        ScalarType::I8 => "(v: number) => encodeI8(v)".into(),
+        ScalarType::U16 => "(v: number) => encodeU16(v)".into(),
+        ScalarType::I16 => "(v: number) => encodeI16(v)".into(),
+        ScalarType::U32 => "(v: number) => encodeU32(v)".into(),
+        ScalarType::I32 => "(v: number) => encodeI32(v)".into(),
+        ScalarType::U64 | ScalarType::USize => "(v: bigint) => encodeU64(v)".into(),
+        ScalarType::I64 | ScalarType::ISize => "(v: bigint) => encodeI64(v)".into(),
+        ScalarType::F32 => "(v: number) => encodeF32(v)".into(),
+        ScalarType::F64 => "(v: number) => encodeF64(v)".into(),
+        ScalarType::Char | ScalarType::Str | ScalarType::String | ScalarType::CowStr => {
+            "(v: string) => encodeString(v)".into()
+        }
+        ScalarType::Unit => "(v: void) => new Uint8Array(0)".into(),
+        _ => "(v: any) => new Uint8Array(0)".into(),
+    }
+}
+
+/// Generate an inline decode function for a type.
+fn generate_decode_fn_inline(shape: &'static Shape) -> String {
+    // Check for bytes first
+    if is_bytes(shape) {
+        return "(bytes: Uint8Array) => bytes".into();
+    }
+
+    match classify_shape(shape) {
+        ShapeKind::Scalar(scalar) => decode_scalar_fn_inline(scalar),
+        _ => {
+            // For complex types, generate a function that decodes from offset 0
+            let decode_fn = generate_decode_fn(shape, "v");
+            format!("(bytes: Uint8Array) => ({decode_fn})(bytes, 0).value")
+        }
+    }
+}
+
+/// Generate inline decode function for scalars.
+fn decode_scalar_fn_inline(scalar: ScalarType) -> String {
+    match scalar {
+        ScalarType::Bool => "(bytes: Uint8Array) => decodeBool(bytes, 0).value".into(),
+        ScalarType::U8 => "(bytes: Uint8Array) => decodeU8(bytes, 0).value".into(),
+        ScalarType::I8 => "(bytes: Uint8Array) => decodeI8(bytes, 0).value".into(),
+        ScalarType::U16 => "(bytes: Uint8Array) => decodeU16(bytes, 0).value".into(),
+        ScalarType::I16 => "(bytes: Uint8Array) => decodeI16(bytes, 0).value".into(),
+        ScalarType::U32 => "(bytes: Uint8Array) => decodeU32(bytes, 0).value".into(),
+        ScalarType::I32 => "(bytes: Uint8Array) => decodeI32(bytes, 0).value".into(),
+        ScalarType::U64 | ScalarType::USize => {
+            "(bytes: Uint8Array) => decodeU64(bytes, 0).value".into()
+        }
+        ScalarType::I64 | ScalarType::ISize => {
+            "(bytes: Uint8Array) => decodeI64(bytes, 0).value".into()
+        }
+        ScalarType::F32 => "(bytes: Uint8Array) => decodeF32(bytes, 0).value".into(),
+        ScalarType::F64 => "(bytes: Uint8Array) => decodeF64(bytes, 0).value".into(),
+        ScalarType::Char | ScalarType::Str | ScalarType::String | ScalarType::CowStr => {
+            "(bytes: Uint8Array) => decodeString(bytes, 0).value".into()
+        }
+        ScalarType::Unit => "(bytes: Uint8Array) => undefined".into(),
+        _ => "(bytes: Uint8Array) => undefined".into(),
+    }
 }
 
 /// Convert Shape to TypeScript type string for client arguments.
