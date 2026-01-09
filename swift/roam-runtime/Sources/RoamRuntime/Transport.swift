@@ -11,9 +11,9 @@ import os
 private let debugEnabled = ProcessInfo.processInfo.environment["ROAM_DEBUG"] != nil
 private let logger = Logger(subsystem: "com.bearcove.roam", category: "transport")
 
-func debugLog(_ message: @autoclosure () -> String) {
+func debugLog(_ message: String) {
     if debugEnabled {
-        logger.debug("\(message())")
+        logger.debug("\(message)")
     }
 }
 

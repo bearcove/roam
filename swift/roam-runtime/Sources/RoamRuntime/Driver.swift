@@ -30,7 +30,7 @@ public protocol ServiceDispatcher: Sendable {
 // MARK: - Handle Command
 
 /// Commands from ConnectionHandle to Driver.
-enum HandleCommand: Sendable {
+public enum HandleCommand: Sendable {
     case call(
         requestId: UInt64,
         methodId: UInt64,
@@ -41,11 +41,21 @@ enum HandleCommand: Sendable {
 
 // MARK: - Connection Handle
 
+/// Actor for allocating request IDs.
+private actor RequestIdAllocator {
+    private var nextId: UInt64 = 1
+
+    func allocate() -> UInt64 {
+        let id = nextId
+        nextId += 1
+        return id
+    }
+}
+
 /// Handle for making outgoing RPC calls.
 public final class ConnectionHandle: @unchecked Sendable {
     private let commandTx: @Sendable (HandleCommand) -> Void
-    private var nextRequestId: UInt64 = 1
-    private let lock = NSLock()
+    private let requestIdAllocator = RequestIdAllocator()
 
     public let channelAllocator: ChannelIdAllocator
     public let channelRegistry: ChannelRegistry
@@ -61,7 +71,7 @@ public final class ConnectionHandle: @unchecked Sendable {
 
     /// Make a raw RPC call.
     public func callRaw(methodId: UInt64, payload: [UInt8]) async throws -> [UInt8] {
-        let requestId = allocateRequestId()
+        let requestId = await requestIdAllocator.allocate()
 
         return try await withCheckedThrowingContinuation { cont in
             let responseTx: @Sendable (Result<[UInt8], ConnectionError>) -> Void = { result in
@@ -76,34 +86,74 @@ public final class ConnectionHandle: @unchecked Sendable {
                 ))
         }
     }
+}
 
-    private func allocateRequestId() -> UInt64 {
-        lock.lock()
-        defer { lock.unlock() }
-        let id = nextRequestId
-        nextRequestId += 1
-        return id
-    }
+// MARK: - Driver Event
+
+/// Events the driver processes in its run loop.
+private enum DriverEvent: Sendable {
+    case incomingMessage(Message)
+    case taskMessage(TaskMessage)
+    case command(HandleCommand)
+    case transportClosed
 }
 
 // MARK: - Driver
 
+// MARK: - Driver State Actor
+
+/// Actor that holds mutable driver state to avoid NSLock in async contexts.
+private actor DriverState {
+    var pendingResponses: [UInt64: @Sendable (Result<[UInt8], ConnectionError>) -> Void] = [:]
+    var inFlightRequests: Set<UInt64> = []
+
+    func addPendingResponse(
+        _ requestId: UInt64,
+        _ handler: @escaping @Sendable (Result<[UInt8], ConnectionError>) -> Void
+    ) {
+        pendingResponses[requestId] = handler
+    }
+
+    func removePendingResponse(_ requestId: UInt64) -> (
+        @Sendable (Result<[UInt8], ConnectionError>) -> Void
+    )? {
+        pendingResponses.removeValue(forKey: requestId)
+    }
+
+    func addInFlight(_ requestId: UInt64) -> Bool {
+        inFlightRequests.insert(requestId).inserted
+    }
+
+    func removeInFlight(_ requestId: UInt64) -> Bool {
+        inFlightRequests.remove(requestId) != nil
+    }
+
+    func failAllPending() -> [UInt64: @Sendable (Result<[UInt8], ConnectionError>) -> Void] {
+        let responses = pendingResponses
+        pendingResponses.removeAll()
+        return responses
+    }
+}
+
 /// Bidirectional connection driver.
-public actor Driver {
+///
+/// Uses AsyncStream to multiplex between:
+/// - Incoming messages from transport
+/// - Task messages from handlers (Data/Close/Response)
+/// - Commands from ConnectionHandle
+public final class Driver: @unchecked Sendable {
     private let transport: any MessageTransport
     private let dispatcher: any ServiceDispatcher
     private let role: Role
     private let negotiated: Negotiated
-
     private let handle: ConnectionHandle
-    private var commandQueue: [(HandleCommand, CheckedContinuation<Void, Never>)] = []
 
     private let serverRegistry: ChannelRegistry
-    private var pendingResponses: [UInt64: @Sendable (Result<[UInt8], ConnectionError>) -> Void] =
-        [:]
-    private var inFlightRequests: Set<UInt64> = []
+    private let state: DriverState
 
-    private var taskQueue: [TaskMessage] = []
+    // Event stream for multiplexing
+    private let eventContinuation: AsyncStream<DriverEvent>.Continuation
+    private let eventStream: AsyncStream<DriverEvent>
 
     public init(
         transport: any MessageTransport,
@@ -118,50 +168,98 @@ public actor Driver {
         self.negotiated = negotiated
         self.handle = handle
         self.serverRegistry = ChannelRegistry()
+        self.state = DriverState()
+
+        // Create event stream
+        var continuation: AsyncStream<DriverEvent>.Continuation!
+        self.eventStream = AsyncStream { cont in
+            continuation = cont
+        }
+        self.eventContinuation = continuation
+    }
+
+    /// Internal initializer with external event stream (for proper wiring).
+    fileprivate init(
+        transport: any MessageTransport,
+        dispatcher: any ServiceDispatcher,
+        role: Role,
+        negotiated: Negotiated,
+        handle: ConnectionHandle,
+        eventStream: AsyncStream<DriverEvent>,
+        eventContinuation: AsyncStream<DriverEvent>.Continuation
+    ) {
+        self.transport = transport
+        self.dispatcher = dispatcher
+        self.role = role
+        self.negotiated = negotiated
+        self.handle = handle
+        self.serverRegistry = ChannelRegistry()
+        self.state = DriverState()
+        self.eventStream = eventStream
+        self.eventContinuation = eventContinuation
+    }
+
+    /// Get the task sender for handlers to send responses.
+    public func taskSender() -> @Sendable (TaskMessage) -> Void {
+        let cont = eventContinuation
+        return { msg in
+            cont.yield(.taskMessage(msg))
+        }
+    }
+
+    /// Get the command sender for ConnectionHandle.
+    func commandSender() -> @Sendable (HandleCommand) -> Void {
+        let cont = eventContinuation
+        return { cmd in
+            cont.yield(.command(cmd))
+        }
     }
 
     /// Run the driver until connection closes.
     public func run() async throws {
-        while true {
-            // Process any pending task messages first
-            while !taskQueue.isEmpty {
-                let msg = taskQueue.removeFirst()
-                try await handleTaskMessage(msg)
+        // Start transport reader task
+        let cont = eventContinuation
+        let transport = self.transport
+        let readerTask = Task {
+            do {
+                while true {
+                    if let msg = try await transport.recv() {
+                        cont.yield(.incomingMessage(msg))
+                    } else {
+                        cont.yield(.transportClosed)
+                        break
+                    }
+                }
+            } catch {
+                cont.yield(.transportClosed)
             }
+        }
 
-            // Then check for incoming messages
-            guard let message = try await transport.recv() else {
-                // EOF - clean shutdown
-                failAllPending()
+        defer {
+            readerTask.cancel()
+            eventContinuation.finish()
+        }
+
+        // Process events
+        for await event in eventStream {
+            switch event {
+            case .incomingMessage(let msg):
+                try await handleMessage(msg)
+
+            case .taskMessage(let msg):
+                try await handleTaskMessage(msg)
+
+            case .command(let cmd):
+                await handleCommand(cmd)
+
+            case .transportClosed:
+                await failAllPending()
                 return
             }
-
-            try await handleMessage(message)
         }
     }
 
-    /// Queue a command from the handle.
-    func enqueueCommand(_ cmd: HandleCommand) {
-        switch cmd {
-        case .call(let requestId, let methodId, let payload, let responseTx):
-            pendingResponses[requestId] = responseTx
-            Task {
-                let msg = Message.request(
-                    requestId: requestId,
-                    methodId: methodId,
-                    metadata: [],
-                    payload: payload
-                )
-                try? await transport.send(msg)
-            }
-        }
-    }
-
-    /// Queue a task message (Data/Close/Response from handlers).
-    func enqueueTaskMessage(_ msg: TaskMessage) {
-        taskQueue.append(msg)
-    }
-
+    /// Handle a task message from a handler.
     private func handleTaskMessage(_ msg: TaskMessage) async throws {
         let wireMsg: Message
         switch msg {
@@ -170,7 +268,8 @@ public actor Driver {
         case .close(let channelId):
             wireMsg = .close(channelId: channelId)
         case .response(let requestId, let payload):
-            guard inFlightRequests.remove(requestId) != nil else {
+            let wasInFlight = await state.removeInFlight(requestId)
+            guard wasInFlight else {
                 return  // Already cancelled
             }
             wireMsg = .response(requestId: requestId, metadata: [], payload: payload)
@@ -178,6 +277,23 @@ public actor Driver {
         try await transport.send(wireMsg)
     }
 
+    /// Handle a command from ConnectionHandle.
+    private func handleCommand(_ cmd: HandleCommand) async {
+        switch cmd {
+        case .call(let requestId, let methodId, let payload, let responseTx):
+            await state.addPendingResponse(requestId, responseTx)
+
+            let msg = Message.request(
+                requestId: requestId,
+                methodId: methodId,
+                metadata: [],
+                payload: payload
+            )
+            try? await transport.send(msg)
+        }
+    }
+
+    /// Handle an incoming message.
     private func handleMessage(_ msg: Message) async throws {
         switch msg {
         case .hello:
@@ -185,16 +301,15 @@ public actor Driver {
             break
 
         case .goodbye(let reason):
-            failAllPending()
+            await failAllPending()
             throw ConnectionError.goodbye(reason: reason)
 
         case .request(let requestId, let methodId, _, let payload):
             try await handleRequest(requestId: requestId, methodId: methodId, payload: payload)
 
         case .response(let requestId, _, let payload):
-            if let responseTx = pendingResponses.removeValue(forKey: requestId) {
-                responseTx(.success(payload))
-            }
+            let responseTx = await state.removePendingResponse(requestId)
+            responseTx?(.success(payload))
 
         case .cancel:
             // TODO: implement cancellation
@@ -219,7 +334,9 @@ public actor Driver {
 
     private func handleRequest(requestId: UInt64, methodId: UInt64, payload: [UInt8]) async throws {
         // Check for duplicate
-        guard inFlightRequests.insert(requestId).inserted else {
+        let inserted = await state.addInFlight(requestId)
+
+        guard inserted else {
             try await sendGoodbye("unary.request-id.duplicate-detection")
             throw ConnectionError.protocolViolation(rule: "unary.request-id.duplicate-detection")
         }
@@ -230,12 +347,8 @@ public actor Driver {
             throw ConnectionError.protocolViolation(rule: "flow.unary.payload-limit")
         }
 
-        // Create task sender that queues to driver
-        let taskTx: @Sendable (TaskMessage) -> Void = { [weak self] msg in
-            Task { [weak self] in
-                await self?.enqueueTaskMessage(msg)
-            }
-        }
+        // Create task sender
+        let taskTx = taskSender()
 
         // Dispatch (spawns handler task)
         Task {
@@ -289,11 +402,12 @@ public actor Driver {
         try await transport.send(.goodbye(reason: reason))
     }
 
-    private func failAllPending() {
-        for (_, responseTx) in pendingResponses {
+    private func failAllPending() async {
+        let responses = await state.failAllPending()
+
+        for (_, responseTx) in responses {
             responseTx(.failure(.connectionClosed))
         }
-        pendingResponses.removeAll()
     }
 }
 
@@ -317,11 +431,23 @@ public func establishInitiator(
     // Send our hello
     try await transport.send(.hello(ourHello))
 
-    // Wait for peer hello
-    guard let peerMsg = try await transport.recv(),
-        case .hello(let peerHello) = peerMsg
-    else {
-        throw ConnectionError.handshakeFailed("expected Hello")
+    // Wait for peer hello - handle decode errors by sending Goodbye
+    let peerHello: Hello
+    do {
+        guard let peerMsg = try await transport.recv(),
+            case .hello(let hello) = peerMsg
+        else {
+            try await transport.send(.goodbye(reason: "handshake.expected-hello"))
+            throw ConnectionError.handshakeFailed("expected Hello")
+        }
+        peerHello = hello
+    } catch let error as WireError {
+        // Unknown Hello variant or decode error - send Goodbye per spec
+        let reason =
+            error == .unknownHelloVariant
+            ? "handshake.unknown-hello-variant" : "handshake.decode-error"
+        try? await transport.send(.goodbye(reason: reason))
+        throw ConnectionError.handshakeFailed(reason)
     }
 
     let (ourMax, ourCredit) =
@@ -338,28 +464,12 @@ public func establishInitiator(
         initialCredit: min(ourCredit, peerCredit)
     )
 
-    // Create handle with command channel
-    var enqueueCommand: (@Sendable (HandleCommand) -> Void)!
-    let handle = ConnectionHandle(
-        commandTx: { cmd in enqueueCommand(cmd) },
-        role: .initiator
-    )
-
-    let driver = Driver(
+    return makeDriverAndHandle(
         transport: transport,
         dispatcher: dispatcher,
         role: .initiator,
-        negotiated: negotiated,
-        handle: handle
+        negotiated: negotiated
     )
-
-    enqueueCommand = { cmd in
-        Task {
-            await driver.enqueueCommand(cmd)
-        }
-    }
-
-    return (handle, driver)
 }
 
 /// Establish a connection as acceptor.
@@ -371,11 +481,23 @@ public func establishAcceptor(
     // Send our hello immediately
     try await transport.send(.hello(ourHello))
 
-    // Wait for peer hello
-    guard let peerMsg = try await transport.recv(),
-        case .hello(let peerHello) = peerMsg
-    else {
-        throw ConnectionError.handshakeFailed("expected Hello")
+    // Wait for peer hello - handle decode errors by sending Goodbye
+    let peerHello: Hello
+    do {
+        guard let peerMsg = try await transport.recv(),
+            case .hello(let hello) = peerMsg
+        else {
+            try await transport.send(.goodbye(reason: "handshake.expected-hello"))
+            throw ConnectionError.handshakeFailed("expected Hello")
+        }
+        peerHello = hello
+    } catch let error as WireError {
+        // Unknown Hello variant or decode error - send Goodbye per spec
+        let reason =
+            error == .unknownHelloVariant
+            ? "handshake.unknown-hello-variant" : "handshake.decode-error"
+        try? await transport.send(.goodbye(reason: reason))
+        throw ConnectionError.handshakeFailed(reason)
     }
 
     let (ourMax, ourCredit) =
@@ -392,26 +514,48 @@ public func establishAcceptor(
         initialCredit: min(ourCredit, peerCredit)
     )
 
-    // Create handle with command channel
-    var enqueueCommand: (@Sendable (HandleCommand) -> Void)!
-    let handle = ConnectionHandle(
-        commandTx: { cmd in enqueueCommand(cmd) },
-        role: .acceptor
-    )
-
-    let driver = Driver(
+    return makeDriverAndHandle(
         transport: transport,
         dispatcher: dispatcher,
         role: .acceptor,
-        negotiated: negotiated,
-        handle: handle
+        negotiated: negotiated
+    )
+}
+
+/// Create a Driver and ConnectionHandle with properly wired command/task channels.
+private func makeDriverAndHandle(
+    transport: any MessageTransport,
+    dispatcher: any ServiceDispatcher,
+    role: Role,
+    negotiated: Negotiated
+) -> (ConnectionHandle, Driver) {
+    // Create the event stream that will be shared
+    var continuation: AsyncStream<DriverEvent>.Continuation!
+    let eventStream = AsyncStream<DriverEvent> { cont in
+        continuation = cont
+    }
+
+    // Create command sender that uses this continuation
+    let commandSender: @Sendable (HandleCommand) -> Void = { cmd in
+        continuation.yield(.command(cmd))
+    }
+
+    // Create handle with the command sender
+    let handle = ConnectionHandle(
+        commandTx: commandSender,
+        role: role
     )
 
-    enqueueCommand = { cmd in
-        Task {
-            await driver.enqueueCommand(cmd)
-        }
-    }
+    // Create driver with the handle and shared event stream
+    let driver = Driver(
+        transport: transport,
+        dispatcher: dispatcher,
+        role: role,
+        negotiated: negotiated,
+        handle: handle,
+        eventStream: eventStream,
+        eventContinuation: continuation
+    )
 
     return (handle, driver)
 }
