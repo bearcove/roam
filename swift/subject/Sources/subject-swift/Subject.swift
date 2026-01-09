@@ -118,6 +118,20 @@ final class TestbedDispatcherAdapter: ServiceDispatcher, @unchecked Sendable {
         self.handler = handler
     }
 
+    func preregister(
+        methodId: UInt64,
+        payload: [UInt8],
+        registry: ChannelRegistry
+    ) async {
+        // Pre-register channels before the handler task is spawned.
+        // This ensures channels are known before any Data messages arrive.
+        await TestbedStreamingDispatcher.preregisterChannels(
+            methodId: methodId,
+            payload: Data(payload),
+            registry: registry
+        )
+    }
+
     func dispatch(
         methodId: UInt64,
         payload: [UInt8],
@@ -130,9 +144,6 @@ final class TestbedDispatcherAdapter: ServiceDispatcher, @unchecked Sendable {
             registry: registry,
             taskSender: taskTx
         )
-
-        // Preregister channels synchronously
-        await dispatcher.preregisterChannels(methodId: methodId, payload: Data(payload))
 
         // Dispatch the request
         await dispatcher.dispatch(methodId: methodId, requestId: requestId, payload: Data(payload))

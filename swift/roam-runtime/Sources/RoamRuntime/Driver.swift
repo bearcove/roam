@@ -17,7 +17,16 @@ public struct Negotiated: Sendable {
 
 /// Protocol for dispatching incoming requests.
 public protocol ServiceDispatcher: Sendable {
-    /// Dispatch a request. Returns a future that sends the response.
+    /// Pre-register any channels in the request payload.
+    /// This is called synchronously BEFORE spawning the handler task,
+    /// ensuring channels are registered before any Data messages arrive.
+    func preregister(
+        methodId: UInt64,
+        payload: [UInt8],
+        registry: ChannelRegistry
+    ) async
+
+    /// Dispatch a request. Called in a spawned task after preregister.
     func dispatch(
         methodId: UInt64,
         payload: [UInt8],
@@ -346,6 +355,14 @@ public final class Driver: @unchecked Sendable {
             try await sendGoodbye("flow.unary.payload-limit")
             throw ConnectionError.protocolViolation(rule: "flow.unary.payload-limit")
         }
+
+        // Pre-register channels BEFORE spawning the handler task.
+        // This ensures channels are registered before any Data messages arrive.
+        await dispatcher.preregister(
+            methodId: methodId,
+            payload: payload,
+            registry: serverRegistry
+        )
 
         // Create task sender
         let taskTx = taskSender()
