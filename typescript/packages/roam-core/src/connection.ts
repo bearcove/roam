@@ -7,12 +7,18 @@
 // - CobsFramed for TCP (byte streams with COBS framing)
 // - WsTransport for WebSocket (message-oriented transport)
 
-import { concat, encodeBytes, encodeString } from "../../roam-postcard/src/binary/bytes.ts";
 import {
-  decodeVarint,
-  decodeVarintNumber,
-  encodeVarint,
-} from "../../roam-postcard/src/binary/varint.ts";
+  type Hello,
+  helloV1,
+  messageHello,
+  messageGoodbye,
+  messageRequest,
+  messageResponse,
+  messageData,
+  messageClose,
+  encodeMessage,
+  decodeMessage,
+} from "@bearcove/roam-wire";
 import {
   ChannelRegistry,
   ChannelIdAllocator,
@@ -49,7 +55,7 @@ export class ConnectionError extends Error {
   }
 
   static protocol(ruleId: string, context: string): ConnectionError {
-    return new ConnectionError("protocol", context, ruleId);
+    return new ConnectionError("protocol", ruleId, context);
   }
 
   static dispatch(message: string): ConnectionError {
@@ -59,72 +65,6 @@ export class ConnectionError extends Error {
   static closed(): ConnectionError {
     return new ConnectionError("closed", "connection closed");
   }
-}
-
-/** Hello message version 1. */
-interface HelloV1 {
-  variant: 0;
-  maxPayloadSize: number;
-  initialStreamCredit: number;
-}
-
-type Hello = HelloV1;
-
-/** Message discriminants. */
-const MSG_HELLO = 0;
-const MSG_GOODBYE = 1;
-const MSG_REQUEST = 2;
-const MSG_RESPONSE = 3;
-// const MSG_CANCEL = 4;
-const MSG_DATA = 5;
-const MSG_CLOSE = 6;
-const MSG_RESET = 7;
-const MSG_CREDIT = 8;
-
-/** Encode a Hello message. */
-function encodeHello(hello: Hello): Uint8Array {
-  return concat(
-    encodeVarint(MSG_HELLO),
-    encodeVarint(hello.variant),
-    encodeVarint(hello.maxPayloadSize),
-    encodeVarint(hello.initialStreamCredit),
-  );
-}
-
-/** Encode a Goodbye message. */
-function encodeGoodbye(reason: string): Uint8Array {
-  return concat(encodeVarint(MSG_GOODBYE), encodeString(reason));
-}
-
-/** Encode a Response message. */
-function encodeResponse(requestId: bigint, payload: Uint8Array): Uint8Array {
-  return concat(
-    encodeVarint(MSG_RESPONSE),
-    encodeVarint(requestId),
-    encodeVarint(0), // empty metadata vec
-    encodeBytes(payload),
-  );
-}
-
-/** Encode a Request message. */
-function encodeRequest(requestId: bigint, methodId: bigint, payload: Uint8Array): Uint8Array {
-  return concat(
-    encodeVarint(MSG_REQUEST),
-    encodeVarint(requestId),
-    encodeVarint(methodId),
-    encodeVarint(0), // empty metadata vec
-    encodeBytes(payload),
-  );
-}
-
-/** Encode a Data message. */
-function encodeData(streamId: bigint, payload: Uint8Array): Uint8Array {
-  return concat(encodeVarint(MSG_DATA), encodeVarint(streamId), encodeBytes(payload));
-}
-
-/** Encode a Close message. */
-function encodeClose(streamId: bigint): Uint8Array {
-  return concat(encodeVarint(MSG_CLOSE), encodeVarint(streamId));
 }
 
 /** Trait for dispatching unary requests to a service. */
@@ -238,7 +178,7 @@ export class Connection<T extends MessageTransport = MessageTransport> {
    */
   async goodbye(ruleId: string): Promise<ConnectionError> {
     try {
-      await this.io.send(encodeGoodbye(ruleId));
+      await this.io.send(encodeMessage(messageGoodbye(ruleId)));
     } catch {
       // Ignore send errors when closing
     }
@@ -281,9 +221,9 @@ export class Connection<T extends MessageTransport = MessageTransport> {
         break;
       }
       if (poll.kind === "data") {
-        await this.io.send(encodeData(poll.channelId, poll.payload));
+        await this.io.send(encodeMessage(messageData(poll.channelId, poll.payload)));
       } else if (poll.kind === "close") {
-        await this.io.send(encodeClose(poll.channelId));
+        await this.io.send(encodeMessage(messageClose(poll.channelId)));
       }
     }
   }
@@ -320,7 +260,7 @@ export class Connection<T extends MessageTransport = MessageTransport> {
     const requestId = this.nextRequestId++;
 
     // Send request
-    await this.io.send(encodeRequest(requestId, methodId, payload));
+    await this.io.send(encodeMessage(messageRequest(requestId, methodId, payload)));
 
     // Flush any pending outgoing stream data (for client-to-server streaming)
     // r[impl streaming.data] - Send queued Data/Close messages after Request.
@@ -333,90 +273,46 @@ export class Connection<T extends MessageTransport = MessageTransport> {
         throw ConnectionError.io("timeout waiting for response");
       }
 
-      // Parse message discriminant
-      let offset = 0;
-      const d0 = decodeVarintNumber(data, offset);
-      const msgDisc = d0.value;
-      offset = d0.next;
+      // Parse message using wire codec
+      const result = decodeMessage(data);
+      const msg = result.value;
 
-      if (msgDisc === MSG_GOODBYE) {
+      if (msg.tag === "Goodbye") {
         throw ConnectionError.closed();
       }
 
       // Handle streaming messages while waiting for response
-      if (msgDisc === MSG_DATA) {
-        // Data { stream_id, payload }
-        const sid = decodeVarint(data, offset);
-        offset = sid.next;
-        const pLen = decodeVarintNumber(data, offset);
-        offset = pLen.next;
-        const dataPayload = data.subarray(offset, offset + pLen.value);
+      if (msg.tag === "Data") {
         // Route to registered stream
         try {
-          this.channelRegistry.routeData(sid.value, dataPayload);
+          this.channelRegistry.routeData(msg.channelId, msg.payload);
         } catch {
           // Ignore stream errors during call - connection still valid
         }
         continue;
       }
 
-      if (msgDisc === MSG_CLOSE) {
-        // Close { stream_id }
-        const sid = decodeVarint(data, offset);
-        if (this.channelRegistry.contains(sid.value)) {
-          this.channelRegistry.close(sid.value);
+      if (msg.tag === "Close") {
+        if (this.channelRegistry.contains(msg.channelId)) {
+          this.channelRegistry.close(msg.channelId);
         }
         continue;
       }
 
-      if (msgDisc === MSG_CREDIT) {
-        // Credit { stream_id, amount } - flow control, currently ignored
+      if (msg.tag === "Credit") {
+        // Credit { channel_id, bytes } - flow control, currently ignored
         // TODO: Implement flow control tracking
         continue;
       }
 
-      if (msgDisc !== MSG_RESPONSE) {
+      if (msg.tag !== "Response") {
         // Ignore other messages (Hello after handshake, Reset, etc.)
         continue;
       }
 
-      // Parse Response { request_id, metadata, payload }
-      const reqIdResult = decodeVarint(data, offset);
-      offset = reqIdResult.next;
-
-      // Skip metadata: Vec<(String, MetadataValue)>
-      const mdLen = decodeVarintNumber(data, offset);
-      offset = mdLen.next;
-      for (let i = 0; i < mdLen.value; i++) {
-        // key string
-        const kLen = decodeVarintNumber(data, offset);
-        offset = kLen.next + kLen.value;
-        // value enum
-        const vDisc = decodeVarintNumber(data, offset);
-        offset = vDisc.next;
-        if (vDisc.value === 0) {
-          // String
-          const sLen = decodeVarintNumber(data, offset);
-          offset = sLen.next + sLen.value;
-        } else if (vDisc.value === 1) {
-          // Bytes
-          const bLen = decodeVarintNumber(data, offset);
-          offset = bLen.next + bLen.value;
-        } else if (vDisc.value === 2) {
-          // U64
-          const u = decodeVarint(data, offset);
-          offset = u.next;
-        }
-      }
-
-      // Payload
-      const pLen = decodeVarintNumber(data, offset);
-      offset = pLen.next;
-      const responsePayload = data.subarray(offset, offset + pLen.value);
-
       // Check if this response is for our request
-      if (reqIdResult.value === requestId) {
-        return responsePayload;
+      if (msg.requestId === requestId) {
+        return msg.payload;
       }
       // Otherwise continue waiting (might be response to different pipelined request)
     }
@@ -462,13 +358,13 @@ export class Connection<T extends MessageTransport = MessageTransport> {
         const msg = taskQueue.shift()!;
         switch (msg.kind) {
           case "data":
-            await this.io.send(encodeData(msg.channelId, msg.payload));
+            await this.io.send(encodeMessage(messageData(msg.channelId, msg.payload)));
             break;
           case "close":
-            await this.io.send(encodeClose(msg.channelId));
+            await this.io.send(encodeMessage(messageClose(msg.channelId)));
             break;
           case "response":
-            await this.io.send(encodeResponse(msg.requestId, msg.payload));
+            await this.io.send(encodeMessage(messageResponse(msg.requestId, msg.payload)));
             break;
         }
       }
@@ -567,98 +463,52 @@ export class Connection<T extends MessageTransport = MessageTransport> {
     dispatcher: StreamingDispatcher,
     taskSender: TaskSender,
   ): Promise<void> | undefined {
-    let offset = 0;
-    const d0 = decodeVarintNumber(payload, offset);
-    const msgDisc = d0.value;
-    offset = d0.next;
+    // Parse message using wire codec
+    const result = decodeMessage(payload);
+    const msg = result.value;
 
-    if (msgDisc === MSG_HELLO) {
+    if (msg.tag === "Hello") {
       return undefined; // Duplicate Hello after exchange - ignore
     }
 
-    if (msgDisc === MSG_GOODBYE) {
+    if (msg.tag === "Goodbye") {
       throw ConnectionError.closed();
     }
 
-    if (msgDisc === MSG_REQUEST) {
-      // Request { request_id, method_id, metadata, payload }
-      let tmp = decodeVarint(payload, offset);
-      const requestId = tmp.value;
-      offset = tmp.next;
-
-      tmp = decodeVarint(payload, offset);
-      const methodId = tmp.value;
-      offset = tmp.next;
-
-      // Skip metadata
-      const mdLen = decodeVarintNumber(payload, offset);
-      offset = mdLen.next;
-      for (let i = 0; i < mdLen.value; i++) {
-        const kLen = decodeVarintNumber(payload, offset);
-        offset = kLen.next + kLen.value;
-        const vDisc = decodeVarintNumber(payload, offset);
-        offset = vDisc.next;
-        if (vDisc.value === 0) {
-          const sLen = decodeVarintNumber(payload, offset);
-          offset = sLen.next + sLen.value;
-        } else if (vDisc.value === 1) {
-          const bLen = decodeVarintNumber(payload, offset);
-          offset = bLen.next + bLen.value;
-        } else if (vDisc.value === 2) {
-          const u = decodeVarint(payload, offset);
-          offset = u.next;
-        } else {
-          throw new Error("unknown MetadataValue");
-        }
-      }
-
-      // payload: bytes
-      const pLen = decodeVarintNumber(payload, offset);
-      offset = pLen.next;
-
+    if (msg.tag === "Request") {
       // r[impl flow.unary.payload-limit] - Validate payload size
-      const payloadViolation = this.validatePayloadSize(pLen.value);
+      const payloadViolation = this.validatePayloadSize(msg.payload.length);
       if (payloadViolation) {
         throw ConnectionError.protocol(payloadViolation, "payload exceeds max size");
       }
 
-      const start = offset;
-      const end = start + pLen.value;
-      if (end > payload.length) throw new Error("request payload overrun");
-      const payloadBytes = payload.subarray(start, end);
-
       // Dispatch with streaming support - return the promise, don't await it!
       // This allows the handler to run concurrently while we continue receiving messages.
       return dispatcher.dispatch(
-        methodId,
-        payloadBytes,
-        requestId,
+        msg.methodId,
+        msg.payload,
+        msg.requestId,
         this.channelRegistry,
         taskSender,
       );
     }
 
     // Handle other message types (Data, Close, etc.) synchronously
-    if (msgDisc === MSG_RESPONSE) {
+    if (msg.tag === "Response") {
       return undefined;
     }
 
-    if (msgDisc === MSG_DATA) {
-      const sid = decodeVarint(payload, offset);
-      offset = sid.next;
-      if (sid.value === 0n) {
+    if (msg.tag === "Data") {
+      if (msg.channelId === 0n) {
         // Can't send goodbye synchronously - throw protocol error
-        throw ConnectionError.protocol("streaming.id.zero-reserved", "stream ID 0 is reserved");
+        throw ConnectionError.protocol("streaming.id.zero-reserved", "channel ID 0 is reserved");
       }
-      const pLen = decodeVarintNumber(payload, offset);
-      offset = pLen.next;
-      const dataPayload = payload.subarray(offset, offset + pLen.value);
       try {
-        this.channelRegistry.routeData(sid.value, dataPayload);
+        this.channelRegistry.routeData(msg.channelId, msg.payload);
       } catch (e) {
         if (e instanceof ChannelError) {
           if (e.kind === "unknown") {
-            throw ConnectionError.protocol("streaming.unknown", "unknown stream ID");
+            throw ConnectionError.protocol("streaming.unknown", "unknown channel ID");
           }
           if (e.kind === "dataAfterClose") {
             throw ConnectionError.protocol("streaming.data-after-close", "data after close");
@@ -669,37 +519,35 @@ export class Connection<T extends MessageTransport = MessageTransport> {
       return undefined;
     }
 
-    if (msgDisc === MSG_CLOSE) {
-      const sid = decodeVarint(payload, offset);
-      if (sid.value === 0n) {
-        throw ConnectionError.protocol("streaming.id.zero-reserved", "stream ID 0 is reserved");
+    if (msg.tag === "Close") {
+      if (msg.channelId === 0n) {
+        throw ConnectionError.protocol("streaming.id.zero-reserved", "channel ID 0 is reserved");
       }
-      if (!this.channelRegistry.contains(sid.value)) {
-        throw ConnectionError.protocol("streaming.unknown", "unknown stream ID");
+      if (!this.channelRegistry.contains(msg.channelId)) {
+        throw ConnectionError.protocol("streaming.unknown", "unknown channel ID");
       }
-      this.channelRegistry.close(sid.value);
+      this.channelRegistry.close(msg.channelId);
       return undefined;
     }
 
-    if (msgDisc === MSG_RESET) {
-      const sid = decodeVarint(payload, offset);
-      if (sid.value === 0n) {
-        throw ConnectionError.protocol("streaming.id.zero-reserved", "stream ID 0 is reserved");
+    if (msg.tag === "Reset") {
+      if (msg.channelId === 0n) {
+        throw ConnectionError.protocol("streaming.id.zero-reserved", "channel ID 0 is reserved");
       }
-      if (!this.channelRegistry.contains(sid.value)) {
-        throw ConnectionError.protocol("streaming.unknown", "unknown stream ID");
+      if (!this.channelRegistry.contains(msg.channelId)) {
+        throw ConnectionError.protocol("streaming.unknown", "unknown channel ID");
       }
-      this.channelRegistry.close(sid.value);
+      // TODO: Signal error to Rx<T> instead of clean close
+      this.channelRegistry.close(msg.channelId);
       return undefined;
     }
 
-    if (msgDisc === MSG_CREDIT) {
-      const sid = decodeVarint(payload, offset);
-      if (sid.value === 0n) {
-        throw ConnectionError.protocol("streaming.id.zero-reserved", "stream ID 0 is reserved");
+    if (msg.tag === "Credit") {
+      if (msg.channelId === 0n) {
+        throw ConnectionError.protocol("streaming.id.zero-reserved", "channel ID 0 is reserved");
       }
-      if (!this.channelRegistry.contains(sid.value)) {
-        throw ConnectionError.protocol("streaming.unknown", "unknown stream ID");
+      if (!this.channelRegistry.contains(msg.channelId)) {
+        throw ConnectionError.protocol("streaming.unknown", "unknown channel ID");
       }
       return undefined;
     }
@@ -749,115 +597,59 @@ export class Connection<T extends MessageTransport = MessageTransport> {
   }
 
   private async handleMessage(payload: Uint8Array, dispatcher: ServiceDispatcher): Promise<void> {
-    let offset = 0;
-    const d0 = decodeVarintNumber(payload, offset);
-    const msgDisc = d0.value;
-    offset = d0.next;
+    // Parse message using wire codec
+    const result = decodeMessage(payload);
+    const msg = result.value;
 
-    if (msgDisc === MSG_HELLO) {
+    if (msg.tag === "Hello") {
       // Duplicate Hello after exchange - ignore
       return;
     }
 
-    if (msgDisc === MSG_GOODBYE) {
+    if (msg.tag === "Goodbye") {
       // Peer sent Goodbye, connection closing
       throw ConnectionError.closed();
     }
 
-    if (msgDisc === MSG_REQUEST) {
-      // Request { request_id, method_id, metadata, payload }
-      let tmp = decodeVarint(payload, offset);
-      const requestId = tmp.value;
-      offset = tmp.next;
-
-      tmp = decodeVarint(payload, offset);
-      const methodId = tmp.value;
-      offset = tmp.next;
-
-      // Skip metadata: Vec<(String, MetadataValue)>
-      const mdLen = decodeVarintNumber(payload, offset);
-      offset = mdLen.next;
-      for (let i = 0; i < mdLen.value; i++) {
-        // key string
-        const kLen = decodeVarintNumber(payload, offset);
-        offset = kLen.next + kLen.value;
-        // value enum
-        const vDisc = decodeVarintNumber(payload, offset);
-        offset = vDisc.next;
-        if (vDisc.value === 0) {
-          // String
-          const sLen = decodeVarintNumber(payload, offset);
-          offset = sLen.next + sLen.value;
-        } else if (vDisc.value === 1) {
-          // Bytes
-          const bLen = decodeVarintNumber(payload, offset);
-          offset = bLen.next + bLen.value;
-        } else if (vDisc.value === 2) {
-          // U64
-          const u = decodeVarint(payload, offset);
-          offset = u.next;
-        } else {
-          throw new Error("unknown MetadataValue");
-        }
-      }
-
-      // payload: bytes
-      const pLen = decodeVarintNumber(payload, offset);
-      offset = pLen.next;
-
+    if (msg.tag === "Request") {
       // r[impl flow.unary.payload-limit] - enforce negotiated max payload size
-      const payloadViolation = this.validatePayloadSize(pLen.value);
+      const payloadViolation = this.validatePayloadSize(msg.payload.length);
       if (payloadViolation) {
         throw await this.goodbye(payloadViolation);
       }
 
-      const start = offset;
-      const end = start + pLen.value;
-      if (end > payload.length) throw new Error("request payload overrun");
-      const payloadBytes = payload.subarray(start, end);
-
       // Dispatch to service
-      const responsePayload = await dispatcher.dispatchUnary(methodId, payloadBytes);
+      const responsePayload = await dispatcher.dispatchUnary(msg.methodId, msg.payload);
 
       // r[impl core.call] - Callee sends Response for caller's Request.
       // r[impl core.call.request-id] - Response has same request_id.
       // r[impl unary.complete] - Send Response with matching request_id.
       // r[impl unary.lifecycle.single-response] - Exactly one Response per Request.
-      await this.io.send(encodeResponse(requestId, responsePayload));
+      await this.io.send(encodeMessage(messageResponse(msg.requestId, responsePayload)));
 
       // Flush any outgoing stream data that handlers may have queued
       await this.flushOutgoing();
       return;
     }
 
-    if (msgDisc === MSG_RESPONSE) {
+    if (msg.tag === "Response") {
       // Server doesn't expect Response in basic mode - skip
-      // Skip over the fields to not break parsing
       return;
     }
 
-    if (msgDisc === MSG_DATA) {
-      // Data { stream_id, payload }
-      const sid = decodeVarint(payload, offset);
-      offset = sid.next;
-
-      // r[impl streaming.id.zero-reserved] - Stream ID 0 is reserved.
-      if (sid.value === 0n) {
+    if (msg.tag === "Data") {
+      // r[impl streaming.id.zero-reserved] - Channel ID 0 is reserved.
+      if (msg.channelId === 0n) {
         throw await this.goodbye("streaming.id.zero-reserved");
       }
 
-      // Decode payload
-      const pLen = decodeVarintNumber(payload, offset);
-      offset = pLen.next;
-      const dataPayload = payload.subarray(offset, offset + pLen.value);
-
-      // r[impl streaming.data] - Route Data to registered stream.
+      // r[impl streaming.data] - Route Data to registered channel.
       try {
-        this.channelRegistry.routeData(sid.value, dataPayload);
+        this.channelRegistry.routeData(msg.channelId, msg.payload);
       } catch (e) {
         if (e instanceof ChannelError) {
           if (e.kind === "unknown") {
-            // r[impl streaming.unknown] - Unknown stream ID.
+            // r[impl streaming.unknown] - Unknown channel ID.
             throw await this.goodbye("streaming.unknown");
           }
           if (e.kind === "dataAfterClose") {
@@ -870,60 +662,51 @@ export class Connection<T extends MessageTransport = MessageTransport> {
       return;
     }
 
-    if (msgDisc === MSG_CLOSE) {
-      // Close { stream_id }
-      const sid = decodeVarint(payload, offset);
-
-      // r[impl streaming.id.zero-reserved] - Stream ID 0 is reserved.
-      if (sid.value === 0n) {
+    if (msg.tag === "Close") {
+      // r[impl streaming.id.zero-reserved] - Channel ID 0 is reserved.
+      if (msg.channelId === 0n) {
         throw await this.goodbye("streaming.id.zero-reserved");
       }
 
-      // r[impl streaming.close] - Close the stream.
-      if (!this.channelRegistry.contains(sid.value)) {
+      // r[impl streaming.close] - Close the channel.
+      if (!this.channelRegistry.contains(msg.channelId)) {
         throw await this.goodbye("streaming.unknown");
       }
-      this.channelRegistry.close(sid.value);
+      this.channelRegistry.close(msg.channelId);
       return;
     }
 
-    if (msgDisc === MSG_RESET) {
-      // Reset { stream_id }
-      const sid = decodeVarint(payload, offset);
-
-      // r[impl streaming.id.zero-reserved] - Stream ID 0 is reserved.
-      if (sid.value === 0n) {
+    if (msg.tag === "Reset") {
+      // r[impl streaming.id.zero-reserved] - Channel ID 0 is reserved.
+      if (msg.channelId === 0n) {
         throw await this.goodbye("streaming.id.zero-reserved");
       }
 
-      // r[impl streaming.reset] - Forcefully terminate stream.
+      // r[impl streaming.reset] - Forcefully terminate channel.
       // For now, treat same as Close.
-      // TODO: Signal error to Pull<T> instead of clean close.
-      if (!this.channelRegistry.contains(sid.value)) {
+      // TODO: Signal error to Rx<T> instead of clean close.
+      if (!this.channelRegistry.contains(msg.channelId)) {
         throw await this.goodbye("streaming.unknown");
       }
-      this.channelRegistry.close(sid.value);
+      this.channelRegistry.close(msg.channelId);
       return;
     }
 
-    if (msgDisc === MSG_CREDIT) {
-      // Credit { stream_id, amount }
-      const sid = decodeVarint(payload, offset);
-
-      // r[impl streaming.id.zero-reserved] - Stream ID 0 is reserved.
-      if (sid.value === 0n) {
+    if (msg.tag === "Credit") {
+      // r[impl streaming.id.zero-reserved] - Channel ID 0 is reserved.
+      if (msg.channelId === 0n) {
         throw await this.goodbye("streaming.id.zero-reserved");
       }
 
       // TODO: Implement flow control.
-      // For now, validate stream exists but ignore credit.
-      if (!this.channelRegistry.contains(sid.value)) {
+      // For now, validate channel exists but ignore credit.
+      if (!this.channelRegistry.contains(msg.channelId)) {
         throw await this.goodbye("streaming.unknown");
       }
       return;
     }
 
-    // Unknown message type - ignore
+    // Unknown message type (Cancel, etc.) - ignore
   }
 }
 
@@ -933,23 +716,22 @@ export class Connection<T extends MessageTransport = MessageTransport> {
  * r[impl message.hello.timing] - Send Hello immediately after connection.
  * r[impl message.hello.ordering] - Hello sent before any other message.
  */
-export async function helloExchangeAcceptor<T extends MessageTransport>(
+export async function helloExchangeInitiator<T extends MessageTransport>(
   io: T,
   ourHello: Hello,
 ): Promise<Connection<T>> {
   // Send our Hello immediately
-  await io.send(encodeHello(ourHello));
+  await io.send(encodeMessage(messageHello(ourHello)));
 
   // Wait for peer Hello
   const peerHello = await waitForPeerHello(io, ourHello);
 
-  // r[impl message.hello.negotiation] - Effective limit is min of both peers.
   const negotiated: Negotiated = {
     maxPayloadSize: Math.min(ourHello.maxPayloadSize, peerHello.maxPayloadSize),
-    initialCredit: Math.min(ourHello.initialStreamCredit, peerHello.initialStreamCredit),
+    initialCredit: Math.min(ourHello.initialChannelCredit, peerHello.initialChannelCredit),
   };
 
-  return new Connection(io, Role.Acceptor, negotiated, ourHello);
+  return new Connection(io, Role.Initiator, negotiated, ourHello);
 }
 
 /**
@@ -958,22 +740,22 @@ export async function helloExchangeAcceptor<T extends MessageTransport>(
  * r[impl message.hello.timing] - Send Hello immediately after connection.
  * r[impl message.hello.ordering] - Hello sent before any other message.
  */
-export async function helloExchangeInitiator<T extends MessageTransport>(
+export async function helloExchangeAcceptor<T extends MessageTransport>(
   io: T,
   ourHello: Hello,
 ): Promise<Connection<T>> {
-  // Send our Hello immediately
-  await io.send(encodeHello(ourHello));
-
   // Wait for peer Hello
   const peerHello = await waitForPeerHello(io, ourHello);
 
   const negotiated: Negotiated = {
     maxPayloadSize: Math.min(ourHello.maxPayloadSize, peerHello.maxPayloadSize),
-    initialCredit: Math.min(ourHello.initialStreamCredit, peerHello.initialStreamCredit),
+    initialCredit: Math.min(ourHello.initialChannelCredit, peerHello.initialChannelCredit),
   };
 
-  return new Connection(io, Role.Initiator, negotiated, ourHello);
+  // Send our Hello
+  await io.send(encodeMessage(messageHello(ourHello)));
+
+  return new Connection(io, Role.Acceptor, negotiated, ourHello);
 }
 
 async function waitForPeerHello<T extends MessageTransport>(
@@ -988,7 +770,7 @@ async function waitForPeerHello<T extends MessageTransport>(
       // r[impl message.hello.unknown-version] - Reject unknown Hello versions.
       const raw = io.lastDecoded;
       if (raw.length >= 2 && raw[0] === 0x00 && raw[1] !== 0x00) {
-        await io.send(encodeGoodbye("message.hello.unknown-version"));
+        await io.send(encodeMessage(messageGoodbye("message.hello.unknown-version")));
         io.close();
         throw ConnectionError.protocol("message.hello.unknown-version", "unknown Hello variant");
       }
@@ -999,37 +781,23 @@ async function waitForPeerHello<T extends MessageTransport>(
       throw ConnectionError.closed();
     }
 
-    // Parse message discriminant
-    const d0 = decodeVarintNumber(payload, 0);
-    const msgDisc = d0.value;
-    let offset = d0.next;
+    // Parse message using wire codec
+    const result = decodeMessage(payload);
+    const msg = result.value;
 
-    if (msgDisc === MSG_HELLO) {
-      // Parse Hello
-      const d1 = decodeVarintNumber(payload, offset);
-      const helloVariant = d1.value;
-      offset = d1.next;
-
+    if (msg.tag === "Hello") {
       // r[impl message.hello.unknown-version] - reject unknown Hello versions
-      if (helloVariant !== 0) {
-        await io.send(encodeGoodbye("message.hello.unknown-version"));
+      if (msg.value.tag !== "V1") {
+        await io.send(encodeMessage(messageGoodbye("message.hello.unknown-version")));
         io.close();
         throw ConnectionError.protocol("message.hello.unknown-version", "unknown Hello variant");
       }
 
-      const maxPayload = decodeVarintNumber(payload, offset);
-      offset = maxPayload.next;
-      const initialCredit = decodeVarintNumber(payload, offset);
-
-      return {
-        variant: 0,
-        maxPayloadSize: maxPayload.value,
-        initialStreamCredit: initialCredit.value,
-      };
+      return msg.value;
     }
 
     // Received non-Hello before Hello exchange completed
-    await io.send(encodeGoodbye("message.hello.ordering"));
+    await io.send(encodeMessage(messageGoodbye("message.hello.ordering")));
     io.close();
     throw ConnectionError.protocol(
       "message.hello.ordering",
@@ -1040,9 +808,5 @@ async function waitForPeerHello<T extends MessageTransport>(
 
 /** Default Hello message. */
 export function defaultHello(): Hello {
-  return {
-    variant: 0,
-    maxPayloadSize: 1024 * 1024,
-    initialStreamCredit: 64 * 1024,
-  };
+  return helloV1(1024 * 1024, 64 * 1024);
 }

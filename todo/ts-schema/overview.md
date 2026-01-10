@@ -75,7 +75,7 @@ manual work.
 | 004 | [004-DONE-codegen-wire.md](./004-DONE-codegen-wire.md) | ✅ DONE | Wire types, schemas, and registry in `roam-wire` |
 | 005 | [005-DONE-wire-codec.md](./005-DONE-wire-codec.md) | ✅ DONE | Wire type encode/decode wrapper functions |
 | 006 | [006-DONE-golden-tests.md](./006-DONE-golden-tests.md) | ✅ DONE | Golden vector tests for wire types |
-| 007 | [007-TODO-migrate-connection.md](./007-TODO-migrate-connection.md) | TODO | Migrate connection.ts to use generated types |
+| 007 | [007-DONE-migrate-connection.md](./007-DONE-migrate-connection.md) | ✅ DONE | Migrate connection.ts to use generated types |
 
 ## Key Design Decisions
 
@@ -206,7 +206,7 @@ Type guards can be generated if useful, but constructors add little value.
 3. ✅ `encodeMessage()` produces bytes identical to Rust `facet_postcard::to_vec()` (golden tests pass)
 4. ✅ `decodeMessage()` correctly parses bytes produced by Rust (golden tests pass)
 5. ✅ Golden vector tests pass for all message variants (25 tests)
-6. ⬜ `connection.ts` uses generated types (no hand-coded wire format)
+6. ✅ `connection.ts` uses generated types (no hand-coded wire format)
 7. ✅ Roundtrip tests: encode → decode → compare passes for all variants (98 wire tests passing)
 
 ## Related Files
@@ -224,7 +224,7 @@ Type guards can be generated if useful, but constructors add little value.
 - `typescript/packages/roam-wire/src/codec.ts` - ✅ encode/decode wrapper functions
 - `typescript/packages/roam-wire/src/wire.test.ts` - ✅ Roundtrip tests (67 tests)
 - `typescript/packages/roam-wire/src/golden.test.ts` - ✅ Golden vector tests (25 tests)
-- `typescript/packages/roam-core/src/connection.ts` - ⬜ TODO: Migrate to use generated types
+- `typescript/packages/roam-core/src/connection.ts` - ✅ Migrated to use wire types and codec
 
 ### Test fixtures
 - `test-fixtures/golden-vectors/wire/` - Binary test vectors from Rust
@@ -300,8 +300,8 @@ cd typescript && pnpm check
 | 004 | Medium | 2-3 hours | ✅ DONE |
 | 005 | Low | 1 hour | ✅ DONE |
 | 006 | Medium | 2 hours | ✅ DONE |
-| 007 | Medium | 2-3 hours | TODO |
-| **Total** | | **12-17 hours** | ~85% complete |
+| 007 | Medium | 2-3 hours | ✅ DONE |
+| **Total** | | **12-17 hours** | 100% complete ✅ |
 
 ### Test Summary
 
