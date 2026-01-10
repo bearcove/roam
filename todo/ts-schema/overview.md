@@ -74,7 +74,7 @@ manual work.
 | 003 | [003-DONE-schema-decode.md](./003-DONE-schema-decode.md) | ✅ DONE | Schema-driven decode function (`decodeWithSchema`) |
 | 004 | [004-DONE-codegen-wire.md](./004-DONE-codegen-wire.md) | ✅ DONE | Wire types, schemas, and registry in `roam-wire` |
 | 005 | [005-DONE-wire-codec.md](./005-DONE-wire-codec.md) | ✅ DONE | Wire type encode/decode wrapper functions |
-| 006 | [006-TODO-golden-tests.md](./006-TODO-golden-tests.md) | TODO | Golden vector tests for wire types |
+| 006 | [006-DONE-golden-tests.md](./006-DONE-golden-tests.md) | ✅ DONE | Golden vector tests for wire types |
 | 007 | [007-TODO-migrate-connection.md](./007-TODO-migrate-connection.md) | TODO | Migrate connection.ts to use generated types |
 
 ## Key Design Decisions
@@ -203,11 +203,11 @@ Type guards can be generated if useful, but constructors add little value.
 
 1. ✅ All wire types (`Message`, `Hello`, `MetadataValue`) have TypeScript definitions
 2. ✅ All wire types have schema definitions with explicit discriminants
-3. ⬜ `encodeMessage()` produces bytes identical to Rust `facet_postcard::to_vec()` (needs golden tests)
-4. ⬜ `decodeMessage()` correctly parses bytes produced by Rust (needs golden tests)
-5. ⬜ Golden vector tests pass for all message variants
+3. ✅ `encodeMessage()` produces bytes identical to Rust `facet_postcard::to_vec()` (golden tests pass)
+4. ✅ `decodeMessage()` correctly parses bytes produced by Rust (golden tests pass)
+5. ✅ Golden vector tests pass for all message variants (25 tests)
 6. ⬜ `connection.ts` uses generated types (no hand-coded wire format)
-7. ✅ Roundtrip tests: encode → decode → compare passes for all variants (177 tests passing)
+7. ✅ Roundtrip tests: encode → decode → compare passes for all variants (98 wire tests passing)
 
 ## Related Files
 
@@ -223,6 +223,7 @@ Type guards can be generated if useful, but constructors add little value.
 - `typescript/packages/roam-wire/src/schemas.ts` - ✅ Wire type schemas with explicit discriminants
 - `typescript/packages/roam-wire/src/codec.ts` - ✅ encode/decode wrapper functions
 - `typescript/packages/roam-wire/src/wire.test.ts` - ✅ Roundtrip tests (67 tests)
+- `typescript/packages/roam-wire/src/golden.test.ts` - ✅ Golden vector tests (25 tests)
 - `typescript/packages/roam-core/src/connection.ts` - ⬜ TODO: Migrate to use generated types
 
 ### Test fixtures
@@ -287,7 +288,7 @@ cd typescript && pnpm check
 | Wire schemas | `roam-wire/src/schemas.ts` ✅ |
 | Wire codec | `roam-wire/src/codec.ts` ✅ |
 | Wire tests | `roam-wire/src/wire.test.ts` ✅ |
-| Golden tests | `roam-wire/src/wire.test.ts` (TODO: add golden vectors) |
+| Golden tests | `roam-wire/src/golden.test.ts` ✅ |
 
 ### Estimated Effort
 
@@ -298,13 +299,13 @@ cd typescript && pnpm check
 | 003 | Medium | 2-3 hours | ✅ DONE |
 | 004 | Medium | 2-3 hours | ✅ DONE |
 | 005 | Low | 1 hour | ✅ DONE |
-| 006 | Medium | 2 hours | TODO |
+| 006 | Medium | 2 hours | ✅ DONE |
 | 007 | Medium | 2-3 hours | TODO |
-| **Total** | | **12-17 hours** | ~70% complete |
+| **Total** | | **12-17 hours** | ~85% complete |
 
 ### Test Summary
 
 - `roam-postcard`: 98 tests (16 postcard + 36 schema + 46 schema_codec)
-- `roam-wire`: 73 tests (6 rpc_error + 67 wire)
+- `roam-wire`: 98 tests (6 rpc_error + 67 wire + 25 golden)
 - `roam-core`: 6 tests (schema re-exports)
-- **Total**: 177 tests passing
+- **Total**: 202 tests passing
