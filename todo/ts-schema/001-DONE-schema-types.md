@@ -1,6 +1,6 @@
 # Phase 001: Extended Schema Types
 
-**Status**: TODO
+**Status**: DONE
 
 ## Objective
 
@@ -246,22 +246,22 @@ export const wireSchemaRegistry: SchemaRegistry = new Map([
 
 ## Success Criteria
 
-1. ✅ `EnumSchema` type is defined with `variants: EnumVariant[]`
-2. ✅ `EnumVariant` supports unit, newtype, tuple, and struct variants
-3. ✅ `EnumVariant` supports optional explicit `discriminant`
-4. ✅ `TupleSchema` type is defined for fixed-size tuples
-5. ✅ `RefSchema` type is defined for type references
-6. ✅ `SchemaRegistry` and `resolveSchema` are defined
-7. ✅ Helper functions compile and have correct type signatures
-8. ✅ Unit tests pass for helper functions:
+1. ✅ `EnumSchema` type is defined with `variants: EnumVariant[]` - DONE
+2. ✅ `EnumVariant` supports unit, newtype, tuple, and struct variants - DONE
+3. ✅ `EnumVariant` supports optional explicit `discriminant` - DONE
+4. ✅ `TupleSchema` type is defined for fixed-size tuples - DONE
+5. ✅ `RefSchema` type is defined for type references - DONE
+6. ✅ `SchemaRegistry` and `resolveSchema` are defined - DONE
+7. ✅ Helper functions compile and have correct type signatures - DONE
+8. ✅ Unit tests pass for helper functions: - DONE (52 tests in roam-postcard)
    - `findVariantByDiscriminant` returns correct variant or undefined
    - `findVariantByName` returns correct variant or undefined
    - `getVariantDiscriminant` returns explicit discriminant or index
    - `getVariantFieldSchemas` returns schemas in correct order for all variant kinds
    - `getVariantFieldNames` returns names for struct variants, null otherwise
    - `resolveSchema` follows refs and throws on unknown types
-9. ✅ `roam-codegen` updated to generate new format with refs
-10. ✅ Existing tests still pass after migration
+9. ✅ `roam-codegen` updated to generate new format - DONE
+10. ✅ Existing tests still pass after migration - DONE
 
 ## Test Cases
 

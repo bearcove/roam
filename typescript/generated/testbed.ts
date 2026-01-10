@@ -434,7 +434,7 @@ switch (_result_disc.value) {
     let offset = decodeRpcResult(buf, 0);
     const _result_0_r = decodeString(buf, offset); const result_0 = _result_0_r.value; offset = _result_0_r.next;
 const _result_1_r = decodeI32(buf, offset); const result_1 = _result_1_r.value; offset = _result_1_r.next;
-const result = [result_0, result_1] as const;
+const result = [result_0, result_1] as [string, number];
     return result;
   }
 
@@ -708,7 +708,7 @@ switch (_msg_disc.value) {
       let offset = 0;
       const _pair_0_r = decodeI32(buf, offset); const pair_0 = _pair_0_r.value; offset = _pair_0_r.next;
 const _pair_1_r = decodeString(buf, offset); const pair_1 = _pair_1_r.value; offset = _pair_1_r.next;
-const pair = [pair_0, pair_1] as const;
+const pair = [pair_0, pair_1] as [number, string];
       if (offset !== buf.length) throw new Error("args: trailing bytes");
       const result = await handler.swapPair(pair);
       return encodeResultOk(concat(encodeString(result[0]), encodeI32(result[1])));
@@ -993,7 +993,7 @@ switch (_msg_disc.value) {
       let offset = 0;
       const _pair_0_r = decodeI32(buf, offset); const pair_0 = _pair_0_r.value; offset = _pair_0_r.next;
 const _pair_1_r = decodeString(buf, offset); const pair_1 = _pair_1_r.value; offset = _pair_1_r.next;
-const pair = [pair_0, pair_1] as const;
+const pair = [pair_0, pair_1] as [number, string];
       if (offset !== buf.length) throw new Error("args: trailing bytes");
       const result = await handler.swapPair(pair);
       taskSender({ kind: 'response', requestId, payload: encodeResultOk(concat(encodeString(result[0]), encodeI32(result[1]))) });
@@ -1002,6 +1002,7 @@ const pair = [pair_0, pair_1] as const;
     }
   }],
 ]);
+
 // Method schemas for runtime channel binding
 export const testbed_schemas: Record<string, MethodSchema> = {
   echo: { args: [{ kind: 'string' }] },
@@ -1013,9 +1014,9 @@ export const testbed_schemas: Record<string, MethodSchema> = {
   createPerson: { args: [{ kind: 'string' }, { kind: 'u8' }, { kind: 'option', inner: { kind: 'string' } }] },
   rectangleArea: { args: [{ kind: 'struct', fields: { 'top_left': { kind: 'struct', fields: { 'x': { kind: 'i32' }, 'y': { kind: 'i32' } } }, 'bottom_right': { kind: 'struct', fields: { 'x': { kind: 'i32' }, 'y': { kind: 'i32' } } }, 'label': { kind: 'option', inner: { kind: 'string' } } } }] },
   parseColor: { args: [{ kind: 'string' }] },
-  shapeArea: { args: [{ kind: 'enum', variants: { 'Circle': [{ kind: 'f64' }], 'Rectangle': [{ kind: 'f64' }, { kind: 'f64' }], 'Point': [] } }] },
-  createCanvas: { args: [{ kind: 'string' }, { kind: 'vec', element: { kind: 'enum', variants: { 'Circle': [{ kind: 'f64' }], 'Rectangle': [{ kind: 'f64' }, { kind: 'f64' }], 'Point': [] } } }, { kind: 'enum', variants: { 'Red': [], 'Green': [], 'Blue': [] } }] },
-  processMessage: { args: [{ kind: 'enum', variants: { 'Text': [{ kind: 'string' }], 'Number': [{ kind: 'i64' }], 'Data': [{ kind: 'bytes' }] } }] },
+  shapeArea: { args: [{ kind: 'enum', variants: [{ name: 'Circle', fields: { 'radius': { kind: 'f64' } } }, { name: 'Rectangle', fields: { 'width': { kind: 'f64' }, 'height': { kind: 'f64' } } }, { name: 'Point', fields: null }] }] },
+  createCanvas: { args: [{ kind: 'string' }, { kind: 'vec', element: { kind: 'enum', variants: [{ name: 'Circle', fields: { 'radius': { kind: 'f64' } } }, { name: 'Rectangle', fields: { 'width': { kind: 'f64' }, 'height': { kind: 'f64' } } }, { name: 'Point', fields: null }] } }, { kind: 'enum', variants: [{ name: 'Red', fields: null }, { name: 'Green', fields: null }, { name: 'Blue', fields: null }] }] },
+  processMessage: { args: [{ kind: 'enum', variants: [{ name: 'Text', fields: { kind: 'string' } }, { name: 'Number', fields: { kind: 'i64' } }, { name: 'Data', fields: { kind: 'bytes' } }] }] },
   getPoints: { args: [{ kind: 'u32' }] },
   swapPair: { args: [{ kind: 'tuple', elements: [{ kind: 'i32' }, { kind: 'string' }] }] },
 };

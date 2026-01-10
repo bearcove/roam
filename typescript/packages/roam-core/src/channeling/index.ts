@@ -23,8 +23,25 @@ export {
   type OptionSchema,
   type MapSchema,
   type StructSchema,
+  type TupleSchema,
+  type EnumVariant,
   type EnumSchema,
+  type RefSchema,
   type Schema,
+  type SchemaRegistry,
   type MethodSchema,
 } from "./schema.ts";
+
+// Schema helper functions
+export {
+  resolveSchema,
+  findVariantByDiscriminant,
+  findVariantByName,
+  getVariantDiscriminant,
+  getVariantFieldSchemas,
+  getVariantFieldNames,
+  isNewtypeVariant,
+  isRefSchema,
+} from "./schema.ts";
+
 export { bindChannels, type BindingSerializers } from "./binding.ts";

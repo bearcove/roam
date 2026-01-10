@@ -2,7 +2,13 @@
 //
 // Walks argument structures using schemas to find and bind Tx/Rx channels.
 
-import type { Schema } from "./schema.ts";
+import type { Schema, EnumSchema } from "./schema.ts";
+import {
+  findVariantByName,
+  getVariantFieldSchemas,
+  getVariantFieldNames,
+  isNewtypeVariant,
+} from "./schema.ts";
 import type { ChannelIdAllocator } from "./allocator.ts";
 import type { ChannelRegistry } from "./registry.ts";
 import { Tx } from "./tx.ts";
@@ -164,14 +170,61 @@ function bindValue(
       // whether there's even a _possibility_ of there being a Tx/Rx
       // nested in any of the fields here
 
-      // Enum value should be { variant: string, fields: unknown[] }
-      const enumVal = value as { variant: string; fields?: unknown[] };
-      const variantSchemas = schema.variants[enumVal.variant];
-      if (variantSchemas && enumVal.fields) {
-        for (let i = 0; i < variantSchemas.length; i++) {
-          bindValue(variantSchemas[i], enumVal.fields[i], allocator, registry, serializers);
+      // Enum value should be { tag: string, ... } (tagged union)
+      const enumVal = value as { tag: string; [key: string]: unknown };
+      const variant = findVariantByName(schema, enumVal.tag);
+      if (!variant) {
+        return; // Unknown variant, nothing to bind
+      }
+
+      if (isNewtypeVariant(variant)) {
+        // Newtype variant: value is in a field named after the variant (lowercase)
+        // e.g., { tag: "Hello", hello: { ... } }
+        const fieldValue = enumVal[variant.name.toLowerCase()] ?? enumVal.value;
+        if (fieldValue !== undefined) {
+          const fieldSchemas = getVariantFieldSchemas(variant);
+          if (fieldSchemas.length === 1) {
+            bindValue(fieldSchemas[0], fieldValue, allocator, registry, serializers);
+          }
+        }
+      } else {
+        // Struct variant or tuple variant
+        const fieldSchemas = getVariantFieldSchemas(variant);
+        const fieldNames = getVariantFieldNames(variant);
+
+        if (fieldNames) {
+          // Struct variant: fields are named
+          for (let i = 0; i < fieldSchemas.length; i++) {
+            const fieldValue = enumVal[fieldNames[i]];
+            if (fieldValue !== undefined) {
+              bindValue(fieldSchemas[i], fieldValue, allocator, registry, serializers);
+            }
+          }
+        } else if (fieldSchemas.length > 0) {
+          // Tuple variant: fields in enumVal.values array
+          const tupleValues = enumVal.values as unknown[] | undefined;
+          if (tupleValues) {
+            for (let i = 0; i < fieldSchemas.length; i++) {
+              bindValue(fieldSchemas[i], tupleValues[i], allocator, registry, serializers);
+            }
+          }
         }
       }
+      return;
+    }
+
+    case "tuple": {
+      // Tuple: array of values matching schema.elements
+      const arr = value as unknown[];
+      for (let i = 0; i < schema.elements.length; i++) {
+        bindValue(schema.elements[i], arr[i], allocator, registry, serializers);
+      }
+      return;
+    }
+
+    case "ref": {
+      // Refs should be resolved before binding, but for safety we skip them
+      // The actual type should be resolved at a higher level if needed
       return;
     }
 

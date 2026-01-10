@@ -289,9 +289,15 @@ pub fn generate_decode_stmt(shape: &'static Shape, var_name: &str, offset_var: &
             let tuple_elements: Vec<String> = (0..fields.len())
                 .map(|i| format!("{var_name}_{i}"))
                 .collect();
+            // Generate tuple type for assertion
+            let tuple_types: Vec<String> = fields
+                .iter()
+                .map(|f| ts_type_base_named(f.shape()))
+                .collect();
             stmts.push(format!(
-                "const {var_name} = [{}] as const;",
-                tuple_elements.join(", ")
+                "const {var_name} = [{}] as [{}];",
+                tuple_elements.join(", "),
+                tuple_types.join(", ")
             ));
             stmts.join("\n")
         }

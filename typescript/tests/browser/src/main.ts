@@ -175,7 +175,7 @@ async function testComplex(client: TestbedClient): Promise<void> {
 
   // Test: swapPair - tuple types
   log("Testing swapPair...");
-  const swapped = await client.swapPair({ 0: 42, 1: "hello" });
+  const swapped = await client.swapPair([42, "hello"]);
   if (swapped[0] !== "hello" || swapped[1] !== 42) {
     throw new Error(`swapPair mismatch: expected ["hello", 42], got ${JSON.stringify(swapped)}`);
   }

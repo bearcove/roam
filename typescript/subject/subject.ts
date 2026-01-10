@@ -131,8 +131,8 @@ class TestbedService implements TestbedHandler {
     return points;
   }
 
-  swapPair(pair: { 0: number; 1: string }): { 0: string; 1: number } {
-    return { 0: pair[1], 1: pair[0] };
+  swapPair(pair: [number, string]): [string, number] {
+    return [pair[1], pair[0]];
   }
 }
 

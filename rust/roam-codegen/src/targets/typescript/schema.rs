@@ -2,6 +2,14 @@
 //!
 //! Generates runtime schema information that allows the TypeScript runtime
 //! to discover and bind streaming channels (Tx/Rx) in method arguments.
+//!
+//! The generated schemas use the new EnumVariant[] format:
+//! ```typescript
+//! { kind: 'enum', variants: [
+//!   { name: 'Circle', fields: [{ kind: 'f64' }] },
+//!   { name: 'Point', fields: null },
+//! ] }
+//! ```
 
 use facet_core::{ScalarType, Shape};
 use heck::ToLowerCamelCase;
@@ -46,13 +54,13 @@ pub fn generate_schema(shape: &'static Shape) -> String {
             format!("{{ kind: 'vec', element: {} }}", generate_schema(element))
         }
         ShapeKind::Tuple { elements } => {
-            // Represent tuple as struct with numeric field names
-            let fields: Vec<_> = elements
-                .iter()
-                .enumerate()
-                .map(|(i, p)| format!("'{}': {}", i, generate_schema(p.shape)))
-                .collect();
-            format!("{{ kind: 'struct', fields: {{ {} }} }}", fields.join(", "))
+            // Generate as TupleSchema
+            let element_schemas: Vec<_> =
+                elements.iter().map(|p| generate_schema(p.shape)).collect();
+            format!(
+                "{{ kind: 'tuple', elements: [{}] }}",
+                element_schemas.join(", ")
+            )
         }
         ShapeKind::Struct(StructInfo { fields, .. }) => {
             let field_schemas: Vec<_> = fields
@@ -65,29 +73,19 @@ pub fn generate_schema(shape: &'static Shape) -> String {
             )
         }
         ShapeKind::Enum(EnumInfo { variants, .. }) => {
-            let variant_schemas: Vec<_> = variants
-                .iter()
-                .map(|v| {
-                    let field_schemas: Vec<_> = match classify_variant(v) {
-                        VariantKind::Unit => vec![],
-                        VariantKind::Newtype { inner } => vec![generate_schema(inner)],
-                        VariantKind::Tuple { fields } | VariantKind::Struct { fields } => {
-                            fields.iter().map(|f| generate_schema(f.shape())).collect()
-                        }
-                    };
-                    format!("'{}': [{}]", v.name, field_schemas.join(", "))
-                })
-                .collect();
+            // Generate new EnumSchema format with EnumVariant[]
+            let variant_schemas: Vec<_> =
+                variants.iter().map(|v| generate_enum_variant(v)).collect();
             format!(
-                "{{ kind: 'enum', variants: {{ {} }} }}",
+                "{{ kind: 'enum', variants: [{}] }}",
                 variant_schemas.join(", ")
             )
         }
         ShapeKind::Pointer { pointee } => generate_schema(pointee),
         ShapeKind::Result { ok, err } => {
-            // Represent Result as enum with Ok/Err variants
+            // Represent Result as enum with Ok/Err variants using new format
             format!(
-                "{{ kind: 'enum', variants: {{ 'Ok': [{}], 'Err': [{}] }} }}",
+                "{{ kind: 'enum', variants: [{{ name: 'Ok', fields: {} }}, {{ name: 'Err', fields: {} }}] }}",
                 generate_schema(ok),
                 generate_schema(err)
             )
@@ -97,6 +95,44 @@ pub fn generate_schema(shape: &'static Shape) -> String {
             format!("{{ kind: 'tuple', elements: [{}] }}", inner.join(", "))
         }
         ShapeKind::Opaque => "{ kind: 'bytes' }".into(),
+    }
+}
+
+/// Generate an EnumVariant object literal.
+fn generate_enum_variant(variant: &facet_core::Variant) -> String {
+    match classify_variant(variant) {
+        VariantKind::Unit => {
+            format!("{{ name: '{}', fields: null }}", variant.name)
+        }
+        VariantKind::Newtype { inner } => {
+            // Newtype variant: fields is a single Schema
+            format!(
+                "{{ name: '{}', fields: {} }}",
+                variant.name,
+                generate_schema(inner)
+            )
+        }
+        VariantKind::Tuple { fields } => {
+            // Tuple variant: fields is Schema[]
+            let field_schemas: Vec<_> = fields.iter().map(|f| generate_schema(f.shape())).collect();
+            format!(
+                "{{ name: '{}', fields: [{}] }}",
+                variant.name,
+                field_schemas.join(", ")
+            )
+        }
+        VariantKind::Struct { fields } => {
+            // Struct variant: fields is Record<string, Schema>
+            let field_schemas: Vec<_> = fields
+                .iter()
+                .map(|f| format!("'{}': {}", f.name, generate_schema(f.shape())))
+                .collect();
+            format!(
+                "{{ name: '{}', fields: {{ {} }} }}",
+                variant.name,
+                field_schemas.join(", ")
+            )
+        }
     }
 }
 
