@@ -29,6 +29,7 @@ import {
   encodeResultErr,
   encodeInvalidPayload,
   encodeUnknownMethod,
+  ConnectionError,
 } from "@bearcove/roam-core";
 
 // Service implementation
@@ -167,8 +168,24 @@ class TestbedStreamingDispatcher implements StreamingDispatcher {
 }
 
 async function runServer() {
+  const addr = process.env.PEER_ADDR;
+  if (!addr) {
+    throw new Error("PEER_ADDR env var not set");
+  }
+
+  console.error(`server mode: connecting to ${addr}`);
   const server = new Server();
-  await server.runSubjectStreaming(new TestbedStreamingDispatcher());
+  const conn = await server.connect(addr);
+
+  try {
+    await conn.runStreaming(new TestbedStreamingDispatcher());
+  } catch (e) {
+    if (e instanceof ConnectionError && e.kind === "closed") {
+      // Clean shutdown
+      return;
+    }
+    throw e;
+  }
 }
 
 async function runClient() {

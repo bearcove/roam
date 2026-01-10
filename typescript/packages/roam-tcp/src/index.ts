@@ -3,7 +3,7 @@
 // Provides TCP-specific I/O: socket framing, connection state machine, server.
 
 export { CobsFramed } from "./framing.ts";
-export { Server, type ServerConfig } from "./server.ts";
+export { Server } from "./transport.ts";
 
 // Re-export Connection and protocol types from core
 export {
