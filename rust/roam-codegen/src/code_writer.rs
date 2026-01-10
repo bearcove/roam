@@ -299,7 +299,7 @@ impl<W: fmt::Write> CodeWriter<W> {
 
 /// RAII guard that maintains indentation level
 ///
-/// Uses Rc<Cell<usize>> to independently manage indent level without any borrows.
+/// Uses `Rc<Cell<usize>>` to independently manage indent level without any borrows.
 pub struct IndentGuard {
     indent_level: Rc<Cell<usize>>,
 }

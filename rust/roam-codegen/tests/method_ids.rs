@@ -74,23 +74,6 @@ fn swift_contains_uint64_literals() {
 }
 
 #[test]
-fn go_contains_uint64_map() {
-    let methods = fixture_methods();
-    let out = targets::go::generate_method_ids(&methods);
-    assert!(out.contains("map[string]uint64"));
-    assert!(out.contains("0x"));
-}
-
-#[test]
-fn java_contains_map_entries() {
-    let methods = fixture_methods();
-    let out = targets::java::generate_method_ids(&methods);
-    assert!(out.contains("Map.entry("));
-    assert!(out.contains("0x"));
-    assert!(out.contains("L)"));
-}
-
-#[test]
 fn typescript_service_generation() {
     let service = testbed_service_detail();
     let out = targets::typescript::generate_service(&service);
@@ -122,37 +105,6 @@ fn typescript_service_generation() {
 }
 
 #[test]
-fn python_method_ids() {
-    let methods = fixture_methods();
-    let out = targets::python::generate_method_ids(&methods);
-    assert!(out.contains("METHOD_ID: dict[str, int]"));
-    assert!(out.contains("0x"));
-}
-
-#[test]
-fn python_service_generation() {
-    let service = testbed_service_detail();
-    let out = targets::python::generate_service(&service);
-
-    // Should contain method IDs
-    assert!(out.contains("METHOD_ID"));
-    assert!(out.contains("\"echo\":"));
-    assert!(out.contains("\"reverse\":"));
-
-    // Should contain caller protocol
-    assert!(out.contains("class TestbedCaller(Protocol)"));
-    assert!(out.contains("def echo(self, message: str) -> str"));
-
-    // Should contain handler
-    assert!(out.contains("class TestbedHandler(ABC)"));
-    assert!(out.contains("@abstractmethod"));
-    assert!(out.contains("create_testbed_dispatcher"));
-
-    // Print for inspection
-    println!("{}", out);
-}
-
-#[test]
 fn swift_service_generation() {
     let service = testbed_service_detail();
     let out = targets::swift::generate_service(&service);
@@ -169,46 +121,6 @@ fn swift_service_generation() {
     // Should contain handler
     assert!(out.contains("protocol TestbedHandler"));
     // Should contain dispatcher class
-    assert!(out.contains("class TestbedDispatcher"));
-
-    // Print for inspection
-    println!("{}", out);
-}
-
-#[test]
-fn go_service_generation() {
-    let service = testbed_service_detail();
-    let out = targets::go::generate_service(&service);
-
-    // Should contain method ID constants
-    assert!(out.contains("MethodIDEcho"));
-    assert!(out.contains("MethodIDReverse"));
-
-    // Should contain caller interface
-    assert!(out.contains("type TestbedCaller interface"));
-    assert!(out.contains("Echo(ctx context.Context, message string) (string, error)"));
-
-    // Should contain handler
-    assert!(out.contains("type TestbedHandler interface"));
-    assert!(out.contains("NewTestbedDispatcher"));
-}
-
-#[test]
-fn java_service_generation() {
-    let service = testbed_service_detail();
-    let out = targets::java::generate_service(&service);
-
-    // Should contain method ID constants
-    assert!(out.contains("TestbedMethodId"));
-    assert!(out.contains("ECHO"));
-    assert!(out.contains("REVERSE"));
-
-    // Should contain caller interface
-    assert!(out.contains("interface TestbedCaller"));
-    assert!(out.contains("CompletableFuture<String> echo(String message)"));
-
-    // Should contain handler
-    assert!(out.contains("interface TestbedHandler"));
     assert!(out.contains("class TestbedDispatcher"));
 
     // Print for inspection
