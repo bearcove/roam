@@ -20,13 +20,13 @@ import {
   encodeOption,
   encodeVec,
   encodeVarint,
-} from "../../roam-core/src/postcard/index.ts";
+} from "@bearcove/roam-postcard";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 /** Load a golden vector from the test-fixtures directory */
 function loadGoldenVector(path: string): Uint8Array {
-  const projectRoot = join(__dirname, "..", "..", "..", "..", "..");
+  const projectRoot = join(__dirname, "..", "..", "..", "..");
   const vectorPath = join(projectRoot, "test-fixtures", "golden-vectors", path);
   return new Uint8Array(readFileSync(vectorPath));
 }

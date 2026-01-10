@@ -3,7 +3,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "check": "pnpm -r run check"
+    "check": "pnpm -r run check",
+    "test": "pnpm -r run test"
   },
   "devDependencies": {
     "@types/node": "^22",
