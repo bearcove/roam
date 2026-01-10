@@ -1,5 +1,5 @@
 {
-  "name": "@bearcove/roam-core",
+  "name": "@bearcove/roam-wire",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -11,8 +11,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@bearcove/roam-postcard": "workspace:*",
-    "@bearcove/roam-wire": "workspace:*"
+    "@bearcove/roam-postcard": "workspace:*"
   },
   "devDependencies": {
     "vitest": "^2.1.0"

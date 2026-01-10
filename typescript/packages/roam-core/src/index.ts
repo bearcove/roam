@@ -66,12 +66,7 @@ import {
 export { encodeResultOk, encodeResultErr, encodeUnknownMethod, encodeInvalidPayload, ROAM_ERROR };
 
 // RPC error types (for client-side error handling)
-export {
-  RpcError,
-  RpcErrorCode,
-  decodeRpcResult,
-  decodeUserError,
-} from "../../roam-postcard/src/rpc_error.ts";
+export { RpcError, RpcErrorCode, decodeRpcResult, decodeUserError } from "@bearcove/roam-wire";
 
 // Channel types
 export {
