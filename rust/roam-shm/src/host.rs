@@ -354,7 +354,7 @@ impl ShmHost {
         messages
     }
 
-    /// Get payload from a descriptor.
+    /// Get payload from a descriptor and free the slot.
     fn get_payload(&self, desc: &MsgDesc, peer_id: PeerId) -> Payload {
         if desc.payload_slot == INLINE_PAYLOAD_SLOT {
             Payload::Inline
@@ -374,7 +374,16 @@ impl ShmHost {
             };
 
             // Free the slot (return to guest's pool)
-            // TODO: Implement slot freeing
+            // shm[impl shm.slot.free]
+            let guest_slots = unsafe {
+                Self::create_slot_pool_view(&self.region, pool_offset, &self.layout.config)
+            };
+            let handle = SlotHandle {
+                index: desc.payload_slot,
+                generation: desc.payload_generation,
+            };
+            // Ignore errors - slot may already be freed on crash recovery
+            let _ = guest_slots.free(handle);
 
             Payload::Owned(payload)
         }
@@ -423,8 +432,10 @@ impl ShmHost {
 
         // Check if ring is full
         // shm[impl shm.ring.full]
+        // Ring is full when (head + 1) % ring_size == tail
+        // Using head - tail comparison: full when head - tail >= ring_size - 1
         let tail = h2g_tail as u64;
-        if local_head.wrapping_sub(tail) >= ring_size as u64 {
+        if local_head.wrapping_sub(tail) >= ring_size as u64 - 1 {
             return Err(SendError::RingFull);
         }
 
@@ -545,6 +556,9 @@ impl ShmHost {
 
         // Clear local head tracking
         self.host_to_guest_heads.remove(&peer_id);
+
+        // Reset peer entry to Empty so slot can be reused
+        self.peer_entry(peer_id).reset();
     }
 
     /// Initiate host goodbye (graceful shutdown).
@@ -575,8 +589,9 @@ impl ShmHost {
         &self.layout
     }
 
-    /// Get a raw pointer to the segment for testing.
-    #[cfg(test)]
+    /// Get a Region view of the segment.
+    ///
+    /// This is needed for guests to attach to the segment.
     pub fn region(&self) -> Region {
         self.region
     }

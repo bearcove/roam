@@ -235,8 +235,10 @@ impl ShmGuest {
 
         // Check if ring is full
         // shm[impl shm.ring.full]
+        // Ring is full when (head + 1) % ring_size == tail
+        // Using head - tail comparison: full when head - tail >= ring_size - 1
         let tail = self.peer_entry().g2h_tail() as u64;
-        if self.g2h_local_head.wrapping_sub(tail) >= ring_size {
+        if self.g2h_local_head.wrapping_sub(tail) >= ring_size - 1 {
             return Err(SendError::RingFull);
         }
 
@@ -337,7 +339,7 @@ impl ShmGuest {
         Some(frame)
     }
 
-    /// Get payload from a descriptor.
+    /// Get payload from a descriptor and free the slot.
     fn get_payload(&self, desc: &MsgDesc) -> Payload {
         if desc.payload_slot == INLINE_PAYLOAD_SLOT {
             Payload::Inline
@@ -355,6 +357,18 @@ impl ShmGuest {
             let payload = unsafe {
                 std::slice::from_raw_parts(payload_ptr, desc.payload_len as usize).to_vec()
             };
+
+            // Free the slot (return to host's pool)
+            // shm[impl shm.slot.free]
+            let host_slots = unsafe {
+                Self::create_slot_pool_view(&self.region, pool_offset, &self.layout.config)
+            };
+            let handle = SlotHandle {
+                index: desc.payload_slot,
+                generation: desc.payload_generation,
+            };
+            // Ignore errors - slot may already be freed
+            let _ = host_slots.free(handle);
 
             Payload::Owned(payload)
         }
