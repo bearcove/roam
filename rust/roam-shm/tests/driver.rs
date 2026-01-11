@@ -3,6 +3,8 @@
 //! These tests verify that roam RPC services can run over SHM transport,
 //! including proper request/response handling and streaming.
 
+#![cfg(feature = "tokio")]
+
 use std::pin::Pin;
 
 use roam_session::{ChannelRegistry, ServiceDispatcher, dispatch_call};

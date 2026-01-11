@@ -30,4 +30,5 @@ libc = { workspace = true }
 shm-primitives = { path = "../shm-primitives", features = ["alloc", "std"] }
 tempfile = "3"
 libc = { workspace = true }
-tokio = { workspace = true, features = ["rt"] }
+tokio = { workspace = true, features = ["macros", "rt", "time"] }
+roam-session = { path = "../roam-session" }

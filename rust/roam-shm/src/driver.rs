@@ -473,12 +473,10 @@ where
     let (task_tx, task_rx) = mpsc::channel(64);
 
     // Guest is initiator (uses odd stream IDs)
-    let handle = ConnectionHandle::new(
-        command_tx,
-        Role::Initiator,
-        negotiated.initial_credit,
-        task_tx.clone(),
-    );
+    // Use infinite credit for now (matches current roam-stream behavior).
+    let initial_credit = u32::MAX;
+    let handle =
+        ConnectionHandle::new(command_tx, Role::Initiator, initial_credit, task_tx.clone());
 
     let driver = ShmDriver::new(
         transport,
@@ -541,12 +539,9 @@ where
     let (task_tx, task_rx) = mpsc::channel(64);
 
     // Host is acceptor (uses even stream IDs)
-    let handle = ConnectionHandle::new(
-        command_tx,
-        Role::Acceptor,
-        negotiated.initial_credit,
-        task_tx.clone(),
-    );
+    // Use infinite credit for now (matches current roam-stream behavior).
+    let initial_credit = u32::MAX;
+    let handle = ConnectionHandle::new(command_tx, Role::Acceptor, initial_credit, task_tx.clone());
 
     let driver = ShmDriver::new(
         transport,

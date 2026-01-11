@@ -77,6 +77,7 @@ let transport = peer.into_transport(doorbell);
 | 009 | [009-roam-tracing.md](./009-roam-tracing.md) | TODO | Tracing across cells (roam-native) |
 | 010 | [010-tunnel-streams.md](./010-tunnel-streams.md) | TODO | Tunnel streams (roam-native) |
 | 011 | [011-dodeca-flag-day-cutover.md](./011-dodeca-flag-day-cutover.md) | TODO | Dodeca flag-day cutover plan |
+| 012 | [012-flow-control-backend.md](./012-flow-control-backend.md) | TODO | Real credit flow control (move off infinite credit) |
 
 ## Phase Dependencies
 
@@ -101,9 +102,9 @@ let transport = peer.into_transport(doorbell);
       │
       ▼
 008 Roam SHM Driver (required for dodeca)
-      │             ┌────────────────┐
-      │             ▼                ▼
-      │         009 Tracing      010 Tunnel Streams
+      │             ┌────────────────┬────────────────┐
+      │             ▼                ▼                ▼
+      │         009 Tracing      010 Tunnel Streams  012 Flow Control (optional)
       │             └───────┬────────┘
       ▼                     ▼
 011 Dodeca Cutover (flag day)
@@ -111,7 +112,7 @@ let transport = peer.into_transport(doorbell);
 
 **Critical path**: 001 → 002 → 003 → 004 → 006 → 008 (+ 010 if tunneling is required)
 
-**Parallel work**: 005 can be done alongside 002-004, and 009/010 can proceed once 008 exists.
+**Parallel work**: 005 can be done alongside 002-004, 009/010 can proceed once 008 exists, and 012 is optional hardening once 008 exists.
 
 ## Spec Rules by Phase
 
