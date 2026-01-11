@@ -74,8 +74,7 @@ pub fn generate_schema(shape: &'static Shape) -> String {
         }
         ShapeKind::Enum(EnumInfo { variants, .. }) => {
             // Generate new EnumSchema format with EnumVariant[]
-            let variant_schemas: Vec<_> =
-                variants.iter().map(|v| generate_enum_variant(v)).collect();
+            let variant_schemas: Vec<_> = variants.iter().map(generate_enum_variant).collect();
             format!(
                 "{{ kind: 'enum', variants: [{}] }}",
                 variant_schemas.join(", ")
