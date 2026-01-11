@@ -505,6 +505,63 @@ impl<'a> ShmHostGuestTransport<'a> {
     }
 }
 
+// Implement MessageTransport for ShmGuestTransport when tokio feature is enabled
+#[cfg(feature = "tokio")]
+mod async_transport {
+    use super::*;
+    use roam_stream::MessageTransport;
+    use std::time::Duration;
+
+    impl MessageTransport for ShmGuestTransport {
+        /// Send a message over the SHM transport.
+        ///
+        /// This is synchronous internally but wrapped as async for the trait.
+        async fn send(&mut self, msg: &Message) -> io::Result<()> {
+            // SHM send is synchronous and fast, no need for spawn_blocking
+            ShmGuestTransport::send(self, msg)
+        }
+
+        /// Receive a message with timeout.
+        ///
+        /// Uses tokio's timeout and yields between poll attempts.
+        async fn recv_timeout(&mut self, timeout: Duration) -> io::Result<Option<Message>> {
+            let deadline = tokio::time::Instant::now() + timeout;
+
+            loop {
+                match self.try_recv() {
+                    Ok(msg) => return Ok(msg),
+                    Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
+                        if tokio::time::Instant::now() >= deadline {
+                            return Ok(None);
+                        }
+                        // Yield to the async runtime
+                        tokio::task::yield_now().await;
+                    }
+                    Err(e) => return Err(e),
+                }
+            }
+        }
+
+        /// Receive a message (async, yields between poll attempts).
+        async fn recv(&mut self) -> io::Result<Option<Message>> {
+            loop {
+                match self.try_recv() {
+                    Ok(msg) => return Ok(msg),
+                    Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
+                        // Yield to the async runtime to avoid blocking
+                        tokio::task::yield_now().await;
+                    }
+                    Err(e) => return Err(e),
+                }
+            }
+        }
+
+        fn last_decoded(&self) -> &[u8] {
+            ShmGuestTransport::last_decoded(self)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -1312,8 +1312,10 @@ version = "0.5.0"
 dependencies = [
  "facet-postcard",
  "roam-frame",
+ "roam-stream",
  "roam-wire",
  "shm-primitives",
+ "tokio",
 ]
 
 [[package]]
