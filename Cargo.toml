@@ -1,7 +1,6 @@
 [workspace]
 resolver = "2"
 members = [
-    # New Rust implementation
     "rust/roam",
     "rust/roam-wire",
     "rust/roam-frame",
@@ -15,9 +14,11 @@ members = [
     "rust/roam-stream",
     "rust/roam-websocket",
     "rust/subject-rust",
+    "rust/shm-primitives",
     # Compliance suite
     "spec/spec-proto",
     "spec/spec-tests",
+    # xtask
     "xtask",
 ]
 exclude = ["fuzz"]
@@ -51,6 +52,7 @@ blake3 = "1.8"
 cobs = "0.5.0"
 tokio = { version = "1", features = ["sync", "rt", "time", "macros"] }
 tokio-tungstenite = "0.26"
+libc = "0.2.180"
 
 # facet ecosystem
 facet = { git = "https://github.com/facet-rs/facet", branch = "main", features = ["camino", "reflect"] }

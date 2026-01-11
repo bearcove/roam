@@ -4,6 +4,9 @@ experimental = ["setup-scripts"]
 [scripts.setup.build-subject-rust]
 command = "cargo build --release -p subject-rust"
 
+[profile.loom]
+slow-timeout = { period = "10s", terminate-after = 3 }
+
 [profile.default]
 # Fail fast - stop on first failure
 fail-fast = true
