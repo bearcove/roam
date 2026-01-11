@@ -164,7 +164,7 @@ jobs:
 
   swift-conformance:
     name: Conformance / Swift
-    runs-on: depot-macos-14
+    runs-on: depot-macos-15
     steps:
       - uses: actions/checkout@v4
 

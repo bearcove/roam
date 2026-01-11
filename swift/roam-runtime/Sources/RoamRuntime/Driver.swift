@@ -603,10 +603,12 @@ private func makeDriverAndHandle(
     let eventStream = AsyncStream<DriverEvent> { cont in
         continuation = cont
     }
+    // Capture as let to satisfy Sendable requirements
+    let capturedContinuation = continuation!
 
     // Create command sender that uses this continuation
     let commandSender: @Sendable (HandleCommand) -> Void = { cmd in
-        continuation.yield(.command(cmd))
+        capturedContinuation.yield(.command(cmd))
     }
 
     // Create handle with the command sender
