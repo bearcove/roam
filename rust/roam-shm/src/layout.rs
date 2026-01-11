@@ -3,7 +3,7 @@
 //! Defines the segment header structure and layout computation for SHM segments.
 
 use core::mem::size_of;
-use core::sync::atomic::{AtomicU32, Ordering};
+use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 /// Magic bytes for SHM segment identification.
 ///
@@ -50,6 +50,74 @@ pub const CHANNEL_ENTRY_SIZE: usize = 16;
 
 /// Descriptor size in bytes (one cache line).
 pub const DESC_SIZE: usize = 64;
+
+/// Extent header size in bytes (one cache line).
+pub const EXTENT_HEADER_SIZE: usize = 64;
+
+/// Magic bytes for extent identification.
+///
+/// shm[impl shm.varslot.extent-layout]
+pub const EXTENT_MAGIC: [u8; 8] = *b"ROAPEXT\x01";
+
+/// Maximum number of extents per size class.
+///
+/// Each size class can have up to 3 extents (initial + 2 growth steps = 3x capacity).
+pub const MAX_EXTENTS_PER_CLASS: usize = 3;
+
+/// Header for an extent appended to the segment.
+///
+/// Each extent contains slots for a single size class and is appended to the
+/// segment file when the host grows that class.
+///
+/// shm[impl shm.varslot.extent-layout]
+#[repr(C, align(64))]
+pub struct ExtentHeader {
+    /// Magic bytes: "ROAPEXT\x01"
+    pub magic: [u8; 8],
+    /// Size class index this extent belongs to.
+    pub class_idx: u32,
+    /// Extent index within the class (1 or 2; extent 0 is the initial inline extent).
+    pub extent_idx: u32,
+    /// Number of slots in this extent.
+    pub slot_count: u32,
+    /// Size of each slot in bytes.
+    pub slot_size: u32,
+    /// Reserved for future use (zero).
+    pub _reserved: [u8; 40],
+}
+
+const _: () = assert!(size_of::<ExtentHeader>() == EXTENT_HEADER_SIZE);
+
+impl ExtentHeader {
+    /// Validate the extent header.
+    pub fn validate(&self) -> bool {
+        self.magic == EXTENT_MAGIC
+    }
+
+    /// Calculate the total size of an extent (header + metadata + data).
+    pub fn extent_size(slot_size: u32, slot_count: u32) -> u64 {
+        let header_size = EXTENT_HEADER_SIZE as u64;
+        // Metadata: 16 bytes per slot (VarSlotMeta), aligned to 16
+        let meta_size = slot_count as u64 * 16;
+        let meta_aligned = align_up(header_size + meta_size, 64);
+        // Data: slot_size bytes per slot
+        let data_size = slot_count as u64 * slot_size as u64;
+        align_up(meta_aligned + data_size, 64)
+    }
+
+    /// Get the offset to the metadata array within this extent.
+    #[inline]
+    pub fn meta_offset() -> usize {
+        EXTENT_HEADER_SIZE
+    }
+
+    /// Get the offset to the data array within this extent.
+    #[inline]
+    pub fn data_offset(slot_count: u32) -> usize {
+        let meta_size = slot_count as usize * 16;
+        align_up(EXTENT_HEADER_SIZE as u64 + meta_size as u64, 64) as usize
+    }
+}
 
 /// Segment header at the start of the shared memory region.
 ///
@@ -99,8 +167,16 @@ pub struct SegmentHeader {
     ///
     /// shm[impl shm.varslot.shared]
     pub var_slot_pool_offset: u64,
+    /// Current segment size in bytes.
+    ///
+    /// This may be larger than `total_size` if the segment has been grown
+    /// via extent allocation. Guests compare this against their mapped size
+    /// to detect when the host has grown the segment.
+    ///
+    /// shm[impl shm.varslot.extents]
+    pub current_size: AtomicU64,
     /// Reserved for future use (zero)
-    pub reserved: [u8; 40],
+    pub reserved: [u8; 32],
 }
 
 const _: () = assert!(size_of::<SegmentHeader>() == HEADER_SIZE);

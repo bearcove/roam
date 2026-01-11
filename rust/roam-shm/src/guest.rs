@@ -569,6 +569,49 @@ impl ShmGuest {
         entry.update_heartbeat(now);
     }
 
+    /// Check if the segment has grown and remap if necessary.
+    ///
+    /// The host may grow the segment by adding extents to variable-size slot
+    /// pools. Guests detect this by comparing `header.current_size` against
+    /// their mapped size and remapping when it differs.
+    ///
+    /// Returns `true` if a remap occurred.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the remap fails (e.g., mmap error).
+    ///
+    /// shm[impl shm.varslot.extents]
+    pub fn check_remap(&mut self) -> io::Result<bool> {
+        use std::sync::atomic::Ordering;
+
+        // Only mmap-backed guests can remap
+        let mmap = match &mut self.backing {
+            GuestBacking::Mmap(m) => m,
+            _ => return Ok(false),
+        };
+
+        // Check current_size in header
+        let header = unsafe { &*(self.region.as_ptr() as *const SegmentHeader) };
+        let current_size = header.current_size.load(Ordering::Acquire) as usize;
+        let mapped_size = mmap.len();
+
+        if current_size <= mapped_size {
+            return Ok(false); // No growth
+        }
+
+        // Segment has grown - remap
+        mmap.check_and_remap()?;
+
+        // Update our region view
+        self.region = mmap.region();
+
+        // Update our slot pool region (pointer may have changed)
+        self.slots.update_region(self.region);
+
+        Ok(true)
+    }
+
     /// Initiate graceful detach.
     ///
     /// shm[impl shm.guest.detach]

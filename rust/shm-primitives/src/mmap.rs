@@ -167,6 +167,76 @@ impl MmapRegion {
     pub fn release_ownership(&mut self) {
         self.owns_file = false;
     }
+
+    /// Resize the region by growing the backing file and remapping.
+    ///
+    /// This is typically a host-only operation. The base pointer may change,
+    /// so callers must update any cached `Region` references after calling this.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the new size is smaller than current size (shrinking
+    /// is not supported), or if the underlying file/mmap operations fail.
+    ///
+    /// shm[impl shm.varslot.extents]
+    pub fn resize(&mut self, new_size: usize) -> io::Result<()> {
+        if new_size < self.len {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "shrinking is not supported",
+            ));
+        }
+        if new_size == self.len {
+            return Ok(()); // No change needed
+        }
+
+        // 1. Grow the backing file
+        self.file.set_len(new_size as u64)?;
+
+        // 2. Unmap old region
+        let unmap_result = unsafe { libc::munmap(self.ptr as *mut libc::c_void, self.len) };
+        if unmap_result != 0 {
+            return Err(io::Error::last_os_error());
+        }
+
+        // 3. Map new region (larger)
+        let ptr = unsafe {
+            libc::mmap(
+                std::ptr::null_mut(),
+                new_size,
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_SHARED,
+                self.file.as_raw_fd(),
+                0,
+            )
+        };
+
+        if ptr == libc::MAP_FAILED {
+            return Err(io::Error::last_os_error());
+        }
+
+        self.ptr = ptr as *mut u8;
+        self.len = new_size;
+        Ok(())
+    }
+
+    /// Check if the backing file has grown and remap if needed.
+    ///
+    /// This is useful for guests to detect when the host has grown the segment.
+    /// Returns `true` if the region was remapped, `false` if no change.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if file metadata cannot be read or remapping fails.
+    pub fn check_and_remap(&mut self) -> io::Result<bool> {
+        let file_size = self.file.metadata()?.len() as usize;
+        if file_size > self.len {
+            self.resize(file_size)?;
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
 }
 
 impl Drop for MmapRegion {
@@ -296,5 +366,109 @@ mod tests {
 
         let result = MmapRegion::create(&path, 0);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_resize_grows_region() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("resize.shm");
+
+        let mut region = MmapRegion::create(&path, 4096).unwrap();
+        assert_eq!(region.len(), 4096);
+
+        // Write data at the start
+        unsafe {
+            std::ptr::write(region.region().as_ptr(), 0xAB);
+        }
+
+        // Resize to 8192
+        region.resize(8192).unwrap();
+        assert_eq!(region.len(), 8192);
+
+        // Original data should still be accessible
+        unsafe {
+            assert_eq!(std::ptr::read(region.region().as_ptr()), 0xAB);
+        }
+
+        // Can write to new area
+        unsafe {
+            std::ptr::write(region.region().as_ptr().add(5000), 0xCD);
+            assert_eq!(std::ptr::read(region.region().as_ptr().add(5000)), 0xCD);
+        }
+    }
+
+    #[test]
+    fn test_resize_shrink_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("shrink.shm");
+
+        let mut region = MmapRegion::create(&path, 8192).unwrap();
+        let result = region.resize(4096);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_check_and_remap() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("remap.shm");
+
+        // Create owner region
+        let mut owner = MmapRegion::create(&path, 4096).unwrap();
+
+        // Attach guest
+        let mut guest = MmapRegion::attach(&path).unwrap();
+        assert_eq!(guest.len(), 4096);
+
+        // Owner grows the file
+        owner.resize(8192).unwrap();
+
+        // Guest detects and remaps
+        let remapped = guest.check_and_remap().unwrap();
+        assert!(remapped);
+        assert_eq!(guest.len(), 8192);
+
+        // Second check should return false (no change)
+        let remapped2 = guest.check_and_remap().unwrap();
+        assert!(!remapped2);
+    }
+
+    #[test]
+    fn test_resize_preserves_shared_data() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("shared_resize.shm");
+
+        let mut owner = MmapRegion::create(&path, 4096).unwrap();
+        let mut guest = MmapRegion::attach(&path).unwrap();
+
+        // Write from owner
+        unsafe {
+            std::ptr::write(owner.region().as_ptr().add(100), 0x42);
+        }
+
+        // Verify guest sees it
+        unsafe {
+            assert_eq!(std::ptr::read(guest.region().as_ptr().add(100)), 0x42);
+        }
+
+        // Owner resizes
+        owner.resize(8192).unwrap();
+
+        // Guest remaps
+        guest.check_and_remap().unwrap();
+
+        // Data should still be visible
+        unsafe {
+            assert_eq!(std::ptr::read(guest.region().as_ptr().add(100)), 0x42);
+        }
+
+        // Owner writes to new area
+        unsafe {
+            std::ptr::write(owner.region().as_ptr().add(5000), 0x99);
+        }
+
+        // Guest should see it
+        unsafe {
+            assert_eq!(std::ptr::read(guest.region().as_ptr().add(5000)), 0x99);
+        }
     }
 }

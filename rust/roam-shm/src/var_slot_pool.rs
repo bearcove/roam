@@ -5,31 +5,45 @@
 //! variable-size pools are shared across all guests with per-slot ownership
 //! tracking for crash recovery.
 
-use core::sync::atomic::{AtomicU64, Ordering};
+use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 use shm_primitives::{Region, SlotState, VarSlotMeta};
 
-use crate::layout::SizeClass;
+use crate::layout::{MAX_EXTENTS_PER_CLASS, SizeClass};
 
 /// Sentinel value indicating end of free list.
 pub const FREE_LIST_END: u64 = u64::MAX;
 
-/// Header for a single size class (64 bytes, cache-line aligned).
+/// Header for a single size class with extent support (64 bytes, cache-line aligned).
+///
+/// Each size class can have up to MAX_EXTENTS_PER_CLASS extents:
+/// - Extent 0: The initial inline extent (in the main pool region)
+/// - Extents 1..N: Additional extents appended to the segment via growth
 ///
 /// shm[impl shm.varslot.freelist]
+/// shm[impl shm.varslot.extents]
 #[repr(C, align(64))]
 pub struct SizeClassHeader {
     /// Size of each slot in this class.
     pub slot_size: u32,
-    /// Number of slots in this class.
-    pub slot_count: u32,
-    /// Free list head: packed (index in upper 32 bits, generation in lower 32 bits).
+    /// Number of slots per extent (same for all extents in this class).
+    pub slots_per_extent: u32,
+    /// Number of extents currently allocated (1 = initial only, 2-3 = grown).
+    pub extent_count: AtomicU32,
+    /// Padding for alignment.
+    pub _pad: u32,
+    /// Free list heads for each extent.
+    /// Each is packed (index in upper 32 bits, generation in lower 32 bits).
     /// Uses `FREE_LIST_END` as sentinel for empty list.
-    pub free_head: AtomicU64,
-    /// Reserved for alignment.
-    pub _reserved: [u8; 48],
+    pub free_heads: [AtomicU64; MAX_EXTENTS_PER_CLASS],
+    /// Offsets to extents 1 and 2 (extent 0 is at the class's inline position).
+    /// Only valid for indices < extent_count - 1.
+    pub extent_offsets: [AtomicU64; MAX_EXTENTS_PER_CLASS - 1],
+    /// Reserved for future use.
+    pub _reserved: [u8; 8],
 }
 
+// 4 + 4 + 4 + 4 + 24 + 16 + 8 = 64 bytes
 const _: () = assert!(core::mem::size_of::<SizeClassHeader>() == 64);
 
 impl SizeClassHeader {
@@ -47,23 +61,56 @@ impl SizeClassHeader {
         (index, generation)
     }
 
-    /// Initialize a size class header.
-    pub fn init(&mut self, slot_size: u32, slot_count: u32) {
+    /// Initialize a size class header (extent 0 only).
+    pub fn init(&mut self, slot_size: u32, slots_per_extent: u32) {
         self.slot_size = slot_size;
-        self.slot_count = slot_count;
-        self.free_head = AtomicU64::new(FREE_LIST_END);
-        self._reserved = [0; 48];
+        self.slots_per_extent = slots_per_extent;
+        self.extent_count = AtomicU32::new(1); // Start with extent 0
+        self._pad = 0;
+        for free_head in &self.free_heads {
+            free_head.store(FREE_LIST_END, Ordering::Relaxed);
+        }
+        for offset in &self.extent_offsets {
+            offset.store(0, Ordering::Relaxed);
+        }
+        self._reserved = [0; 8];
+    }
+
+    /// Get the free list head for a specific extent.
+    #[inline]
+    pub fn free_head(&self, extent_idx: usize) -> &AtomicU64 {
+        &self.free_heads[extent_idx]
+    }
+
+    /// Get the number of currently allocated extents.
+    #[inline]
+    pub fn extent_count(&self) -> u32 {
+        self.extent_count.load(Ordering::Acquire)
+    }
+
+    /// Get the offset to an extent (extent 0 returns None as it's inline).
+    #[inline]
+    pub fn extent_offset(&self, extent_idx: usize) -> Option<u64> {
+        if extent_idx == 0 {
+            None // Extent 0 is inline
+        } else if extent_idx < MAX_EXTENTS_PER_CLASS {
+            Some(self.extent_offsets[extent_idx - 1].load(Ordering::Acquire))
+        } else {
+            None
+        }
     }
 }
 
 /// Handle to an allocated variable-size slot.
 ///
-/// Encodes the size class index, slot index within that class, and generation.
+/// Encodes the size class index, extent index, slot index, and generation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct VarSlotHandle {
     /// Size class index (0-255).
     pub class_idx: u8,
-    /// Slot index within the size class.
+    /// Extent index within the size class (0-2).
+    pub extent_idx: u8,
+    /// Slot index within the extent.
     pub slot_idx: u32,
     /// Generation counter for ABA detection.
     pub generation: u32,
@@ -73,22 +120,28 @@ impl VarSlotHandle {
     /// Sentinel value for inline payloads (no slot allocated).
     pub const INLINE: Self = Self {
         class_idx: 0xFF,
-        slot_idx: 0x00FFFFFF,
+        extent_idx: 0xFF,
+        slot_idx: 0x003FFFFF,
         generation: 0,
     };
 
     /// Check if this is the inline sentinel.
     #[inline]
     pub fn is_inline(&self) -> bool {
-        self.class_idx == 0xFF && self.slot_idx == 0x00FFFFFF
+        self.class_idx == 0xFF && self.extent_idx == 0xFF && self.slot_idx == 0x003FFFFF
     }
 
     /// Pack into a u32 for MsgDesc.payload_slot.
     ///
-    /// Format: class_idx (8 bits) | slot_idx (24 bits).
+    /// Format:
+    /// - Bits 31-24: class_idx (8 bits)
+    /// - Bits 23-22: extent_idx (2 bits, 0-3)
+    /// - Bits 21-0: slot_idx (22 bits, max ~4M slots per extent)
     #[inline]
     pub fn pack_slot(&self) -> u32 {
-        ((self.class_idx as u32) << 24) | (self.slot_idx & 0x00FFFFFF)
+        ((self.class_idx as u32) << 24)
+            | ((self.extent_idx as u32 & 0x3) << 22)
+            | (self.slot_idx & 0x003FFFFF)
     }
 
     /// Unpack from MsgDesc.payload_slot and payload_generation.
@@ -96,7 +149,8 @@ impl VarSlotHandle {
     pub fn from_packed(payload_slot: u32, payload_generation: u32) -> Self {
         Self {
             class_idx: (payload_slot >> 24) as u8,
-            slot_idx: payload_slot & 0x00FFFFFF,
+            extent_idx: ((payload_slot >> 22) & 0x3) as u8,
+            slot_idx: payload_slot & 0x003FFFFF,
             generation: payload_generation,
         }
     }
@@ -118,19 +172,24 @@ pub enum VarFreeError {
     },
 }
 
-/// Variable-size slot pool with multiple size classes.
+/// Variable-size slot pool with multiple size classes and extent support.
+///
+/// Each size class can have up to MAX_EXTENTS_PER_CLASS extents:
+/// - Extent 0: Inline in the main pool region (offsets computed at construction)
+/// - Extents 1-2: Appended to segment via growth (offsets stored in SizeClassHeader)
 ///
 /// shm[impl shm.varslot.shared]
+/// shm[impl shm.varslot.extents]
 pub struct VarSlotPool {
     region: Region,
     /// Offset to the first size class header.
     base_offset: u64,
     /// Size class configurations.
     classes: Vec<SizeClass>,
-    /// Computed offsets to each class's metadata array.
-    meta_offsets: Vec<u64>,
-    /// Computed offsets to each class's data array.
-    data_offsets: Vec<u64>,
+    /// Computed offsets to each class's extent 0 metadata array.
+    extent0_meta_offsets: Vec<u64>,
+    /// Computed offsets to each class's extent 0 data array.
+    extent0_data_offsets: Vec<u64>,
 }
 
 impl VarSlotPool {
@@ -138,8 +197,8 @@ impl VarSlotPool {
     ///
     /// This does not initialize the pool - use `init` for that.
     pub fn new(region: Region, base_offset: u64, classes: Vec<SizeClass>) -> Self {
-        let mut meta_offsets = Vec::with_capacity(classes.len());
-        let mut data_offsets = Vec::with_capacity(classes.len());
+        let mut extent0_meta_offsets = Vec::with_capacity(classes.len());
+        let mut extent0_data_offsets = Vec::with_capacity(classes.len());
 
         // Headers are at the start
         let headers_size = classes.len() as u64 * 64;
@@ -148,12 +207,12 @@ impl VarSlotPool {
         for class in &classes {
             // Align metadata array
             offset = align_up(offset, 16); // VarSlotMeta is 16 bytes
-            meta_offsets.push(offset);
+            extent0_meta_offsets.push(offset);
             offset += class.count as u64 * 16; // VarSlotMeta size
 
             // Align data array
             offset = align_up(offset, 64);
-            data_offsets.push(offset);
+            extent0_data_offsets.push(offset);
             offset += class.count as u64 * class.slot_size as u64;
         }
 
@@ -161,12 +220,19 @@ impl VarSlotPool {
             region,
             base_offset,
             classes,
-            meta_offsets,
-            data_offsets,
+            extent0_meta_offsets,
+            extent0_data_offsets,
         }
     }
 
-    /// Calculate the total size needed for a variable slot pool.
+    /// Update the region after a resize/remap.
+    ///
+    /// Call this after the underlying MmapRegion has been resized.
+    pub fn update_region(&mut self, region: Region) {
+        self.region = region;
+    }
+
+    /// Calculate the total size needed for a variable slot pool (extent 0 only).
     pub fn calculate_size(classes: &[SizeClass]) -> u64 {
         let headers_size = classes.len() as u64 * 64;
         let mut size = headers_size;
@@ -186,6 +252,8 @@ impl VarSlotPool {
 
     /// Initialize the pool (call once during segment creation).
     ///
+    /// This initializes extent 0 for all size classes.
+    ///
     /// # Safety
     ///
     /// Caller must ensure exclusive access during initialization.
@@ -196,34 +264,45 @@ impl VarSlotPool {
             header.init(class.slot_size, class.count);
         }
 
-        // Initialize slot metadata and build free lists
+        // Initialize extent 0 slot metadata and build free lists
         for class_idx in 0..self.classes.len() {
-            let class = &self.classes[class_idx];
+            // SAFETY: We have exclusive access during init (caller's requirement)
+            unsafe { self.init_extent_slots(class_idx, 0) };
+        }
+    }
 
-            // Initialize all slot metadata
-            for slot_idx in 0..class.count {
-                let meta = self.slot_meta_mut(class_idx, slot_idx);
+    /// Initialize slots for a specific extent and build its free list.
+    ///
+    /// # Safety
+    ///
+    /// Caller must ensure exclusive access to the extent during initialization.
+    pub unsafe fn init_extent_slots(&self, class_idx: usize, extent_idx: usize) {
+        let class = &self.classes[class_idx];
+        let slot_count = class.count;
+
+        // Initialize all slot metadata
+        for slot_idx in 0..slot_count {
+            if let Some(meta) = self.slot_meta_mut_ext(class_idx, extent_idx, slot_idx) {
                 meta.init();
             }
+        }
 
-            // Build free list by linking slots together
-            // Link 0 -> 1 -> 2 -> ... -> (n-1) -> END
-            for slot_idx in 0..class.count {
-                let meta = self.slot_meta_mut(class_idx, slot_idx);
-                if slot_idx + 1 < class.count {
+        // Build free list by linking slots together
+        // Link 0 -> 1 -> 2 -> ... -> (n-1) -> END
+        for slot_idx in 0..slot_count {
+            if let Some(meta) = self.slot_meta_mut_ext(class_idx, extent_idx, slot_idx) {
+                if slot_idx + 1 < slot_count {
                     meta.next_free.store(slot_idx + 1, Ordering::Release);
                 } else {
                     meta.next_free.store(u32::MAX, Ordering::Release);
                 }
             }
+        }
 
-            // Set head to first slot
-            let header = self.class_header_mut(class_idx);
-            if class.count > 0 {
-                header
-                    .free_head
-                    .store(SizeClassHeader::pack(0, 0), Ordering::Release);
-            }
+        // Set free list head for this extent
+        let header = self.class_header_mut(class_idx);
+        if slot_count > 0 {
+            header.free_heads[extent_idx].store(SizeClassHeader::pack(0, 0), Ordering::Release);
         }
     }
 
@@ -240,17 +319,82 @@ impl VarSlotPool {
         unsafe { &mut *self.class_header_ptr(class_idx) }
     }
 
-    fn slot_meta_ptr(&self, class_idx: usize, slot_idx: u32) -> *mut VarSlotMeta {
-        let offset = self.meta_offsets[class_idx] as usize + slot_idx as usize * 16;
-        self.region.offset(offset) as *mut VarSlotMeta
+    /// Get the base offset for an extent's data within the segment.
+    /// Used by grow_size_class() when initializing new extents.
+    #[allow(dead_code)]
+    fn extent_base_offset(&self, class_idx: usize, extent_idx: usize) -> Option<u64> {
+        if extent_idx == 0 {
+            // Extent 0 is inline - we have precomputed offsets
+            Some(self.extent0_meta_offsets[class_idx] - 64) // Approximate base
+        } else {
+            // Extents 1+ have their offset stored in the header
+            let header = self.class_header(class_idx);
+            let offset = header.extent_offsets[extent_idx - 1].load(Ordering::Acquire);
+            if offset == 0 {
+                None // Extent not allocated
+            } else {
+                Some(offset)
+            }
+        }
     }
 
-    fn slot_meta(&self, class_idx: usize, slot_idx: u32) -> &VarSlotMeta {
-        unsafe { &*self.slot_meta_ptr(class_idx, slot_idx) }
+    /// Get a slot's metadata for any extent.
+    fn slot_meta_ext(
+        &self,
+        class_idx: usize,
+        extent_idx: usize,
+        slot_idx: u32,
+    ) -> Option<&VarSlotMeta> {
+        let class = &self.classes[class_idx];
+        if slot_idx >= class.count {
+            return None;
+        }
+
+        if extent_idx == 0 {
+            // Extent 0: use precomputed offsets
+            let offset = self.extent0_meta_offsets[class_idx] as usize + slot_idx as usize * 16;
+            Some(unsafe { &*(self.region.offset(offset) as *const VarSlotMeta) })
+        } else if extent_idx < MAX_EXTENTS_PER_CLASS {
+            // Extents 1+: look up offset from header
+            let header = self.class_header(class_idx);
+            let extent_offset = header.extent_offsets[extent_idx - 1].load(Ordering::Acquire);
+            if extent_offset == 0 {
+                return None; // Extent not allocated
+            }
+            // Extent layout: ExtentHeader (64) + metadata array
+            let meta_offset = extent_offset as usize + 64 + slot_idx as usize * 16;
+            Some(unsafe { &*(self.region.offset(meta_offset) as *const VarSlotMeta) })
+        } else {
+            None
+        }
     }
 
-    fn slot_meta_mut(&self, class_idx: usize, slot_idx: u32) -> &mut VarSlotMeta {
-        unsafe { &mut *self.slot_meta_ptr(class_idx, slot_idx) }
+    /// Get a mutable slot's metadata for any extent.
+    fn slot_meta_mut_ext(
+        &self,
+        class_idx: usize,
+        extent_idx: usize,
+        slot_idx: u32,
+    ) -> Option<&mut VarSlotMeta> {
+        let class = &self.classes[class_idx];
+        if slot_idx >= class.count {
+            return None;
+        }
+
+        if extent_idx == 0 {
+            let offset = self.extent0_meta_offsets[class_idx] as usize + slot_idx as usize * 16;
+            Some(unsafe { &mut *(self.region.offset(offset) as *mut VarSlotMeta) })
+        } else if extent_idx < MAX_EXTENTS_PER_CLASS {
+            let header = self.class_header(class_idx);
+            let extent_offset = header.extent_offsets[extent_idx - 1].load(Ordering::Acquire);
+            if extent_offset == 0 {
+                return None;
+            }
+            let meta_offset = extent_offset as usize + 64 + slot_idx as usize * 16;
+            Some(unsafe { &mut *(self.region.offset(meta_offset) as *mut VarSlotMeta) })
+        } else {
+            None
+        }
     }
 
     /// Get a pointer to the slot's payload data area.
@@ -262,9 +406,28 @@ impl VarSlotPool {
         if handle.slot_idx >= class.count {
             return None;
         }
-        let offset = self.data_offsets[handle.class_idx as usize] as usize
-            + handle.slot_idx as usize * class.slot_size as usize;
-        Some(self.region.offset(offset))
+        let extent_idx = handle.extent_idx as usize;
+
+        if extent_idx == 0 {
+            // Extent 0: use precomputed offsets
+            let offset = self.extent0_data_offsets[handle.class_idx as usize] as usize
+                + handle.slot_idx as usize * class.slot_size as usize;
+            Some(self.region.offset(offset))
+        } else if extent_idx < MAX_EXTENTS_PER_CLASS {
+            // Extents 1+: compute from extent offset
+            let header = self.class_header(handle.class_idx as usize);
+            let extent_offset = header.extent_offsets[extent_idx - 1].load(Ordering::Acquire);
+            if extent_offset == 0 {
+                return None;
+            }
+            // Extent layout: ExtentHeader (64) + metadata (count * 16, aligned to 64) + data
+            let meta_size = class.count as usize * 16;
+            let data_start = extent_offset as usize + 64 + align_up(meta_size as u64, 64) as usize;
+            let offset = data_start + handle.slot_idx as usize * class.slot_size as usize;
+            Some(self.region.offset(offset))
+        } else {
+            None
+        }
     }
 
     /// Get the slot size for a given class.
@@ -291,24 +454,46 @@ impl VarSlotPool {
         None // All classes exhausted
     }
 
-    /// Allocate from a specific size class.
+    /// Allocate from a specific size class, trying all available extents.
     ///
     /// shm[impl shm.varslot.allocation]
+    /// shm[impl shm.varslot.extents]
     pub fn alloc_from_class(&self, class_idx: usize, owner: u8) -> Option<VarSlotHandle> {
         if class_idx >= self.classes.len() {
             return None;
         }
 
         let header = self.class_header(class_idx);
+        let extent_count = header.extent_count() as usize;
+
+        // Try each extent in order
+        for extent_idx in 0..extent_count {
+            if let Some(handle) = self.alloc_from_extent(class_idx, extent_idx, owner) {
+                return Some(handle);
+            }
+        }
+
+        None // All extents exhausted
+    }
+
+    /// Allocate from a specific extent within a size class.
+    fn alloc_from_extent(
+        &self,
+        class_idx: usize,
+        extent_idx: usize,
+        owner: u8,
+    ) -> Option<VarSlotHandle> {
+        let header = self.class_header(class_idx);
+        let free_head = header.free_head(extent_idx);
 
         loop {
-            let head = header.free_head.load(Ordering::Acquire);
+            let head = free_head.load(Ordering::Acquire);
             if head == FREE_LIST_END {
-                return None; // Class exhausted
+                return None; // This extent exhausted
             }
 
             let (index, tag) = SizeClassHeader::unpack(head);
-            let meta = self.slot_meta(class_idx, index);
+            let meta = self.slot_meta_ext(class_idx, extent_idx, index)?;
 
             // Read next pointer before CAS
             let next = meta.next_free.load(Ordering::Acquire);
@@ -319,7 +504,7 @@ impl VarSlotPool {
             };
 
             // Try to pop from free list
-            match header.free_head.compare_exchange_weak(
+            match free_head.compare_exchange_weak(
                 head,
                 next_packed,
                 Ordering::AcqRel,
@@ -337,6 +522,7 @@ impl VarSlotPool {
 
                     return Some(VarSlotHandle {
                         class_idx: class_idx as u8,
+                        extent_idx: extent_idx as u8,
                         slot_idx: index,
                         generation: new_gen,
                     });
@@ -356,7 +542,13 @@ impl VarSlotPool {
             return Err(VarFreeError::InvalidIndex);
         }
 
-        let meta = self.slot_meta(handle.class_idx as usize, handle.slot_idx);
+        let meta = self
+            .slot_meta_ext(
+                handle.class_idx as usize,
+                handle.extent_idx as usize,
+                handle.slot_idx,
+            )
+            .ok_or(VarFreeError::InvalidIndex)?;
 
         // Verify generation
         let actual_gen = meta.generation.load(Ordering::Acquire);
@@ -394,7 +586,13 @@ impl VarSlotPool {
             return Err(VarFreeError::InvalidIndex);
         }
 
-        let meta = self.slot_meta(handle.class_idx as usize, handle.slot_idx);
+        let meta = self
+            .slot_meta_ext(
+                handle.class_idx as usize,
+                handle.extent_idx as usize,
+                handle.slot_idx,
+            )
+            .ok_or(VarFreeError::InvalidIndex)?;
 
         // Verify generation (detect double-free)
         let actual_gen = meta.generation.load(Ordering::Acquire);
@@ -421,8 +619,12 @@ impl VarSlotPool {
             }
         }
 
-        // Push to free list
-        self.push_to_free_list(handle.class_idx as usize, handle.slot_idx);
+        // Push to free list for this extent
+        self.push_to_free_list(
+            handle.class_idx as usize,
+            handle.extent_idx as usize,
+            handle.slot_idx,
+        );
         Ok(())
     }
 
@@ -436,7 +638,13 @@ impl VarSlotPool {
             return Err(VarFreeError::InvalidIndex);
         }
 
-        let meta = self.slot_meta(handle.class_idx as usize, handle.slot_idx);
+        let meta = self
+            .slot_meta_ext(
+                handle.class_idx as usize,
+                handle.extent_idx as usize,
+                handle.slot_idx,
+            )
+            .ok_or(VarFreeError::InvalidIndex)?;
 
         // Verify generation
         let actual_gen = meta.generation.load(Ordering::Acquire);
@@ -463,17 +671,24 @@ impl VarSlotPool {
             }
         }
 
-        // Push to free list
-        self.push_to_free_list(handle.class_idx as usize, handle.slot_idx);
+        // Push to free list for this extent
+        self.push_to_free_list(
+            handle.class_idx as usize,
+            handle.extent_idx as usize,
+            handle.slot_idx,
+        );
         Ok(())
     }
 
-    fn push_to_free_list(&self, class_idx: usize, slot_idx: u32) {
+    fn push_to_free_list(&self, class_idx: usize, extent_idx: usize, slot_idx: u32) {
         let header = self.class_header(class_idx);
-        let meta = self.slot_meta(class_idx, slot_idx);
+        let free_head = header.free_head(extent_idx);
+        let Some(meta) = self.slot_meta_ext(class_idx, extent_idx, slot_idx) else {
+            return; // Invalid extent/slot
+        };
 
         loop {
-            let head = header.free_head.load(Ordering::Acquire);
+            let head = free_head.load(Ordering::Acquire);
             let (head_idx, head_gen) = if head == FREE_LIST_END {
                 (u32::MAX, 0u32)
             } else {
@@ -486,7 +701,7 @@ impl VarSlotPool {
             // Try to become new head
             let new_head = SizeClassHeader::pack(slot_idx, head_gen.wrapping_add(1));
 
-            match header.free_head.compare_exchange_weak(
+            match free_head.compare_exchange_weak(
                 head,
                 new_head,
                 Ordering::AcqRel,
@@ -500,23 +715,31 @@ impl VarSlotPool {
 
     /// Recover all slots owned by a crashed peer.
     ///
-    /// This scans all slots and frees any that were owned by the specified peer.
+    /// This scans all extents in all size classes and frees any slots
+    /// that were owned by the specified peer.
     /// Should be called when a peer crashes or disconnects unexpectedly.
     pub fn recover_peer(&self, peer_id: u8) {
         for class_idx in 0..self.classes.len() {
+            let header = self.class_header(class_idx);
+            let extent_count = header.extent_count() as usize;
             let class = &self.classes[class_idx];
-            for slot_idx in 0..class.count {
-                let meta = self.slot_meta(class_idx, slot_idx);
 
-                let owner = meta.owner_peer.load(Ordering::Acquire);
-                let state = meta.state.load(Ordering::Acquire);
+            for extent_idx in 0..extent_count {
+                for slot_idx in 0..class.count {
+                    let Some(meta) = self.slot_meta_ext(class_idx, extent_idx, slot_idx) else {
+                        continue;
+                    };
 
-                if owner == peer_id as u32 && state != SlotState::Free as u32 {
-                    // Force transition to Free
-                    meta.state.store(SlotState::Free as u32, Ordering::Release);
+                    let owner = meta.owner_peer.load(Ordering::Acquire);
+                    let state = meta.state.load(Ordering::Acquire);
 
-                    // Push to free list
-                    self.push_to_free_list(class_idx, slot_idx);
+                    if owner == peer_id as u32 && state != SlotState::Free as u32 {
+                        // Force transition to Free
+                        meta.state.store(SlotState::Free as u32, Ordering::Release);
+
+                        // Push to free list for this extent
+                        self.push_to_free_list(class_idx, extent_idx, slot_idx);
+                    }
                 }
             }
         }
@@ -532,34 +755,44 @@ impl VarSlotPool {
         &self.classes
     }
 
-    /// Approximate count of free slots in a class.
+    /// Approximate count of free slots in a class (across all extents).
     pub fn free_count_approx(&self, class_idx: usize) -> u32 {
         if class_idx >= self.classes.len() {
             return 0;
         }
 
         let header = self.class_header(class_idx);
+        let extent_count = header.extent_count() as usize;
         let slot_count = self.classes[class_idx].count;
-        let mut count = 0u32;
-        let mut current = header.free_head.load(Ordering::Acquire);
+        let mut total_count = 0u32;
 
-        while current != FREE_LIST_END && count < slot_count {
-            let (index, _) = SizeClassHeader::unpack(current);
-            if index < slot_count {
-                count += 1;
-                let meta = self.slot_meta(class_idx, index);
-                let next = meta.next_free.load(Ordering::Acquire);
-                current = if next == u32::MAX {
-                    FREE_LIST_END
+        for extent_idx in 0..extent_count {
+            let free_head = header.free_head(extent_idx);
+            let mut count = 0u32;
+            let mut current = free_head.load(Ordering::Acquire);
+
+            while current != FREE_LIST_END && count < slot_count {
+                let (index, _) = SizeClassHeader::unpack(current);
+                if index < slot_count {
+                    count += 1;
+                    if let Some(meta) = self.slot_meta_ext(class_idx, extent_idx, index) {
+                        let next = meta.next_free.load(Ordering::Acquire);
+                        current = if next == u32::MAX {
+                            FREE_LIST_END
+                        } else {
+                            SizeClassHeader::pack(next, 0)
+                        };
+                    } else {
+                        break;
+                    }
                 } else {
-                    SizeClassHeader::pack(next, 0)
-                };
-            } else {
-                break;
+                    break;
+                }
             }
+            total_count += count;
         }
 
-        count
+        total_count
     }
 }
 
@@ -606,14 +839,21 @@ mod tests {
     fn test_var_slot_handle_pack() {
         let handle = VarSlotHandle {
             class_idx: 2,
+            extent_idx: 1,
             slot_idx: 0x00123456,
             generation: 42,
         };
         let packed = handle.pack_slot();
-        assert_eq!(packed, 0x02123456);
+        // class_idx=2 in bits 31-24, extent_idx=1 in bits 23-22, slot_idx in bits 21-0
+        // 0x02 << 24 = 0x02000000
+        // 0x01 << 22 = 0x00400000
+        // 0x00123456 & 0x003FFFFF = 0x00123456
+        // Result: 0x02400000 | 0x00123456 = 0x02523456
+        assert_eq!(packed, 0x02523456);
 
         let unpacked = VarSlotHandle::from_packed(packed, 42);
         assert_eq!(unpacked.class_idx, 2);
+        assert_eq!(unpacked.extent_idx, 1);
         assert_eq!(unpacked.slot_idx, 0x00123456);
         assert_eq!(unpacked.generation, 42);
     }
@@ -702,8 +942,20 @@ mod tests {
         let handle1 = pool.alloc(32, 1).unwrap(); // Owner: peer 1
         let handle2 = pool.alloc(32, 2).unwrap(); // Owner: peer 2
 
-        let meta1 = pool.slot_meta(handle1.class_idx as usize, handle1.slot_idx);
-        let meta2 = pool.slot_meta(handle2.class_idx as usize, handle2.slot_idx);
+        let meta1 = pool
+            .slot_meta_ext(
+                handle1.class_idx as usize,
+                handle1.extent_idx as usize,
+                handle1.slot_idx,
+            )
+            .expect("meta1 should exist");
+        let meta2 = pool
+            .slot_meta_ext(
+                handle2.class_idx as usize,
+                handle2.extent_idx as usize,
+                handle2.slot_idx,
+            )
+            .expect("meta2 should exist");
 
         assert_eq!(meta1.owner(), 1);
         assert_eq!(meta2.owner(), 2);
@@ -734,7 +986,9 @@ mod tests {
         assert_eq!(free_after, free_before + 2);
 
         // Peer 2's slot should still be in-flight (not recovered)
-        let meta3 = pool.slot_meta(h3.class_idx as usize, h3.slot_idx);
+        let meta3 = pool
+            .slot_meta_ext(h3.class_idx as usize, h3.extent_idx as usize, h3.slot_idx)
+            .expect("meta3 should exist");
         assert_eq!(meta3.state(), SlotState::InFlight);
         assert_eq!(meta3.owner(), 2);
     }
@@ -750,6 +1004,7 @@ mod tests {
         // Invalid handles should return None
         let invalid = VarSlotHandle {
             class_idx: 255,
+            extent_idx: 0,
             slot_idx: 0,
             generation: 0,
         };

@@ -41,6 +41,13 @@ impl SlotPool {
         }
     }
 
+    /// Update the region after a resize/remap.
+    ///
+    /// Call this after the underlying MmapRegion has been resized.
+    pub(crate) fn update_region(&mut self, region: Region) {
+        self.region = region;
+    }
+
     fn bitmap_ptr(&self) -> *mut AtomicU64 {
         self.region.offset(self.pool_offset as usize) as *mut AtomicU64
     }

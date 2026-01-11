@@ -7,18 +7,20 @@ use std::collections::HashMap;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::ptr;
+use std::sync::atomic::Ordering;
 
 use roam_frame::{Frame, INLINE_PAYLOAD_LEN, INLINE_PAYLOAD_SLOT, MsgDesc, Payload};
 use shm_primitives::{Doorbell, HeapRegion, MmapRegion, Region, SignalResult, SlotHandle};
 
 use crate::channel::ChannelEntry;
 use crate::layout::{
-    CHANNEL_ENTRY_SIZE, DESC_SIZE, HEADER_SIZE, MAGIC, SegmentConfig, SegmentHeader, SegmentLayout,
-    VERSION,
+    CHANNEL_ENTRY_SIZE, DESC_SIZE, EXTENT_MAGIC, ExtentHeader, HEADER_SIZE, MAGIC,
+    MAX_EXTENTS_PER_CLASS, SegmentConfig, SegmentHeader, SegmentLayout, VERSION,
 };
 use crate::peer::{PeerEntry, PeerId, PeerState};
 use crate::slot_pool::SlotPool;
 use crate::spawn::{AddPeerOptions, DeathCallback, SpawnTicket};
+use crate::var_slot_pool::{SizeClassHeader, VarSlotPool};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RecvError {
@@ -252,6 +254,9 @@ impl ShmHost {
         header.max_channels = layout.config.max_channels;
         header.heartbeat_interval = layout.config.heartbeat_interval;
         header.var_slot_pool_offset = layout.var_slot_pool_offset.unwrap_or(0);
+        header
+            .current_size
+            .store(layout.total_size, core::sync::atomic::Ordering::Release);
         // host_goodbye and reserved are already zeroed
     }
 
@@ -274,25 +279,37 @@ impl ShmHost {
         }
     }
 
-    /// Initialize all slot pools (host + per-guest).
+    /// Initialize all slot pools (host + per-guest or shared var pool).
     ///
     /// # Safety
     ///
     /// The region must be valid and exclusively owned.
     unsafe fn init_slot_pools(region: &Region, layout: &SegmentLayout) {
-        // Host pool
-        unsafe { SlotPool::init(region, layout.host_slot_pool_offset(), &layout.config) };
+        if let Some(ref var_classes) = layout.config.var_slot_classes {
+            // Initialize shared variable-size slot pool
+            let var_pool_offset = layout.var_slot_pool_offset.unwrap();
+            let var_pool = VarSlotPool::new(
+                *region,
+                var_pool_offset,
+                var_classes.iter().copied().collect(),
+            );
+            unsafe { var_pool.init() };
+        } else {
+            // Initialize fixed-size per-guest pools
+            // Host pool
+            unsafe { SlotPool::init(region, layout.host_slot_pool_offset(), &layout.config) };
 
-        // Guest pools
-        for i in 0..layout.config.max_guests {
-            let peer_id = PeerId::from_index(i as u8).unwrap();
-            unsafe {
-                SlotPool::init(
-                    region,
-                    layout.guest_slot_pool_offset(peer_id.get()),
-                    &layout.config,
-                )
-            };
+            // Guest pools
+            for i in 0..layout.config.max_guests {
+                let peer_id = PeerId::from_index(i as u8).unwrap();
+                unsafe {
+                    SlotPool::init(
+                        region,
+                        layout.guest_slot_pool_offset(peer_id.get()),
+                        &layout.config,
+                    )
+                };
+            }
         }
     }
 
@@ -813,6 +830,120 @@ impl ShmHost {
     pub fn region(&self) -> Region {
         self.region
     }
+
+    /// Grow a variable-size slot pool size class by adding a new extent.
+    ///
+    /// This appends a new extent to the segment file, initializes it with
+    /// free slots, and atomically updates the extent count. Guests will
+    /// detect the size change via `current_size` in the segment header
+    /// and remap accordingly.
+    ///
+    /// Returns the new extent index (1 or 2) on success.
+    ///
+    /// # Errors
+    ///
+    /// - `GrowError::NoVarSlotPool` - Segment was not configured with var slot pools
+    /// - `GrowError::MaxExtentsReached` - Size class already has maximum extents
+    /// - `GrowError::HeapBackedNotSupported` - Cannot grow heap-backed segments
+    /// - `GrowError::Io` - File resize or remap failed
+    ///
+    /// shm[impl shm.varslot.extents]
+    pub fn grow_size_class(&mut self, class_idx: usize) -> Result<u32, GrowError> {
+        // Check that we have var slot pools configured
+        let var_pool_offset = self
+            .layout
+            .var_slot_pool_offset
+            .ok_or(GrowError::NoVarSlotPool)?;
+
+        // Must be file-backed to grow
+        let mmap = match &mut self.backing {
+            ShmBacking::Mmap(m) => m,
+            ShmBacking::Heap(_) => return Err(GrowError::HeapBackedNotSupported),
+        };
+
+        // Get size class configuration
+        let var_classes = self
+            .layout
+            .config
+            .var_slot_classes
+            .as_ref()
+            .ok_or(GrowError::NoVarSlotPool)?;
+
+        if class_idx >= var_classes.len() {
+            return Err(GrowError::InvalidClassIndex);
+        }
+
+        let class = &var_classes[class_idx];
+        let slot_size = class.slot_size;
+        let slots_per_extent = class.count;
+
+        // Read current extent count from header
+        let class_header_offset = var_pool_offset as usize + class_idx * 64;
+        let class_header =
+            unsafe { &*(self.region.offset(class_header_offset) as *const SizeClassHeader) };
+
+        let current_extent_count = class_header.extent_count.load(Ordering::Acquire);
+        if current_extent_count >= MAX_EXTENTS_PER_CLASS as u32 {
+            return Err(GrowError::MaxExtentsReached);
+        }
+
+        let new_extent_idx = current_extent_count;
+
+        // Calculate extent size and new segment size
+        let extent_size = ExtentHeader::extent_size(slot_size, slots_per_extent);
+        let current_size = mmap.len();
+        let new_size = current_size + extent_size as usize;
+
+        // Resize the backing file and remap
+        mmap.resize(new_size)?;
+
+        // Update our region view
+        self.region = mmap.region();
+
+        // Update host_slots pool region (pointer may have changed)
+        self.host_slots.update_region(self.region);
+
+        // Calculate extent offset (at end of old size)
+        let extent_offset = current_size as u64;
+
+        // Initialize extent header
+        let extent_header =
+            unsafe { &mut *(self.region.offset(extent_offset as usize) as *mut ExtentHeader) };
+        extent_header.magic = EXTENT_MAGIC;
+        extent_header.class_idx = class_idx as u32;
+        extent_header.extent_idx = new_extent_idx;
+        extent_header.slot_count = slots_per_extent;
+        extent_header.slot_size = slot_size;
+        extent_header._reserved = [0; 40];
+
+        // Build free list for the new extent
+        // Construct a temporary VarSlotPool view and init the extent
+        let var_classes_vec: Vec<_> = var_classes.iter().copied().collect();
+        let var_pool = VarSlotPool::new(self.region, var_pool_offset, var_classes_vec);
+
+        // Store the extent offset in the class header
+        class_header.extent_offsets[new_extent_idx as usize - 1]
+            .store(extent_offset, Ordering::Release);
+
+        // Initialize the extent's slots and free list
+        // SAFETY: We have exclusive access during growth
+        unsafe {
+            var_pool.init_extent_slots(class_idx, new_extent_idx as usize);
+        }
+
+        // Atomically increment extent count (makes extent visible to allocators)
+        class_header
+            .extent_count
+            .store(new_extent_idx + 1, Ordering::Release);
+
+        // Update segment header's current_size
+        let header = self.header();
+        header
+            .current_size
+            .store(new_size as u64, Ordering::Release);
+
+        Ok(new_extent_idx)
+    }
 }
 
 /// Errors from send operations.
@@ -840,6 +971,43 @@ impl std::fmt::Display for SendError {
 }
 
 impl std::error::Error for SendError {}
+
+/// Errors from grow operations.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GrowError {
+    /// Segment was not configured with variable slot pools
+    NoVarSlotPool,
+    /// Size class already has maximum number of extents
+    MaxExtentsReached,
+    /// Invalid size class index
+    InvalidClassIndex,
+    /// Cannot grow heap-backed segments (only file-backed)
+    HeapBackedNotSupported,
+    /// I/O error during resize or remap
+    Io(String),
+}
+
+impl std::fmt::Display for GrowError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            GrowError::NoVarSlotPool => write!(f, "segment has no variable slot pools"),
+            GrowError::MaxExtentsReached => write!(f, "size class has maximum extents"),
+            GrowError::InvalidClassIndex => write!(f, "invalid size class index"),
+            GrowError::HeapBackedNotSupported => {
+                write!(f, "cannot grow heap-backed segments")
+            }
+            GrowError::Io(msg) => write!(f, "I/O error: {}", msg),
+        }
+    }
+}
+
+impl std::error::Error for GrowError {}
+
+impl From<io::Error> for GrowError {
+    fn from(err: io::Error) -> Self {
+        GrowError::Io(err.to_string())
+    }
+}
 
 #[cfg(test)]
 mod tests {

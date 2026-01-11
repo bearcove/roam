@@ -398,3 +398,67 @@ fn test_release_reserved_slot() {
     // Should get the same slot
     assert_eq!(ticket2.peer_id.get(), 1);
 }
+
+/// Test growing a variable-size slot pool by adding extents.
+#[test]
+fn test_grow_size_class() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("grow.shm");
+
+    // Configure with variable-size slot pools using with_var_slots()
+    // which sets max_payload_size appropriately
+    let mut config = SegmentConfig::with_var_slots();
+    // Reduce max_guests to keep segment size reasonable
+    config.max_guests = 2;
+
+    let mut host = ShmHost::create(&path, config).unwrap();
+
+    // Get initial file size
+    let initial_size = std::fs::metadata(&path).unwrap().len();
+
+    // Grow the first size class
+    let extent_idx = host.grow_size_class(0).unwrap();
+    assert_eq!(extent_idx, 1); // First growth creates extent 1
+
+    // File should be larger now
+    let size_after_first_grow = std::fs::metadata(&path).unwrap().len();
+    assert!(size_after_first_grow > initial_size);
+
+    // Grow again
+    let extent_idx = host.grow_size_class(0).unwrap();
+    assert_eq!(extent_idx, 2); // Second growth creates extent 2
+
+    let size_after_second_grow = std::fs::metadata(&path).unwrap().len();
+    assert!(size_after_second_grow > size_after_first_grow);
+
+    // Third growth should fail (max 3 extents)
+    let result = host.grow_size_class(0);
+    assert!(result.is_err());
+}
+
+/// Test that growing fails appropriately for heap-backed segments.
+#[test]
+fn test_grow_heap_backed_fails() {
+    // Heap-backed segments can't grow - use with_var_slots()
+    let mut config = SegmentConfig::with_var_slots();
+    config.max_guests = 2;
+
+    let mut host = ShmHost::create_heap(config).unwrap();
+
+    let result = host.grow_size_class(0);
+    assert!(result.is_err());
+}
+
+/// Test that growing fails for segments without var slot pools.
+#[test]
+fn test_grow_no_var_pool_fails() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("no_var.shm");
+
+    // No var_slot_classes configured
+    let config = SegmentConfig::default();
+    let mut host = ShmHost::create(&path, config).unwrap();
+
+    let result = host.grow_size_class(0);
+    assert!(result.is_err());
+}
