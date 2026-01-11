@@ -75,6 +75,9 @@ pub mod host;
 #[cfg(feature = "std")]
 pub mod guest;
 
+#[cfg(feature = "std")]
+pub mod transport;
+
 // Re-export key types
 pub use channel::{
     ChannelEntry, ChannelId, ChannelIdAllocator, ChannelState, FlowControl, RequestId,
@@ -92,6 +95,11 @@ pub use host::ShmHost;
 
 #[cfg(feature = "std")]
 pub use guest::ShmGuest;
+
+#[cfg(feature = "std")]
+pub use transport::{
+    ConvertError, ShmGuestTransport, ShmHostGuestTransport, frame_to_message, message_to_frame,
+};
 
 /// Handshake is implicit via segment header.
 ///

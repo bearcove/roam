@@ -1310,7 +1310,9 @@ dependencies = [
 name = "roam-shm"
 version = "0.5.0"
 dependencies = [
+ "facet-postcard",
  "roam-frame",
+ "roam-wire",
  "shm-primitives",
 ]
 

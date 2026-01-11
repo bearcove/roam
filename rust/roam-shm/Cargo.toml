@@ -18,6 +18,8 @@ std = ["shm-primitives/std"]
 [dependencies]
 shm-primitives = { path = "../shm-primitives", default-features = false }
 roam-frame = { path = "../roam-frame" }
+roam-wire = { path = "../roam-wire" }
+facet-postcard = { workspace = true }
 
 [dev-dependencies]
 shm-primitives = { path = "../shm-primitives", features = ["alloc"] }
