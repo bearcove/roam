@@ -29,7 +29,7 @@ The Swift implementation is **more complete than originally estimated**:
 | **Channel binding** | ✅ | ✅ | ✅ | Generated |
 | **Client stubs** | ✅ | ✅ | ✅ | Generated |
 | **Server dispatcher** | ✅ | ✅ | ✅ | Generated |
-| **Spec rule coverage** | 80% | 47% | 0% | No annotations yet |
+| **Spec rule coverage** | 80% | 47% | 84% | Annotations added |
 | **Golden vector tests** | ✅ | ✅ | ✅ | All pass |
 
 ### Spec Test Results
@@ -53,7 +53,7 @@ The Swift implementation is **more complete than originally estimated**:
 
 | Phase | Status | Description |
 |-------|--------|-------------|
-| 003 | TODO | Add tracey spec annotations to Swift code |
+| 003 | **DONE** | Add tracey spec annotations to Swift code (84% coverage) |
 
 **Phases 002-012 from original plan are obsolete** — codegen already works!
 
@@ -126,13 +126,17 @@ cargo xtask codegen --swift
 2. ✅ Swift subject builds and runs
 3. ✅ All 17 spec tests pass (100%)
 4. ✅ All streaming tests pass
-5. ⏳ Tracey annotations added (Phase 003)
+5. ✅ Tracey annotations added (84% impl coverage)
 
-## Estimated Remaining Effort
+## Completion
 
-| Phase | Complexity | Est. Time |
-|-------|------------|-----------|
-| 003 Spec Annotations | Low | 2-3 hours |
-| **Total** | | **2-3 hours** |
+All phases complete! Swift implementation is at parity with Rust:
+- 100% spec test pass rate (17/17)
+- 84% tracey impl coverage (73/87 rules)
+- Rust is at 80% impl coverage (70/87 rules)
 
-Swift parity is essentially complete. Only tracey annotations remain.
+**Swift now exceeds Rust in tracey coverage!**
+
+Remaining uncovered rules are for features not yet implemented:
+- Flow control with credit (byte accounting, credit consume/overrun/prompt)
+- Advanced channel lifecycle (speculative, immediate-data, response-closes-pulls)
