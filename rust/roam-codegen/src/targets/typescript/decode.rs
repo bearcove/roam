@@ -19,7 +19,7 @@ pub fn generate_decode_stmt_client(
     match classify_shape(shape) {
         ShapeKind::Tx { inner } => {
             // Caller's Tx (caller sends) - decode channel_id and create Tx handle
-            // r[impl streaming.type] - Channel types decode as channel_id on wire.
+            // r[impl channeling.type] - Channel types decode as channel_id on wire.
             // TODO: Need Connection access to create proper Tx handle
             let inner_type = ts_type_client_return(inner);
             format!(
@@ -28,7 +28,7 @@ pub fn generate_decode_stmt_client(
         }
         ShapeKind::Rx { inner } => {
             // Caller's Rx (caller receives) - decode channel_id and create Rx handle
-            // r[impl streaming.type] - Channel types decode as channel_id on wire.
+            // r[impl channeling.type] - Channel types decode as channel_id on wire.
             // TODO: Need Connection access to create proper Rx handle
             let inner_type = ts_type_client_return(inner);
             format!(
@@ -52,7 +52,7 @@ pub fn generate_decode_stmt_server(
     match classify_shape(shape) {
         ShapeKind::Tx { inner } => {
             // Schema Tx → server sends via Tx
-            // r[impl streaming.type] - Channel types decode as channel_id on wire.
+            // r[impl channeling.type] - Channel types decode as channel_id on wire.
             let inner_type = ts_type_server_arg(inner);
             format!(
                 "const _{var_name}_r = decodeU64(buf, {offset_var}); const {var_name} = {{ channelId: _{var_name}_r.value }} as Tx<{inner_type}>; {offset_var} = _{var_name}_r.next; /* TODO: create real Tx handle */"
@@ -60,7 +60,7 @@ pub fn generate_decode_stmt_server(
         }
         ShapeKind::Rx { inner } => {
             // Schema Rx → server receives via Rx
-            // r[impl streaming.type] - Channel types decode as channel_id on wire.
+            // r[impl channeling.type] - Channel types decode as channel_id on wire.
             let inner_type = ts_type_server_arg(inner);
             format!(
                 "const _{var_name}_r = decodeU64(buf, {offset_var}); const {var_name} = {{ channelId: _{var_name}_r.value }} as Rx<{inner_type}>; {offset_var} = _{var_name}_r.next; /* TODO: create real Rx handle */"

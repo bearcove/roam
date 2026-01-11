@@ -11,7 +11,7 @@ use super::types::{is_fully_supported, ts_type_server_arg, ts_type_server_return
 
 /// Generate handler interface (for handling incoming calls).
 ///
-/// r[impl streaming.caller-pov] - Handler uses Rx for args, Tx for returns.
+/// r[impl channeling.caller-pov] - Handler uses Rx for args, Tx for returns.
 pub fn generate_handler_interface(service: &ServiceDetail) -> String {
     let mut out = String::new();
     let service_name = service.name.to_upper_camel_case();

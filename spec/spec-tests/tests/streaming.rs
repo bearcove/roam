@@ -48,10 +48,10 @@ async fn hello_exchange(io: &mut spec_tests::harness::CobsFramed) -> Result<(), 
     Ok(())
 }
 
-// r[verify streaming.client-to-server] - Client pushes data, server aggregates
-// r[verify streaming.data] - Data messages carry stream payloads
-// r[verify streaming.close] - Close terminates stream gracefully
-// r[verify streaming.id.parity] - Client uses odd stream IDs (initiator)
+// r[verify channeling.type] - Client pushes data, server aggregates
+// r[verify channeling.data] - Data messages carry stream payloads
+// r[verify channeling.close] - Close terminates stream gracefully
+// r[verify channeling.id.parity] - Client uses odd stream IDs (initiator)
 #[test]
 fn streaming_sum_client_to_server() {
     run_async(async {
@@ -134,9 +134,9 @@ fn streaming_sum_client_to_server() {
     .unwrap();
 }
 
-// r[verify streaming.server-to-client] - Server pushes data to client
-// r[verify streaming.data] - Data messages carry stream payloads
-// r[verify streaming.close] - Close terminates stream gracefully
+// r[verify channeling.type] - Server pushes data to client
+// r[verify channeling.data] - Data messages carry stream payloads
+// r[verify channeling.close] - Close terminates stream gracefully
 #[test]
 fn streaming_generate_server_to_client() {
     run_async(async {
@@ -231,8 +231,8 @@ fn streaming_generate_server_to_client() {
     .unwrap();
 }
 
-// r[verify streaming.bidirectional] - Both sides can push data
-// r[verify streaming.lifecycle.concurrent] - Input/output streams are independent
+// r[verify channeling.type] - Both sides can push data
+// r[verify channeling.lifecycle.immediate-data] - Input/output streams are independent
 #[test]
 fn streaming_transform_bidirectional() {
     run_async(async {

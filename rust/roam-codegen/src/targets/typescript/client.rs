@@ -9,7 +9,7 @@ use super::types::{is_fully_supported, ts_type_client_arg, ts_type_client_return
 
 /// Generate caller interface (for making calls to the service).
 ///
-/// r[impl streaming.caller-pov] - Caller uses Tx for args, Rx for returns.
+/// r[impl channeling.caller-pov] - Caller uses Tx for args, Rx for returns.
 pub fn generate_caller_interface(service: &ServiceDetail) -> String {
     let mut out = String::new();
     let service_name = service.name.to_upper_camel_case();
@@ -46,8 +46,6 @@ pub fn generate_caller_interface(service: &ServiceDetail) -> String {
 }
 
 /// Generate client implementation (for making calls to the service).
-///
-/// r[impl codegen.typescript.client] - Generate client class with method implementations.
 pub fn generate_client_impl(service: &ServiceDetail) -> String {
     use super::decode::generate_decode_stmt_client;
     use super::encode::generate_encode_expr;

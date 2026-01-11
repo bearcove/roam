@@ -38,8 +38,8 @@ pub enum Role {
 
 /// Allocates unique stream IDs with correct parity.
 ///
-/// r[impl streaming.id.uniqueness] - IDs are unique within a connection.
-/// r[impl streaming.id.parity] - Initiator uses odd, Acceptor uses even.
+/// r[impl channeling.id.uniqueness] - IDs are unique within a connection.
+/// r[impl channeling.id.parity] - Initiator uses odd, Acceptor uses even.
 pub struct ChannelIdAllocator {
     next: AtomicU64,
 }
@@ -171,12 +171,12 @@ impl TaskTxSlot {
 
 /// Tx stream handle - caller sends data to callee.
 ///
-/// r[impl streaming.caller-pov] - From caller's perspective, Tx means "I send".
-/// r[impl streaming.type] - Serializes as u64 stream ID on wire.
-/// r[impl streaming.holder-semantics] - The holder sends on this stream.
-/// r[impl streaming.streams-outlive-response] - Tx streams may outlive Response.
-/// r[impl streaming.lifecycle.immediate-data] - Can send Data before Response.
-/// r[impl streaming.lifecycle.speculative] - Early Data may be wasted on error.
+/// r[impl channeling.caller-pov] - From caller's perspective, Tx means "I send".
+/// r[impl channeling.type] - Serializes as u64 stream ID on wire.
+/// r[impl channeling.holder-semantics] - The holder sends on this stream.
+/// r[impl channeling.channels-outlive-response] - Tx streams may outlive Response.
+/// r[impl channeling.lifecycle.immediate-data] - Can send Data before Response.
+/// r[impl channeling.lifecycle.speculative] - Early Data may be wasted on error.
 ///
 /// # Facet Implementation
 ///
@@ -270,7 +270,7 @@ impl<T: 'static> Tx<T> {
 
     /// Send a value on this stream.
     ///
-    /// r[impl streaming.data] - Data messages carry serialized values.
+    /// r[impl channeling.data] - Data messages carry serialized values.
     ///
     /// Works in two modes:
     /// - Server-side: sends `TaskMessage::Data` directly to connection driver
@@ -302,7 +302,7 @@ impl<T: 'static> Tx<T> {
 
 /// When a Tx is dropped, send a Close message if in server-side mode.
 ///
-/// r[impl streaming.close] - Close terminates the stream.
+/// r[impl channeling.close] - Close terminates the stream.
 impl<T: 'static> Drop for Tx<T> {
     fn drop(&mut self) {
         // Only send Close in server-side mode (task_tx is set)
@@ -399,9 +399,9 @@ impl ReceiverSlot {
 
 /// Rx stream handle - caller receives data from callee.
 ///
-/// r[impl streaming.caller-pov] - From caller's perspective, Rx means "I receive".
-/// r[impl streaming.type] - Serializes as u64 stream ID on wire.
-/// r[impl streaming.holder-semantics] - The holder receives from this stream.
+/// r[impl channeling.caller-pov] - From caller's perspective, Rx means "I receive".
+/// r[impl channeling.type] - Serializes as u64 stream ID on wire.
+/// r[impl channeling.holder-semantics] - The holder receives from this stream.
 ///
 /// # Facet Implementation
 ///
@@ -490,8 +490,8 @@ impl<T: 'static> Rx<T> {
     /// `Ok(None)` when the stream is closed,
     /// or `Err` if deserialization fails.
     ///
-    /// r[impl streaming.data] - Deserialize Data message payloads.
-    /// r[impl streaming.data.invalid] - Caller must send Goodbye on deserialize error.
+    /// r[impl channeling.data] - Deserialize Data message payloads.
+    /// r[impl channeling.data.invalid] - Caller must send Goodbye on deserialize error.
     pub async fn recv(&mut self) -> Result<Option<T>, RxError>
     where
         T: Facet<'static>,
@@ -587,7 +587,7 @@ pub enum TaskMessage {
 /// For outgoing streams (server `Tx<T>` args), spawned tasks drain receivers
 /// and send Data/Close messages via `task_tx`.
 ///
-/// r[impl streaming.unknown] - Unknown stream IDs cause Goodbye.
+/// r[impl channeling.unknown] - Unknown stream IDs cause Goodbye.
 pub struct ChannelRegistry {
     /// Streams where we receive Data messages (backing `Rx<T>` or `Tx<T>` handles on our side).
     /// Key: channel_id, Value: sender to route Data payloads to the handle.
@@ -596,26 +596,26 @@ pub struct ChannelRegistry {
     /// Stream IDs that have been closed.
     /// Used to detect data-after-close violations.
     ///
-    /// r[impl streaming.data-after-close] - Track closed streams.
+    /// r[impl channeling.data-after-close] - Track closed streams.
     closed: HashSet<ChannelId>,
 
     // ========================================================================
     // Flow Control
     // ========================================================================
-    /// r[impl flow.stream.credit-based] - Credit tracking for incoming streams.
-    /// r[impl flow.stream.all-transports] - Flow control applies to all transports.
+    /// r[impl flow.channel.credit-based] - Credit tracking for incoming streams.
+    /// r[impl flow.channel.all-transports] - Flow control applies to all transports.
     /// This is the credit we've granted to the peer - bytes they can still send us.
     /// Decremented when we receive Data, incremented when we send Credit.
     incoming_credit: HashMap<ChannelId, u32>,
 
-    /// r[impl flow.stream.credit-based] - Credit tracking for outgoing streams.
-    /// r[impl flow.stream.all-transports] - Flow control applies to all transports.
+    /// r[impl flow.channel.credit-based] - Credit tracking for outgoing streams.
+    /// r[impl flow.channel.all-transports] - Flow control applies to all transports.
     /// This is the credit peer granted us - bytes we can still send them.
     /// Decremented when we send Data, incremented when we receive Credit.
     outgoing_credit: HashMap<ChannelId, u32>,
 
     /// Initial credit to grant new streams.
-    /// r[impl flow.stream.initial-credit] - Each stream starts with this credit.
+    /// r[impl flow.channel.initial-credit] - Each stream starts with this credit.
     initial_credit: u32,
 
     /// Channel for spawned tasks to send messages (Data/Close/Response).
@@ -630,7 +630,7 @@ impl ChannelRegistry {
     /// The `task_tx` is used by spawned tasks to send Data/Close/Response messages
     /// back to the driver for transmission on the wire.
     ///
-    /// r[impl flow.stream.initial-credit] - Each stream starts with this credit.
+    /// r[impl flow.channel.initial-credit] - Each stream starts with this credit.
     pub fn new_with_credit(initial_credit: u32, task_tx: mpsc::Sender<TaskMessage>) -> Self {
         Self {
             incoming: HashMap::new(),
@@ -644,8 +644,8 @@ impl ChannelRegistry {
 
     /// Create a new registry with default infinite credit.
     ///
-    /// r[impl flow.stream.infinite-credit] - Implementations MAY use very large credit.
-    /// r[impl flow.stream.zero-credit] - With infinite credit, zero-credit never occurs.
+    /// r[impl flow.channel.infinite-credit] - Implementations MAY use very large credit.
+    /// r[impl flow.channel.zero-credit] - With infinite credit, zero-credit never occurs.
     /// This disables backpressure but simplifies implementation.
     pub fn new(task_tx: mpsc::Sender<TaskMessage>) -> Self {
         Self::new_with_credit(u32::MAX, task_tx)
@@ -663,7 +663,7 @@ impl ChannelRegistry {
     /// The connection layer will route Data messages for this channel_id to the sender.
     /// Used for both `Rx<T>` (caller receives from callee) and `Tx<T>` (callee sends to caller).
     ///
-    /// r[impl flow.stream.initial-credit] - Stream starts with initial credit.
+    /// r[impl flow.channel.initial-credit] - Stream starts with initial credit.
     pub fn register_incoming(&mut self, channel_id: ChannelId, tx: mpsc::Sender<Vec<u8>>) {
         self.incoming.insert(channel_id, tx);
         // Grant initial credit - peer can send us this many bytes
@@ -675,7 +675,7 @@ impl ChannelRegistry {
     /// The actual receiver is NOT stored here - the driver owns it directly.
     /// This only sets up credit tracking for the stream.
     ///
-    /// r[impl flow.stream.initial-credit] - Stream starts with initial credit.
+    /// r[impl flow.channel.initial-credit] - Stream starts with initial credit.
     pub fn register_outgoing_credit(&mut self, channel_id: ChannelId) {
         // Assume peer grants us initial credit - we can send them this many bytes
         self.outgoing_credit.insert(channel_id, self.initial_credit);
@@ -685,11 +685,11 @@ impl ChannelRegistry {
     ///
     /// Returns Ok(()) if routed successfully, Err(ChannelError) otherwise.
     ///
-    /// r[impl streaming.data] - Data messages routed by channel_id.
-    /// r[impl streaming.data-after-close] - Reject data on closed streams.
-    /// r[impl flow.stream.credit-overrun] - Reject if data exceeds remaining credit.
-    /// r[impl flow.stream.credit-consume] - Deduct bytes from remaining credit.
-    /// r[impl flow.stream.byte-accounting] - Credit measured in payload bytes.
+    /// r[impl channeling.data] - Data messages routed by channel_id.
+    /// r[impl channeling.data-after-close] - Reject data on closed streams.
+    /// r[impl flow.channel.credit-overrun] - Reject if data exceeds remaining credit.
+    /// r[impl flow.channel.credit-consume] - Deduct bytes from remaining credit.
+    /// r[impl flow.channel.byte-accounting] - Credit measured in payload bytes.
     ///
     /// Returns a sender and payload if routing is allowed, or an error.
     /// The actual send must be done by the caller to avoid holding locks across await.
@@ -704,13 +704,13 @@ impl ChannelRegistry {
         }
 
         // Check credit before routing
-        // r[impl flow.stream.credit-overrun] - Reject if exceeds credit
+        // r[impl flow.channel.credit-overrun] - Reject if exceeds credit
         let payload_len = payload.len() as u32;
         if let Some(credit) = self.incoming_credit.get_mut(&channel_id) {
             if payload_len > *credit {
                 return Err(ChannelError::CreditOverrun);
             }
-            // r[impl flow.stream.credit-consume] - Deduct from credit
+            // r[impl flow.channel.credit-consume] - Deduct from credit
             *credit -= payload_len;
         }
         // Note: if no credit entry exists, the stream may not be registered yet
@@ -727,11 +727,11 @@ impl ChannelRegistry {
     ///
     /// Returns Ok(()) if routed successfully, Err(ChannelError) otherwise.
     ///
-    /// r[impl streaming.data] - Data messages routed by channel_id.
-    /// r[impl streaming.data-after-close] - Reject data on closed streams.
-    /// r[impl flow.stream.credit-overrun] - Reject if data exceeds remaining credit.
-    /// r[impl flow.stream.credit-consume] - Deduct bytes from remaining credit.
-    /// r[impl flow.stream.byte-accounting] - Credit measured in payload bytes.
+    /// r[impl channeling.data] - Data messages routed by channel_id.
+    /// r[impl channeling.data-after-close] - Reject data on closed streams.
+    /// r[impl flow.channel.credit-overrun] - Reject if data exceeds remaining credit.
+    /// r[impl flow.channel.credit-consume] - Deduct bytes from remaining credit.
+    /// r[impl flow.channel.byte-accounting] - Credit measured in payload bytes.
     pub async fn route_data(
         &mut self,
         channel_id: ChannelId,
@@ -747,8 +747,8 @@ impl ChannelRegistry {
     ///
     /// Dropping the sender will cause the `Rx<T>`'s recv() to return None.
     ///
-    /// r[impl streaming.close] - Close terminates the stream.
-    /// r[impl flow.stream.close-exempt] - Close doesn't consume credit.
+    /// r[impl channeling.close] - Close terminates the stream.
+    /// r[impl flow.channel.close-exempt] - Close doesn't consume credit.
     pub fn close(&mut self, channel_id: ChannelId) {
         self.incoming.remove(&channel_id);
         self.incoming_credit.remove(&channel_id);
@@ -758,8 +758,8 @@ impl ChannelRegistry {
 
     /// Reset a stream (remove from registry, discard credit).
     ///
-    /// r[impl streaming.reset] - Reset terminates the stream abruptly.
-    /// r[impl streaming.reset.credit] - Outstanding credit is lost on reset.
+    /// r[impl channeling.reset] - Reset terminates the stream abruptly.
+    /// r[impl channeling.reset.credit] - Outstanding credit is lost on reset.
     pub fn reset(&mut self, channel_id: ChannelId) {
         self.incoming.remove(&channel_id);
         self.incoming_credit.remove(&channel_id);
@@ -769,11 +769,11 @@ impl ChannelRegistry {
 
     /// Receive a Credit message - add credit for an outgoing stream.
     ///
-    /// r[impl flow.stream.credit-grant] - Credit message adds to available credit.
-    /// r[impl flow.stream.credit-additive] - Credit accumulates additively.
+    /// r[impl flow.channel.credit-grant] - Credit message adds to available credit.
+    /// r[impl flow.channel.credit-additive] - Credit accumulates additively.
     pub fn receive_credit(&mut self, channel_id: ChannelId, bytes: u32) {
         if let Some(credit) = self.outgoing_credit.get_mut(&channel_id) {
-            // r[impl flow.stream.credit-additive] - Add to existing credit
+            // r[impl flow.channel.credit-additive] - Add to existing credit
             *credit = credit.saturating_add(bytes);
         }
         // If no entry, stream may be closed or unknown - ignore
@@ -920,7 +920,7 @@ pub enum ChannelError {
     Unknown,
     /// Data received after stream was closed.
     DataAfterClose,
-    /// r[impl flow.stream.credit-overrun] - Data exceeded remaining credit.
+    /// r[impl flow.channel.credit-overrun] - Data exceeded remaining credit.
     CreditOverrun,
 }
 
@@ -1090,7 +1090,7 @@ pub trait ServiceDispatcher: Send + Sync {
     /// Returns a boxed future with `'static` lifetime so it can be spawned.
     /// Implementations should clone their service into the future to achieve this.
     ///
-    /// r[impl streaming.allocation.caller] - Stream IDs are decoded from payload (caller allocated).
+    /// r[impl channeling.allocation.caller] - Stream IDs are decoded from payload (caller allocated).
     fn dispatch(
         &self,
         method_id: u64,
@@ -1559,7 +1559,7 @@ pub trait UnaryCaller {
 mod tests {
     use super::*;
 
-    // r[verify streaming.id.parity]
+    // r[verify channeling.id.parity]
     #[test]
     fn channel_id_allocator_initiator_uses_odd_ids() {
         let alloc = ChannelIdAllocator::new(Role::Initiator);
@@ -1569,7 +1569,7 @@ mod tests {
         assert_eq!(alloc.next(), 7);
     }
 
-    // r[verify streaming.id.parity]
+    // r[verify channeling.id.parity]
     #[test]
     fn channel_id_allocator_acceptor_uses_even_ids() {
         let alloc = ChannelIdAllocator::new(Role::Acceptor);
@@ -1579,7 +1579,7 @@ mod tests {
         assert_eq!(alloc.next(), 8);
     }
 
-    // r[verify streaming.holder-semantics]
+    // r[verify channeling.holder-semantics]
     #[tokio::test]
     async fn tx_serializes_and_rx_deserializes() {
         // Create a channel pair using roam::channel
@@ -1608,7 +1608,7 @@ mod tests {
         ChannelRegistry::new(task_tx)
     }
 
-    // r[verify streaming.data-after-close]
+    // r[verify channeling.data-after-close]
     #[tokio::test]
     async fn data_after_close_is_rejected() {
         let mut registry = test_registry();
@@ -1623,8 +1623,8 @@ mod tests {
         assert_eq!(result, Err(ChannelError::DataAfterClose));
     }
 
-    // r[verify streaming.data]
-    // r[verify streaming.unknown]
+    // r[verify channeling.data]
+    // r[verify channeling.unknown]
     #[tokio::test]
     async fn channel_registry_routes_data_to_registered_stream() {
         let mut registry = test_registry();
@@ -1643,7 +1643,7 @@ mod tests {
         assert!(registry.route_data(999, b"nope".to_vec()).await.is_err());
     }
 
-    // r[verify streaming.close]
+    // r[verify channeling.close]
     #[tokio::test]
     async fn channel_registry_close_terminates_stream() {
         let mut registry = test_registry();

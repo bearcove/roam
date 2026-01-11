@@ -139,7 +139,7 @@ impl testbed::Testbed for TestbedService {
     }
 }
 
-// r[verify client.unary] - Generated client can make unary calls
+// r[verify unary.initiate] - Generated client can make unary calls
 #[test]
 fn client_mode_echo() {
     run_async(async {
@@ -149,8 +149,8 @@ fn client_mode_echo() {
     .unwrap();
 }
 
-// r[verify client.streaming.client-to-server] - Generated client can send streaming data
-// r[verify streaming.client-to-server] - Client pushes data via Rx channel
+// r[verify channeling.type] - Generated client can send streaming data
+// r[verify channeling.type] - Client pushes data via Rx channel
 #[test]
 fn client_mode_sum() {
     run_async(async {
@@ -160,8 +160,8 @@ fn client_mode_sum() {
     .unwrap();
 }
 
-// r[verify client.streaming.server-to-client] - Generated client can receive streaming data
-// r[verify streaming.server-to-client] - Server pushes data via Tx channel
+// r[verify channeling.type] - Generated client can receive streaming data
+// r[verify channeling.type] - Server pushes data via Tx channel
 #[test]
 fn client_mode_generate() {
     run_async(async {

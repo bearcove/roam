@@ -192,7 +192,7 @@ fn unary_payload_over_max_triggers_goodbye() {
     .unwrap();
 }
 
-// r[verify streaming.id.zero-reserved] - Stream ID 0 is reserved; if a peer
+// r[verify channeling.id.zero-reserved] - Stream ID 0 is reserved; if a peer
 // receives a stream message with channel_id of 0, it MUST send a Goodbye message.
 #[test]
 fn channel_id_zero_triggers_goodbye() {
@@ -233,7 +233,7 @@ fn channel_id_zero_triggers_goodbye() {
         }
 
         let reason = reason.ok_or_else(|| "expected Goodbye after channel_id=0".to_string())?;
-        let ok = reason.contains("streaming.id.zero-reserved")
+        let ok = reason.contains("channeling.id.zero-reserved")
             || reason.contains("core.stream.id.zero-reserved");
         if !ok {
             return Err(format!(
@@ -247,7 +247,7 @@ fn channel_id_zero_triggers_goodbye() {
     .unwrap();
 }
 
-// r[verify streaming.unknown] - If a peer receives a stream message with a
+// r[verify channeling.unknown] - If a peer receives a stream message with a
 // channel_id that was never opened, it MUST send a Goodbye message.
 #[test]
 fn stream_unknown_id_triggers_goodbye() {
@@ -292,9 +292,9 @@ fn stream_unknown_id_triggers_goodbye() {
 
         let reason =
             reason.ok_or_else(|| "expected Goodbye after unknown channel_id".to_string())?;
-        if !reason.contains("streaming.unknown") {
+        if !reason.contains("channeling.unknown") {
             return Err(format!(
-                "Goodbye reason must mention streaming.unknown, got {reason:?}"
+                "Goodbye reason must mention channeling.unknown, got {reason:?}"
             ));
         }
 
@@ -304,7 +304,7 @@ fn stream_unknown_id_triggers_goodbye() {
     .unwrap();
 }
 
-// r[verify streaming.id.zero-reserved] - Verify Data message with channel_id=0
+// r[verify channeling.id.zero-reserved] - Verify Data message with channel_id=0
 // also triggers Goodbye (not just Close).
 #[test]
 fn stream_data_id_zero_triggers_goodbye() {
@@ -348,7 +348,7 @@ fn stream_data_id_zero_triggers_goodbye() {
 
         let reason =
             reason.ok_or_else(|| "expected Goodbye after channel_id=0 Data".to_string())?;
-        let ok = reason.contains("streaming.id.zero-reserved")
+        let ok = reason.contains("channeling.id.zero-reserved")
             || reason.contains("core.stream.id.zero-reserved");
         if !ok {
             return Err(format!(
