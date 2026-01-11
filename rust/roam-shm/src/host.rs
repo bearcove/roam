@@ -251,6 +251,7 @@ impl ShmHost {
         header.slots_per_guest = layout.config.slots_per_guest;
         header.max_channels = layout.config.max_channels;
         header.heartbeat_interval = layout.config.heartbeat_interval;
+        header.var_slot_pool_offset = layout.var_slot_pool_offset.unwrap_or(0);
         // host_goodbye and reserved are already zeroed
     }
 

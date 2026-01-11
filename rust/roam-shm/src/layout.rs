@@ -91,8 +91,16 @@ pub struct SegmentHeader {
     pub host_goodbye: AtomicU32,
     /// Heartbeat interval in nanoseconds (0 = disabled)
     pub heartbeat_interval: u64,
+    /// Offset to shared variable-size slot pool (0 = uses fixed per-guest pools).
+    ///
+    /// When non-zero, the segment uses a shared variable-size slot pool instead
+    /// of fixed-size per-guest pools. Guests that don't support variable pools
+    /// must reject attachment when this field is non-zero.
+    ///
+    /// shm[impl shm.varslot.shared]
+    pub var_slot_pool_offset: u64,
     /// Reserved for future use (zero)
-    pub reserved: [u8; 48],
+    pub reserved: [u8; 40],
 }
 
 const _: () = assert!(size_of::<SegmentHeader>() == HEADER_SIZE);

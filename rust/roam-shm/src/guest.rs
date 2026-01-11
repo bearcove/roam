@@ -82,6 +82,8 @@ pub enum AttachError {
     SlotNotReserved,
     /// Peer ID is out of range for this segment
     InvalidPeerId,
+    /// Segment uses variable-size slot pools which this guest doesn't support
+    VarSlotPoolNotSupported,
     /// I/O error
     Io(io::Error),
 }
@@ -95,6 +97,9 @@ impl std::fmt::Display for AttachError {
             AttachError::HostGoodbye => write!(f, "host has signaled goodbye"),
             AttachError::SlotNotReserved => write!(f, "slot was not reserved for this guest"),
             AttachError::InvalidPeerId => write!(f, "peer ID is out of range for this segment"),
+            AttachError::VarSlotPoolNotSupported => {
+                write!(f, "segment uses variable-size slot pools (not supported)")
+            }
             AttachError::Io(e) => write!(f, "I/O error: {}", e),
         }
     }
@@ -152,10 +157,12 @@ impl ShmGuest {
             return Err(AttachError::HostGoodbye);
         }
 
-        // Reconstruct layout from header
-        // Note: var_slot_classes is None here - guests use fixed pools by default.
-        // Variable slot pool info would need to be stored in the header for guests
-        // to detect it.
+        // Check if this segment uses variable-size slot pools
+        if header.var_slot_pool_offset != 0 {
+            return Err(AttachError::VarSlotPoolNotSupported);
+        }
+
+        // Reconstruct layout from header (fixed-size per-guest pools only)
         let config = crate::layout::SegmentConfig {
             max_payload_size: header.max_payload_size,
             initial_credit: header.initial_credit,
@@ -241,7 +248,12 @@ impl ShmGuest {
             return Err(AttachError::HostGoodbye);
         }
 
-        // Reconstruct layout from header
+        // Check if this segment uses variable-size slot pools
+        if header.var_slot_pool_offset != 0 {
+            return Err(AttachError::VarSlotPoolNotSupported);
+        }
+
+        // Reconstruct layout from header (fixed-size per-guest pools only)
         let config = crate::layout::SegmentConfig {
             max_payload_size: header.max_payload_size,
             initial_credit: header.initial_credit,
