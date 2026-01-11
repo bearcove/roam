@@ -14,7 +14,7 @@ that communicate via shared memory.
 > r[shm.scope]
 >
 > This binding encodes Core Semantics over shared memory. It does NOT
-> redefine the meaning of calls, streams, errors, or flow control —
+> redefine the meaning of calls, channels, errors, or flow control —
 > only their representation in this transport.
 
 > r[shm.architecture]
@@ -76,7 +76,7 @@ that communicate via shared memory.
 
 ## ID Widths
 
-Core defines `request_id` and `stream_id` as u64. SHM uses narrower
+Core defines `request_id` and `channel_id` as u64. SHM uses narrower
 encodings to fit in the 64-byte descriptor:
 
 > r[shm.id.request-id]
@@ -85,27 +85,27 @@ encodings to fit in the 64-byte descriptor:
 > `request_id` are implicitly zero. Implementations MUST NOT use
 > request IDs ≥ 2^32.
 
-> r[shm.id.stream-id]
+> r[shm.id.channel-id]
 >
-> SHM encodes `stream_id` as u32. The upper 32 bits of Core's u64
-> `stream_id` are implicitly zero.
+> SHM encodes `channel_id` as u32. The upper 32 bits of Core's u64
+> `channel_id` are implicitly zero.
 
-## Stream ID Allocation
+## Channel ID Allocation
 
-> r[shm.id.stream-scope]
+> r[shm.id.channel-scope]
 >
-> Stream IDs are scoped to the guest-host pair. Two different guests
-> may independently use the same `stream_id` value without collision
-> because they have separate stream tables.
+> Channel IDs are scoped to the guest-host pair. Two different guests
+> may independently use the same `channel_id` value without collision
+> because they have separate channel tables.
 
-> r[shm.id.stream-parity]
+> r[shm.id.channel-parity]
 >
-> Within a guest-host pair, stream IDs use odd/even parity to prevent
+> Within a guest-host pair, channel IDs use odd/even parity to prevent
 > collisions:
-> - The **host** allocates even stream IDs (2, 4, 6, ...)
-> - The **guest** allocates odd stream IDs (1, 3, 5, ...)
+> - The **host** allocates even channel IDs (2, 4, 6, ...)
+> - The **guest** allocates odd channel IDs (1, 3, 5, ...)
 >
-> Stream ID 0 is reserved and MUST NOT be used.
+> Channel ID 0 is reserved and MUST NOT be used.
 
 ## Request ID Scope
 
@@ -123,7 +123,7 @@ SHM replaces this with the segment header:
 > r[shm.handshake]
 >
 > SHM does not use Hello messages. Instead, the segment header fields
-> (`max_payload_size`, `initial_credit`, `max_streams`) serve as the
+> (`max_payload_size`, `initial_credit`, `max_channels`) serve as the
 > host's unilateral configuration. Guests accept these values by
 > attaching to the segment.
 
@@ -152,14 +152,14 @@ Offset  Size   Field                Description
 12      4      header_size          Size of this header
 16      8      total_size           Total segment size in bytes
 24      4      max_payload_size     Maximum payload per message
-28      4      initial_credit       Initial stream credit (bytes)
+28      4      initial_credit       Initial channel credit (bytes)
 32      4      max_guests           Maximum number of guests (≤ 255)
 36      4      ring_size            Descriptor ring capacity (power of 2)
 40      8      peer_table_offset    Offset to peer table
 48      8      slot_region_offset   Offset to payload slot region
 56      4      slot_size            Size of each payload slot
 60      4      slots_per_guest      Number of slots per guest
-64      4      max_streams          Max concurrent streams per guest
+64      4      max_channels         Max concurrent channels per guest
 68      4      host_goodbye         Host goodbye flag (0 = active)
 72      8      heartbeat_interval   Heartbeat interval in nanoseconds (0 = disabled)
 80      48     reserved             Reserved for future use (zero)
@@ -191,7 +191,7 @@ struct PeerEntry {
     last_heartbeat: AtomicU64,  // Monotonic tick count (see r[shm.crash.heartbeat-clock])
     ring_offset: u64,           // Offset to this guest's descriptor rings
     slot_pool_offset: u64,      // Offset to this guest's slot pool
-    stream_table_offset: u64,   // Offset to this guest's stream table
+    channel_table_offset: u64,  // Offset to this guest's channel table
     reserved: [u8; 8],          // Reserved (zero)
 }
 // Total: 64 bytes per entry
@@ -296,7 +296,7 @@ pub struct MsgDesc {
     pub msg_type: u8,             // Message type
     pub flags: u8,                // Message flags (reserved, must be 0)
     pub _reserved: [u8; 2],       // Reserved (must be zero)
-    pub id: u32,                  // request_id or stream_id
+    pub id: u32,                  // request_id or channel_id
     pub method_id: u64,           // Method ID (for Request only, else 0)
 
     // Payload location (16 bytes)
@@ -366,9 +366,9 @@ so they are combined:
 > | 1 | Request | `request_id` |
 > | 2 | Response | `request_id` |
 > | 3 | Cancel | `request_id` |
-> | 4 | Data | `stream_id` |
-> | 5 | Close | `stream_id` |
-> | 6 | Reset | `stream_id` |
+> | 4 | Data | `channel_id` |
+> | 5 | Close | `channel_id` |
+> | 6 | Reset | `channel_id` |
 > | 7 | Goodbye | (unused) |
 
 Note: There is no Credit message type. Credit is conveyed via shared
@@ -489,7 +489,7 @@ corresponding wake site:
 > r[shm.wakeup.credit-wait]
 >
 > **Sender waiting for credit** (zero remaining):
-> - Wait: futex_wait on `StreamEntry.granted_total`
+> - Wait: futex_wait on `ChannelEntry.granted_total`
 > - Wake: Receiver calls futex_wake on `granted_total` after updating
 
 > r[shm.wakeup.slot-wait]
@@ -508,17 +508,17 @@ corresponding wake site:
 SHM uses shared counters for flow control instead of explicit Credit
 messages.
 
-## Stream Metadata Table
+## Channel Metadata Table
 
-> r[shm.flow.stream-table]
+> r[shm.flow.channel-table]
 >
-> Each guest-host pair has a **stream metadata table** for tracking
-> active streams. The table is located at a fixed offset within the
+> Each guest-host pair has a **channel metadata table** for tracking
+> active channels. The table is located at a fixed offset within the
 > guest's region:
 
 ```rust
 #[repr(C)]
-struct StreamEntry {
+struct ChannelEntry {
     state: AtomicU32,        // 0=Free, 1=Active, 2=Closed
     granted_total: AtomicU32, // Cumulative bytes authorized
     _reserved: [u8; 8],      // Reserved (zero)
@@ -526,47 +526,47 @@ struct StreamEntry {
 // 16 bytes per entry
 ```
 
-> r[shm.flow.stream-table-location]
+> r[shm.flow.channel-table-location]
 >
-> Each guest's stream table offset is stored in `PeerEntry.stream_table_offset`.
-> The table size is `max_streams * 16` bytes.
+> Each guest's channel table offset is stored in `PeerEntry.channel_table_offset`.
+> The table size is `max_channels * 16` bytes.
 
-> r[shm.flow.stream-table-indexing]
+> r[shm.flow.channel-table-indexing]
 >
-> The `stream_id` directly indexes the stream table: stream N uses
+> The `channel_id` directly indexes the channel table: channel N uses
 > entry N. This means:
-> - Stream IDs MUST be < `max_streams`
-> - Stream ID 0 is reserved; entry 0 is unused
-> - Usable stream IDs are 1 to `max_streams - 1`
+> - Channel IDs MUST be < `max_channels`
+> - Channel ID 0 is reserved; entry 0 is unused
+> - Usable channel IDs are 1 to `max_channels - 1`
 
-> r[shm.flow.stream-activate]
+> r[shm.flow.channel-activate]
 >
-> When opening a new stream, the allocator MUST initialize the entry:
+> When opening a new channel, the allocator MUST initialize the entry:
 > 1. Set `granted_total = initial_credit` (from segment header)
 > 2. Set `state = Active` (with Release ordering)
 >
 > The sender maintains its own `sent_total` counter locally (not in
 > shared memory).
 
-> r[shm.flow.stream-id-reuse]
+> r[shm.flow.channel-id-reuse]
 >
-> A stream ID MAY be reused after the stream is closed (Close or Reset
+> A channel ID MAY be reused after the channel is closed (Close or Reset
 > received by both peers). To reuse:
 > 1. Sender sends Close or Reset
-> 2. Receiver sets `StreamEntry.state = Free` (with Release ordering)
+> 2. Receiver sets `ChannelEntry.state = Free` (with Release ordering)
 > 3. Allocator polls for `state == Free` before reusing
 >
-> On reuse, the allocator reinitializes per `r[shm.flow.stream-activate]`.
+> On reuse, the allocator reinitializes per `r[shm.flow.channel-activate]`.
 >
 > Implementations SHOULD delay reuse to avoid races (e.g., wait for
 > the entry to be Free before reallocating).
 
 ## Credit Counters
 
-> r[shm.flow.counter-per-stream]
+> r[shm.flow.counter-per-channel]
 >
-> Each active stream has a `granted_total: AtomicU32` counter in its
-> stream table entry. The receiver publishes; the sender reads.
+> Each active channel has a `granted_total: AtomicU32` counter in its
+> channel table entry. The receiver publishes; the sender reads.
 
 ## Counter Semantics
 
@@ -599,7 +599,7 @@ struct StreamEntry {
 
 > r[shm.flow.initial]
 >
-> Streams start with `granted_total = initial_credit` from segment
+> Channels start with `granted_total = initial_credit` from segment
 > header. Sender's `sent_total` starts at 0.
 
 ## Zero Credit
@@ -613,7 +613,7 @@ struct StreamEntry {
 
 > r[shm.flow.reset]
 >
-> After Reset, stop accessing the stream's credit counter. Values
+> After Reset, stop accessing the channel's credit counter. Values
 > after Reset are undefined.
 
 # Guest Lifecycle
@@ -729,7 +729,7 @@ additional mechanisms to detect a guest that crashed while attached.
 > 2. Treat all in-flight operations as failed
 > 3. Reset rings to empty (head = tail = 0)
 > 4. Return all slots to free
-> 5. Reset stream table entries to Free
+> 5. Reset channel table entries to Free
 > 6. Set state to Empty (allowing new guest to attach)
 
 # Byte Accounting

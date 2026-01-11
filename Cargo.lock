@@ -1309,6 +1309,10 @@ dependencies = [
 [[package]]
 name = "roam-shm"
 version = "0.5.0"
+dependencies = [
+ "roam-frame",
+ "shm-primitives",
+]
 
 [[package]]
 name = "roam-stream"

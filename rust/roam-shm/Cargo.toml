@@ -11,4 +11,13 @@ description = "Shared-memory transport binding implementation"
 [package.metadata."docs.rs"]
 rustdoc-args = ["--html-in-header", "arborium-header.html"]
 
+[features]
+default = ["std"]
+std = ["shm-primitives/std"]
+
 [dependencies]
+shm-primitives = { path = "../shm-primitives", default-features = false }
+roam-frame = { path = "../roam-frame" }
+
+[dev-dependencies]
+shm-primitives = { path = "../shm-primitives", features = ["alloc"] }
