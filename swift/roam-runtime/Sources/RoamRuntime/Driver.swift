@@ -273,17 +273,22 @@ public final class Driver: @unchecked Sendable {
         let wireMsg: Message
         switch msg {
         case .data(let channelId, let payload):
+            debugLog("handleTaskMessage: Data(channelId=\(channelId), \(payload.count) bytes)")
             wireMsg = .data(channelId: channelId, payload: payload)
         case .close(let channelId):
+            debugLog("handleTaskMessage: Close(channelId=\(channelId))")
             wireMsg = .close(channelId: channelId)
         case .response(let requestId, let payload):
+            debugLog("handleTaskMessage: Response(requestId=\(requestId), \(payload.count) bytes)")
             let wasInFlight = await state.removeInFlight(requestId)
             guard wasInFlight else {
                 return  // Already cancelled
             }
             wireMsg = .response(requestId: requestId, metadata: [], payload: payload)
         }
+        debugLog("handleTaskMessage: sending wireMsg")
         try await transport.send(wireMsg)
+        debugLog("handleTaskMessage: sent wireMsg")
     }
 
     /// Handle a command from ConnectionHandle.
@@ -381,8 +386,8 @@ public final class Driver: @unchecked Sendable {
 
     private func handleData(channelId: UInt64, payload: [UInt8]) async throws {
         if channelId == 0 {
-            try await sendGoodbye("streaming.id.zero-reserved")
-            throw ConnectionError.protocolViolation(rule: "streaming.id.zero-reserved")
+            try await sendGoodbye("channeling.id.zero-reserved")
+            throw ConnectionError.protocolViolation(rule: "channeling.id.zero-reserved")
         }
 
         // Try server registry first, then client registry
@@ -393,15 +398,15 @@ public final class Driver: @unchecked Sendable {
         }
 
         if !delivered {
-            try await sendGoodbye("streaming.unknown")
-            throw ConnectionError.protocolViolation(rule: "streaming.unknown")
+            try await sendGoodbye("channeling.unknown")
+            throw ConnectionError.protocolViolation(rule: "channeling.unknown")
         }
     }
 
     private func handleClose(channelId: UInt64) async throws {
         if channelId == 0 {
-            try await sendGoodbye("streaming.id.zero-reserved")
-            throw ConnectionError.protocolViolation(rule: "streaming.id.zero-reserved")
+            try await sendGoodbye("channeling.id.zero-reserved")
+            throw ConnectionError.protocolViolation(rule: "channeling.id.zero-reserved")
         }
 
         var delivered = await serverRegistry.deliverClose(channelId: channelId)
@@ -410,8 +415,8 @@ public final class Driver: @unchecked Sendable {
         }
 
         if !delivered {
-            try await sendGoodbye("streaming.unknown")
-            throw ConnectionError.protocolViolation(rule: "streaming.unknown")
+            try await sendGoodbye("channeling.unknown")
+            throw ConnectionError.protocolViolation(rule: "channeling.unknown")
         }
     }
 
@@ -462,7 +467,7 @@ public func establishInitiator(
         // Unknown Hello variant or decode error - send Goodbye per spec
         let reason =
             error == .unknownHelloVariant
-            ? "handshake.unknown-hello-variant" : "handshake.decode-error"
+            ? "message.hello.unknown-version" : "handshake.decode-error"
         try? await transport.send(.goodbye(reason: reason))
         throw ConnectionError.handshakeFailed(reason)
     }
@@ -512,7 +517,7 @@ public func establishAcceptor(
         // Unknown Hello variant or decode error - send Goodbye per spec
         let reason =
             error == .unknownHelloVariant
-            ? "handshake.unknown-hello-variant" : "handshake.decode-error"
+            ? "message.hello.unknown-version" : "handshake.decode-error"
         try? await transport.send(.goodbye(reason: reason))
         throw ConnectionError.handshakeFailed(reason)
     }
