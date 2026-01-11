@@ -10,7 +10,7 @@ let package = Package(
         .library(name: "RoamRuntime", targets: ["RoamRuntime"])
     ],
     dependencies: [
-        .package(url: "https://github.com/apple/swift-nio.git", from: "2.92.1")
+        .package(url: "https://github.com/apple/swift-nio.git", .upToNextMinor(from: "2.86.0"))
     ],
     targets: [
         .target(
