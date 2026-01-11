@@ -364,6 +364,9 @@ impl ShmGuestTransport {
                 io::Error::new(io::ErrorKind::ConnectionReset, "host goodbye")
             }
             SendError::RingFull => io::Error::new(io::ErrorKind::WouldBlock, "ring full"),
+            SendError::PayloadTooLarge => {
+                io::Error::new(io::ErrorKind::InvalidData, "payload too large")
+            }
             SendError::SlotExhausted => io::Error::new(io::ErrorKind::WouldBlock, "slot exhausted"),
         })
     }
@@ -465,6 +468,9 @@ impl<'a> ShmHostGuestTransport<'a> {
                     io::Error::new(io::ErrorKind::NotConnected, "peer not attached")
                 }
                 SendError::RingFull => io::Error::new(io::ErrorKind::WouldBlock, "ring full"),
+                SendError::PayloadTooLarge => {
+                    io::Error::new(io::ErrorKind::InvalidData, "payload too large")
+                }
                 SendError::SlotExhausted => {
                     io::Error::new(io::ErrorKind::WouldBlock, "slot exhausted")
                 }

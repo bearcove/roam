@@ -8,7 +8,7 @@ use std::io;
 use std::ptr;
 
 use roam_frame::{Frame, INLINE_PAYLOAD_LEN, INLINE_PAYLOAD_SLOT, MsgDesc, Payload};
-use shm_primitives::{HeapRegion, Region, SlotHandle, TreiberSlabRaw};
+use shm_primitives::{HeapRegion, Region, SlotHandle};
 
 use crate::channel::ChannelEntry;
 use crate::layout::{
@@ -16,6 +16,18 @@ use crate::layout::{
     VERSION,
 };
 use crate::peer::{PeerEntry, PeerId, PeerState};
+use crate::slot_pool::SlotPool;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RecvError {
+    MalformedInlineFields,
+    InlineLenTooLarge,
+    PayloadTooLarge,
+    SlotIndexOutOfRange,
+    SlotBoundsOutOfRange,
+    GenerationMismatch,
+    FreeFailed,
+}
 
 /// Host-side handle for a SHM segment.
 ///
@@ -31,7 +43,7 @@ pub struct ShmHost {
     /// Per-guest state tracked by the host
     guests: HashMap<PeerId, GuestState>,
     /// Host's slot pool
-    host_slots: TreiberSlabRaw,
+    host_slots: SlotPool,
     /// Host's local head for each guest's H→G ring
     host_to_guest_heads: HashMap<PeerId, u64>,
 }
@@ -62,14 +74,11 @@ impl ShmHost {
         unsafe {
             Self::init_header(&region, &layout);
             Self::init_peer_table(&region, &layout);
-            Self::init_host_slots(&region, &layout);
+            Self::init_slot_pools(&region, &layout);
             Self::init_guest_areas(&region, &layout);
         }
 
-        // Create host slot pool view
-        let host_slots = unsafe {
-            Self::create_slot_pool_view(&region, layout.host_slot_pool_offset(), &config)
-        };
+        let host_slots = SlotPool::new(region, layout.host_slot_pool_offset(), &config);
 
         Ok(Self {
             backing,
@@ -124,14 +133,26 @@ impl ShmHost {
         }
     }
 
-    /// Initialize the host's slot pool.
+    /// Initialize all slot pools (host + per-guest).
     ///
     /// # Safety
     ///
     /// The region must be valid and exclusively owned.
-    unsafe fn init_host_slots(region: &Region, layout: &SegmentLayout) {
-        // SAFETY: caller guarantees region is valid and exclusively owned
-        unsafe { Self::init_slot_pool(region, layout.host_slot_pool_offset(), &layout.config) };
+    unsafe fn init_slot_pools(region: &Region, layout: &SegmentLayout) {
+        // Host pool
+        unsafe { SlotPool::init(region, layout.host_slot_pool_offset(), &layout.config) };
+
+        // Guest pools
+        for i in 0..layout.config.max_guests {
+            let peer_id = PeerId::from_index(i as u8).unwrap();
+            unsafe {
+                SlotPool::init(
+                    region,
+                    layout.guest_slot_pool_offset(peer_id.get()),
+                    &layout.config,
+                )
+            };
+        }
     }
 
     /// Initialize all guest areas.
@@ -146,16 +167,6 @@ impl ShmHost {
             // Initialize rings (zeroed by HeapRegion)
             // shm[impl shm.ring.initialization]
 
-            // Initialize slot pool
-            // SAFETY: caller guarantees region is valid
-            unsafe {
-                Self::init_slot_pool(
-                    region,
-                    layout.guest_slot_pool_offset(peer_id.get()),
-                    &layout.config,
-                )
-            };
-
             // Initialize channel table
             // SAFETY: caller guarantees region is valid
             unsafe {
@@ -165,39 +176,6 @@ impl ShmHost {
                     &layout.config,
                 )
             };
-        }
-    }
-
-    /// Initialize a slot pool at the given offset.
-    ///
-    /// # Safety
-    ///
-    /// The region must be valid and the offset must be correct.
-    unsafe fn init_slot_pool(region: &Region, offset: u64, config: &SegmentConfig) {
-        // Compute header size
-        let bitmap_words = (config.slots_per_guest as u64 + 63) / 64;
-        let bitmap_bytes = bitmap_words * 8;
-        let header_size = ((bitmap_bytes + 63) / 64) * 64; // Align to 64
-
-        // Initialize bitmap: all slots free (all bits set to 1)
-        let bitmap_ptr = region.offset(offset as usize) as *mut u64;
-        for i in 0..bitmap_words as usize {
-            unsafe { ptr::write(bitmap_ptr.add(i), u64::MAX) };
-        }
-
-        // Clear any excess bits in the last word
-        let excess = (config.slots_per_guest as u64) % 64;
-        if excess != 0 {
-            let last_word = unsafe { &mut *bitmap_ptr.add(bitmap_words as usize - 1) };
-            *last_word = (1u64 << excess) - 1;
-        }
-
-        // Initialize slot generations to 0
-        let slots_ptr = region.offset((offset + header_size) as usize);
-        for i in 0..config.slots_per_guest {
-            let slot_ptr =
-                unsafe { slots_ptr.add(i as usize * config.slot_size as usize) } as *mut u32;
-            unsafe { ptr::write(slot_ptr, 0) }; // Generation = 0
         }
     }
 
@@ -212,48 +190,6 @@ impl ShmHost {
             let entry = unsafe { &mut *(region.offset(entry_offset) as *mut ChannelEntry) };
             entry.init();
         }
-    }
-
-    /// Create a TreiberSlabRaw view for a slot pool.
-    ///
-    /// # Safety
-    ///
-    /// The pool must be initialized.
-    unsafe fn create_slot_pool_view(
-        region: &Region,
-        offset: u64,
-        config: &SegmentConfig,
-    ) -> TreiberSlabRaw {
-        use core::mem::size_of;
-        use shm_primitives::SlotMeta;
-        use shm_primitives::TreiberSlabHeader;
-
-        let header_ptr = region.offset(offset as usize) as *mut TreiberSlabHeader;
-
-        // Initialize the header
-        unsafe { (*header_ptr).init(config.slot_size, config.slots_per_guest) };
-
-        // Compute meta and data offsets
-        let meta_offset = offset as usize + size_of::<TreiberSlabHeader>();
-        let meta_offset = ((meta_offset + 7) / 8) * 8; // Align to 8
-        let data_offset = meta_offset + config.slots_per_guest as usize * size_of::<SlotMeta>();
-        let data_offset = ((data_offset + 3) / 4) * 4; // Align to 4
-
-        let meta_ptr = region.offset(meta_offset) as *mut SlotMeta;
-        let data_ptr = region.offset(data_offset);
-
-        // Initialize slot metadata
-        for i in 0..config.slots_per_guest {
-            let meta = unsafe { &mut *meta_ptr.add(i as usize) };
-            meta.init();
-        }
-
-        let slab = unsafe { TreiberSlabRaw::from_raw(header_ptr, meta_ptr, data_ptr) };
-
-        // Initialize free list
-        unsafe { slab.init_free_list() };
-
-        slab
     }
 
     /// Get the segment header.
@@ -276,6 +212,7 @@ impl ShmHost {
         let mut messages = Vec::new();
         let mut crashed_guests = Vec::new();
         let mut goodbye_guests = Vec::new();
+        let mut bad_guests = Vec::new();
 
         for i in 0..self.layout.config.max_guests {
             let Some(peer_id) = PeerId::from_index(i as u8) else {
@@ -324,10 +261,19 @@ impl ShmHost {
                 let desc = unsafe { ptr::read(self.region.offset(desc_offset) as *const MsgDesc) };
 
                 // Get payload
-                let payload = self.get_payload(&desc, peer_id);
-                let frame = Frame { desc, payload };
-
-                messages.push((peer_id, frame));
+                match self.get_payload(&desc, peer_id) {
+                    Ok(payload) => {
+                        let frame = Frame { desc, payload };
+                        messages.push((peer_id, frame));
+                    }
+                    Err(_e) => {
+                        // Protocol violation / corrupted descriptor: treat as guest crash.
+                        // Advance tail once to avoid stalling the poll loop, then schedule cleanup.
+                        entry.g2h_advance_tail(tail.wrapping_add(1));
+                        bad_guests.push(peer_id);
+                        break;
+                    }
+                }
 
                 // Advance tail
                 entry.g2h_advance_tail(tail.wrapping_add(1));
@@ -350,55 +296,62 @@ impl ShmHost {
         for peer_id in goodbye_guests {
             self.handle_guest_goodbye(peer_id);
         }
+        for peer_id in bad_guests {
+            self.handle_guest_crash(peer_id);
+        }
 
         messages
     }
 
     /// Get payload from a descriptor and free the slot.
-    fn get_payload(&self, desc: &MsgDesc, peer_id: PeerId) -> Payload {
+    fn get_payload(&self, desc: &MsgDesc, peer_id: PeerId) -> Result<Payload, RecvError> {
         if desc.payload_slot == INLINE_PAYLOAD_SLOT {
-            Payload::Inline
+            // r[shm.desc.inline-fields]
+            if desc.payload_generation != 0 || desc.payload_offset != 0 {
+                return Err(RecvError::MalformedInlineFields);
+            }
+            if desc.payload_len as usize > INLINE_PAYLOAD_LEN {
+                return Err(RecvError::InlineLenTooLarge);
+            }
+            Ok(Payload::Inline)
         } else {
-            // Read from guest's slot pool
             let pool_offset = self.layout.guest_slot_pool_offset(peer_id.get());
-            let slot_offset = pool_offset as usize
-                + self.slot_header_size()
-                + desc.payload_slot as usize * self.layout.config.slot_size as usize
-                + 4; // Skip generation counter
+            let pool = SlotPool::new(self.region, pool_offset, &self.layout.config);
 
-            let payload_ptr = self
-                .region
-                .offset(slot_offset + desc.payload_offset as usize);
-            let payload = unsafe {
-                std::slice::from_raw_parts(payload_ptr, desc.payload_len as usize).to_vec()
+            let usable = self.layout.config.slot_size as usize - 4;
+            let len = desc.payload_len as usize;
+            let off = desc.payload_offset as usize;
+            if len > self.layout.config.max_payload_size as usize {
+                return Err(RecvError::PayloadTooLarge);
+            }
+            if desc.payload_slot >= self.layout.config.slots_per_guest {
+                return Err(RecvError::SlotIndexOutOfRange);
+            }
+            if off > usable || off + len > usable {
+                return Err(RecvError::SlotBoundsOutOfRange);
+            }
+
+            // Verify generation to detect ABA.
+            if pool.generation(desc.payload_slot) != Some(desc.payload_generation) {
+                return Err(RecvError::GenerationMismatch);
+            }
+
+            let Some(payload_ptr) = pool.payload_ptr(desc.payload_slot, desc.payload_offset) else {
+                return Err(RecvError::SlotBoundsOutOfRange);
             };
+
+            let payload = unsafe { std::slice::from_raw_parts(payload_ptr, len).to_vec() };
 
             // Free the slot (return to guest's pool)
             // shm[impl shm.slot.free]
-            let guest_slots = unsafe {
-                Self::create_slot_pool_view(&self.region, pool_offset, &self.layout.config)
-            };
             let handle = SlotHandle {
                 index: desc.payload_slot,
                 generation: desc.payload_generation,
             };
-            // Ignore errors - slot may already be freed on crash recovery
-            let _ = guest_slots.free(handle);
+            pool.free(handle).map_err(|_| RecvError::FreeFailed)?;
 
-            Payload::Owned(payload)
+            Ok(Payload::Owned(payload))
         }
-    }
-
-    /// Compute slot pool header size.
-    fn slot_header_size(&self) -> usize {
-        use core::mem::size_of;
-        use shm_primitives::{SlotMeta, TreiberSlabHeader};
-
-        let meta_offset = size_of::<TreiberSlabHeader>();
-        let meta_offset = ((meta_offset + 7) / 8) * 8;
-        let data_offset =
-            meta_offset + self.layout.config.slots_per_guest as usize * size_of::<SlotMeta>();
-        ((data_offset + 3) / 4) * 4
     }
 
     /// Send a message to a specific guest.
@@ -446,52 +399,100 @@ impl ShmHost {
 
         // Handle payload - extract data slice
         let mut desc = frame.desc;
-        let data: Option<&[u8]> = match &frame.payload {
-            Payload::Inline => None,
-            Payload::Owned(data) => Some(data.as_slice()),
-            Payload::Bytes(data) => Some(data.as_ref()),
-        };
 
-        if let Some(data) = data {
-            if data.len() <= INLINE_PAYLOAD_LEN {
-                // Can inline
+        match &frame.payload {
+            Payload::Inline => {
+                if desc.payload_len as usize > INLINE_PAYLOAD_LEN {
+                    return Err(SendError::PayloadTooLarge);
+                }
                 desc.payload_slot = INLINE_PAYLOAD_SLOT;
                 desc.payload_generation = 0;
                 desc.payload_offset = 0;
-                desc.payload_len = data.len() as u32;
-                desc.inline_payload[..data.len()].copy_from_slice(data);
-            } else {
-                // Need slot from host pool
-                // shm[impl shm.payload.slot]
-                match self.host_slots.try_alloc() {
-                    shm_primitives::AllocResult::Ok(handle) => {
-                        let slot_ptr = unsafe { self.host_slots.slot_data_ptr(handle) };
-                        // Skip generation counter (4 bytes)
-                        unsafe {
-                            ptr::copy_nonoverlapping(data.as_ptr(), slot_ptr.add(4), data.len());
-                        }
-                        desc.payload_slot = handle.index;
-                        desc.payload_generation = handle.generation;
-                        desc.payload_offset = 0;
-                        desc.payload_len = data.len() as u32;
-
-                        // Mark as in-flight
-                        let _ = self.host_slots.mark_in_flight(handle);
-
-                        // Track for later freeing
-                        self.guests
-                            .entry(peer_id)
-                            .or_insert(GuestState {
-                                last_epoch: current_epoch,
-                                pending_slots: Vec::new(),
-                            })
-                            .pending_slots
-                            .push(handle);
+            }
+            Payload::Owned(data) => {
+                let data = data.as_slice();
+                if data.len() <= INLINE_PAYLOAD_LEN {
+                    // Can inline
+                    desc.payload_slot = INLINE_PAYLOAD_SLOT;
+                    desc.payload_generation = 0;
+                    desc.payload_offset = 0;
+                    desc.payload_len = data.len() as u32;
+                    desc.inline_payload[..data.len()].copy_from_slice(data);
+                } else {
+                    if data.len() > self.layout.config.max_payload_size as usize {
+                        return Err(SendError::PayloadTooLarge);
                     }
-                    shm_primitives::AllocResult::WouldBlock => {
+                    // Need slot from host pool
+                    // shm[impl shm.payload.slot]
+                    let Some(handle) = self.host_slots.try_alloc() else {
                         // shm[impl shm.slot.exhaustion]
                         return Err(SendError::SlotExhausted);
+                    };
+
+                    let Some(payload_ptr) = self.host_slots.payload_ptr(handle.index, 0) else {
+                        return Err(SendError::PayloadTooLarge);
+                    };
+                    unsafe {
+                        ptr::copy_nonoverlapping(data.as_ptr(), payload_ptr, data.len());
                     }
+
+                    desc.payload_slot = handle.index;
+                    desc.payload_generation = handle.generation;
+                    desc.payload_offset = 0;
+                    desc.payload_len = data.len() as u32;
+
+                    // Track for crash recovery, but prune slots already reclaimed by the guest.
+                    let state = self.guests.entry(peer_id).or_insert(GuestState {
+                        last_epoch: current_epoch,
+                        pending_slots: Vec::new(),
+                    });
+                    state.pending_slots.push(handle);
+                    state
+                        .pending_slots
+                        .retain(|h| !self.host_slots.is_reclaimed(*h));
+                }
+            }
+            Payload::Bytes(data) => {
+                let data = data.as_ref();
+                if data.len() <= INLINE_PAYLOAD_LEN {
+                    // Can inline
+                    desc.payload_slot = INLINE_PAYLOAD_SLOT;
+                    desc.payload_generation = 0;
+                    desc.payload_offset = 0;
+                    desc.payload_len = data.len() as u32;
+                    desc.inline_payload[..data.len()].copy_from_slice(data);
+                } else {
+                    if data.len() > self.layout.config.max_payload_size as usize {
+                        return Err(SendError::PayloadTooLarge);
+                    }
+                    // Need slot from host pool
+                    // shm[impl shm.payload.slot]
+                    let Some(handle) = self.host_slots.try_alloc() else {
+                        // shm[impl shm.slot.exhaustion]
+                        return Err(SendError::SlotExhausted);
+                    };
+
+                    let Some(payload_ptr) = self.host_slots.payload_ptr(handle.index, 0) else {
+                        return Err(SendError::PayloadTooLarge);
+                    };
+                    unsafe {
+                        ptr::copy_nonoverlapping(data.as_ptr(), payload_ptr, data.len());
+                    }
+
+                    desc.payload_slot = handle.index;
+                    desc.payload_generation = handle.generation;
+                    desc.payload_offset = 0;
+                    desc.payload_len = data.len() as u32;
+
+                    // Track for crash recovery, but prune slots already reclaimed by the guest.
+                    let state = self.guests.entry(peer_id).or_insert(GuestState {
+                        last_epoch: current_epoch,
+                        pending_slots: Vec::new(),
+                    });
+                    state.pending_slots.push(handle);
+                    state
+                        .pending_slots
+                        .retain(|h| !self.host_slots.is_reclaimed(*h));
                 }
             }
         }
@@ -522,6 +523,11 @@ impl ShmHost {
         // Reset rings
         entry.reset();
 
+        // Reset guest slot pool bitmap (any in-flight guest→host messages are discarded).
+        let guest_pool_offset = self.layout.guest_slot_pool_offset(peer_id.get());
+        let guest_pool = SlotPool::new(self.region, guest_pool_offset, &self.layout.config);
+        unsafe { guest_pool.reset_free_bitmap() };
+
         // Free pending slots
         if let Some(state) = self.guests.remove(&peer_id) {
             for handle in state.pending_slots {
@@ -546,6 +552,11 @@ impl ShmHost {
     fn handle_guest_goodbye(&mut self, peer_id: PeerId) {
         // Drain remaining messages before cleanup
         // (handled by poll loop)
+
+        // Reset guest slot pool bitmap (any in-flight guest→host messages are discarded).
+        let guest_pool_offset = self.layout.guest_slot_pool_offset(peer_id.get());
+        let guest_pool = SlotPool::new(self.region, guest_pool_offset, &self.layout.config);
+        unsafe { guest_pool.reset_free_bitmap() };
 
         // Free pending slots
         if let Some(state) = self.guests.remove(&peer_id) {
@@ -604,6 +615,8 @@ pub enum SendError {
     PeerNotAttached,
     /// Ring is full (backpressure)
     RingFull,
+    /// Payload is too large for configured limits
+    PayloadTooLarge,
     /// No slots available (backpressure)
     SlotExhausted,
 }
@@ -613,6 +626,7 @@ impl std::fmt::Display for SendError {
         match self {
             SendError::PeerNotAttached => write!(f, "peer not attached"),
             SendError::RingFull => write!(f, "ring full"),
+            SendError::PayloadTooLarge => write!(f, "payload too large"),
             SendError::SlotExhausted => write!(f, "slot exhausted"),
         }
     }
@@ -623,6 +637,9 @@ impl std::error::Error for SendError {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::guest::ShmGuest;
+    use crate::msg::msg_type;
+    use crate::peer::PeerEntry;
 
     #[test]
     fn create_host() {
@@ -653,5 +670,105 @@ mod tests {
 
         let messages = host.poll();
         assert!(messages.is_empty());
+    }
+
+    #[test]
+    fn guest_to_host_large_payloads_reclaim_guest_slots() {
+        let config = SegmentConfig {
+            max_guests: 1,
+            ring_size: 8,
+            slot_size: 64,
+            slots_per_guest: 2,
+            max_payload_size: 60,
+            ..SegmentConfig::default()
+        };
+
+        let mut host = ShmHost::create(config.clone()).unwrap();
+        let mut guest = ShmGuest::attach(host.region()).unwrap();
+
+        let payload = vec![0xAB; 40];
+        for _ in 0..16 {
+            let desc = MsgDesc::new(msg_type::DATA, 1, 0);
+            let frame = Frame {
+                desc,
+                payload: Payload::Owned(payload.clone()),
+            };
+
+            guest.send(frame).unwrap();
+            let messages = host.poll();
+            assert_eq!(messages.len(), 1);
+            assert_eq!(messages[0].0, guest.peer_id());
+            assert_eq!(messages[0].1.payload_bytes(), payload.as_slice());
+        }
+    }
+
+    #[test]
+    fn host_to_guest_large_payloads_reclaim_host_slots() {
+        let config = SegmentConfig {
+            max_guests: 1,
+            ring_size: 8,
+            slot_size: 64,
+            slots_per_guest: 2,
+            max_payload_size: 60,
+            ..SegmentConfig::default()
+        };
+
+        let mut host = ShmHost::create(config.clone()).unwrap();
+        let mut guest = ShmGuest::attach(host.region()).unwrap();
+
+        let payload = vec![0xCD; 40];
+        for _ in 0..16 {
+            let desc = MsgDesc::new(msg_type::DATA, 1, 0);
+            let frame = Frame {
+                desc,
+                payload: Payload::Owned(payload.clone()),
+            };
+
+            host.send(guest.peer_id(), frame).unwrap();
+            let recv = guest.recv().expect("frame");
+            assert_eq!(recv.payload_bytes(), payload.as_slice());
+        }
+    }
+
+    #[test]
+    fn malformed_guest_descriptor_disconnects_guest() {
+        let config = SegmentConfig {
+            max_guests: 1,
+            ring_size: 8,
+            slot_size: 64,
+            slots_per_guest: 2,
+            max_payload_size: 60,
+            ..SegmentConfig::default()
+        };
+
+        let mut host = ShmHost::create(config).unwrap();
+        let region = host.region();
+        let mut guest = ShmGuest::attach(region).unwrap();
+        let peer_id = guest.peer_id();
+
+        // Guest sends an inline payload.
+        let desc = MsgDesc::new(msg_type::DATA, 1, 0);
+        let frame = Frame {
+            desc,
+            payload: Payload::Inline,
+        };
+        guest.send(frame).unwrap();
+
+        // Corrupt the descriptor in the ring: inline payload with non-zero generation.
+        let ring_offset = host.layout().guest_to_host_ring_offset(peer_id.get());
+        let desc_offset = ring_offset as usize; // first slot (tail=0)
+        let mut corrupt = unsafe { ptr::read(region.offset(desc_offset) as *const MsgDesc) };
+        corrupt.payload_generation = 1;
+        unsafe {
+            ptr::write(region.offset(desc_offset) as *mut MsgDesc, corrupt);
+        }
+
+        // Host should treat this as a crash and reset the peer.
+        let msgs = host.poll();
+        assert!(msgs.is_empty());
+
+        let peer_entry_offset = host.layout().peer_entry_offset(peer_id.get()) as usize;
+        let entry = unsafe { &*(region.offset(peer_entry_offset) as *const PeerEntry) };
+        assert_eq!(entry.state(), PeerState::Empty);
     }
 }

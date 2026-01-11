@@ -117,12 +117,14 @@ pub struct SegmentConfig {
 
 impl Default for SegmentConfig {
     fn default() -> Self {
+        let slot_size = 64 * 1024; // 64 KB slots
         Self {
-            max_payload_size: 64 * 1024, // 64 KB
-            initial_credit: 256 * 1024,  // 256 KB
+            // Usable payload area is slot_size - 4 (generation counter).
+            max_payload_size: slot_size - 4,
+            initial_credit: 256 * 1024, // 256 KB
             max_guests: 16,
-            ring_size: 256,       // Power of 2
-            slot_size: 64 * 1024, // 64 KB slots
+            ring_size: 256, // Power of 2
+            slot_size,
             slots_per_guest: 16,
             max_channels: 256,
             heartbeat_interval: 0, // Disabled by default
@@ -133,6 +135,9 @@ impl Default for SegmentConfig {
 impl SegmentConfig {
     /// Validate the configuration.
     pub fn validate(&self) -> Result<(), &'static str> {
+        if self.max_payload_size == 0 {
+            return Err("max_payload_size must be > 0");
+        }
         if self.max_guests == 0 || self.max_guests > 255 {
             return Err("max_guests must be 1-255");
         }
@@ -142,14 +147,21 @@ impl SegmentConfig {
         if self.ring_size < 2 {
             return Err("ring_size must be at least 2");
         }
-        if self.slot_size < 4 {
-            return Err("slot_size must be at least 4");
+        if self.slot_size < 8 {
+            return Err("slot_size must be at least 8");
+        }
+        if self.slot_size % 8 != 0 {
+            return Err("slot_size must be a multiple of 8");
         }
         if self.slots_per_guest == 0 {
             return Err("slots_per_guest must be > 0");
         }
         if self.max_channels == 0 {
             return Err("max_channels must be > 0");
+        }
+        // Slot payload area is `slot_size - 4` bytes (generation counter).
+        if self.max_payload_size > self.slot_size - 4 {
+            return Err("max_payload_size must be <= slot_size - 4");
         }
         Ok(())
     }
@@ -163,7 +175,7 @@ impl SegmentConfig {
 
 /// Computed layout of a SHM segment.
 ///
-/// All offsets are cache-line aligned (64 bytes).
+/// Ring-related offsets are cache-line aligned (64 bytes).
 #[derive(Debug, Clone)]
 pub struct SegmentLayout {
     /// Configuration used to compute this layout
@@ -197,38 +209,38 @@ impl SegmentLayout {
         // Host slot pool is at position 0 in the slot region
         let slot_region_offset = align_up(peer_table_offset + peer_table_size, 64);
 
-        // Compute slot pool size to match TreiberSlab layout:
-        // - TreiberSlabHeader (64 bytes, cache-line aligned)
-        // - SlotMeta array (8 bytes per slot, aligned to SlotMeta alignment)
-        // - Slot data (slot_size bytes per slot, aligned to u32)
+        // Compute slot pool size per shm-spec:
+        // pool_size = slot_pool_header_size + slots_per_guest * slot_size
+        // where slot_pool_header_size is a bitmap header rounded up to 64 bytes.
         //
+        // shm[impl shm.segment.pool-size]
         // shm[impl shm.slot.pool-header-size]
-        const TREIBER_HEADER_SIZE: u64 = 64; // TreiberSlabHeader is 64 bytes
-        const SLOT_META_SIZE: u64 = 8; // SlotMeta is 8 bytes (generation + state)
-        const SLOT_META_ALIGN: u64 = 4; // SlotMeta alignment (AtomicU32)
-        const DATA_ALIGN: u64 = 4; // Slot data aligned to u32
+        let bitmap_words = (config.slots_per_guest as u64 + 63) / 64;
+        let bitmap_bytes = bitmap_words * 8;
+        let slot_pool_header_size = align_up(bitmap_bytes, 64);
+        let pool_size =
+            slot_pool_header_size + (config.slots_per_guest as u64) * config.slot_size as u64;
 
-        let meta_offset = align_up(TREIBER_HEADER_SIZE, SLOT_META_ALIGN);
-        let meta_size = (config.slots_per_guest as u64) * SLOT_META_SIZE;
-        let data_offset = align_up(meta_offset + meta_size, DATA_ALIGN);
-        let data_size = (config.slots_per_guest as u64) * (config.slot_size as u64);
-        let pool_size = data_offset + data_size;
-
-        // Guest areas follow host slot pool
+        // Slot region contains:
+        // - Host slot pool (position 0)
+        // - One slot pool per potential guest (positions 1..=max_guests)
+        //
+        // shm[impl shm.segment.host-slots]
         // shm[impl shm.segment.guest-slot-offset]
-        let guest_areas_offset = align_up(slot_region_offset + pool_size, 64);
+        let slot_region_size = (config.max_guests as u64 + 1) * pool_size;
+
+        // Guest areas follow slot region
+        let guest_areas_offset = align_up(slot_region_offset + slot_region_size, 64);
 
         // Each guest area contains:
         // - Guest→Host ring: ring_size * 64 bytes
         // - Host→Guest ring: ring_size * 64 bytes
-        // - Slot pool: pool_size bytes
         // - Channel table: max_channels * 16 bytes
         //
         // shm[impl shm.ring.layout]
         let rings_size = 2 * (config.ring_size as u64) * (DESC_SIZE as u64);
         let channel_table_size = (config.max_channels as u64) * (CHANNEL_ENTRY_SIZE as u64);
-        let guest_area_size =
-            align_up(rings_size, 64) + align_up(pool_size, 64) + align_up(channel_table_size, 64);
+        let guest_area_size = align_up(rings_size, 64) + align_up(channel_table_size, 64);
 
         // Total size
         let total_size = guest_areas_offset + (config.max_guests as u64) * guest_area_size;
@@ -296,8 +308,8 @@ impl SegmentLayout {
     /// shm[impl shm.segment.guest-slot-offset]
     #[inline]
     pub fn guest_slot_pool_offset(&self, peer_id: u8) -> u64 {
-        let rings_size = 2 * (self.config.ring_size as u64) * (DESC_SIZE as u64);
-        self.guest_area_offset(peer_id) + align_up(rings_size, 64)
+        assert!(peer_id >= 1 && peer_id <= self.config.max_guests as u8);
+        self.slot_region_offset + (peer_id as u64) * self.pool_size
     }
 
     /// Get the offset to a guest's channel table.
@@ -305,7 +317,8 @@ impl SegmentLayout {
     /// shm[impl shm.flow.channel-table-location]
     #[inline]
     pub fn guest_channel_table_offset(&self, peer_id: u8) -> u64 {
-        self.guest_slot_pool_offset(peer_id) + align_up(self.pool_size, 64)
+        let rings_size = 2 * (self.config.ring_size as u64) * (DESC_SIZE as u64);
+        self.guest_area_offset(peer_id) + align_up(rings_size, 64)
     }
 }
 
@@ -342,7 +355,6 @@ mod tests {
         for peer_id in 1..=config.max_guests as u8 {
             assert_eq!(layout.guest_area_offset(peer_id) % 64, 0);
             assert_eq!(layout.guest_rings_offset(peer_id) % 64, 0);
-            assert_eq!(layout.guest_slot_pool_offset(peer_id) % 64, 0);
             assert_eq!(layout.guest_channel_table_offset(peer_id) % 64, 0);
         }
     }
@@ -362,106 +374,49 @@ mod tests {
         assert!(config.validate().is_err());
     }
 
-    /// Verify that pool_size matches the actual TreiberSlab memory layout.
-    ///
-    /// The slot pool must contain:
-    /// - TreiberSlabHeader (64 bytes, cache-line aligned)
-    /// - SlotMeta array (8 bytes per slot)
-    /// - Slot data (slot_size bytes per slot)
-    ///
-    /// This test ensures the channel table doesn't overlap the slot pool.
     #[test]
-    fn pool_size_matches_treiber_slab_layout() {
-        use core::mem::{align_of, size_of};
-        use shm_primitives::{SlotMeta, TreiberSlabHeader};
-
-        // Helper to compute actual Treiber slab size
-        fn actual_treiber_slab_size(slot_count: u32, slot_size: u32) -> usize {
-            let header_offset = 0usize;
-            let meta_offset = {
-                let raw = header_offset + size_of::<TreiberSlabHeader>();
-                (raw + (align_of::<SlotMeta>() - 1)) & !(align_of::<SlotMeta>() - 1)
-            };
-            let data_offset = {
-                let raw = meta_offset + (slot_count as usize * size_of::<SlotMeta>());
-                (raw + (align_of::<u32>() - 1)) & !(align_of::<u32>() - 1)
-            };
-            data_offset + (slot_count as usize * slot_size as usize)
-        }
-
-        // Test with default config
+    fn pool_size_matches_bitmap_layout() {
         let config = SegmentConfig::default();
         let layout = config.layout().unwrap();
 
-        let actual_size = actual_treiber_slab_size(config.slots_per_guest, config.slot_size);
+        let bitmap_words = (config.slots_per_guest as u64 + 63) / 64;
+        let bitmap_bytes = bitmap_words * 8;
+        let header_size = align_up(bitmap_bytes, 64);
+        let expected_pool_size =
+            header_size + (config.slots_per_guest as u64) * (config.slot_size as u64);
 
-        assert!(
-            layout.pool_size as usize >= actual_size,
-            "pool_size ({}) is smaller than actual Treiber slab size ({}).\n\
-             This would cause the channel table to overlap the slot pool!\n\
-             slots_per_guest={}, slot_size={}, SlotMeta size={}",
-            layout.pool_size,
-            actual_size,
-            config.slots_per_guest,
-            config.slot_size,
-            size_of::<SlotMeta>()
-        );
-
-        // Test with various configurations
-        for slots_per_guest in [1, 2, 8, 16, 32, 64, 128] {
-            for slot_size in [64, 256, 1024, 4096, 65536] {
-                let config = SegmentConfig {
-                    slots_per_guest,
-                    slot_size,
-                    ..Default::default()
-                };
-                let layout = config.layout().unwrap();
-                let actual_size = actual_treiber_slab_size(slots_per_guest, slot_size);
-
-                assert!(
-                    layout.pool_size as usize >= actual_size,
-                    "pool_size ({}) < actual size ({}) for slots_per_guest={}, slot_size={}",
-                    layout.pool_size,
-                    actual_size,
-                    slots_per_guest,
-                    slot_size
-                );
-            }
-        }
+        assert_eq!(layout.pool_size, expected_pool_size);
     }
 
-    /// Verify that regions don't overlap within a guest area.
     #[test]
     fn guest_area_regions_do_not_overlap() {
-        use core::mem::size_of;
-        use shm_primitives::{SlotMeta, TreiberSlabHeader};
-
         let config = SegmentConfig::default();
         let layout = config.layout().unwrap();
 
-        for peer_id in 1..=config.max_guests as u8 {
-            let slot_pool_start = layout.guest_slot_pool_offset(peer_id);
-            let channel_table_start = layout.guest_channel_table_offset(peer_id);
+        let rings_size = 2 * (config.ring_size as u64) * (DESC_SIZE as u64);
+        let channel_table_size = (config.max_channels as u64) * (CHANNEL_ENTRY_SIZE as u64);
 
-            // Compute actual slot pool end (using Treiber slab layout)
-            let meta_offset = size_of::<TreiberSlabHeader>();
-            let meta_offset_aligned = (meta_offset + (core::mem::align_of::<SlotMeta>() - 1))
-                & !(core::mem::align_of::<SlotMeta>() - 1);
-            let data_offset =
-                meta_offset_aligned + (config.slots_per_guest as usize * size_of::<SlotMeta>());
-            let data_offset_aligned = (data_offset + (core::mem::align_of::<u32>() - 1))
-                & !(core::mem::align_of::<u32>() - 1);
-            let actual_pool_end = slot_pool_start
-                + data_offset_aligned as u64
-                + (config.slots_per_guest as u64 * config.slot_size as u64);
+        for peer_id in 1..=config.max_guests as u8 {
+            let rings_start = layout.guest_rings_offset(peer_id);
+            let channel_table_start = layout.guest_channel_table_offset(peer_id);
+            let rings_end = rings_start + align_up(rings_size, 64);
 
             assert!(
-                channel_table_start >= actual_pool_end,
-                "Guest {} channel table (offset {}) overlaps slot pool (ends at {})!\n\
-                 This will cause data corruption.",
+                channel_table_start >= rings_end,
+                "Guest {} channel table (offset {}) overlaps rings (end at {})!",
                 peer_id,
                 channel_table_start,
-                actual_pool_end
+                rings_end
+            );
+
+            let channel_table_end = channel_table_start + align_up(channel_table_size, 64);
+            let area_end = layout.guest_area_offset(peer_id) + layout.guest_area_size;
+            assert!(
+                channel_table_end <= area_end,
+                "Guest {} channel table (end {}) exceeds guest area end ({})!",
+                peer_id,
+                channel_table_end,
+                area_end
             );
         }
     }

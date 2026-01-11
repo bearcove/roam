@@ -147,7 +147,7 @@ fn stress_bidirectional_ping_pong() {
 fn stress_varying_payload_sizes() {
     let config = SegmentConfig {
         slot_size: 4096,
-        max_payload_size: 4096,
+        max_payload_size: 4092,
         ..SegmentConfig::default()
     };
     let mut host = ShmHost::create(config).unwrap();

@@ -68,6 +68,7 @@ pub mod channel;
 pub mod layout;
 pub mod msg;
 pub mod peer;
+mod slot_pool;
 
 #[cfg(feature = "std")]
 pub mod host;
