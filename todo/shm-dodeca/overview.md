@@ -67,7 +67,7 @@ let transport = peer.into_transport(doorbell);
 | 003 | [003-spawn-tickets.md](./003-spawn-tickets.md) | TODO | `AddPeerOptions` and spawn ticket API |
 | 004 | [004-death-callbacks.md](./004-death-callbacks.md) | TODO | Crash detection and cleanup callbacks |
 | 005 | [005-futex-wakeups.md](./005-futex-wakeups.md) | TODO | Efficient blocking on ring/credit/slots |
-| 006 | [006-variable-slots.md](./006-variable-slots.md) | TODO | Variable-size slot pools (optional for MVP) |
+| 006 | [006-variable-slots.md](./006-variable-slots.md) | TODO | Variable-size slot pools (likely required for dodeca parity) |
 
 ## Phase Dependencies
 
@@ -85,10 +85,10 @@ let transport = peer.into_transport(doorbell);
 004 Death Callbacks
       │
       ▼
-006 Variable Slots (optional)
+006 Variable Slots (optional in spec, likely required for dodeca)
 ```
 
-**Critical path**: 001 → 002 → 003 → 004 (minimum for dodeca migration)
+**Critical path**: 001 → 002 → 003 → 004 (+ 006 for dodeca parity / large payloads)
 
 **Parallel work**: 005 can be done alongside 002-004
 
@@ -148,12 +148,13 @@ let transport = peer.into_transport(doorbell);
 ## Success Criteria
 
 1. ✅ `ShmHost::create(path, config)` creates a file-backed segment
-2. ✅ `ShmGuest::attach(path, peer_id)` attaches to existing segment
-3. ✅ Doorbells provide instant wakeup and death detection
-4. ✅ `AddPeerOptions` supports death callbacks
-5. ✅ Spawn tickets work with `Command::spawn()`
-6. ✅ All spec tests pass
-7. ✅ Dodeca can be migrated from rapace to roam-shm
+2. ✅ `ShmGuest::attach_path(path)` attaches to existing segment (non-spawned)
+3. ✅ `ShmGuest::attach_with_ticket(&SpawnArgs)` works for spawned guests
+4. ✅ Doorbells provide instant wakeup and death detection
+5. ✅ `AddPeerOptions` supports death callbacks
+6. ✅ Spawn tickets work with `Command::spawn()`
+7. ✅ All spec tests pass
+8. ✅ Dodeca can be migrated from rapace to roam-shm
 
 ## Files
 
@@ -178,13 +179,13 @@ let transport = peer.into_transport(doorbell);
 
 ```bash
 # Run roam-shm tests
-cargo test -p roam-shm
+cargo nextest run -p roam-shm
 
 # Check tracey coverage
 tracey web  # then look at shm/rust
 
 # Run stress tests
-cargo test -p roam-shm --test stress
+cargo nextest run -p roam-shm --test stress
 
 # Build dodeca (after migration)
 cd ~/bearcove/dodeca && cargo build
@@ -205,6 +206,6 @@ cd ~/bearcove/dodeca && cargo build
 
 ## Notes
 
-- Phase 006 (variable slots) can be deferred if dodeca works with fixed slots
+- Phase 006 (variable slots) is likely required for dodeca (fonts/images) unless we accept major fixed-slot waste or add fragmentation
 - Windows support (`shm.file.mmap-windows`) is optional for initial migration
 - The existing `HeapRegion` code is useful for unit tests even after mmap is added

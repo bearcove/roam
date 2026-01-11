@@ -21,7 +21,8 @@ let (transport, ticket) = host.add_peer(AddPeerOptions {
 
 // ticket contains:
 // - peer_id: PeerId
-// - doorbell_fd: RawFd (guest's end, CLOEXEC cleared)
+// - guest doorbell (kept alive by the ticket until spawn)
+//   - fd is inheritable (CLOEXEC cleared)
 
 // Spawn child with ticket info
 Command::new(&cell_path)
@@ -102,24 +103,30 @@ impl PeerEntry {
 ```rust
 // roam-shm/src/spawn.rs
 
-use std::os::unix::io::RawFd;
-use std::path::{Path, PathBuf};
+use std::os::unix::io::{AsRawFd, RawFd};
+use std::path::PathBuf;
 use crate::peer::PeerId;
+use shm_primitives::Doorbell;
 
 /// Information needed by a spawned guest to attach.
 ///
 /// shm[impl shm.spawn.ticket]
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct SpawnTicket {
     /// Path to the SHM segment file
     pub hub_path: PathBuf,
     /// Assigned peer ID
     pub peer_id: PeerId,
-    /// Guest's doorbell file descriptor (CLOEXEC cleared)
-    pub doorbell_fd: RawFd,
+    /// Guest's doorbell end (fd is inheritable; ticket drop closes our copy)
+    pub guest_doorbell: Doorbell,
 }
 
 impl SpawnTicket {
+    /// The raw file descriptor to pass to the child process.
+    pub fn doorbell_fd(&self) -> RawFd {
+        self.guest_doorbell.as_raw_fd()
+    }
+
     /// Convert to command-line arguments.
     ///
     /// shm[impl shm.spawn.args]
@@ -127,7 +134,7 @@ impl SpawnTicket {
         vec![
             format!("--hub-path={}", self.hub_path.display()),
             format!("--peer-id={}", self.peer_id.get()),
-            format!("--doorbell-fd={}", self.doorbell_fd),
+            format!("--doorbell-fd={}", self.doorbell_fd()),
         ]
     }
 }
@@ -223,7 +230,7 @@ impl ShmHost {
     /// The returned ticket should be passed to the spawned process.
     ///
     /// shm[impl shm.spawn.ticket]
-    pub fn add_peer(
+pub fn add_peer(
         &mut self,
         options: AddPeerOptions,
     ) -> io::Result<(PeerHandle, SpawnTicket)> {
@@ -242,12 +249,8 @@ impl ShmHost {
                 io::Error::new(io::ErrorKind::Other, "no path for heap-backed segment")
             })?,
             peer_id,
-            doorbell_fd: guest_bell.as_raw_fd(),
+            guest_doorbell: guest_bell,
         };
-        
-        // Keep guest_bell alive until spawn (caller must manage this)
-        // In practice, it's kept alive by being passed to the child
-        std::mem::forget(guest_bell);
         
         let handle = PeerHandle {
             peer_id,
@@ -381,11 +384,9 @@ fn test_spawn_and_attach() {
     match unsafe { libc::fork() } {
         0 => {
             // Child
-            let args = SpawnArgs {
-                hub_path: ticket.hub_path,
-                peer_id: ticket.peer_id,
-                doorbell_fd: ticket.doorbell_fd,
-            };
+            let SpawnTicket { hub_path, peer_id, guest_doorbell } = ticket;
+            let doorbell_fd = guest_doorbell.into_raw_fd();
+            let args = SpawnArgs { hub_path, peer_id, doorbell_fd };
             let guest = ShmGuest::attach_with_ticket(&args).unwrap();
             let doorbell = unsafe { Doorbell::from_raw_fd(args.doorbell_fd) };
             
@@ -412,6 +413,6 @@ fn test_spawn_and_attach() {
 
 ## Notes
 
-- The guest's doorbell fd is kept alive by `std::mem::forget()` after `clear_cloexec()`
-- In real usage, the fd is inherited by the child and closed by the parent after spawn
+- The guest doorbell is kept alive by the returned `SpawnTicket` until `Command::spawn()`
+- After successful spawn, drop the `SpawnTicket` to close the parent's copy (child inherited it)
 - If spawn fails, call `host.release_peer(peer_id)` to free the reserved slot

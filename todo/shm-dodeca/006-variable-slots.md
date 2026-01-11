@@ -1,4 +1,4 @@
-# Phase 006: Variable-Size Slot Pools (Optional)
+# Phase 006: Variable-Size Slot Pools (Optional in spec, likely required for dodeca)
 
 ## Goal
 

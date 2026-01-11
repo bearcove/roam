@@ -63,7 +63,7 @@ let fd = guest_bell.as_raw_fd();
 // shm-primitives/src/doorbell.rs
 
 use std::io;
-use std::os::unix::io::{AsRawFd, FromRawFd, OwnedFd, RawFd};
+use std::os::unix::io::{AsRawFd, FromRawFd, IntoRawFd, OwnedFd, RawFd};
 use std::time::Duration;
 
 /// One end of a doorbell pair for cross-process notification.
@@ -130,13 +130,24 @@ impl Doorbell {
     pub fn ring(&self) -> io::Result<()> {
         let byte: u8 = 1;
         let ret = unsafe {
-            libc::write(self.fd.as_raw_fd(), &byte as *const u8 as *const _, 1)
+            libc::send(
+                self.fd.as_raw_fd(),
+                &byte as *const u8 as *const _,
+                1,
+                libc::MSG_DONTWAIT,
+            )
         };
-        
-        if ret < 0 {
-            Err(io::Error::last_os_error())
-        } else {
-            Ok(())
+
+        if ret >= 0 {
+            return Ok(());
+        }
+
+        // Doorbell is level-triggered: if the socket buffer is full, the peer is
+        // already "woken"; treat EAGAIN/EWOULDBLOCK as success.
+        let err = io::Error::last_os_error();
+        match err.raw_os_error() {
+            Some(libc::EAGAIN) | Some(libc::EWOULDBLOCK) => Ok(()),
+            _ => Err(err),
         }
     }
     
@@ -189,7 +200,7 @@ impl Doorbell {
     }
     
     /// Drain any pending data from the socket.
-    fn drain(&self) -> io::Result<()> {
+    pub fn drain(&self) -> io::Result<()> {
         let mut buf = [0u8; 64];
         loop {
             let ret = unsafe {
@@ -302,6 +313,14 @@ impl ShmHost {
         self.send(peer_id, frame)?;
         doorbell.ring().map_err(SendError::Io)?;
         Ok(())
+    }
+
+    /// Convert this doorbell into a raw fd without closing it.
+    ///
+    /// This is useful in fork-based tests; real `Command::spawn()` + `exec()`
+    /// won't have a `Doorbell` value to drop.
+    pub fn into_raw_fd(self) -> RawFd {
+        self.fd.into_raw_fd()
     }
 }
 

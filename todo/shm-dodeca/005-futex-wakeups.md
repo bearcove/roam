@@ -103,7 +103,7 @@ pub mod linux {
             libc::syscall(
                 libc::SYS_futex,
                 atomic as *const AtomicU32 as *const u32,
-                libc::FUTEX_WAIT | libc::FUTEX_PRIVATE_FLAG,
+                libc::FUTEX_WAIT,
                 expected,
                 timeout_ptr,
                 std::ptr::null::<u32>(),
@@ -130,7 +130,7 @@ pub mod linux {
             libc::syscall(
                 libc::SYS_futex,
                 atomic as *const AtomicU32 as *const u32,
-                libc::FUTEX_WAKE | libc::FUTEX_PRIVATE_FLAG,
+                libc::FUTEX_WAKE,
                 count,
                 std::ptr::null::<libc::timespec>(),
                 std::ptr::null::<u32>(),
@@ -356,11 +356,9 @@ impl SlotPool {
     pub fn free_and_wake(&self, handle: SlotHandle) {
         self.free(handle);
         
-        // Wake waiters on the bitmap word that changed
-        let word_idx = handle.index as usize / 64;
-        if word_idx < self.bitmap.len() {
-            futex::wake_one(&self.bitmap[word_idx]);
-        }
+        // Pick a single, canonical futex word for slot-waiters and always wake it.
+        // This avoids "wait-on-word-0, wake-word-N" bugs.
+        futex::wake_one(&self.bitmap[0]);
     }
 }
 ```
@@ -512,7 +510,7 @@ fn test_ring_blocking() {
 ## Notes
 
 - Futex operates on `AtomicU32`, but our ring indices are `AtomicU32` anyway
-- The "private" futex flag assumes same process (inherited mappings) - correct for SHM
+- SHM is cross-process, so use the shared futex ops (do **not** use `FUTEX_PRIVATE_FLAG`)
 - Fallback uses exponential backoff to avoid burning CPU
 - Consider adding `FUTEX_WAIT_BITSET` for more selective wakeup on slot pools
 - macOS has no futex; fallback uses polling (consider `os_sync_wait_on_address` on newer macOS)
