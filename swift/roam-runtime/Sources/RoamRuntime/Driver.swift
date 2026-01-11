@@ -273,22 +273,17 @@ public final class Driver: @unchecked Sendable {
         let wireMsg: Message
         switch msg {
         case .data(let channelId, let payload):
-            debugLog("handleTaskMessage: Data(channelId=\(channelId), \(payload.count) bytes)")
             wireMsg = .data(channelId: channelId, payload: payload)
         case .close(let channelId):
-            debugLog("handleTaskMessage: Close(channelId=\(channelId))")
             wireMsg = .close(channelId: channelId)
         case .response(let requestId, let payload):
-            debugLog("handleTaskMessage: Response(requestId=\(requestId), \(payload.count) bytes)")
             let wasInFlight = await state.removeInFlight(requestId)
             guard wasInFlight else {
                 return  // Already cancelled
             }
             wireMsg = .response(requestId: requestId, metadata: [], payload: payload)
         }
-        debugLog("handleTaskMessage: sending wireMsg")
         try await transport.send(wireMsg)
-        debugLog("handleTaskMessage: sent wireMsg")
     }
 
     /// Handle a command from ConnectionHandle.
