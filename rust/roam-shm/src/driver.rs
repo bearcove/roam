@@ -116,7 +116,9 @@ where
         task_tx: mpsc::Sender<TaskMessage>,
         task_rx: mpsc::Receiver<TaskMessage>,
     ) -> Self {
-        let initial_credit = negotiated.initial_credit;
+        // Use infinite credit for now - proper SHM flow control via channel table
+        // atomics will be implemented in a future phase. This matches the current
+        // behavior of stream transports which also use infinite credit.
         Self {
             io,
             dispatcher,
@@ -124,7 +126,7 @@ where
             negotiated,
             handle,
             command_rx,
-            server_channel_registry: ChannelRegistry::new_with_credit(initial_credit, task_tx),
+            server_channel_registry: ChannelRegistry::new(task_tx),
             pending_responses: HashMap::new(),
             in_flight_server_requests: std::collections::HashSet::new(),
             task_rx,
