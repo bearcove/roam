@@ -197,13 +197,22 @@ impl SegmentLayout {
         // Host slot pool is at position 0 in the slot region
         let slot_region_offset = align_up(peer_table_offset + peer_table_size, 64);
 
-        // Compute slot pool size (header + slots)
+        // Compute slot pool size to match TreiberSlab layout:
+        // - TreiberSlabHeader (64 bytes, cache-line aligned)
+        // - SlotMeta array (8 bytes per slot, aligned to SlotMeta alignment)
+        // - Slot data (slot_size bytes per slot, aligned to u32)
+        //
         // shm[impl shm.slot.pool-header-size]
-        let bitmap_words = (config.slots_per_guest as u64 + 63) / 64;
-        let bitmap_bytes = bitmap_words * 8;
-        let slot_pool_header_size = align_up(bitmap_bytes, 64);
-        let pool_size =
-            slot_pool_header_size + (config.slots_per_guest as u64) * (config.slot_size as u64);
+        const TREIBER_HEADER_SIZE: u64 = 64; // TreiberSlabHeader is 64 bytes
+        const SLOT_META_SIZE: u64 = 8; // SlotMeta is 8 bytes (generation + state)
+        const SLOT_META_ALIGN: u64 = 4; // SlotMeta alignment (AtomicU32)
+        const DATA_ALIGN: u64 = 4; // Slot data aligned to u32
+
+        let meta_offset = align_up(TREIBER_HEADER_SIZE, SLOT_META_ALIGN);
+        let meta_size = (config.slots_per_guest as u64) * SLOT_META_SIZE;
+        let data_offset = align_up(meta_offset + meta_size, DATA_ALIGN);
+        let data_size = (config.slots_per_guest as u64) * (config.slot_size as u64);
+        let pool_size = data_offset + data_size;
 
         // Guest areas follow host slot pool
         // shm[impl shm.segment.guest-slot-offset]
@@ -351,5 +360,109 @@ mod tests {
         config.max_guests = 16;
         config.ring_size = 3; // Not power of 2
         assert!(config.validate().is_err());
+    }
+
+    /// Verify that pool_size matches the actual TreiberSlab memory layout.
+    ///
+    /// The slot pool must contain:
+    /// - TreiberSlabHeader (64 bytes, cache-line aligned)
+    /// - SlotMeta array (8 bytes per slot)
+    /// - Slot data (slot_size bytes per slot)
+    ///
+    /// This test ensures the channel table doesn't overlap the slot pool.
+    #[test]
+    fn pool_size_matches_treiber_slab_layout() {
+        use core::mem::{align_of, size_of};
+        use shm_primitives::{SlotMeta, TreiberSlabHeader};
+
+        // Helper to compute actual Treiber slab size
+        fn actual_treiber_slab_size(slot_count: u32, slot_size: u32) -> usize {
+            let header_offset = 0usize;
+            let meta_offset = {
+                let raw = header_offset + size_of::<TreiberSlabHeader>();
+                (raw + (align_of::<SlotMeta>() - 1)) & !(align_of::<SlotMeta>() - 1)
+            };
+            let data_offset = {
+                let raw = meta_offset + (slot_count as usize * size_of::<SlotMeta>());
+                (raw + (align_of::<u32>() - 1)) & !(align_of::<u32>() - 1)
+            };
+            data_offset + (slot_count as usize * slot_size as usize)
+        }
+
+        // Test with default config
+        let config = SegmentConfig::default();
+        let layout = config.layout().unwrap();
+
+        let actual_size = actual_treiber_slab_size(config.slots_per_guest, config.slot_size);
+
+        assert!(
+            layout.pool_size as usize >= actual_size,
+            "pool_size ({}) is smaller than actual Treiber slab size ({}).\n\
+             This would cause the channel table to overlap the slot pool!\n\
+             slots_per_guest={}, slot_size={}, SlotMeta size={}",
+            layout.pool_size,
+            actual_size,
+            config.slots_per_guest,
+            config.slot_size,
+            size_of::<SlotMeta>()
+        );
+
+        // Test with various configurations
+        for slots_per_guest in [1, 2, 8, 16, 32, 64, 128] {
+            for slot_size in [64, 256, 1024, 4096, 65536] {
+                let config = SegmentConfig {
+                    slots_per_guest,
+                    slot_size,
+                    ..Default::default()
+                };
+                let layout = config.layout().unwrap();
+                let actual_size = actual_treiber_slab_size(slots_per_guest, slot_size);
+
+                assert!(
+                    layout.pool_size as usize >= actual_size,
+                    "pool_size ({}) < actual size ({}) for slots_per_guest={}, slot_size={}",
+                    layout.pool_size,
+                    actual_size,
+                    slots_per_guest,
+                    slot_size
+                );
+            }
+        }
+    }
+
+    /// Verify that regions don't overlap within a guest area.
+    #[test]
+    fn guest_area_regions_do_not_overlap() {
+        use core::mem::size_of;
+        use shm_primitives::{SlotMeta, TreiberSlabHeader};
+
+        let config = SegmentConfig::default();
+        let layout = config.layout().unwrap();
+
+        for peer_id in 1..=config.max_guests as u8 {
+            let slot_pool_start = layout.guest_slot_pool_offset(peer_id);
+            let channel_table_start = layout.guest_channel_table_offset(peer_id);
+
+            // Compute actual slot pool end (using Treiber slab layout)
+            let meta_offset = size_of::<TreiberSlabHeader>();
+            let meta_offset_aligned = (meta_offset + (core::mem::align_of::<SlotMeta>() - 1))
+                & !(core::mem::align_of::<SlotMeta>() - 1);
+            let data_offset =
+                meta_offset_aligned + (config.slots_per_guest as usize * size_of::<SlotMeta>());
+            let data_offset_aligned = (data_offset + (core::mem::align_of::<u32>() - 1))
+                & !(core::mem::align_of::<u32>() - 1);
+            let actual_pool_end = slot_pool_start
+                + data_offset_aligned as u64
+                + (config.slots_per_guest as u64 * config.slot_size as u64);
+
+            assert!(
+                channel_table_start >= actual_pool_end,
+                "Guest {} channel table (offset {}) overlaps slot pool (ends at {})!\n\
+                 This will cause data corruption.",
+                peer_id,
+                channel_table_start,
+                actual_pool_end
+            );
+        }
     }
 }
