@@ -13,7 +13,8 @@ use shm_primitives::{HeapRegion, MmapRegion, Region, SlotHandle};
 
 use crate::channel::ChannelEntry;
 use crate::layout::{
-    CHANNEL_ENTRY_SIZE, DESC_SIZE, HEADER_SIZE, MAGIC, SegmentHeader, SegmentLayout, VERSION,
+    CHANNEL_ENTRY_SIZE, DESC_SIZE, HEADER_SIZE, MAGIC, SegmentConfig, SegmentHeader, SegmentLayout,
+    VERSION,
 };
 use crate::peer::{PeerEntry, PeerId};
 use crate::slot_pool::SlotPool;
@@ -327,6 +328,15 @@ impl ShmGuest {
     #[inline]
     pub fn peer_id(&self) -> PeerId {
         self.peer_id
+    }
+
+    /// Get the segment configuration.
+    ///
+    /// This returns the config that was read from the segment header when
+    /// attaching. Useful for getting max_payload_size, initial_credit, etc.
+    #[inline]
+    pub fn config(&self) -> &SegmentConfig {
+        &self.layout.config
     }
 
     /// Get the segment header.

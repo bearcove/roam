@@ -161,6 +161,14 @@ impl ShmHost {
         self.path.as_deref()
     }
 
+    /// Get the segment configuration.
+    ///
+    /// Returns the config that was used to create this segment.
+    #[inline]
+    pub fn config(&self) -> &SegmentConfig {
+        &self.layout.config
+    }
+
     /// Add a new peer, returning the spawn ticket.
     ///
     /// This reserves a peer slot and creates a doorbell pair.

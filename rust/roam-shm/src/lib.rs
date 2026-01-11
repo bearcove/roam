@@ -80,6 +80,9 @@ pub mod guest;
 #[cfg(feature = "std")]
 pub mod transport;
 
+#[cfg(feature = "tokio")]
+pub mod driver;
+
 #[cfg(all(feature = "std", unix))]
 pub mod spawn;
 
@@ -109,7 +112,8 @@ pub use guest::ShmGuest;
 
 #[cfg(feature = "std")]
 pub use transport::{
-    ConvertError, ShmGuestTransport, ShmHostGuestTransport, frame_to_message, message_to_frame,
+    ConvertError, OwnedShmHostTransport, ShmGuestTransport, ShmHostGuestTransport,
+    frame_to_message, message_to_frame,
 };
 
 #[cfg(all(feature = "std", unix))]

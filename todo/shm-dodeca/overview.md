@@ -16,14 +16,18 @@ high-performance shared memory IPC.
 | Slot pools (fixed) | ✅ Done | Partial | Bitmap allocation via `SlotPool` |
 | Channel metadata | ✅ Done | Partial | `ChannelEntry`, `ChannelState` |
 | Transport trait | ✅ Done | Covered | `ShmHostGuestTransport`, `ShmGuestTransport` |
-| **File-backed mmap** | ❌ Missing | 0% | Uses `HeapRegion` only |
-| **Doorbells** | ❌ Missing | 0% | No socketpair wakeup/death detection |
-| **Spawn tickets** | ❌ Missing | 0% | No `AddPeerOptions`, fd inheritance |
-| **Death callbacks** | ❌ Missing | 0% | No crash notification |
-| **Futex wakeups** | ❌ Missing | 0% | No efficient blocking |
-| **Variable-size slots** | ❌ Missing | 0% | Fixed slots only |
+| File-backed mmap | ✅ Done | Covered | `MmapRegion`, `ShmHost::create(path, ...)`, `ShmGuest::attach_path` |
+| Doorbells | ✅ Done | Covered | `Doorbell` socketpair wakeup + death detection |
+| Spawn tickets | ✅ Done | Covered | `SpawnTicket`, `SpawnArgs`, Reserved peer state |
+| Death callbacks | ✅ Done | Covered | doorbell-based death detection + recovery |
+| Futex wakeups | ✅ Done | Covered | ring/credit/slot waiting + fallback |
+| Variable-size slots | ✅ Done | Covered | shared size classes + ownership tracking |
+| Slot extents | ✅ Done | Covered | extent-based growth + cross-process remap |
+| **Roam SHM driver** | ❌ Missing | n/a | Needed for `ConnectionHandle`/`#[roam::service]` over SHM |
+| **Tracing** | ❌ Missing | n/a | Replace `rapace_tracing` plumbing |
+| **Tunnel streams** | ❌ Missing | n/a | Replace `rapace::TunnelStream` |
 
-**Overall spec coverage: 51% (58/114 rules)**
+**Spec coverage:** see tracey (SHM / rust). The remaining work is mostly runtime integration (driver/tracing/tunnel).
 
 ## Target API (matching rapace)
 
@@ -62,12 +66,17 @@ let transport = peer.into_transport(doorbell);
 
 | Phase | File | Status | Description |
 |-------|------|--------|-------------|
-| 001 | [001-mmap-backed-regions.md](./001-mmap-backed-regions.md) | TODO | File-backed mmap for cross-process SHM |
-| 002 | [002-doorbells.md](./002-doorbells.md) | TODO | Socketpair-based wakeup and death detection |
-| 003 | [003-spawn-tickets.md](./003-spawn-tickets.md) | TODO | `AddPeerOptions` and spawn ticket API |
-| 004 | [004-death-callbacks.md](./004-death-callbacks.md) | TODO | Crash detection and cleanup callbacks |
-| 005 | [005-futex-wakeups.md](./005-futex-wakeups.md) | TODO | Efficient blocking on ring/credit/slots |
-| 006 | [006-variable-slots.md](./006-variable-slots.md) | TODO | Variable-size slot pools (likely required for dodeca parity) |
+| 001 | [001-mmap-backed-regions.md](./001-mmap-backed-regions.md) | ✅ Done | File-backed mmap for cross-process SHM |
+| 002 | [002-doorbells.md](./002-doorbells.md) | ✅ Done | Socketpair-based wakeup and death detection |
+| 003 | [003-spawn-tickets.md](./003-spawn-tickets.md) | ✅ Done | `AddPeerOptions` and spawn ticket API |
+| 004 | [004-death-callbacks.md](./004-death-callbacks.md) | ✅ Done | Crash detection and cleanup callbacks |
+| 005 | [005-futex-wakeups.md](./005-futex-wakeups.md) | ✅ Done | Efficient blocking on ring/credit/slots |
+| 006 | [006-variable-slots.md](./006-variable-slots.md) | ✅ Done | Variable-size slot pools |
+| 007 | [007-slot-extents.md](./007-slot-extents.md) | ✅ Done | Extent-based growth + remap |
+| 008 | [008-roam-shm-driver.md](./008-roam-shm-driver.md) | TODO | Roam driver over SHM (no Hello/Credit frames) |
+| 009 | [009-roam-tracing.md](./009-roam-tracing.md) | TODO | Tracing across cells (roam-native) |
+| 010 | [010-tunnel-streams.md](./010-tunnel-streams.md) | TODO | Tunnel streams (roam-native) |
+| 011 | [011-dodeca-flag-day-cutover.md](./011-dodeca-flag-day-cutover.md) | TODO | Dodeca flag-day cutover plan |
 
 ## Phase Dependencies
 
@@ -85,12 +94,24 @@ let transport = peer.into_transport(doorbell);
 004 Death Callbacks
       │
       ▼
-006 Variable Slots (optional in spec, likely required for dodeca)
+006 Variable Slots
+      │
+      ▼
+007 Slot Extents (optional)
+      │
+      ▼
+008 Roam SHM Driver (required for dodeca)
+      │             ┌────────────────┐
+      │             ▼                ▼
+      │         009 Tracing      010 Tunnel Streams
+      │             └───────┬────────┘
+      ▼                     ▼
+011 Dodeca Cutover (flag day)
 ```
 
-**Critical path**: 001 → 002 → 003 → 004 (+ 006 for dodeca parity / large payloads)
+**Critical path**: 001 → 002 → 003 → 004 → 006 → 008 (+ 010 if tunneling is required)
 
-**Parallel work**: 005 can be done alongside 002-004
+**Parallel work**: 005 can be done alongside 002-004, and 009/010 can proceed once 008 exists.
 
 ## Spec Rules by Phase
 
@@ -145,6 +166,10 @@ let transport = peer.into_transport(doorbell);
 - `shm.varslot.allocation` - Allocation algorithm
 - `shm.varslot.freeing` - Freeing algorithm
 
+### Phase 007: Slot Extents
+- `shm.varslot.extents` - Extent-based growth
+- `shm.varslot.extent-layout` - Extent layout
+
 ## Success Criteria
 
 1. ✅ `ShmHost::create(path, config)` creates a file-backed segment
@@ -154,7 +179,10 @@ let transport = peer.into_transport(doorbell);
 5. ✅ `AddPeerOptions` supports death callbacks
 6. ✅ Spawn tickets work with `Command::spawn()`
 7. ✅ All spec tests pass
-8. ✅ Dodeca can be migrated from rapace to roam-shm
+8. ✅ Roam driver can run over SHM (`ConnectionHandle` + driver task)
+9. ✅ Tracing works across cells (or is explicitly deferred)
+10. ✅ Tunneling works for cell-http (or is explicitly deferred)
+11. ✅ Dodeca can be migrated from rapace to roam + roam-shm
 
 ## Files
 
@@ -195,17 +223,12 @@ cd ~/bearcove/dodeca && cargo build
 
 | Phase | Complexity | Est. Time |
 |-------|------------|-----------|
-| 001 Mmap Regions | Medium | 3-4 hours |
-| 002 Doorbells | Medium | 3-4 hours |
-| 003 Spawn Tickets | Medium | 2-3 hours |
-| 004 Death Callbacks | Low-Medium | 2-3 hours |
-| 005 Futex Wakeups | Medium | 3-4 hours |
-| 006 Variable Slots | High | 6-8 hours |
-| **MVP (001-004)** | | **10-14 hours** |
-| **Full (001-006)** | | **19-26 hours** |
+| 008 Roam SHM Driver | High | 1-3 days |
+| 009 Tracing | Medium | 0.5-2 days |
+| 010 Tunnel Streams | Medium-High | 1-3 days |
+| 011 Dodeca Cutover | High | 1-3 days |
 
 ## Notes
 
-- Phase 006 (variable slots) is likely required for dodeca (fonts/images) unless we accept major fixed-slot waste or add fragmentation
 - Windows support (`shm.file.mmap-windows`) is optional for initial migration
 - The existing `HeapRegion` code is useful for unit tests even after mmap is added
