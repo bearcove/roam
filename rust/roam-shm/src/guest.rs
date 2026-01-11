@@ -80,6 +80,8 @@ pub enum AttachError {
     HostGoodbye,
     /// Slot was not in Reserved state (for spawned guests)
     SlotNotReserved,
+    /// Peer ID is out of range for this segment
+    InvalidPeerId,
     /// I/O error
     Io(io::Error),
 }
@@ -92,6 +94,7 @@ impl std::fmt::Display for AttachError {
             AttachError::NoPeerSlots => write!(f, "no available peer slots"),
             AttachError::HostGoodbye => write!(f, "host has signaled goodbye"),
             AttachError::SlotNotReserved => write!(f, "slot was not reserved for this guest"),
+            AttachError::InvalidPeerId => write!(f, "peer ID is out of range for this segment"),
             AttachError::Io(e) => write!(f, "I/O error: {}", e),
         }
     }
@@ -164,8 +167,13 @@ impl ShmGuest {
             .layout()
             .map_err(|_| AttachError::UnsupportedVersion)?;
 
-        // Claim our reserved slot
+        // Validate peer ID is within range
         let peer_id = args.peer_id;
+        if peer_id.get() < 1 || peer_id.get() > header.max_guests as u8 {
+            return Err(AttachError::InvalidPeerId);
+        }
+
+        // Claim our reserved slot
         let offset = layout.peer_entry_offset(peer_id.get());
         let entry = unsafe { &*(region.offset(offset as usize) as *const PeerEntry) };
 
