@@ -54,8 +54,8 @@ export class ConnectionError extends Error {
     return new ConnectionError("io", message);
   }
 
-  static protocol(ruleId: string, context: string): ConnectionError {
-    return new ConnectionError("protocol", ruleId, context);
+  static protocol({ ruleId, context }: { ruleId: string; context: string }): ConnectionError {
+    return new ConnectionError("protocol", context, ruleId);
   }
 
   static dispatch(message: string): ConnectionError {
@@ -183,7 +183,7 @@ export class Connection<T extends MessageTransport = MessageTransport> {
       // Ignore send errors when closing
     }
     this.io.close();
-    return ConnectionError.protocol(ruleId, "");
+    return ConnectionError.protocol({ ruleId, context: "" });
   }
 
   /**
@@ -479,7 +479,10 @@ export class Connection<T extends MessageTransport = MessageTransport> {
       // r[impl flow.unary.payload-limit] - Validate payload size
       const payloadViolation = this.validatePayloadSize(msg.payload.length);
       if (payloadViolation) {
-        throw ConnectionError.protocol(payloadViolation, "payload exceeds max size");
+        throw ConnectionError.protocol({
+          ruleId: payloadViolation,
+          context: "payload exceeds max size",
+        });
       }
 
       // Dispatch with streaming support - return the promise, don't await it!
@@ -501,17 +504,26 @@ export class Connection<T extends MessageTransport = MessageTransport> {
     if (msg.tag === "Data") {
       if (msg.channelId === 0n) {
         // Can't send goodbye synchronously - throw protocol error
-        throw ConnectionError.protocol("streaming.id.zero-reserved", "channel ID 0 is reserved");
+        throw ConnectionError.protocol({
+          ruleId: "streaming.id.zero-reserved",
+          context: "channel ID 0 is reserved",
+        });
       }
       try {
         this.channelRegistry.routeData(msg.channelId, msg.payload);
       } catch (e) {
         if (e instanceof ChannelError) {
           if (e.kind === "unknown") {
-            throw ConnectionError.protocol("streaming.unknown", "unknown channel ID");
+            throw ConnectionError.protocol({
+              ruleId: "streaming.unknown",
+              context: "unknown channel ID",
+            });
           }
           if (e.kind === "dataAfterClose") {
-            throw ConnectionError.protocol("streaming.data-after-close", "data after close");
+            throw ConnectionError.protocol({
+              ruleId: "streaming.data-after-close",
+              context: "data after close",
+            });
           }
         }
         throw e;
@@ -521,10 +533,16 @@ export class Connection<T extends MessageTransport = MessageTransport> {
 
     if (msg.tag === "Close") {
       if (msg.channelId === 0n) {
-        throw ConnectionError.protocol("streaming.id.zero-reserved", "channel ID 0 is reserved");
+        throw ConnectionError.protocol({
+          ruleId: "streaming.id.zero-reserved",
+          context: "channel ID 0 is reserved",
+        });
       }
       if (!this.channelRegistry.contains(msg.channelId)) {
-        throw ConnectionError.protocol("streaming.unknown", "unknown channel ID");
+        throw ConnectionError.protocol({
+          ruleId: "streaming.unknown",
+          context: "unknown channel ID",
+        });
       }
       this.channelRegistry.close(msg.channelId);
       return undefined;
@@ -532,10 +550,16 @@ export class Connection<T extends MessageTransport = MessageTransport> {
 
     if (msg.tag === "Reset") {
       if (msg.channelId === 0n) {
-        throw ConnectionError.protocol("streaming.id.zero-reserved", "channel ID 0 is reserved");
+        throw ConnectionError.protocol({
+          ruleId: "streaming.id.zero-reserved",
+          context: "channel ID 0 is reserved",
+        });
       }
       if (!this.channelRegistry.contains(msg.channelId)) {
-        throw ConnectionError.protocol("streaming.unknown", "unknown channel ID");
+        throw ConnectionError.protocol({
+          ruleId: "streaming.unknown",
+          context: "unknown channel ID",
+        });
       }
       // TODO: Signal error to Rx<T> instead of clean close
       this.channelRegistry.close(msg.channelId);
@@ -544,10 +568,16 @@ export class Connection<T extends MessageTransport = MessageTransport> {
 
     if (msg.tag === "Credit") {
       if (msg.channelId === 0n) {
-        throw ConnectionError.protocol("streaming.id.zero-reserved", "channel ID 0 is reserved");
+        throw ConnectionError.protocol({
+          ruleId: "streaming.id.zero-reserved",
+          context: "channel ID 0 is reserved",
+        });
       }
       if (!this.channelRegistry.contains(msg.channelId)) {
-        throw ConnectionError.protocol("streaming.unknown", "unknown channel ID");
+        throw ConnectionError.protocol({
+          ruleId: "streaming.unknown",
+          context: "unknown channel ID",
+        });
       }
       return undefined;
     }
@@ -772,7 +802,10 @@ async function waitForPeerHello<T extends MessageTransport>(
       if (raw.length >= 2 && raw[0] === 0x00 && raw[1] !== 0x00) {
         await io.send(encodeMessage(messageGoodbye("message.hello.unknown-version")));
         io.close();
-        throw ConnectionError.protocol("message.hello.unknown-version", "unknown Hello variant");
+        throw ConnectionError.protocol({
+          ruleId: "message.hello.unknown-version",
+          context: "unknown Hello variant",
+        });
       }
       throw ConnectionError.io("failed to receive peer Hello");
     }
@@ -782,7 +815,22 @@ async function waitForPeerHello<T extends MessageTransport>(
     }
 
     // Parse message using wire codec
-    const result = decodeMessage(payload);
+    // r[impl message.hello.unknown-version] - Reject unknown Hello versions.
+    let result;
+    try {
+      result = decodeMessage(payload);
+    } catch {
+      // Check if this is an unknown Hello variant: [Message::Hello=0][Hello::unknown=1+]
+      if (payload.length >= 2 && payload[0] === 0x00 && payload[1] !== 0x00) {
+        await io.send(encodeMessage(messageGoodbye("message.hello.unknown-version")));
+        io.close();
+        throw ConnectionError.protocol({
+          ruleId: "message.hello.unknown-version",
+          context: "unknown Hello variant",
+        });
+      }
+      throw ConnectionError.io("failed to decode message");
+    }
     const msg = result.value;
 
     if (msg.tag === "Hello") {
@@ -790,7 +838,10 @@ async function waitForPeerHello<T extends MessageTransport>(
       if (msg.value.tag !== "V1") {
         await io.send(encodeMessage(messageGoodbye("message.hello.unknown-version")));
         io.close();
-        throw ConnectionError.protocol("message.hello.unknown-version", "unknown Hello variant");
+        throw ConnectionError.protocol({
+          ruleId: "message.hello.unknown-version",
+          context: "unknown Hello variant",
+        });
       }
 
       return msg.value;
@@ -799,10 +850,10 @@ async function waitForPeerHello<T extends MessageTransport>(
     // Received non-Hello before Hello exchange completed
     await io.send(encodeMessage(messageGoodbye("message.hello.ordering")));
     io.close();
-    throw ConnectionError.protocol(
-      "message.hello.ordering",
-      "received non-Hello before Hello exchange",
-    );
+    throw ConnectionError.protocol({
+      ruleId: "message.hello.ordering",
+      context: "received non-Hello before Hello exchange",
+    });
   }
 }
 
