@@ -5,10 +5,11 @@
 //! rings and slot pool.
 
 use std::io;
+use std::path::Path;
 use std::ptr;
 
 use roam_frame::{Frame, INLINE_PAYLOAD_LEN, INLINE_PAYLOAD_SLOT, MsgDesc, Payload};
-use shm_primitives::{HeapRegion, Region, SlotHandle};
+use shm_primitives::{HeapRegion, MmapRegion, Region, SlotHandle};
 
 use crate::channel::ChannelEntry;
 use crate::layout::{
@@ -16,6 +17,7 @@ use crate::layout::{
 };
 use crate::peer::{PeerEntry, PeerId};
 use crate::slot_pool::SlotPool;
+use crate::spawn::SpawnArgs;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RecvError {
@@ -28,13 +30,27 @@ enum RecvError {
     FreeFailed,
 }
 
+/// Backing memory for a guest's SHM view.
+///
+/// The backing is kept alive for the lifetime of the guest, ensuring
+/// the memory mapping remains valid.
+#[allow(dead_code)]
+enum GuestBacking {
+    /// No owned backing (external region)
+    None,
+    /// Heap-allocated memory (for testing)
+    Heap(HeapRegion),
+    /// File-backed mmap (for production cross-process IPC)
+    Mmap(MmapRegion),
+}
+
 /// Guest-side handle for a SHM segment.
 ///
 /// shm[impl shm.topology.hub]
 pub struct ShmGuest {
-    /// Backing memory (heap-allocated for testing, mmap in production)
+    /// Backing memory (heap, mmap, or external)
     #[allow(dead_code)]
-    backing: Option<HeapRegion>,
+    backing: GuestBacking,
     /// Region view into backing memory
     region: Region,
     /// Our peer ID
@@ -62,6 +78,8 @@ pub enum AttachError {
     NoPeerSlots,
     /// Host has signaled goodbye
     HostGoodbye,
+    /// Slot was not in Reserved state (for spawned guests)
+    SlotNotReserved,
     /// I/O error
     Io(io::Error),
 }
@@ -73,6 +91,7 @@ impl std::fmt::Display for AttachError {
             AttachError::UnsupportedVersion => write!(f, "unsupported segment version"),
             AttachError::NoPeerSlots => write!(f, "no available peer slots"),
             AttachError::HostGoodbye => write!(f, "host has signaled goodbye"),
+            AttachError::SlotNotReserved => write!(f, "slot was not reserved for this guest"),
             AttachError::Io(e) => write!(f, "I/O error: {}", e),
         }
     }
@@ -88,13 +107,115 @@ impl std::error::Error for AttachError {
 }
 
 impl ShmGuest {
-    /// Attach to an existing SHM segment.
+    /// Attach to an existing SHM segment by path.
+    ///
+    /// This opens the file, maps it into memory, finds an empty peer slot,
+    /// atomically claims it, and initializes the guest's local state.
+    ///
+    /// shm[impl shm.file.attach]
+    /// shm[impl shm.guest.attach]
+    pub fn attach_path<P: AsRef<Path>>(path: P) -> Result<Self, AttachError> {
+        let backing = MmapRegion::attach(path.as_ref()).map_err(AttachError::Io)?;
+        let region = backing.region();
+
+        let mut guest = Self::attach_region(region)?;
+        guest.backing = GuestBacking::Mmap(backing);
+        Ok(guest)
+    }
+
+    /// Attach to a segment using a spawn ticket's arguments.
+    ///
+    /// This is for spawned guest processes that have a pre-reserved slot.
+    /// The host has already reserved a slot via `add_peer()`, and the guest
+    /// claims it via CAS transition from Reserved → Attached.
+    ///
+    /// shm[impl shm.spawn.guest-init]
+    pub fn attach_with_ticket(args: &SpawnArgs) -> Result<Self, AttachError> {
+        let backing = MmapRegion::attach(&args.hub_path).map_err(AttachError::Io)?;
+        let region = backing.region();
+
+        // Validate header
+        let header = unsafe { &*(region.as_ptr() as *const crate::layout::SegmentHeader) };
+
+        if header.magic != crate::layout::MAGIC {
+            return Err(AttachError::InvalidMagic);
+        }
+        if header.version != crate::layout::VERSION
+            || header.header_size != crate::layout::HEADER_SIZE as u32
+        {
+            return Err(AttachError::UnsupportedVersion);
+        }
+        if header.is_host_goodbye() {
+            return Err(AttachError::HostGoodbye);
+        }
+
+        // Reconstruct layout from header
+        let config = crate::layout::SegmentConfig {
+            max_payload_size: header.max_payload_size,
+            initial_credit: header.initial_credit,
+            max_guests: header.max_guests,
+            ring_size: header.ring_size,
+            slot_size: header.slot_size,
+            slots_per_guest: header.slots_per_guest,
+            max_channels: header.max_channels,
+            heartbeat_interval: header.heartbeat_interval,
+        };
+        let layout = config
+            .layout()
+            .map_err(|_| AttachError::UnsupportedVersion)?;
+
+        // Claim our reserved slot
+        let peer_id = args.peer_id;
+        let offset = layout.peer_entry_offset(peer_id.get());
+        let entry = unsafe { &*(region.offset(offset as usize) as *const PeerEntry) };
+
+        // CAS: Reserved → Attached
+        entry
+            .try_claim_reserved()
+            .map_err(|_| AttachError::SlotNotReserved)?;
+
+        let slots = SlotPool::new(
+            region,
+            layout.guest_slot_pool_offset(peer_id.get()),
+            &config,
+        );
+
+        // Initialize channel table entries to Free
+        let channel_table_offset = layout.guest_channel_table_offset(peer_id.get());
+        for i in 0..config.max_channels {
+            let entry_offset =
+                channel_table_offset as usize + i as usize * crate::layout::CHANNEL_ENTRY_SIZE;
+            let channel_entry = unsafe { &mut *(region.offset(entry_offset) as *mut ChannelEntry) };
+            channel_entry.init();
+        }
+
+        Ok(Self {
+            backing: GuestBacking::Mmap(backing),
+            region,
+            peer_id,
+            layout,
+            slots,
+            g2h_local_head: 0,
+            h2g_local_tail: 0,
+            fatal_error: false,
+        })
+    }
+
+    /// Attach to an existing SHM segment via a Region.
     ///
     /// This finds an empty peer slot, atomically claims it, and initializes
     /// the guest's local state.
     ///
+    /// This is the low-level attach that works with any Region source.
+    /// For file-backed segments, prefer `attach_path`.
+    ///
     /// shm[impl shm.guest.attach]
     pub fn attach(region: Region) -> Result<Self, AttachError> {
+        Self::attach_region(region)
+    }
+
+    /// Internal attach implementation.
+    fn attach_region(region: Region) -> Result<Self, AttachError> {
         // Validate header
         let header = unsafe { &*(region.as_ptr() as *const SegmentHeader) };
 
@@ -157,7 +278,7 @@ impl ShmGuest {
         }
 
         Ok(Self {
-            backing: None,
+            backing: GuestBacking::None,
             region,
             peer_id,
             layout,
@@ -172,8 +293,8 @@ impl ShmGuest {
     #[cfg(test)]
     pub fn attach_heap(backing: HeapRegion) -> Result<Self, AttachError> {
         let region = backing.region();
-        let mut guest = Self::attach(region)?;
-        guest.backing = Some(backing);
+        let mut guest = Self::attach_region(region)?;
+        guest.backing = GuestBacking::Heap(backing);
         Ok(guest)
     }
 
@@ -480,7 +601,7 @@ mod tests {
     #[test]
     fn attach_to_segment() {
         let config = SegmentConfig::default();
-        let host = ShmHost::create(config).unwrap();
+        let host = ShmHost::create_heap(config).unwrap();
         let region = host.region();
 
         let guest = ShmGuest::attach(region).unwrap();
@@ -490,7 +611,7 @@ mod tests {
     #[test]
     fn multiple_guests_get_different_ids() {
         let config = SegmentConfig::default();
-        let host = ShmHost::create(config).unwrap();
+        let host = ShmHost::create_heap(config).unwrap();
         let region = host.region();
 
         let guest1 = ShmGuest::attach(region).unwrap();
@@ -511,7 +632,7 @@ mod tests {
             ..SegmentConfig::default()
         };
 
-        let mut host = ShmHost::create(config).unwrap();
+        let mut host = ShmHost::create_heap(config).unwrap();
         let region = host.region();
         let mut guest = ShmGuest::attach(region).unwrap();
 

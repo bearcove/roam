@@ -37,7 +37,7 @@ fn make_response(id: u32, payload: &[u8]) -> Frame {
 #[test]
 fn guest_to_host_inline_message() {
     let config = SegmentConfig::default();
-    let mut host = ShmHost::create(config).unwrap();
+    let mut host = ShmHost::create_heap(config).unwrap();
     let region = host.region();
 
     let mut guest = ShmGuest::attach(region).unwrap();
@@ -61,7 +61,7 @@ fn guest_to_host_inline_message() {
 #[test]
 fn host_to_guest_inline_message() {
     let config = SegmentConfig::default();
-    let mut host = ShmHost::create(config).unwrap();
+    let mut host = ShmHost::create_heap(config).unwrap();
     let region = host.region();
 
     let mut guest = ShmGuest::attach(region).unwrap();
@@ -81,7 +81,7 @@ fn host_to_guest_inline_message() {
 #[test]
 fn bidirectional_roundtrip() {
     let config = SegmentConfig::default();
-    let mut host = ShmHost::create(config).unwrap();
+    let mut host = ShmHost::create_heap(config).unwrap();
     let region = host.region();
 
     let mut guest = ShmGuest::attach(region).unwrap();
@@ -109,7 +109,7 @@ fn bidirectional_roundtrip() {
 #[test]
 fn multiple_guests_isolated() {
     let config = SegmentConfig::default();
-    let mut host = ShmHost::create(config).unwrap();
+    let mut host = ShmHost::create_heap(config).unwrap();
     let region = host.region();
 
     let mut guest1 = ShmGuest::attach(region).unwrap();
@@ -152,7 +152,7 @@ fn multiple_guests_isolated() {
 #[test]
 fn large_payload_via_slot() {
     let config = SegmentConfig::default();
-    let mut host = ShmHost::create(config).unwrap();
+    let mut host = ShmHost::create_heap(config).unwrap();
     let region = host.region();
 
     let mut guest = ShmGuest::attach(region).unwrap();
@@ -193,7 +193,7 @@ fn large_payload_via_slot() {
 #[test]
 fn host_goodbye_prevents_guest_send() {
     let config = SegmentConfig::default();
-    let host = ShmHost::create(config).unwrap();
+    let host = ShmHost::create_heap(config).unwrap();
     let region = host.region();
 
     let mut guest = ShmGuest::attach(region).unwrap();
@@ -212,7 +212,7 @@ fn host_goodbye_prevents_guest_send() {
 #[test]
 fn many_messages_in_sequence() {
     let config = SegmentConfig::default();
-    let mut host = ShmHost::create(config).unwrap();
+    let mut host = ShmHost::create_heap(config).unwrap();
     let region = host.region();
 
     let mut guest = ShmGuest::attach(region).unwrap();
@@ -243,7 +243,7 @@ fn ring_backpressure() {
         ring_size: 4, // Very small ring
         ..SegmentConfig::default()
     };
-    let mut host = ShmHost::create(config).unwrap();
+    let mut host = ShmHost::create_heap(config).unwrap();
     let region = host.region();
 
     let mut guest = ShmGuest::attach(region).unwrap();
@@ -273,7 +273,7 @@ fn slot_reclamation_guest_to_host() {
         ring_size: 256,
         ..SegmentConfig::default()
     };
-    let mut host = ShmHost::create(config).unwrap();
+    let mut host = ShmHost::create_heap(config).unwrap();
     let region = host.region();
 
     let mut guest = ShmGuest::attach(region).unwrap();
@@ -305,7 +305,7 @@ fn slot_reclamation_host_to_guest() {
         ring_size: 256,
         ..SegmentConfig::default()
     };
-    let mut host = ShmHost::create(config).unwrap();
+    let mut host = ShmHost::create_heap(config).unwrap();
     let region = host.region();
 
     let mut guest = ShmGuest::attach(region).unwrap();

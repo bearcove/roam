@@ -8,6 +8,7 @@ use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 /// Peer states.
 ///
 /// shm[impl shm.segment.peer-state]
+/// shm[impl shm.spawn.reserved-state]
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PeerState {
@@ -17,6 +18,10 @@ pub enum PeerState {
     Attached = 1,
     /// Guest is shutting down or has crashed
     Goodbye = 2,
+    /// Host has reserved this slot for a spawned guest
+    ///
+    /// shm[impl shm.spawn.reserved-state]
+    Reserved = 3,
 }
 
 impl PeerState {
@@ -27,6 +32,7 @@ impl PeerState {
             0 => Some(PeerState::Empty),
             1 => Some(PeerState::Attached),
             2 => Some(PeerState::Goodbye),
+            3 => Some(PeerState::Reserved),
             _ => None,
         }
     }
@@ -117,6 +123,59 @@ impl PeerEntry {
             }
             Err(actual) => Err(PeerState::from_u32(actual).unwrap_or(PeerState::Empty)),
         }
+    }
+
+    /// Reserve this slot for a spawned guest.
+    ///
+    /// Called by the host before spawning a guest process.
+    /// Returns `Ok(new_epoch)` if successful, `Err(actual_state)` if slot not empty.
+    ///
+    /// shm[impl shm.spawn.reserved-state]
+    pub fn try_reserve(&self) -> Result<u32, PeerState> {
+        match self.state.compare_exchange(
+            PeerState::Empty as u32,
+            PeerState::Reserved as u32,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        ) {
+            Ok(_) => {
+                // Increment epoch
+                let new_epoch = self.epoch.fetch_add(1, Ordering::AcqRel) + 1;
+                Ok(new_epoch)
+            }
+            Err(actual) => Err(PeerState::from_u32(actual).unwrap_or(PeerState::Empty)),
+        }
+    }
+
+    /// Claim a reserved slot (transition Reserved -> Attached).
+    ///
+    /// Called by a spawned guest to claim its pre-assigned slot.
+    /// Returns `Ok(())` if successful, `Err(actual_state)` if not reserved.
+    ///
+    /// shm[impl shm.spawn.guest-init]
+    pub fn try_claim_reserved(&self) -> Result<(), PeerState> {
+        match self.state.compare_exchange(
+            PeerState::Reserved as u32,
+            PeerState::Attached as u32,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        ) {
+            Ok(_) => Ok(()),
+            Err(actual) => Err(PeerState::from_u32(actual).unwrap_or(PeerState::Empty)),
+        }
+    }
+
+    /// Release a reserved slot back to Empty.
+    ///
+    /// Called by the host if spawn fails.
+    pub fn release_reserved(&self) {
+        // Only release if still reserved (avoid racing with other transitions)
+        let _ = self.state.compare_exchange(
+            PeerState::Reserved as u32,
+            PeerState::Empty as u32,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        );
     }
 
     /// Set state to Goodbye.
@@ -289,7 +348,8 @@ mod tests {
         assert_eq!(PeerState::from_u32(0), Some(PeerState::Empty));
         assert_eq!(PeerState::from_u32(1), Some(PeerState::Attached));
         assert_eq!(PeerState::from_u32(2), Some(PeerState::Goodbye));
-        assert_eq!(PeerState::from_u32(3), None);
+        assert_eq!(PeerState::from_u32(3), Some(PeerState::Reserved));
+        assert_eq!(PeerState::from_u32(4), None);
     }
 
     #[test]

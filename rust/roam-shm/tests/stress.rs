@@ -24,7 +24,7 @@ fn stress_single_guest_high_throughput() {
         slots_per_guest: 32,
         ..SegmentConfig::default()
     };
-    let mut host = ShmHost::create(config).unwrap();
+    let mut host = ShmHost::create_heap(config).unwrap();
     let region = host.region();
 
     let mut guest = ShmGuest::attach(region).unwrap();
@@ -66,7 +66,7 @@ fn stress_multiple_guests_interleaved() {
         slots_per_guest: 16,
         ..SegmentConfig::default()
     };
-    let mut host = ShmHost::create(config).unwrap();
+    let mut host = ShmHost::create_heap(config).unwrap();
     let region = host.region();
 
     const NUM_GUESTS: usize = 4;
@@ -116,7 +116,7 @@ fn stress_multiple_guests_interleaved() {
 #[test]
 fn stress_bidirectional_ping_pong() {
     let config = SegmentConfig::default();
-    let mut host = ShmHost::create(config).unwrap();
+    let mut host = ShmHost::create_heap(config).unwrap();
     let region = host.region();
 
     let mut guest = ShmGuest::attach(region).unwrap();
@@ -150,7 +150,7 @@ fn stress_varying_payload_sizes() {
         max_payload_size: 4092,
         ..SegmentConfig::default()
     };
-    let mut host = ShmHost::create(config).unwrap();
+    let mut host = ShmHost::create_heap(config).unwrap();
     let region = host.region();
 
     let mut guest = ShmGuest::attach(region).unwrap();
@@ -193,7 +193,7 @@ fn stress_slot_exhaustion_recovery() {
         ring_size: 256,
         ..SegmentConfig::default()
     };
-    let mut host = ShmHost::create(config).unwrap();
+    let mut host = ShmHost::create_heap(config).unwrap();
     let region = host.region();
 
     let mut guest = ShmGuest::attach(region).unwrap();
@@ -233,7 +233,7 @@ fn stress_guest_attach_detach_cycle() {
         max_guests: 4,
         ..SegmentConfig::default()
     };
-    let mut host = ShmHost::create(config).unwrap();
+    let mut host = ShmHost::create_heap(config).unwrap();
     let region = host.region();
 
     const CYCLES: usize = 10;
@@ -268,7 +268,7 @@ fn stress_concurrent_send_recv() {
         ..SegmentConfig::default()
     };
 
-    let mut host = ShmHost::create(config).unwrap();
+    let mut host = ShmHost::create_heap(config).unwrap();
     let region = host.region();
 
     let mut guest = ShmGuest::attach(region).unwrap();
@@ -331,7 +331,7 @@ fn stress_max_guests() {
         slots_per_guest: 4,
         ..SegmentConfig::default()
     };
-    let mut host = ShmHost::create(config).unwrap();
+    let mut host = ShmHost::create_heap(config).unwrap();
     let region = host.region();
 
     // Attach maximum guests

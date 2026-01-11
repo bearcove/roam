@@ -1311,10 +1311,12 @@ name = "roam-shm"
 version = "0.5.0"
 dependencies = [
  "facet-postcard",
+ "libc",
  "roam-frame",
  "roam-stream",
  "roam-wire",
  "shm-primitives",
+ "tempfile",
  "tokio",
 ]
 
@@ -1457,6 +1459,7 @@ version = "0.5.0"
 dependencies = [
  "libc",
  "loom",
+ "tempfile",
  "tokio",
  "tracing",
 ]

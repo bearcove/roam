@@ -79,6 +79,12 @@ pub mod guest;
 #[cfg(feature = "std")]
 pub mod transport;
 
+#[cfg(all(feature = "std", unix))]
+pub mod spawn;
+
+#[cfg(feature = "std")]
+pub mod wait;
+
 // Re-export key types
 pub use channel::{
     ChannelEntry, ChannelId, ChannelIdAllocator, ChannelState, FlowControl, RequestId,
@@ -100,6 +106,15 @@ pub use guest::ShmGuest;
 #[cfg(feature = "std")]
 pub use transport::{
     ConvertError, ShmGuestTransport, ShmHostGuestTransport, frame_to_message, message_to_frame,
+};
+
+#[cfg(all(feature = "std", unix))]
+pub use spawn::{AddPeerOptions, DeathCallback, SpawnArgs, SpawnArgsError, SpawnTicket};
+
+#[cfg(feature = "std")]
+pub use wait::{
+    WaitError, wait_for_credit, wait_for_ring_data, wait_for_ring_space, wait_for_slot,
+    wake_credit_waiters, wake_ring_consumers, wake_ring_producers, wake_slot_waiters,
 };
 
 /// Handshake is implicit via segment header.

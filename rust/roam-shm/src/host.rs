@@ -5,10 +5,11 @@
 
 use std::collections::HashMap;
 use std::io;
+use std::path::{Path, PathBuf};
 use std::ptr;
 
 use roam_frame::{Frame, INLINE_PAYLOAD_LEN, INLINE_PAYLOAD_SLOT, MsgDesc, Payload};
-use shm_primitives::{HeapRegion, Region, SlotHandle};
+use shm_primitives::{Doorbell, HeapRegion, MmapRegion, Region, SignalResult, SlotHandle};
 
 use crate::channel::ChannelEntry;
 use crate::layout::{
@@ -17,6 +18,7 @@ use crate::layout::{
 };
 use crate::peer::{PeerEntry, PeerId, PeerState};
 use crate::slot_pool::SlotPool;
+use crate::spawn::{AddPeerOptions, DeathCallback, SpawnTicket};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RecvError {
@@ -29,13 +31,27 @@ enum RecvError {
     FreeFailed,
 }
 
+/// Backing memory for a SHM segment.
+///
+/// The backing is kept alive for the lifetime of the host, ensuring
+/// the memory mapping remains valid.
+#[allow(dead_code)]
+enum ShmBacking {
+    /// Heap-allocated memory (for testing)
+    Heap(HeapRegion),
+    /// File-backed mmap (for production cross-process IPC)
+    Mmap(MmapRegion),
+}
+
 /// Host-side handle for a SHM segment.
 ///
 /// shm[impl shm.topology.hub]
 pub struct ShmHost {
-    /// Backing memory (heap-allocated for now, mmap in production)
+    /// Backing memory (heap or mmap)
     #[allow(dead_code)]
-    backing: HeapRegion,
+    backing: ShmBacking,
+    /// Path to segment file (for cross-process use)
+    path: Option<PathBuf>,
     /// Region view into backing memory
     region: Region,
     /// Computed layout
@@ -50,17 +66,64 @@ pub struct ShmHost {
 
 /// Host-side state for a single guest.
 struct GuestState {
+    /// Human-readable name for debugging
+    #[allow(dead_code)]
+    name: Option<String>,
     /// Last observed epoch
     last_epoch: u32,
     /// Slots we've allocated for messages to this guest
     pending_slots: Vec<SlotHandle>,
+    /// Host's doorbell for this peer (if spawned via add_peer)
+    doorbell: Option<Doorbell>,
+    /// Death callback (if registered via add_peer)
+    on_death: Option<DeathCallback>,
+    /// Whether we've already notified death for this peer
+    death_notified: bool,
 }
 
 impl ShmHost {
-    /// Create a new SHM segment with the given configuration.
+    /// Create a new file-backed SHM segment at the given path.
     ///
-    /// This allocates memory and initializes all data structures.
-    pub fn create(config: SegmentConfig) -> io::Result<Self> {
+    /// This creates a file, maps it into memory, and initializes all data structures.
+    /// The file will be deleted when the ShmHost is dropped.
+    ///
+    /// shm[impl shm.file.create]
+    pub fn create<P: AsRef<Path>>(path: P, config: SegmentConfig) -> io::Result<Self> {
+        let layout = config
+            .layout()
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
+
+        // Create file-backed memory
+        let backing = MmapRegion::create(path.as_ref(), layout.total_size as usize)?;
+        let region = backing.region();
+
+        // Initialize segment header
+        // SAFETY: We just allocated this memory and it's zeroed
+        unsafe {
+            Self::init_header(&region, &layout);
+            Self::init_peer_table(&region, &layout);
+            Self::init_slot_pools(&region, &layout);
+            Self::init_guest_areas(&region, &layout);
+        }
+
+        let host_slots = SlotPool::new(region, layout.host_slot_pool_offset(), &config);
+
+        Ok(Self {
+            backing: ShmBacking::Mmap(backing),
+            path: Some(path.as_ref().to_path_buf()),
+            region,
+            layout,
+            guests: HashMap::new(),
+            host_slots,
+            host_to_guest_heads: HashMap::new(),
+        })
+    }
+
+    /// Create a new heap-backed SHM segment (for testing).
+    ///
+    /// This allocates memory on the heap and initializes all data structures.
+    /// Useful for unit tests that don't need cross-process IPC.
+    pub fn create_heap(config: SegmentConfig) -> io::Result<Self> {
         let layout = config
             .layout()
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
@@ -81,13 +144,90 @@ impl ShmHost {
         let host_slots = SlotPool::new(region, layout.host_slot_pool_offset(), &config);
 
         Ok(Self {
-            backing,
+            backing: ShmBacking::Heap(backing),
+            path: None,
             region,
             layout,
             guests: HashMap::new(),
             host_slots,
             host_to_guest_heads: HashMap::new(),
         })
+    }
+
+    /// Get the path to the segment file, if any.
+    pub fn path(&self) -> Option<&Path> {
+        self.path.as_deref()
+    }
+
+    /// Add a new peer, returning the spawn ticket.
+    ///
+    /// This reserves a peer slot and creates a doorbell pair.
+    /// The returned ticket should be passed to the spawned process
+    /// via command-line arguments.
+    ///
+    /// shm[impl shm.spawn.ticket]
+    /// shm[impl shm.doorbell.socketpair]
+    pub fn add_peer(&mut self, options: AddPeerOptions) -> io::Result<SpawnTicket> {
+        // Must have a path for file-backed segments
+        let hub_path = self.path.clone().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::Other,
+                "add_peer requires a file-backed segment",
+            )
+        })?;
+
+        // Find and reserve an empty slot
+        let peer_id = self.reserve_peer_slot()?;
+
+        // Create doorbell pair
+        let (host_doorbell, guest_fd) = Doorbell::create_pair()?;
+
+        // Clear CLOEXEC on guest's doorbell so it's inherited by children
+        // shm[impl shm.spawn.fd-inheritance]
+        shm_primitives::clear_cloexec(guest_fd)?;
+
+        // Track this peer
+        self.guests.insert(
+            peer_id,
+            GuestState {
+                name: options.peer_name.clone(),
+                last_epoch: self.peer_entry(peer_id).epoch(),
+                pending_slots: Vec::new(),
+                doorbell: Some(host_doorbell),
+                on_death: options.on_death,
+                death_notified: false,
+            },
+        );
+
+        Ok(SpawnTicket::new(hub_path, peer_id, guest_fd))
+    }
+
+    /// Reserve a peer slot, returning its ID.
+    fn reserve_peer_slot(&self) -> io::Result<PeerId> {
+        for i in 1..=self.layout.config.max_guests as u8 {
+            let Some(peer_id) = PeerId::from_index(i - 1) else {
+                continue;
+            };
+            let entry = self.peer_entry(peer_id);
+
+            if entry.try_reserve().is_ok() {
+                return Ok(peer_id);
+            }
+        }
+
+        Err(io::Error::new(
+            io::ErrorKind::Other,
+            "no available peer slots",
+        ))
+    }
+
+    /// Release a reserved peer slot (if spawn fails).
+    ///
+    /// Call this if `Command::spawn()` fails after calling `add_peer()`.
+    pub fn release_peer(&mut self, peer_id: PeerId) {
+        let entry = self.peer_entry(peer_id);
+        entry.release_reserved();
+        self.guests.remove(&peer_id);
     }
 
     /// Initialize the segment header.
@@ -283,8 +423,12 @@ impl ShmHost {
             self.guests
                 .entry(peer_id)
                 .or_insert(GuestState {
+                    name: None,
                     last_epoch: current_epoch,
                     pending_slots: Vec::new(),
+                    doorbell: None,
+                    on_death: None,
+                    death_notified: false,
                 })
                 .last_epoch = current_epoch;
         }
@@ -443,8 +587,12 @@ impl ShmHost {
 
                     // Track for crash recovery, but prune slots already reclaimed by the guest.
                     let state = self.guests.entry(peer_id).or_insert(GuestState {
+                        name: None,
                         last_epoch: current_epoch,
                         pending_slots: Vec::new(),
+                        doorbell: None,
+                        on_death: None,
+                        death_notified: false,
                     });
                     state.pending_slots.push(handle);
                     state
@@ -486,8 +634,12 @@ impl ShmHost {
 
                     // Track for crash recovery, but prune slots already reclaimed by the guest.
                     let state = self.guests.entry(peer_id).or_insert(GuestState {
+                        name: None,
                         last_epoch: current_epoch,
                         pending_slots: Vec::new(),
+                        doorbell: None,
+                        on_death: None,
+                        death_notified: false,
                     });
                     state.pending_slots.push(handle);
                     state
@@ -514,6 +666,7 @@ impl ShmHost {
     /// Handle a guest crash.
     ///
     /// shm[impl shm.crash.recovery]
+    /// shm[impl shm.death.callback]
     fn handle_guest_crash(&mut self, peer_id: PeerId) {
         let entry = self.peer_entry(peer_id);
 
@@ -528,10 +681,20 @@ impl ShmHost {
         let guest_pool = SlotPool::new(self.region, guest_pool_offset, &self.layout.config);
         unsafe { guest_pool.reset_free_bitmap() };
 
-        // Free pending slots
-        if let Some(state) = self.guests.remove(&peer_id) {
+        // Free pending slots and invoke death callback
+        if let Some(mut state) = self.guests.remove(&peer_id) {
             for handle in state.pending_slots {
                 let _ = self.host_slots.free(handle);
+            }
+
+            // Invoke death callback if registered and not already notified
+            // shm[impl shm.death.callback]
+            // shm[impl shm.death.callback-context]
+            if !state.death_notified {
+                state.death_notified = true;
+                if let Some(ref callback) = state.on_death {
+                    callback(peer_id);
+                }
             }
         }
 
@@ -558,7 +721,7 @@ impl ShmHost {
         let guest_pool = SlotPool::new(self.region, guest_pool_offset, &self.layout.config);
         unsafe { guest_pool.reset_free_bitmap() };
 
-        // Free pending slots
+        // Free pending slots (no death callback for graceful goodbye)
         if let Some(state) = self.guests.remove(&peer_id) {
             for handle in state.pending_slots {
                 let _ = self.host_slots.free(handle);
@@ -570,6 +733,49 @@ impl ShmHost {
 
         // Reset peer entry to Empty so slot can be reused
         self.peer_entry(peer_id).reset();
+    }
+
+    /// Check all peer doorbells for death events.
+    ///
+    /// Returns a list of peers that have died (doorbell shows peer disconnected).
+    /// This should be called periodically to detect crashed guests.
+    ///
+    /// shm[impl shm.doorbell.death]
+    /// shm[impl shm.death.detection-methods]
+    pub fn check_doorbell_deaths(&mut self) -> Vec<PeerId> {
+        let mut dead_peers = Vec::new();
+
+        for (&peer_id, state) in &self.guests {
+            if state.death_notified {
+                continue;
+            }
+
+            if let Some(ref doorbell) = state.doorbell {
+                // Try to signal - if peer is dead, we'll find out
+                if doorbell.signal() == SignalResult::PeerDead {
+                    dead_peers.push(peer_id);
+                }
+            }
+        }
+
+        // Handle deaths
+        for peer_id in &dead_peers {
+            self.handle_guest_crash(*peer_id);
+        }
+
+        dead_peers
+    }
+
+    /// Signal a guest's doorbell after sending a message.
+    ///
+    /// This wakes up a guest that might be waiting for messages.
+    ///
+    /// shm[impl shm.doorbell.ring-integration]
+    pub fn ring_doorbell(&self, peer_id: PeerId) -> Option<SignalResult> {
+        self.guests
+            .get(&peer_id)
+            .and_then(|state| state.doorbell.as_ref())
+            .map(|doorbell| doorbell.signal())
     }
 
     /// Initiate host goodbye (graceful shutdown).
@@ -644,7 +850,7 @@ mod tests {
     #[test]
     fn create_host() {
         let config = SegmentConfig::default();
-        let host = ShmHost::create(config).unwrap();
+        let host = ShmHost::create_heap(config).unwrap();
 
         // Verify header
         let header = host.header();
@@ -656,7 +862,7 @@ mod tests {
     #[test]
     fn host_goodbye() {
         let config = SegmentConfig::default();
-        let host = ShmHost::create(config).unwrap();
+        let host = ShmHost::create_heap(config).unwrap();
 
         assert!(!host.is_goodbye());
         host.goodbye("test shutdown");
@@ -666,7 +872,7 @@ mod tests {
     #[test]
     fn poll_empty() {
         let config = SegmentConfig::default();
-        let mut host = ShmHost::create(config).unwrap();
+        let mut host = ShmHost::create_heap(config).unwrap();
 
         let messages = host.poll();
         assert!(messages.is_empty());
@@ -683,7 +889,7 @@ mod tests {
             ..SegmentConfig::default()
         };
 
-        let mut host = ShmHost::create(config.clone()).unwrap();
+        let mut host = ShmHost::create_heap(config.clone()).unwrap();
         let mut guest = ShmGuest::attach(host.region()).unwrap();
 
         let payload = vec![0xAB; 40];
@@ -713,7 +919,7 @@ mod tests {
             ..SegmentConfig::default()
         };
 
-        let mut host = ShmHost::create(config.clone()).unwrap();
+        let mut host = ShmHost::create_heap(config.clone()).unwrap();
         let mut guest = ShmGuest::attach(host.region()).unwrap();
 
         let payload = vec![0xCD; 40];
@@ -741,7 +947,7 @@ mod tests {
             ..SegmentConfig::default()
         };
 
-        let mut host = ShmHost::create(config).unwrap();
+        let mut host = ShmHost::create_heap(config).unwrap();
         let region = host.region();
         let mut guest = ShmGuest::attach(region).unwrap();
         let peer_id = guest.peer_id();

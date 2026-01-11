@@ -11,7 +11,7 @@ use roam_wire::{Message, MetadataValue};
 
 fn create_host_and_guest() -> (ShmHost, ShmGuest) {
     let config = SegmentConfig::default();
-    let host = ShmHost::create(config).unwrap();
+    let host = ShmHost::create_heap(config).unwrap();
     let region = host.region();
     let guest = ShmGuest::attach(region).unwrap();
     (host, guest)
