@@ -877,12 +877,14 @@ impl ShmHost {
         let slot_size = class.slot_size;
         let slots_per_extent = class.count;
 
-        // Read current extent count from header
+        // Read current extent count from header (before resize)
         let class_header_offset = var_pool_offset as usize + class_idx * 64;
-        let class_header =
-            unsafe { &*(self.region.offset(class_header_offset) as *const SizeClassHeader) };
+        let current_extent_count = {
+            let class_header =
+                unsafe { &*(self.region.offset(class_header_offset) as *const SizeClassHeader) };
+            class_header.extent_count.load(Ordering::Acquire)
+        };
 
-        let current_extent_count = class_header.extent_count.load(Ordering::Acquire);
         if current_extent_count >= MAX_EXTENTS_PER_CLASS as u32 {
             return Err(GrowError::MaxExtentsReached);
         }
@@ -897,7 +899,7 @@ impl ShmHost {
         // Resize the backing file and remap
         mmap.resize(new_size)?;
 
-        // Update our region view
+        // Update our region view (pointer may have changed after remap)
         self.region = mmap.region();
 
         // Update host_slots pool region (pointer may have changed)
@@ -906,7 +908,7 @@ impl ShmHost {
         // Calculate extent offset (at end of old size)
         let extent_offset = current_size as u64;
 
-        // Initialize extent header
+        // Initialize extent header (using fresh pointer after remap)
         let extent_header =
             unsafe { &mut *(self.region.offset(extent_offset as usize) as *mut ExtentHeader) };
         extent_header.magic = EXTENT_MAGIC;
@@ -915,6 +917,10 @@ impl ShmHost {
         extent_header.slot_count = slots_per_extent;
         extent_header.slot_size = slot_size;
         extent_header._reserved = [0; 40];
+
+        // Reacquire class header pointer after remap (old pointer is stale)
+        let class_header =
+            unsafe { &*(self.region.offset(class_header_offset) as *const SizeClassHeader) };
 
         // Build free list for the new extent
         // Construct a temporary VarSlotPool view and init the extent
