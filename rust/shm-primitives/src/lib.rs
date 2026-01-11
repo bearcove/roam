@@ -15,7 +15,7 @@ pub mod treiber;
 #[cfg(any(test, feature = "alloc"))]
 pub use region::HeapRegion;
 pub use region::Region;
-pub use slot::{SlotMeta, SlotState};
+pub use slot::{SlotMeta, SlotState, VarSlotMeta};
 pub use spsc::{
     PushResult, RingFull, SpscConsumer, SpscProducer, SpscRing, SpscRingHeader, SpscRingRaw,
 };

@@ -10,6 +10,30 @@ use core::sync::atomic::{AtomicU32, Ordering};
 /// shm[impl shm.segment.magic]
 pub const MAGIC: [u8; 8] = *b"RAPAHUB\x01";
 
+/// A slot size class for variable-size slot pools.
+///
+/// shm[impl shm.varslot.classes]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SizeClass {
+    /// Size of each slot in this class (bytes).
+    /// Must be at least 16 bytes (for VarSlotMeta overhead).
+    pub slot_size: u32,
+    /// Number of slots in this class.
+    pub count: u32,
+}
+
+impl SizeClass {
+    /// Create a new size class.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `slot_size < 16` (minimum for VarSlotMeta).
+    pub const fn new(slot_size: u32, count: u32) -> Self {
+        assert!(slot_size >= 16, "slot_size must be >= 16");
+        Self { slot_size, count }
+    }
+}
+
 /// Segment header size in bytes.
 ///
 /// shm[impl shm.segment.header-size]
@@ -105,14 +129,19 @@ pub struct SegmentConfig {
     pub max_guests: u32,
     /// Descriptor ring capacity (must be power of 2)
     pub ring_size: u32,
-    /// Size of each payload slot
+    /// Size of each payload slot (for fixed-size pools)
     pub slot_size: u32,
-    /// Number of slots per guest
+    /// Number of slots per guest (for fixed-size pools)
     pub slots_per_guest: u32,
     /// Max concurrent channels per guest
     pub max_channels: u32,
     /// Heartbeat interval in nanoseconds (0 = disabled)
     pub heartbeat_interval: u64,
+    /// Variable-size slot pool configuration (optional).
+    ///
+    /// If `Some`, uses a shared variable-size pool instead of per-guest fixed pools.
+    /// shm[impl shm.varslot.shared]
+    pub var_slot_classes: Option<Vec<SizeClass>>,
 }
 
 impl Default for SegmentConfig {
@@ -127,7 +156,39 @@ impl Default for SegmentConfig {
             slot_size,
             slots_per_guest: 16,
             max_channels: 256,
-            heartbeat_interval: 0, // Disabled by default
+            heartbeat_interval: 0,  // Disabled by default
+            var_slot_classes: None, // Use fixed-size pools by default
+        }
+    }
+}
+
+impl SegmentConfig {
+    /// Default size classes for variable-size slot pools.
+    ///
+    /// shm[impl shm.varslot.classes]
+    ///
+    /// Returns a configuration suitable for mixed workloads:
+    /// - 1 KB × 1024 slots = 1 MB (small RPC args)
+    /// - 16 KB × 256 slots = 4 MB (typical payloads)
+    /// - 256 KB × 32 slots = 8 MB (images, CSS)
+    /// - 4 MB × 8 slots = 32 MB (compressed fonts, large blobs)
+    pub fn default_size_classes() -> Vec<SizeClass> {
+        vec![
+            SizeClass::new(1024, 1024),         // 1 KB × 1024
+            SizeClass::new(16 * 1024, 256),     // 16 KB × 256
+            SizeClass::new(256 * 1024, 32),     // 256 KB × 32
+            SizeClass::new(4 * 1024 * 1024, 8), // 4 MB × 8
+        ]
+    }
+
+    /// Create a config with variable-size slot pools using default size classes.
+    pub fn with_var_slots() -> Self {
+        let classes = Self::default_size_classes();
+        let max_slot_size = classes.iter().map(|c| c.slot_size).max().unwrap_or(0);
+        Self {
+            max_payload_size: max_slot_size,
+            var_slot_classes: Some(classes),
+            ..Self::default()
         }
     }
 }
@@ -147,22 +208,52 @@ impl SegmentConfig {
         if self.ring_size < 2 {
             return Err("ring_size must be at least 2");
         }
-        if self.slot_size < 8 {
-            return Err("slot_size must be at least 8");
-        }
-        if self.slot_size % 8 != 0 {
-            return Err("slot_size must be a multiple of 8");
-        }
-        if self.slots_per_guest == 0 {
-            return Err("slots_per_guest must be > 0");
-        }
         if self.max_channels == 0 {
             return Err("max_channels must be > 0");
         }
-        // Slot payload area is `slot_size - 4` bytes (generation counter).
-        if self.max_payload_size > self.slot_size - 4 {
-            return Err("max_payload_size must be <= slot_size - 4");
+
+        // Validate based on pool type
+        if let Some(ref classes) = self.var_slot_classes {
+            // Variable-size pool validation
+            if classes.is_empty() {
+                return Err("var_slot_classes must have at least one class");
+            }
+            if classes.len() > 256 {
+                return Err("var_slot_classes must have at most 256 classes");
+            }
+            for (i, class) in classes.iter().enumerate() {
+                if class.slot_size < 16 {
+                    return Err("var_slot_classes slot_size must be >= 16");
+                }
+                if class.count == 0 {
+                    return Err("var_slot_classes count must be > 0");
+                }
+                // Classes must be sorted by slot_size ascending
+                if i > 0 && class.slot_size <= classes[i - 1].slot_size {
+                    return Err("var_slot_classes must be sorted by slot_size ascending");
+                }
+            }
+            let max_slot_size = classes.last().map(|c| c.slot_size).unwrap_or(0);
+            if self.max_payload_size > max_slot_size {
+                return Err("max_payload_size must be <= largest var_slot_class slot_size");
+            }
+        } else {
+            // Fixed-size pool validation
+            if self.slot_size < 8 {
+                return Err("slot_size must be at least 8");
+            }
+            if self.slot_size % 8 != 0 {
+                return Err("slot_size must be a multiple of 8");
+            }
+            if self.slots_per_guest == 0 {
+                return Err("slots_per_guest must be > 0");
+            }
+            // Slot payload area is `slot_size - 4` bytes (generation counter).
+            if self.max_payload_size > self.slot_size - 4 {
+                return Err("max_payload_size must be <= slot_size - 4");
+            }
         }
+
         Ok(())
     }
 
@@ -184,15 +275,21 @@ pub struct SegmentLayout {
     pub peer_table_offset: u64,
     /// Size of peer table in bytes
     pub peer_table_size: u64,
-    /// Offset to slot region (host slots first, then guest slots)
+    /// Offset to slot region (host slots first, then guest slots for fixed pools)
     pub slot_region_offset: u64,
-    /// Size of each slot pool (header + slots)
+    /// Size of each slot pool (header + slots) - for fixed pools only
     ///
     /// shm[impl shm.segment.pool-size]
     pub pool_size: u64,
+    /// Offset to shared variable-size slot pool (if using var slots)
+    ///
+    /// shm[impl shm.varslot.shared]
+    pub var_slot_pool_offset: Option<u64>,
+    /// Size of the shared variable-size slot pool
+    pub var_slot_pool_size: u64,
     /// Offset to first guest area
     pub guest_areas_offset: u64,
-    /// Size of each guest area (rings + slot pool + channel table)
+    /// Size of each guest area (rings + channel table)
     pub guest_area_size: u64,
     /// Total segment size
     pub total_size: u64,
@@ -206,28 +303,38 @@ impl SegmentLayout {
         let peer_table_size = (config.max_guests as u64) * (PEER_ENTRY_SIZE as u64);
 
         // Slot region follows peer table
-        // Host slot pool is at position 0 in the slot region
         let slot_region_offset = align_up(peer_table_offset + peer_table_size, 64);
 
-        // Compute slot pool size per shm-spec:
-        // pool_size = slot_pool_header_size + slots_per_guest * slot_size
-        // where slot_pool_header_size is a bitmap header rounded up to 64 bytes.
-        //
-        // shm[impl shm.segment.pool-size]
-        // shm[impl shm.slot.pool-header-size]
-        let bitmap_words = (config.slots_per_guest as u64 + 63) / 64;
-        let bitmap_bytes = bitmap_words * 8;
-        let slot_pool_header_size = align_up(bitmap_bytes, 64);
-        let pool_size =
-            slot_pool_header_size + (config.slots_per_guest as u64) * config.slot_size as u64;
+        // Compute layout based on pool type
+        let (pool_size, var_slot_pool_offset, var_slot_pool_size, slot_region_size) =
+            if let Some(ref classes) = config.var_slot_classes {
+                // Variable-size shared pool
+                // shm[impl shm.varslot.shared]
+                let var_pool_size = crate::var_slot_pool::VarSlotPool::calculate_size(classes);
+                (0, Some(slot_region_offset), var_pool_size, var_pool_size)
+            } else {
+                // Fixed-size per-guest pools
+                // Compute slot pool size per shm-spec:
+                // pool_size = slot_pool_header_size + slots_per_guest * slot_size
+                // where slot_pool_header_size is a bitmap header rounded up to 64 bytes.
+                //
+                // shm[impl shm.segment.pool-size]
+                // shm[impl shm.slot.pool-header-size]
+                let bitmap_words = (config.slots_per_guest as u64 + 63) / 64;
+                let bitmap_bytes = bitmap_words * 8;
+                let slot_pool_header_size = align_up(bitmap_bytes, 64);
+                let pool_size = slot_pool_header_size
+                    + (config.slots_per_guest as u64) * config.slot_size as u64;
 
-        // Slot region contains:
-        // - Host slot pool (position 0)
-        // - One slot pool per potential guest (positions 1..=max_guests)
-        //
-        // shm[impl shm.segment.host-slots]
-        // shm[impl shm.segment.guest-slot-offset]
-        let slot_region_size = (config.max_guests as u64 + 1) * pool_size;
+                // Slot region contains:
+                // - Host slot pool (position 0)
+                // - One slot pool per potential guest (positions 1..=max_guests)
+                //
+                // shm[impl shm.segment.host-slots]
+                // shm[impl shm.segment.guest-slot-offset]
+                let slot_region_size = (config.max_guests as u64 + 1) * pool_size;
+                (pool_size, None, 0, slot_region_size)
+            };
 
         // Guest areas follow slot region
         let guest_areas_offset = align_up(slot_region_offset + slot_region_size, 64);
@@ -251,6 +358,8 @@ impl SegmentLayout {
             peer_table_size,
             slot_region_offset,
             pool_size,
+            var_slot_pool_offset,
+            var_slot_pool_size,
             guest_areas_offset,
             guest_area_size,
             total_size,
@@ -319,6 +428,20 @@ impl SegmentLayout {
     pub fn guest_channel_table_offset(&self, peer_id: u8) -> u64 {
         let rings_size = 2 * (self.config.ring_size as u64) * (DESC_SIZE as u64);
         self.guest_area_offset(peer_id) + align_up(rings_size, 64)
+    }
+
+    /// Check if this layout uses variable-size slot pools.
+    #[inline]
+    pub fn uses_var_slots(&self) -> bool {
+        self.var_slot_pool_offset.is_some()
+    }
+
+    /// Get the offset to the shared variable-size slot pool.
+    ///
+    /// Returns `None` if using fixed-size per-guest pools.
+    #[inline]
+    pub fn var_slot_pool_offset(&self) -> Option<u64> {
+        self.var_slot_pool_offset
     }
 }
 

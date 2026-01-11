@@ -153,6 +153,9 @@ impl ShmGuest {
         }
 
         // Reconstruct layout from header
+        // Note: var_slot_classes is None here - guests use fixed pools by default.
+        // Variable slot pool info would need to be stored in the header for guests
+        // to detect it.
         let config = crate::layout::SegmentConfig {
             max_payload_size: header.max_payload_size,
             initial_credit: header.initial_credit,
@@ -162,6 +165,7 @@ impl ShmGuest {
             slots_per_guest: header.slots_per_guest,
             max_channels: header.max_channels,
             heartbeat_interval: header.heartbeat_interval,
+            var_slot_classes: None,
         };
         let layout = config
             .layout()
@@ -247,6 +251,7 @@ impl ShmGuest {
             slots_per_guest: header.slots_per_guest,
             max_channels: header.max_channels,
             heartbeat_interval: header.heartbeat_interval,
+            var_slot_classes: None,
         };
         let layout = config
             .layout()

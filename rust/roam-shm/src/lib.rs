@@ -69,6 +69,7 @@ pub mod layout;
 pub mod msg;
 pub mod peer;
 mod slot_pool;
+pub mod var_slot_pool;
 
 #[cfg(feature = "std")]
 pub mod host;
@@ -90,9 +91,12 @@ pub use channel::{
     ChannelEntry, ChannelId, ChannelIdAllocator, ChannelState, FlowControl, RequestId,
     RequestIdAllocator,
 };
-pub use layout::{HEADER_SIZE, MAGIC, SegmentConfig, SegmentHeader, SegmentLayout, VERSION};
+pub use layout::{
+    HEADER_SIZE, MAGIC, SegmentConfig, SegmentHeader, SegmentLayout, SizeClass, VERSION,
+};
 pub use msg::msg_type;
 pub use peer::{PeerEntry, PeerId, PeerState};
+pub use var_slot_pool::{SizeClassHeader, VarFreeError, VarSlotHandle, VarSlotPool};
 
 // Re-export MsgDesc from roam-frame
 pub use roam_frame::{Frame, INLINE_PAYLOAD_LEN, INLINE_PAYLOAD_SLOT, MsgDesc, Payload};
