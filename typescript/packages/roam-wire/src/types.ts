@@ -124,7 +124,7 @@ export interface MessageCancel {
 /**
  * Data message (discriminant = 5).
  *
- * rs[impl wire.channel] - Tx<T>/Rx<T> encoded as u64 channel ID on wire
+ * r[impl channeling.type] - Tx<T>/Rx<T> encoded as u64 channel ID on wire
  */
 export interface MessageData {
   tag: "Data";
@@ -262,7 +262,7 @@ export function messageRequest(
   requestId: bigint,
   methodId: bigint,
   payload: Uint8Array,
-  metadata: MetadataEntry[] = []
+  metadata: MetadataEntry[] = [],
 ): Message {
   return { tag: "Request", requestId, methodId, metadata, payload };
 }
@@ -273,7 +273,7 @@ export function messageRequest(
 export function messageResponse(
   requestId: bigint,
   payload: Uint8Array,
-  metadata: MetadataEntry[] = []
+  metadata: MetadataEntry[] = [],
 ): Message {
   return { tag: "Response", requestId, metadata, payload };
 }

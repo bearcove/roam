@@ -5,8 +5,8 @@ import { type ChannelId, Role } from "./types.ts";
 /**
  * Allocates unique channel IDs with correct parity.
  *
- * r[impl streaming.id.uniqueness] - IDs are unique within a connection.
- * r[impl streaming.id.parity] - Initiator uses odd, Acceptor uses even.
+ * r[impl channeling.id.uniqueness] - IDs are unique within a connection.
+ * r[impl channeling.id.parity] - Initiator uses odd, Acceptor uses even.
  */
 export class ChannelIdAllocator {
   private nextId: bigint;

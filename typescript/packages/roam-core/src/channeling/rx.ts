@@ -10,9 +10,9 @@ import type { Tx } from "./tx.ts";
 /**
  * Rx channel handle - caller receives data from callee.
  *
- * r[impl streaming.caller-pov] - From caller's perspective, Rx means "I receive".
- * r[impl streaming.type] - Serializes as u64 channel ID on wire.
- * r[impl streaming.holder-semantics] - The holder receives from this channel.
+ * r[impl channeling.caller-pov] - From caller's perspective, Rx means "I receive".
+ * r[impl channeling.type] - Serializes as u64 channel ID on wire.
+ * r[impl channeling.holder-semantics] - The holder receives from this channel.
  *
  * # Two modes of operation
  *
@@ -105,7 +105,7 @@ export class Rx<T> {
    *
    * Returns the value, or null when the channel is closed.
    *
-   * r[impl streaming.data] - Deserialize Data message payloads.
+   * r[impl channeling.data] - Deserialize Data message payloads.
    *
    * @throws If the Rx is not bound yet
    */

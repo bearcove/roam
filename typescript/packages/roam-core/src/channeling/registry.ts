@@ -46,7 +46,7 @@ export class OutgoingSender {
  * Handles both incoming channels (Data from wire → Rx<T>) and
  * outgoing channels (Tx<T> → Data to wire).
  *
- * r[impl streaming.unknown] - Unknown channel IDs cause Goodbye.
+ * r[impl channeling.unknown] - Unknown channel IDs cause Goodbye.
  */
 export class ChannelRegistry {
   /** Channels where we receive Data messages (backing Rx<T> handles). */
@@ -61,7 +61,7 @@ export class ChannelRegistry {
   /**
    * Register an incoming channel and return the receiver for Rx<T>.
    *
-   * r[impl streaming.allocation.caller] - Caller allocates channel IDs.
+   * r[impl channeling.allocation.caller] - Caller allocates channel IDs.
    */
   registerIncoming(channelId: ChannelId): ChannelReceiver<Uint8Array> {
     const channel = createChannel<Uint8Array>(64);
@@ -72,7 +72,7 @@ export class ChannelRegistry {
   /**
    * Register an outgoing channel and return the sender for Tx<T>.
    *
-   * r[impl streaming.allocation.caller] - Caller allocates channel IDs.
+   * r[impl channeling.allocation.caller] - Caller allocates channel IDs.
    */
   registerOutgoing(channelId: ChannelId): OutgoingSender {
     const channel = createChannel<OutgoingMessage>(64);
@@ -83,8 +83,8 @@ export class ChannelRegistry {
   /**
    * Route a Data message payload to the appropriate incoming channel.
    *
-   * r[impl streaming.data] - Data messages routed by channel_id.
-   * r[impl streaming.data-after-close] - Reject data on closed channels.
+   * r[impl channeling.data] - Data messages routed by channel_id.
+   * r[impl channeling.data-after-close] - Reject data on closed channels.
    */
   routeData(channelId: ChannelId, payload: Uint8Array): void {
     // Check for data-after-close
@@ -180,7 +180,7 @@ export class ChannelRegistry {
   /**
    * Close an incoming channel.
    *
-   * r[impl streaming.close] - Close terminates the channel.
+   * r[impl channeling.close] - Close terminates the channel.
    */
   close(channelId: ChannelId): void {
     const channel = this.incoming.get(channelId);

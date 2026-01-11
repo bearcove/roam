@@ -21,9 +21,9 @@ type TxSender =
 /**
  * Tx channel handle - caller sends data to callee.
  *
- * r[impl streaming.caller-pov] - From caller's perspective, Tx means "I send".
- * r[impl streaming.type] - Serializes as u64 channel ID on wire.
- * r[impl streaming.holder-semantics] - The holder sends on this channel.
+ * r[impl channeling.caller-pov] - From caller's perspective, Tx means "I send".
+ * r[impl channeling.type] - Serializes as u64 channel ID on wire.
+ * r[impl channeling.holder-semantics] - The holder sends on this channel.
  *
  * # Two modes of operation
  *
@@ -129,7 +129,7 @@ export class Tx<T> {
   /**
    * Send a value on this channel.
    *
-   * r[impl streaming.data] - Data messages carry serialized values.
+   * r[impl channeling.data] - Data messages carry serialized values.
    *
    * @throws If the Tx is not bound yet
    */
@@ -166,7 +166,7 @@ export class Tx<T> {
   /**
    * Close this channel.
    *
-   * r[impl streaming.lifecycle.caller-closes-pushes] - Caller sends Close when done.
+   * r[impl channeling.lifecycle.caller-closes-pushes] - Caller sends Close when done.
    */
   close(): void {
     if (this.closed) return;

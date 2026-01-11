@@ -157,7 +157,7 @@ export class Connection<T extends MessageTransport = MessageTransport> {
   /**
    * Get the channel ID allocator.
    *
-   * r[impl streaming.allocation.caller] - Caller allocates ALL channel IDs.
+   * r[impl channeling.allocation.caller] - Caller allocates ALL channel IDs.
    */
   getChannelAllocator(): ChannelIdAllocator {
     return this.channelAllocator;
@@ -192,14 +192,14 @@ export class Connection<T extends MessageTransport = MessageTransport> {
    * Returns the rule ID if validation fails.
    */
   validateChannelId(channelId: bigint): string | null {
-    // r[impl streaming.id.zero-reserved] - Channel ID 0 is reserved.
+    // r[impl channeling.id.zero-reserved] - Channel ID 0 is reserved.
     if (channelId === 0n) {
-      return "streaming.id.zero-reserved";
+      return "channeling.id.zero-reserved";
     }
 
-    // r[impl streaming.unknown] - Unknown channel IDs are connection errors.
+    // r[impl channeling.unknown] - Unknown channel IDs are connection errors.
     if (!this.channelRegistry.contains(channelId)) {
-      return "streaming.unknown";
+      return "channeling.unknown";
     }
 
     return null;
@@ -211,8 +211,8 @@ export class Connection<T extends MessageTransport = MessageTransport> {
    * Drains the outgoing channels and sends Data/Close messages
    * to the peer. Call this periodically or after processing requests.
    *
-   * r[impl streaming.data] - Send Data messages for outgoing channels.
-   * r[impl streaming.close] - Send Close messages when channels end.
+   * r[impl channeling.data] - Send Data messages for outgoing channels.
+   * r[impl channeling.close] - Send Close messages when channels end.
    */
   async flushOutgoing(): Promise<void> {
     while (true) {
@@ -263,7 +263,7 @@ export class Connection<T extends MessageTransport = MessageTransport> {
     await this.io.send(encodeMessage(messageRequest(requestId, methodId, payload)));
 
     // Flush any pending outgoing stream data (for client-to-server streaming)
-    // r[impl streaming.data] - Send queued Data/Close messages after Request.
+    // r[impl channeling.data] - Send queued Data/Close messages after Request.
     await this.flushOutgoing();
 
     // Wait for response
@@ -505,7 +505,7 @@ export class Connection<T extends MessageTransport = MessageTransport> {
       if (msg.channelId === 0n) {
         // Can't send goodbye synchronously - throw protocol error
         throw ConnectionError.protocol({
-          ruleId: "streaming.id.zero-reserved",
+          ruleId: "channeling.id.zero-reserved",
           context: "channel ID 0 is reserved",
         });
       }
@@ -515,13 +515,13 @@ export class Connection<T extends MessageTransport = MessageTransport> {
         if (e instanceof ChannelError) {
           if (e.kind === "unknown") {
             throw ConnectionError.protocol({
-              ruleId: "streaming.unknown",
+              ruleId: "channeling.unknown",
               context: "unknown channel ID",
             });
           }
           if (e.kind === "dataAfterClose") {
             throw ConnectionError.protocol({
-              ruleId: "streaming.data-after-close",
+              ruleId: "channeling.data-after-close",
               context: "data after close",
             });
           }
@@ -534,13 +534,13 @@ export class Connection<T extends MessageTransport = MessageTransport> {
     if (msg.tag === "Close") {
       if (msg.channelId === 0n) {
         throw ConnectionError.protocol({
-          ruleId: "streaming.id.zero-reserved",
+          ruleId: "channeling.id.zero-reserved",
           context: "channel ID 0 is reserved",
         });
       }
       if (!this.channelRegistry.contains(msg.channelId)) {
         throw ConnectionError.protocol({
-          ruleId: "streaming.unknown",
+          ruleId: "channeling.unknown",
           context: "unknown channel ID",
         });
       }
@@ -551,13 +551,13 @@ export class Connection<T extends MessageTransport = MessageTransport> {
     if (msg.tag === "Reset") {
       if (msg.channelId === 0n) {
         throw ConnectionError.protocol({
-          ruleId: "streaming.id.zero-reserved",
+          ruleId: "channeling.id.zero-reserved",
           context: "channel ID 0 is reserved",
         });
       }
       if (!this.channelRegistry.contains(msg.channelId)) {
         throw ConnectionError.protocol({
-          ruleId: "streaming.unknown",
+          ruleId: "channeling.unknown",
           context: "unknown channel ID",
         });
       }
@@ -569,13 +569,13 @@ export class Connection<T extends MessageTransport = MessageTransport> {
     if (msg.tag === "Credit") {
       if (msg.channelId === 0n) {
         throw ConnectionError.protocol({
-          ruleId: "streaming.id.zero-reserved",
+          ruleId: "channeling.id.zero-reserved",
           context: "channel ID 0 is reserved",
         });
       }
       if (!this.channelRegistry.contains(msg.channelId)) {
         throw ConnectionError.protocol({
-          ruleId: "streaming.unknown",
+          ruleId: "channeling.unknown",
           context: "unknown channel ID",
         });
       }
@@ -668,23 +668,23 @@ export class Connection<T extends MessageTransport = MessageTransport> {
     }
 
     if (msg.tag === "Data") {
-      // r[impl streaming.id.zero-reserved] - Channel ID 0 is reserved.
+      // r[impl channeling.id.zero-reserved] - Channel ID 0 is reserved.
       if (msg.channelId === 0n) {
-        throw await this.goodbye("streaming.id.zero-reserved");
+        throw await this.goodbye("channeling.id.zero-reserved");
       }
 
-      // r[impl streaming.data] - Route Data to registered channel.
+      // r[impl channeling.data] - Route Data to registered channel.
       try {
         this.channelRegistry.routeData(msg.channelId, msg.payload);
       } catch (e) {
         if (e instanceof ChannelError) {
           if (e.kind === "unknown") {
-            // r[impl streaming.unknown] - Unknown channel ID.
-            throw await this.goodbye("streaming.unknown");
+            // r[impl channeling.unknown] - Unknown channel ID.
+            throw await this.goodbye("channeling.unknown");
           }
           if (e.kind === "dataAfterClose") {
-            // r[impl streaming.data-after-close] - Data after Close is error.
-            throw await this.goodbye("streaming.data-after-close");
+            // r[impl channeling.data-after-close] - Data after Close is error.
+            throw await this.goodbye("channeling.data-after-close");
           }
         }
         throw e;
@@ -693,45 +693,45 @@ export class Connection<T extends MessageTransport = MessageTransport> {
     }
 
     if (msg.tag === "Close") {
-      // r[impl streaming.id.zero-reserved] - Channel ID 0 is reserved.
+      // r[impl channeling.id.zero-reserved] - Channel ID 0 is reserved.
       if (msg.channelId === 0n) {
-        throw await this.goodbye("streaming.id.zero-reserved");
+        throw await this.goodbye("channeling.id.zero-reserved");
       }
 
-      // r[impl streaming.close] - Close the channel.
+      // r[impl channeling.close] - Close the channel.
       if (!this.channelRegistry.contains(msg.channelId)) {
-        throw await this.goodbye("streaming.unknown");
+        throw await this.goodbye("channeling.unknown");
       }
       this.channelRegistry.close(msg.channelId);
       return;
     }
 
     if (msg.tag === "Reset") {
-      // r[impl streaming.id.zero-reserved] - Channel ID 0 is reserved.
+      // r[impl channeling.id.zero-reserved] - Channel ID 0 is reserved.
       if (msg.channelId === 0n) {
-        throw await this.goodbye("streaming.id.zero-reserved");
+        throw await this.goodbye("channeling.id.zero-reserved");
       }
 
-      // r[impl streaming.reset] - Forcefully terminate channel.
+      // r[impl channeling.reset] - Forcefully terminate channel.
       // For now, treat same as Close.
       // TODO: Signal error to Rx<T> instead of clean close.
       if (!this.channelRegistry.contains(msg.channelId)) {
-        throw await this.goodbye("streaming.unknown");
+        throw await this.goodbye("channeling.unknown");
       }
       this.channelRegistry.close(msg.channelId);
       return;
     }
 
     if (msg.tag === "Credit") {
-      // r[impl streaming.id.zero-reserved] - Channel ID 0 is reserved.
+      // r[impl channeling.id.zero-reserved] - Channel ID 0 is reserved.
       if (msg.channelId === 0n) {
-        throw await this.goodbye("streaming.id.zero-reserved");
+        throw await this.goodbye("channeling.id.zero-reserved");
       }
 
       // TODO: Implement flow control.
       // For now, validate channel exists but ignore credit.
       if (!this.channelRegistry.contains(msg.channelId)) {
-        throw await this.goodbye("streaming.unknown");
+        throw await this.goodbye("channeling.unknown");
       }
       return;
     }

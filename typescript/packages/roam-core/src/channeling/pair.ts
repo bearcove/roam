@@ -25,8 +25,8 @@ import { Rx } from "./rx.ts";
  * const result = await resultPromise;
  * ```
  *
- * r[impl streaming.allocation.caller] - Caller allocates channel IDs (at bind time).
- * r[impl streaming.holder-semantics] - Tx holder sends, Rx holder receives.
+ * r[impl channeling.allocation.caller] - Caller allocates channel IDs (at bind time).
+ * r[impl channeling.holder-semantics] - Tx holder sends, Rx holder receives.
  */
 export function channel<T>(): [Tx<T>, Rx<T>] {
   const tx = new Tx<T>();
