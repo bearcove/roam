@@ -39,7 +39,7 @@ This is a “flag day” in the sense that host and cells must move together.
 
 ### 4. Replace Tunneling
 
-- Migrate `cell-http` and host-side tunnel consumers to roam tunnel streams.
+- Migrate `cell-http` and host-side tunnel consumers to `Tx/Rx<Vec<u8>>` tunnels.
 
 ### 5. Replace Tracing
 
@@ -60,4 +60,3 @@ This is a “flag day” in the sense that host and cells must move together.
 
 - Keep the migration incremental at the code level even if the end state is a
   flag day: get one cell working first, then scale out.
-

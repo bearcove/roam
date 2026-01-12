@@ -2,23 +2,26 @@
 //!
 //! These tests verify that roam RPC services can run over SHM transport,
 //! including proper request/response handling and streaming.
+//!
+//! shm[verify shm.handshake]
+//! shm[verify shm.flow.no-credit-message]
 
 #![cfg(feature = "tokio")]
 
 use std::pin::Pin;
 
-use roam_session::{ChannelRegistry, ServiceDispatcher, dispatch_call};
+use roam_session::{ChannelRegistry, Rx, ServiceDispatcher, Tx, channel, dispatch_call};
 use roam_shm::driver::{establish_guest, establish_host_peer};
 use roam_shm::guest::ShmGuest;
 use roam_shm::host::ShmHost;
 use roam_shm::layout::SegmentConfig;
 use roam_shm::transport::ShmGuestTransport;
 
-/// A simple echo service for testing.
+/// A service with both unary and streaming methods for testing.
 #[derive(Clone)]
-struct EchoService;
+struct TestService;
 
-impl ServiceDispatcher for EchoService {
+impl ServiceDispatcher for TestService {
     fn dispatch(
         &self,
         method_id: u64,
@@ -41,6 +44,38 @@ impl ServiceDispatcher for EchoService {
                 registry,
                 |(a, b): (i32, i32)| async move { Ok(a + b) },
             ),
+            // Sum method: client streams numbers, server returns sum
+            // Client creates channel(), passes tx in args (keeping rx to send data)
+            // Server receives Rx<i32> after bind_streams hydrates it
+            3 => dispatch_call::<Rx<i32>, i64, (), _, _>(
+                payload,
+                request_id,
+                registry,
+                |mut input: Rx<i32>| async move {
+                    // Server receives data from client via input stream
+                    let mut sum: i64 = 0;
+                    while let Ok(Some(value)) = input.recv().await {
+                        sum += value as i64;
+                    }
+                    Ok(sum)
+                },
+            ),
+            // Generate method: server streams numbers back to client
+            // Client creates channel(), passes rx in args (keeping tx to receive data)
+            // Server receives Tx<i32> after bind_streams hydrates it with task_tx
+            4 => dispatch_call::<(u32, Tx<i32>), (), (), _, _>(
+                payload,
+                request_id,
+                registry,
+                |(count, output): (u32, Tx<i32>)| async move {
+                    // Server sends data to client via output stream
+                    for i in 0..count {
+                        output.send(&(i as i32)).await.ok();
+                    }
+                    // Tx is dropped here, which sends Close
+                    Ok(())
+                },
+            ),
             _ => roam_session::dispatch_unknown_method(request_id, registry),
         }
     }
@@ -61,10 +96,10 @@ async fn guest_calls_host_echo() {
 
     // Set up guest-side driver (client)
     let guest_transport = ShmGuestTransport::new(guest);
-    let (guest_handle, guest_driver) = establish_guest(guest_transport, EchoService);
+    let (guest_handle, guest_driver) = establish_guest(guest_transport, TestService);
 
     // Set up host-side driver (server)
-    let (host_handle, host_driver) = establish_host_peer(host, peer_id, EchoService);
+    let (host_handle, host_driver) = establish_host_peer(host, peer_id, TestService);
 
     // Spawn both drivers
     let guest_driver_handle = tokio::spawn(guest_driver.run());
@@ -100,8 +135,8 @@ async fn guest_calls_host_add() {
     let peer_id = guest.peer_id();
 
     let guest_transport = ShmGuestTransport::new(guest);
-    let (guest_handle, guest_driver) = establish_guest(guest_transport, EchoService);
-    let (_host_handle, host_driver) = establish_host_peer(host, peer_id, EchoService);
+    let (guest_handle, guest_driver) = establish_guest(guest_transport, TestService);
+    let (_host_handle, host_driver) = establish_host_peer(host, peer_id, TestService);
 
     tokio::spawn(guest_driver.run());
     tokio::spawn(host_driver.run());
@@ -123,8 +158,8 @@ async fn host_calls_guest() {
     let peer_id = guest.peer_id();
 
     let guest_transport = ShmGuestTransport::new(guest);
-    let (_guest_handle, guest_driver) = establish_guest(guest_transport, EchoService);
-    let (host_handle, host_driver) = establish_host_peer(host, peer_id, EchoService);
+    let (_guest_handle, guest_driver) = establish_guest(guest_transport, TestService);
+    let (host_handle, host_driver) = establish_host_peer(host, peer_id, TestService);
 
     tokio::spawn(guest_driver.run());
     tokio::spawn(host_driver.run());
@@ -146,8 +181,8 @@ async fn unknown_method_returns_error() {
     let peer_id = guest.peer_id();
 
     let guest_transport = ShmGuestTransport::new(guest);
-    let (guest_handle, guest_driver) = establish_guest(guest_transport, EchoService);
-    let (_host_handle, host_driver) = establish_host_peer(host, peer_id, EchoService);
+    let (guest_handle, guest_driver) = establish_guest(guest_transport, TestService);
+    let (_host_handle, host_driver) = establish_host_peer(host, peer_id, TestService);
 
     tokio::spawn(guest_driver.run());
     tokio::spawn(host_driver.run());
@@ -166,8 +201,8 @@ async fn multiple_sequential_calls() {
     let peer_id = guest.peer_id();
 
     let guest_transport = ShmGuestTransport::new(guest);
-    let (guest_handle, guest_driver) = establish_guest(guest_transport, EchoService);
-    let (_host_handle, host_driver) = establish_host_peer(host, peer_id, EchoService);
+    let (guest_handle, guest_driver) = establish_guest(guest_transport, TestService);
+    let (_host_handle, host_driver) = establish_host_peer(host, peer_id, TestService);
 
     tokio::spawn(guest_driver.run());
     tokio::spawn(host_driver.run());
@@ -181,4 +216,96 @@ async fn multiple_sequential_calls() {
         let result: i32 = facet_postcard::from_slice(&response[1..]).unwrap();
         assert_eq!(result, i + i * 2);
     }
+}
+
+// ============================================================================
+// Streaming tests - verify Tx/Rx work over SHM transport
+// ============================================================================
+
+/// Test client streaming: client sends multiple values, server returns aggregate.
+///
+/// shm[verify shm.handshake]
+#[tokio::test]
+async fn client_streaming_sum() {
+    let (host, guest) = create_host_and_guest();
+    let peer_id = guest.peer_id();
+
+    let guest_transport = ShmGuestTransport::new(guest);
+    let (guest_handle, guest_driver) = establish_guest(guest_transport, TestService);
+    let (_host_handle, host_driver) = establish_host_peer(host, peer_id, TestService);
+
+    tokio::spawn(guest_driver.run());
+    tokio::spawn(host_driver.run());
+
+    // Create a channel for streaming numbers to the server
+    // For Rx<i32> in args: caller keeps tx to send, passes rx
+    let (tx, rx) = channel::<i32>();
+
+    // Spawn a task to send data. We need to do this before call() because
+    // call() blocks until the response is received.
+    let sender_task = tokio::spawn(async move {
+        // Give call() a moment to set up stream binding
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        for i in 1..=10i32 {
+            if tx.send(&i).await.is_err() {
+                break;
+            }
+            // Yield between sends to let the runtime process messages
+            tokio::task::yield_now().await;
+        }
+        // Close the stream by dropping tx (this happens automatically)
+    });
+
+    // Use call() which handles stream binding (assigns channel IDs, sets up routing)
+    let mut args = rx;
+    let response = guest_handle.call(3, &mut args).await.unwrap();
+
+    // Wait for sender to complete
+    sender_task.await.unwrap();
+
+    assert_eq!(response[0], 0, "Expected success marker");
+    let result: i64 = facet_postcard::from_slice(&response[1..]).unwrap();
+    assert_eq!(result, 55); // 1+2+3+...+10 = 55
+}
+
+/// Test server streaming: server sends multiple values back to client.
+///
+/// shm[verify shm.flow.no-credit-message]
+#[tokio::test]
+async fn server_streaming_generate() {
+    let (host, guest) = create_host_and_guest();
+    let peer_id = guest.peer_id();
+
+    let guest_transport = ShmGuestTransport::new(guest);
+    let (guest_handle, guest_driver) = establish_guest(guest_transport, TestService);
+    let (_host_handle, host_driver) = establish_host_peer(host, peer_id, TestService);
+
+    tokio::spawn(guest_driver.run());
+    tokio::spawn(host_driver.run());
+
+    // Create a channel for receiving numbers from the server
+    // For Tx<i32> in args: caller keeps rx to receive, passes tx
+    let (tx, mut rx) = channel::<i32>();
+
+    // Use call() which handles stream binding
+    let mut args = (5u32, tx);
+
+    // Spawn a task to collect streamed values
+    let collector = tokio::spawn(async move {
+        let mut values = Vec::new();
+        while let Ok(Some(value)) = rx.recv().await {
+            values.push(value);
+        }
+        values
+    });
+
+    // Make the call - use call() for proper stream binding
+    let response = guest_handle.call(4, &mut args).await.unwrap();
+
+    assert_eq!(response[0], 0, "Expected success marker");
+
+    // Wait for all streamed values
+    let values = collector.await.unwrap();
+    assert_eq!(values, vec![0, 1, 2, 3, 4]);
 }

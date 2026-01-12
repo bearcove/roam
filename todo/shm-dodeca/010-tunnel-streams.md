@@ -1,4 +1,4 @@
-# Phase 010: Tunnel Streams (Roam-Native Replacement for rapace::TunnelStream)
+# Phase 010: Tunnel Streams (Tx/Rx<Vec<u8>> Replacement for rapace::TunnelStream)
 
 ## Goal
 
@@ -8,62 +8,67 @@ handles bytes) in the roam stack over roam-shm.
 ## Current State
 
 - Dodeca uses `rapace::TunnelStream<AnyTransport>` (and friends) to tunnel bytes.
-- Roam currently has stream/message semantics, but no tunnel abstraction or
-  helper runtime for “raw byte stream tunneled through RPC”.
+- Roam already supports streaming `Vec<u8>` payloads (`roam_wire::Value::Bytes(Vec<u8>)`)
+  and stream handles (`roam_session::Tx<T>` / `roam_session::Rx<T>`), so “tunnel”
+  can just be a pair of `Tx<Vec<u8>>`/`Rx<Vec<u8>>`.
 
 ## Target API
+
+Proto (shared):
+
+```rust
+pub struct Tunnel {
+    pub to_cell: roam_session::Tx<Vec<u8>>,
+    pub from_cell: roam_session::Rx<Vec<u8>>,
+}
+```
 
 Host:
 
 ```rust
-let (client, server) = roam_tunnel::open(/* ... */);
-tokio::spawn(async move { pump_tcp_to_tunnel(socket, client).await });
-```
-
-Cell:
-
-```rust
-// Expose a service method that returns a tunnel endpoint.
-// The cell consumes bytes and produces bytes via a bidirectional tunnel.
+let tunnel = http_cell.open_tunnel(/* ... */).await?;
+tokio::spawn(async move { pump_tcp_to_cell(socket, tunnel.to_cell).await });
+tokio::spawn(async move { pump_cell_to_tcp(tunnel.from_cell, socket).await });
 ```
 
 ## Design
 
-Prefer an explicit tunnel primitive implemented atop roam streams:
+Tunnel is just two roam streams of `Vec<u8>`:
 
-- Tunnel is a pair of streams:
-  - host → cell bytes (Tx<Data>)
-  - cell → host bytes (Tx<Data>)
-- Add close/reset semantics mapped onto roam’s Close/Reset.
+- host → cell: `Tx<Vec<u8>>`
+- cell → host: `Rx<Vec<u8>>`
+
+Close/reset semantics come from normal stream close behavior (no separate tunnel
+protocol needed).
 
 ## Implementation Plan
 
-### 1. Define Tunnel Protocol
+### 1. Define Tunnel Types in the Relevant Proto Crate
 
-- Add a `roam-tunnel` crate with:
-  - a small record type for data chunks
-  - helper to expose a bidirectional tunnel as a pair of stream endpoints
+- Define a `Tunnel` struct (or equivalent) holding `Tx<Vec<u8>>` and `Rx<Vec<u8>>`.
+- Add a roam service method that returns a `Tunnel` (or otherwise provisions the
+  two streams).
 
 ### 2. Host Adapters
 
 - Adapters:
-  - `TcpStream <-> TunnelEndpoint`
-  - bounded buffering and backpressure behavior
+  - `TcpStream -> Tx<Vec<u8>>` (read socket, chunk, send)
+  - `Rx<Vec<u8>> -> TcpStream` (recv, write socket)
+- Keep the implementation simple: a couple of tasks doing `read/write` + `send/recv`.
 
 ### 3. Cell Adapters
 
-- Provide a simple API for cell code:
-  - accept a tunnel endpoint and treat it like an async `Read + Write`
-  - or expose two async channels for bytes in/out
+- In the cell, treat the tunnel as two async channels:
+  - `Rx<Vec<u8>>` for inbound bytes
+  - `Tx<Vec<u8>>` for outbound bytes
 
 ## Tasks
 
-- [ ] Decide whether tunnel is “just streams” or a dedicated abstraction
-- [ ] Implement host/cell adapters
+- [ ] Implement host pumps (`TcpStream` <-> `Tx/Rx<Vec<u8>>`)
+- [ ] Implement cell pumps (`Tx/Rx<Vec<u8>>` <-> cell logic)
 - [ ] Add tests (loopback + SHM once Phase 008 lands)
 
 ## Notes
 
 - Keep chunk sizes bounded (e.g., 16–64KB) to avoid pathological slot usage.
 - Do not block the driver task; tunnel pumps must run as independent tasks.
-

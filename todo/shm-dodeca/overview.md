@@ -75,7 +75,7 @@ let transport = peer.into_transport(doorbell);
 | 007 | [007-slot-extents.md](./007-slot-extents.md) | ✅ Done | Extent-based growth + remap |
 | 008 | [008-roam-shm-driver.md](./008-roam-shm-driver.md) | TODO | Roam driver over SHM (no Hello/Credit frames) |
 | 009 | [009-roam-tracing.md](./009-roam-tracing.md) | TODO | Tracing across cells (roam-native) |
-| 010 | [010-tunnel-streams.md](./010-tunnel-streams.md) | TODO | Tunnel streams (roam-native) |
+| 010 | [010-tunnel-streams.md](./010-tunnel-streams.md) | TODO | Tunnel streams (just `Tx/Rx<Vec<u8>>`) |
 | 011 | [011-dodeca-flag-day-cutover.md](./011-dodeca-flag-day-cutover.md) | TODO | Dodeca flag-day cutover plan |
 | 012 | [012-flow-control-backend.md](./012-flow-control-backend.md) | TODO | Real credit flow control (move off infinite credit) |
 

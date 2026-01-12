@@ -93,12 +93,26 @@ correct.
 
 ## Tasks
 
-- [ ] Decide where driver core lives (`roam-session` vs new crate)
-- [ ] Refactor `roam-stream::Driver` to use driver core
-- [ ] Implement SHM handshake provider (no Hello)
-- [ ] Implement SHM flow-control provider (no Credit messages)
-- [ ] Add `roam_shm::driver` module + public API
-- [ ] Add integration tests: roam service call over SHM with streams (Tx/Rx)
+- [x] Decide where driver core lives (`roam-session` vs new crate)
+  - Decision: Keep drivers separate for now. `roam-session` provides shared
+    infrastructure (`ConnectionHandle`, `ChannelRegistry`, `Tx`/`Rx`, `dispatch_call`).
+    Each transport has its own driver that uses these building blocks.
+- [x] Refactor `roam-stream::Driver` to use driver core
+  - Note: Rather than refactoring, we kept `roam-stream::Driver` as-is and
+    created `roam-shm::ShmDriver` using the same shared infrastructure.
+- [x] Implement SHM handshake provider (no Hello)
+  - `ShmNegotiated` reads config from segment header (no wire exchange)
+  - Driver rejects `Message::Hello` with `goodbye("shm.handshake")`
+- [x] Implement SHM flow-control provider (no Credit messages)
+  - Driver rejects `Message::Credit` with `goodbye("shm.flow.no-credit-message")`
+  - Uses infinite credit for now (real channel-table flow control in Phase 012)
+- [x] Add `roam_shm::driver` module + public API
+  - `establish_guest(transport, dispatcher) -> (ConnectionHandle, ShmDriver)`
+  - `establish_host_peer(host, peer_id, dispatcher) -> (ConnectionHandle, ShmDriver)`
+- [x] Add integration tests: roam service call over SHM with streams (Tx/Rx)
+  - Unary calls: `guest_calls_host_echo`, `guest_calls_host_add`, `host_calls_guest`
+  - Client streaming: `client_streaming_sum` (client sends `Rx<i32>`, server aggregates)
+  - Server streaming: `server_streaming_generate` (server sends via `Tx<i32>`)
 
 ## Notes
 
