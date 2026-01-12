@@ -179,12 +179,10 @@ impl ShmHost {
     /// shm[impl shm.doorbell.socketpair]
     pub fn add_peer(&mut self, options: AddPeerOptions) -> io::Result<SpawnTicket> {
         // Must have a path for file-backed segments
-        let hub_path = self.path.clone().ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::Other,
-                "add_peer requires a file-backed segment",
-            )
-        })?;
+        let hub_path = self
+            .path
+            .clone()
+            .ok_or_else(|| io::Error::other("add_peer requires a file-backed segment"))?;
 
         // Find and reserve an empty slot
         let peer_id = self.reserve_peer_slot()?;
@@ -225,10 +223,7 @@ impl ShmHost {
             }
         }
 
-        Err(io::Error::new(
-            io::ErrorKind::Other,
-            "no available peer slots",
-        ))
+        Err(io::Error::other("no available peer slots"))
     }
 
     /// Release a reserved peer slot (if spawn fails).
@@ -296,11 +291,7 @@ impl ShmHost {
         if let Some(ref var_classes) = layout.config.var_slot_classes {
             // Initialize shared variable-size slot pool
             let var_pool_offset = layout.var_slot_pool_offset.unwrap();
-            let var_pool = VarSlotPool::new(
-                *region,
-                var_pool_offset,
-                var_classes.iter().copied().collect(),
-            );
+            let mut var_pool = VarSlotPool::new(*region, var_pool_offset, var_classes.to_vec());
             unsafe { var_pool.init() };
         } else {
             // Initialize fixed-size per-guest pools
@@ -395,12 +386,13 @@ impl ShmHost {
             // Check for epoch change (crash detection)
             // shm[impl shm.crash.epoch]
             let current_epoch = entry.epoch();
-            if let Some(guest_state) = self.guests.get(&peer_id) {
-                if guest_state.last_epoch != current_epoch && guest_state.last_epoch != 0 {
-                    // Epoch changed unexpectedly - previous guest crashed
-                    crashed_guests.push(peer_id);
-                    continue;
-                }
+            if let Some(guest_state) = self.guests.get(&peer_id)
+                && guest_state.last_epoch != current_epoch
+                && guest_state.last_epoch != 0
+            {
+                // Epoch changed unexpectedly - previous guest crashed
+                crashed_guests.push(peer_id);
+                continue;
             }
 
             if state == PeerState::Goodbye {
@@ -932,8 +924,8 @@ impl ShmHost {
 
         // Build free list for the new extent
         // Construct a temporary VarSlotPool view and init the extent
-        let var_classes_vec: Vec<_> = var_classes.iter().copied().collect();
-        let var_pool = VarSlotPool::new(self.region, var_pool_offset, var_classes_vec);
+        let var_classes_vec: Vec<_> = var_classes.to_vec();
+        let mut var_pool = VarSlotPool::new(self.region, var_pool_offset, var_classes_vec);
 
         // Store the extent offset in the class header
         class_header.extent_offsets[new_extent_idx as usize - 1]

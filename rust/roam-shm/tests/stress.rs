@@ -79,8 +79,8 @@ fn stress_multiple_guests_interleaved() {
         .map(|_| ShmGuest::attach(region).unwrap())
         .collect();
 
-    let mut sent_per_guest = vec![0u32; NUM_GUESTS];
-    let mut received_per_guest = vec![0u32; NUM_GUESTS];
+    let mut sent_per_guest = [0u32; NUM_GUESTS];
+    let mut received_per_guest = [0u32; NUM_GUESTS];
 
     let total_expected = NUM_GUESTS as u32 * MESSAGES_PER_GUEST;
     let mut total_received = 0u32;
@@ -292,13 +292,12 @@ fn stress_concurrent_send_recv() {
 
     while guest_received < ITERATIONS {
         // Guest sends if possible
-        if guest_sent < ITERATIONS {
-            if guest
+        if guest_sent < ITERATIONS
+            && guest
                 .send(make_data_frame(guest_sent, vec![0u8; 8]))
                 .is_ok()
-            {
-                guest_sent += 1;
-            }
+        {
+            guest_sent += 1;
         }
 
         // Host polls and responds

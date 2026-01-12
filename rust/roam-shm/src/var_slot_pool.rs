@@ -257,11 +257,13 @@ impl VarSlotPool {
     /// # Safety
     ///
     /// Caller must ensure exclusive access during initialization.
-    pub unsafe fn init(&self) {
+    pub unsafe fn init(&mut self) {
         // Initialize size class headers
-        for (i, class) in self.classes.iter().enumerate() {
+        for i in 0..self.classes.len() {
+            let slot_size = self.classes[i].slot_size;
+            let count = self.classes[i].count;
             let header = self.class_header_mut(i);
-            header.init(class.slot_size, class.count);
+            header.init(slot_size, count);
         }
 
         // Initialize extent 0 slot metadata and build free lists
@@ -276,7 +278,7 @@ impl VarSlotPool {
     /// # Safety
     ///
     /// Caller must ensure exclusive access to the extent during initialization.
-    pub unsafe fn init_extent_slots(&self, class_idx: usize, extent_idx: usize) {
+    pub unsafe fn init_extent_slots(&mut self, class_idx: usize, extent_idx: usize) {
         let class = &self.classes[class_idx];
         let slot_count = class.count;
 
@@ -315,7 +317,7 @@ impl VarSlotPool {
         unsafe { &*self.class_header_ptr(class_idx) }
     }
 
-    fn class_header_mut(&self, class_idx: usize) -> &mut SizeClassHeader {
+    fn class_header_mut(&mut self, class_idx: usize) -> &mut SizeClassHeader {
         unsafe { &mut *self.class_header_ptr(class_idx) }
     }
 
@@ -371,7 +373,7 @@ impl VarSlotPool {
 
     /// Get a mutable slot's metadata for any extent.
     fn slot_meta_mut_ext(
-        &self,
+        &mut self,
         class_idx: usize,
         extent_idx: usize,
         slot_idx: u32,
@@ -444,12 +446,12 @@ impl VarSlotPool {
     pub fn alloc(&self, size: u32, owner: u8) -> Option<VarSlotHandle> {
         // Find smallest class that fits
         for (class_idx, class) in self.classes.iter().enumerate() {
-            if class.slot_size >= size {
-                if let Some(handle) = self.alloc_from_class(class_idx, owner) {
-                    return Some(handle);
-                }
-                // Class exhausted, try next larger
+            if class.slot_size >= size
+                && let Some(handle) = self.alloc_from_class(class_idx, owner)
+            {
+                return Some(handle);
             }
+            // Class exhausted, try next larger
         }
         None // All classes exhausted
     }
@@ -815,7 +817,7 @@ mod tests {
 
         let size = VarSlotPool::calculate_size(&classes);
         let region = HeapRegion::new_zeroed(size as usize);
-        let pool = VarSlotPool::new(region.region(), 0, classes);
+        let mut pool = VarSlotPool::new(region.region(), 0, classes);
 
         unsafe { pool.init() };
 

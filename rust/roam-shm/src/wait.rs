@@ -65,10 +65,10 @@ pub fn wait_for_ring_space(
         let _ = futex_wait(tail, t, remaining);
 
         // Check timeout after waking
-        if let Some(deadline) = deadline {
-            if std::time::Instant::now() >= deadline {
-                return Err(WaitError::Timeout);
-            }
+        if let Some(deadline) = deadline
+            && std::time::Instant::now() >= deadline
+        {
+            return Err(WaitError::Timeout);
         }
     }
 }
@@ -109,10 +109,10 @@ pub fn wait_for_ring_data(
         let _ = futex_wait(head, h, remaining);
 
         // Check timeout after waking
-        if let Some(deadline) = deadline {
-            if std::time::Instant::now() >= deadline {
-                return Err(WaitError::Timeout);
-            }
+        if let Some(deadline) = deadline
+            && std::time::Instant::now() >= deadline
+        {
+            return Err(WaitError::Timeout);
         }
     }
 }
@@ -165,10 +165,10 @@ pub fn wait_for_credit(
         let _ = futex_wait(granted_total, granted, remaining);
 
         // Check timeout after waking
-        if let Some(deadline) = deadline {
-            if std::time::Instant::now() >= deadline {
-                return Err(WaitError::Timeout);
-            }
+        if let Some(deadline) = deadline
+            && std::time::Instant::now() >= deadline
+        {
+            return Err(WaitError::Timeout);
         }
     }
 }
@@ -219,10 +219,10 @@ where
         let _ = futex_wait(futex_word, current, remaining);
 
         // Check timeout after waking
-        if let Some(deadline) = deadline {
-            if std::time::Instant::now() >= deadline {
-                return Err(WaitError::Timeout);
-            }
+        if let Some(deadline) = deadline
+            && std::time::Instant::now() >= deadline
+        {
+            return Err(WaitError::Timeout);
         }
     }
 }

@@ -326,7 +326,7 @@ impl SegmentConfig {
             if self.slot_size < 8 {
                 return Err("slot_size must be at least 8");
             }
-            if self.slot_size % 8 != 0 {
+            if !self.slot_size.is_multiple_of(8) {
                 return Err("slot_size must be a multiple of 8");
             }
             if self.slots_per_guest == 0 {
@@ -404,7 +404,7 @@ impl SegmentLayout {
                 //
                 // shm[impl shm.segment.pool-size]
                 // shm[impl shm.slot.pool-header-size]
-                let bitmap_words = (config.slots_per_guest as u64 + 63) / 64;
+                let bitmap_words = (config.slots_per_guest as u64).div_ceil(64);
                 let bitmap_bytes = bitmap_words * 8;
                 let slot_pool_header_size = align_up(bitmap_bytes, 64);
                 let pool_size = slot_pool_header_size
@@ -568,10 +568,13 @@ mod tests {
 
     #[test]
     fn invalid_configs_are_rejected() {
-        let mut config = SegmentConfig::default();
-
-        config.max_guests = 0;
+        let config = SegmentConfig {
+            max_guests: 0,
+            ..Default::default()
+        };
         assert!(config.validate().is_err());
+
+        let mut config = config;
 
         config.max_guests = 256;
         assert!(config.validate().is_err());
@@ -586,7 +589,7 @@ mod tests {
         let config = SegmentConfig::default();
         let layout = config.layout().unwrap();
 
-        let bitmap_words = (config.slots_per_guest as u64 + 63) / 64;
+        let bitmap_words = (config.slots_per_guest as u64).div_ceil(64);
         let bitmap_bytes = bitmap_words * 8;
         let header_size = align_up(bitmap_bytes, 64);
         let expected_pool_size =

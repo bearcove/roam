@@ -158,18 +158,15 @@ mod tests {
         // We should have at least 2 events
         let mut count = 0;
         while let Some(record) = buffer.try_pop() {
-            match record {
-                TracingRecord::Event { message, level, .. } => {
-                    count += 1;
-                    if count == 1 {
-                        assert_eq!(message, Some("test message".to_string()));
-                        assert_eq!(level, Level::Info);
-                    } else if count == 2 {
-                        assert_eq!(message, Some("warning with field".to_string()));
-                        assert_eq!(level, Level::Warn);
-                    }
+            if let TracingRecord::Event { message, level, .. } = record {
+                count += 1;
+                if count == 1 {
+                    assert_eq!(message, Some("test message".to_string()));
+                    assert_eq!(level, Level::Info);
+                } else if count == 2 {
+                    assert_eq!(message, Some("warning with field".to_string()));
+                    assert_eq!(level, Level::Warn);
                 }
-                _ => {}
             }
         }
         assert_eq!(count, 2, "expected 2 events");

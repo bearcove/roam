@@ -211,7 +211,7 @@ impl ChannelId {
     /// shm[impl shm.id.channel-parity]
     #[inline]
     pub fn is_host_allocated(self) -> bool {
-        self.0 % 2 == 0
+        self.0.is_multiple_of(2)
     }
 
     /// Check if this is a guest-allocated channel ID (odd).

@@ -18,6 +18,9 @@ use roam_wire::{Message, MetadataValue};
 use crate::guest::{SendError, ShmGuest};
 use crate::msg::msg_type;
 
+/// Decoded metadata and payload from a message.
+type DecodedPayload = Result<(Vec<(String, MetadataValue)>, Vec<u8>), String>;
+
 /// Conversion error when mapping between Message and Frame.
 #[derive(Debug)]
 pub enum ConvertError {
@@ -276,7 +279,7 @@ fn encode_response_payload(metadata: &[(String, MetadataValue)], payload: &[u8])
 }
 
 /// Decode metadata + payload for Request messages.
-fn decode_request_payload(data: &[u8]) -> Result<(Vec<(String, MetadataValue)>, Vec<u8>), String> {
+fn decode_request_payload(data: &[u8]) -> DecodedPayload {
     if data.is_empty() {
         return Ok((Vec::new(), Vec::new()));
     }
@@ -320,7 +323,7 @@ fn decode_request_payload(data: &[u8]) -> Result<(Vec<(String, MetadataValue)>, 
 }
 
 /// Decode metadata + payload for Response messages.
-fn decode_response_payload(data: &[u8]) -> Result<(Vec<(String, MetadataValue)>, Vec<u8>), String> {
+fn decode_response_payload(data: &[u8]) -> DecodedPayload {
     // Same format as request
     decode_request_payload(data)
 }

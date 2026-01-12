@@ -27,7 +27,7 @@ pub(crate) struct SlotPool {
 
 impl SlotPool {
     pub(crate) fn new(region: Region, pool_offset: u64, config: &SegmentConfig) -> Self {
-        let bitmap_words = ((config.slots_per_guest as usize) + 63) / 64;
+        let bitmap_words = (config.slots_per_guest as usize).div_ceil(64);
         let bitmap_bytes = bitmap_words * 8;
         let header_size = align_up_usize(bitmap_bytes, 64);
 
@@ -97,7 +97,7 @@ impl SlotPool {
             let mut current = word_ptr.load(Ordering::Acquire);
 
             while current != 0 {
-                let bit = current.trailing_zeros() as u32;
+                let bit = current.trailing_zeros();
                 let slot_index = (word_index as u32) * 64 + bit;
                 if slot_index >= self.slots_per_guest {
                     break;

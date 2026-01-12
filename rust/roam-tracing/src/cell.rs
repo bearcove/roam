@@ -171,14 +171,14 @@ where
             return;
         }
 
-        if let Some(span) = ctx.span(&id) {
-            if let Some(ext) = span.extensions().get::<SpanIdExt>() {
-                let record = TracingRecord::SpanClose {
-                    id: ext.0,
-                    timestamp_ns: self.now_ns(),
-                };
-                self.buffer.push(record);
-            }
+        if let Some(span) = ctx.span(&id)
+            && let Some(ext) = span.extensions().get::<SpanIdExt>()
+        {
+            let record = TracingRecord::SpanClose {
+                id: ext.0,
+                timestamp_ns: self.now_ns(),
+            };
+            self.buffer.push(record);
         }
     }
 
@@ -190,12 +190,12 @@ where
             return;
         }
 
-        if let Some(span) = ctx.span(id) {
-            if let Some(ext) = span.extensions().get::<SpanIdExt>() {
-                // Only emit if this is a re-entry (not first enter)
-                // For now, we skip this to reduce verbosity
-                let _ = ext;
-            }
+        if let Some(span) = ctx.span(id)
+            && let Some(ext) = span.extensions().get::<SpanIdExt>()
+        {
+            // Only emit if this is a re-entry (not first enter)
+            // For now, we skip this to reduce verbosity
+            let _ = ext;
         }
     }
 
@@ -205,14 +205,14 @@ where
             return;
         }
 
-        if let Some(span) = ctx.span(id) {
-            if let Some(ext) = span.extensions().get::<SpanIdExt>() {
-                let record = TracingRecord::SpanExit {
-                    id: ext.0,
-                    timestamp_ns: self.now_ns(),
-                };
-                self.buffer.push(record);
-            }
+        if let Some(span) = ctx.span(id)
+            && let Some(ext) = span.extensions().get::<SpanIdExt>()
+        {
+            let record = TracingRecord::SpanExit {
+                id: ext.0,
+                timestamp_ns: self.now_ns(),
+            };
+            self.buffer.push(record);
         }
     }
 }
@@ -237,10 +237,10 @@ impl CellTracing for CellTracingService {
         let buffer = self.buffer.clone();
         tokio::spawn(async move {
             loop {
-                if let Some(record) = buffer.pop().await {
-                    if sink.send(&record).await.is_err() {
-                        break; // Sink closed
-                    }
+                if let Some(record) = buffer.pop().await
+                    && sink.send(&record).await.is_err()
+                {
+                    break; // Sink closed
                 }
             }
         });
