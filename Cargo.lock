@@ -1334,6 +1334,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "roam-tracing"
+version = "0.5.0"
+dependencies = [
+ "facet",
+ "roam",
+ "roam-session",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "roam-websocket"
 version = "0.5.0"
 dependencies = [
