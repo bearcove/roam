@@ -690,10 +690,16 @@ fn test_multiple_reserved_slots() {
     assert!(ticket4.peer_id.get() >= 1 && ticket4.peer_id.get() <= 4);
 }
 
-/// Test graceful shutdown vs crash produces different behavior.
+/// Test graceful shutdown does NOT trigger death callback.
+///
+/// When a guest does a graceful detach (via Drop), the death callback
+/// should NOT be invoked. Death callbacks are only for unexpected crashes.
+///
+/// shm[verify shm.goodbye.guest]
+/// shm[verify shm.guest.detach]
 #[test]
 #[cfg(unix)]
-fn test_graceful_vs_crash_shutdown() {
+fn test_graceful_shutdown_no_death_callback() {
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -701,52 +707,73 @@ fn test_graceful_vs_crash_shutdown() {
     let _guard = rt.enter();
 
     let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("graceful.shm");
 
-    // Test 1: Graceful shutdown (no death callback)
-    {
-        let path = dir.path().join("graceful.shm");
-        let config = SegmentConfig::default();
-        let mut host = ShmHost::create(&path, config).unwrap();
+    let config = SegmentConfig::default();
+    let mut host = ShmHost::create(&path, config).unwrap();
 
-        let graceful_death_called = Arc::new(AtomicBool::new(false));
-        let graceful_death_called_clone = graceful_death_called.clone();
+    let death_called = Arc::new(AtomicBool::new(false));
+    let death_called_clone = death_called.clone();
 
-        let ticket = host
-            .add_peer(AddPeerOptions {
-                peer_name: Some("graceful".to_string()),
-                on_death: Some(Arc::new(move |_| {
-                    graceful_death_called_clone.store(true, Ordering::SeqCst);
-                })),
-            })
-            .unwrap();
+    let ticket = host
+        .add_peer(AddPeerOptions {
+            peer_name: Some("graceful-guest".to_string()),
+            on_death: Some(Arc::new(move |_| {
+                death_called_clone.store(true, Ordering::SeqCst);
+            })),
+        })
+        .unwrap();
 
-        let args = ticket.to_args();
+    let args = ticket.to_args();
 
-        match unsafe { libc::fork() } {
-            -1 => panic!("fork failed"),
-            0 => {
-                // Child: graceful attach and detach
-                let spawn_args = roam_shm::spawn::SpawnArgs::from_args(&args).unwrap();
-                let guest = ShmGuest::attach_with_ticket(&spawn_args).unwrap();
-                drop(guest); // Graceful detach via Drop
-                unsafe { libc::_exit(0) };
-            }
-            child_pid => {
-                drop(ticket);
-                let mut status: i32 = 0;
-                unsafe { libc::waitpid(child_pid, &mut status, 0) };
+    match unsafe { libc::fork() } {
+        -1 => panic!("fork failed"),
+        0 => {
+            // Child: attach, send a message, then gracefully detach
+            let spawn_args = roam_shm::spawn::SpawnArgs::from_args(&args).unwrap();
+            let mut guest = ShmGuest::attach_with_ticket(&spawn_args).unwrap();
 
-                // Poll to process goodbye
-                let _ = host.poll();
+            // Send a message to prove we connected
+            let desc = MsgDesc::new(msg_type::DATA, 1, 0);
+            let frame = Frame {
+                desc,
+                payload: Payload::Owned(b"graceful goodbye".to_vec()),
+            };
+            guest.send(frame).unwrap();
 
-                // Check doorbells
-                let _ = host.check_doorbell_deaths();
+            // Graceful detach via Drop
+            drop(guest);
+            unsafe { libc::_exit(0) };
+        }
+        child_pid => {
+            drop(ticket);
 
-                // Graceful shutdown should NOT trigger death callback
-                // (The guest did a proper detach)
-                // Note: This may vary based on implementation - the key point
-                // is that graceful detach is distinguishable from crash
-            }
+            // Wait for child to connect and send message
+            std::thread::sleep(Duration::from_millis(100));
+
+            // Poll to receive the message (may also process goodbye)
+            let messages = host.poll();
+            // Message may or may not be present depending on timing -
+            // the key assertion is about the death callback
+            let _ = messages;
+
+            // Wait for child to exit
+            let mut status: i32 = 0;
+            unsafe { libc::waitpid(child_pid, &mut status, 0) };
+            assert!(libc::WIFEXITED(status));
+            assert_eq!(libc::WEXITSTATUS(status), 0);
+
+            // Poll again to ensure goodbye is processed
+            let _ = host.poll();
+
+            // Check doorbells - this is where death would be detected for crashes
+            let _ = host.check_doorbell_deaths();
+
+            // Graceful shutdown should NOT trigger death callback
+            assert!(
+                !death_called.load(Ordering::SeqCst),
+                "death callback should NOT be called for graceful shutdown"
+            );
         }
     }
 }
