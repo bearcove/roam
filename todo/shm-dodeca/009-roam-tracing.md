@@ -66,9 +66,9 @@ pub enum TracingRecord {
 
 ### Key Constraints (all met)
 
-- ✅ **Lossy buffering** - `LossyBuffer` drops oldest records when full
+- ✅ **Lossy buffering** - Cell-side `LossyBuffer` drops oldest; host-side drops newest under backpressure
 - ✅ **Never blocks** - Layer pushes to local buffer; async drain to host
-- ✅ **Bounded memory** - Configurable buffer size
+- ✅ **Bounded memory** - Configurable buffer size at both cell and host
 - ✅ **Transport agnostic** - Works over stream and SHM via `Tx<TracingRecord>`
 
 ## Implementation

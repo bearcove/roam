@@ -110,7 +110,7 @@ impl TracingHost {
     /// Create a new tracing host with the given buffer size.
     ///
     /// `buffer_size` is the capacity of the aggregated record channel.
-    /// If the consumer is slow, oldest records may be dropped.
+    /// If the consumer is slow, newest records are dropped (backpressure).
     pub fn new(buffer_size: usize) -> Self {
         let (record_tx, record_rx) = mpsc::channel(buffer_size);
         Self {
@@ -190,7 +190,7 @@ impl TracingHost {
                                     peer_name: peer_name_clone.clone(),
                                     record,
                                 };
-                                // If host channel is full, drop (backpressure)
+                                // If host channel is full, drop newest (backpressure)
                                 let _ = record_tx.try_send(tagged);
                             }
                             Ok(None) => break, // Stream closed

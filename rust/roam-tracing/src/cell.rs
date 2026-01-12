@@ -93,9 +93,15 @@ where
 
         let span_id = self.alloc_span_id();
 
-        // Store our span_id in the span's extensions
+        // Store our span_id in the span's extensions (always, for parent tracking)
         if let Some(span) = ctx.span(id) {
             span.extensions_mut().insert(SpanIdExt(span_id));
+        }
+
+        // Only emit SpanEnter record if include_span_events is enabled
+        let config = self.config.read().unwrap();
+        if !config.include_span_events {
+            return;
         }
 
         // Get parent span ID if any
