@@ -40,6 +40,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
+use facet::Facet;
 use roam_session::{
     CallError, ChannelRegistry, ConnectionHandle, RoamError, ServiceDispatcher, TaskMessage,
 };
@@ -333,6 +334,47 @@ impl<C: Connector> ReconnectingClient<C> {
                 }
             }
         }
+    }
+
+    // r[reconnect.call]
+    /// Make a typed RPC call with automatic reconnection.
+    ///
+    /// This is the primary API for making calls. It handles serialization,
+    /// automatic reconnection on transport failure, and deserialization.
+    ///
+    /// # Type Parameters
+    ///
+    /// * `Req` - The request type (must implement `Facet`)
+    /// * `Resp` - The response type (must implement `Facet`)
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let response: StatusResponse = client
+    ///     .call(status_method_id(), &StatusRequest {})
+    ///     .await?;
+    /// ```
+    pub async fn call<Req, Resp>(
+        &self,
+        method_id: u64,
+        request: &Req,
+    ) -> Result<Resp, ReconnectError>
+    where
+        Req: for<'a> Facet<'a>,
+        Resp: for<'a> Facet<'a>,
+    {
+        // Serialize the request
+        let payload = facet_postcard::to_vec(request)
+            .map_err(|e| ReconnectError::Rpc(CallError::Encode(e)))?;
+
+        // Make the call with reconnection
+        let response_bytes = self.call_raw(method_id, payload).await?;
+
+        // Deserialize the response
+        let response: Resp = facet_postcard::from_slice(&response_bytes)
+            .map_err(|e| ReconnectError::Rpc(CallError::Decode(e)))?;
+
+        Ok(response)
     }
 }
 
