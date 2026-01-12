@@ -2,73 +2,60 @@
 
 ## Goal
 
-Support dodeca’s “TCP tunneling” use case (host accepts connections, cell
+Support dodeca's "TCP tunneling" use case (host accepts connections, cell
 handles bytes) in the roam stack over roam-shm.
 
 ## Current State
 
 - Dodeca uses `rapace::TunnelStream<AnyTransport>` (and friends) to tunnel bytes.
 - Roam already supports streaming `Vec<u8>` payloads (`roam_wire::Value::Bytes(Vec<u8>)`)
-  and stream handles (`roam_session::Tx<T>` / `roam_session::Rx<T>`), so “tunnel”
+  and stream handles (`roam_session::Tx<T>` / `roam_session::Rx<T>`), so "tunnel"
   can just be a pair of `Tx<Vec<u8>>`/`Rx<Vec<u8>>`.
 
-## Target API
+## Implementation (DONE)
 
-Proto (shared):
+Generic `AsyncRead`/`AsyncWrite` tunnel adapters are now implemented in `roam-session`
+and re-exported from `roam`. The implementation is generic over any async stream type,
+not just `TcpStream`.
 
-```rust
-pub struct Tunnel {
-    pub to_cell: roam_session::Tx<Vec<u8>>,
-    pub from_cell: roam_session::Rx<Vec<u8>>,
-}
-```
-
-Host:
+### API
 
 ```rust
-let tunnel = http_cell.open_tunnel(/* ... */).await?;
-tokio::spawn(async move { pump_tcp_to_cell(socket, tunnel.to_cell).await });
-tokio::spawn(async move { pump_cell_to_tcp(tunnel.from_cell, socket).await });
+use roam::{Tunnel, tunnel_pair, tunnel_stream, DEFAULT_TUNNEL_CHUNK_SIZE};
+
+// Create connected tunnel pair
+let (local, remote) = tunnel_pair();
+
+// Bridge an async stream to a tunnel (spawns two tasks)
+let (read_handle, write_handle) = tunnel_stream(socket, local, DEFAULT_TUNNEL_CHUNK_SIZE);
+
+// Or use the lower-level pump functions directly:
+use roam::{pump_read_to_tx, pump_rx_to_write};
 ```
 
-## Design
+### Types
 
-Tunnel is just two roam streams of `Vec<u8>`:
+- `Tunnel` - Bidirectional byte tunnel (`tx: Tx<Vec<u8>>`, `rx: Rx<Vec<u8>>`)
+- `tunnel_pair()` - Create connected tunnel pair
+- `tunnel_stream()` - Bridge `AsyncRead + AsyncWrite` to tunnel (spawns tasks)
+- `pump_read_to_tx()` - Pump bytes from reader to channel
+- `pump_rx_to_write()` - Pump bytes from channel to writer
+- `DEFAULT_TUNNEL_CHUNK_SIZE` - 32KB default chunk size
 
-- host → cell: `Tx<Vec<u8>>`
-- cell → host: `Rx<Vec<u8>>`
+### Files Changed
 
-Close/reset semantics come from normal stream close behavior (no separate tunnel
-protocol needed).
-
-## Implementation Plan
-
-### 1. Define Tunnel Types in the Relevant Proto Crate
-
-- Define a `Tunnel` struct (or equivalent) holding `Tx<Vec<u8>>` and `Rx<Vec<u8>>`.
-- Add a roam service method that returns a `Tunnel` (or otherwise provisions the
-  two streams).
-
-### 2. Host Adapters
-
-- Adapters:
-  - `TcpStream -> Tx<Vec<u8>>` (read socket, chunk, send)
-  - `Rx<Vec<u8>> -> TcpStream` (recv, write socket)
-- Keep the implementation simple: a couple of tasks doing `read/write` + `send/recv`.
-
-### 3. Cell Adapters
-
-- In the cell, treat the tunnel as two async channels:
-  - `Rx<Vec<u8>>` for inbound bytes
-  - `Tx<Vec<u8>>` for outbound bytes
+- `Cargo.toml` - Added `io-util` feature to tokio workspace dep
+- `rust/roam-session/src/lib.rs` - Added tunnel types and pump functions
+- `rust/roam/src/lib.rs` - Re-exported tunnel types
 
 ## Tasks
 
-- [ ] Implement host pumps (`TcpStream` <-> `Tx/Rx<Vec<u8>>`)
-- [ ] Implement cell pumps (`Tx/Rx<Vec<u8>>` <-> cell logic)
-- [ ] Add tests (loopback + SHM once Phase 008 lands)
+- [x] Implement host pumps (generic `AsyncRead`/`AsyncWrite` <-> `Tx/Rx<Vec<u8>>`)
+- [x] Implement cell pumps (`Tx/Rx<Vec<u8>>` <-> cell logic) - same functions work both sides
+- [x] Add tests (loopback with `tokio::io::duplex`)
 
 ## Notes
 
-- Keep chunk sizes bounded (e.g., 16–64KB) to avoid pathological slot usage.
-- Do not block the driver task; tunnel pumps must run as independent tasks.
+- Chunk size is configurable via `chunk_size` parameter (default 32KB)
+- Close semantics come naturally from channel close (drop `Tx` → `Rx::recv()` returns `None`)
+- Pump functions are intentionally simple - backpressure comes from the channel
