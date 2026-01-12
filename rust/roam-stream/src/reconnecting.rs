@@ -213,7 +213,7 @@ impl<C: Connector> ReconnectingClient<C> {
     /// Get a connection handle for making calls.
     ///
     /// The returned handle may become invalid if the connection drops.
-    /// Prefer using [`call()`](Self::call) directly for automatic retry.
+    /// Prefer using [`call_raw()`](Self::call_raw) directly for automatic retry.
     pub async fn handle(&self) -> Result<ConnectionHandle, ReconnectError> {
         self.ensure_connected().await
     }
