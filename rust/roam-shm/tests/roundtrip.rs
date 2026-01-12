@@ -1,4 +1,7 @@
 //! Integration tests for SHM host-guest message roundtrip.
+//!
+//! shm[verify shm.topology.hub]
+//! shm[verify shm.topology.hub.calls]
 
 use roam_frame::{Frame, INLINE_PAYLOAD_LEN, INLINE_PAYLOAD_SLOT, MsgDesc, Payload};
 use roam_shm::guest::ShmGuest;
@@ -34,6 +37,9 @@ fn make_response(id: u32, payload: &[u8]) -> Frame {
     }
 }
 
+/// shm[verify shm.guest.attach]
+/// shm[verify shm.ordering.ring-publish]
+/// shm[verify shm.ordering.ring-consume]
 #[test]
 fn guest_to_host_inline_message() {
     let config = SegmentConfig::default();
@@ -58,6 +64,8 @@ fn guest_to_host_inline_message() {
     assert_eq!(&frame.desc.inline_payload[..10], b"hello host");
 }
 
+/// shm[verify shm.ordering.ring-publish]
+/// shm[verify shm.ordering.ring-consume]
 #[test]
 fn host_to_guest_inline_message() {
     let config = SegmentConfig::default();
@@ -106,6 +114,8 @@ fn bidirectional_roundtrip() {
     assert_eq!(&frame.desc.inline_payload[..4], b"pong");
 }
 
+/// shm[verify shm.topology.peer-id]
+/// shm[verify shm.segment.peer-table]
 #[test]
 fn multiple_guests_isolated() {
     let config = SegmentConfig::default();
@@ -149,6 +159,8 @@ fn multiple_guests_isolated() {
     assert!(guest2.recv().is_none());
 }
 
+/// shm[verify shm.payload.slot]
+/// shm[verify shm.slot.allocate]
 #[test]
 fn large_payload_via_slot() {
     let config = SegmentConfig::default();
@@ -190,6 +202,7 @@ fn large_payload_via_slot() {
     }
 }
 
+/// shm[verify shm.goodbye.host]
 #[test]
 fn host_goodbye_prevents_guest_send() {
     let config = SegmentConfig::default();
@@ -236,6 +249,7 @@ fn many_messages_in_sequence() {
     }
 }
 
+/// shm[verify shm.ring.full]
 #[test]
 fn ring_backpressure() {
     // Use a small ring to test backpressure
@@ -265,6 +279,7 @@ fn ring_backpressure() {
     guest.send(make_request(100, b"x")).unwrap();
 }
 
+/// shm[verify shm.slot.free]
 #[test]
 fn slot_reclamation_guest_to_host() {
     // Test that slots are properly reclaimed after host consumes messages
@@ -297,6 +312,7 @@ fn slot_reclamation_guest_to_host() {
     }
 }
 
+/// shm[verify shm.slot.free]
 #[test]
 fn slot_reclamation_host_to_guest() {
     // Test that slots are properly reclaimed after guest consumes messages

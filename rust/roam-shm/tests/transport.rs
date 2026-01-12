@@ -2,6 +2,10 @@
 //!
 //! These tests verify that the SHM transport correctly handles roam wire Messages,
 //! including metadata encoding and round-trip preservation.
+//!
+//! shm[verify shm.metadata.in-payload]
+//! shm[verify shm.payload.encoding]
+//! shm[verify shm.scope]
 
 use roam_shm::guest::ShmGuest;
 use roam_shm::host::ShmHost;

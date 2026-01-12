@@ -2,6 +2,9 @@
 //!
 //! These tests exercise the implementation under load to catch
 //! race conditions, memory corruption, and edge cases.
+//!
+//! shm[verify shm.host.poll-peers]
+//! shm[verify shm.topology.max-guests]
 
 use roam_frame::{Frame, MsgDesc, Payload};
 use roam_shm::guest::ShmGuest;
@@ -186,6 +189,7 @@ fn stress_varying_payload_sizes() {
     }
 }
 
+/// shm[verify shm.slot.exhaustion]
 #[test]
 fn stress_slot_exhaustion_recovery() {
     let config = SegmentConfig {
@@ -227,6 +231,8 @@ fn stress_slot_exhaustion_recovery() {
     assert_eq!(received, TOTAL_MESSAGES);
 }
 
+/// shm[verify shm.guest.detach]
+/// shm[verify shm.crash.recovery]
 #[test]
 fn stress_guest_attach_detach_cycle() {
     let config = SegmentConfig {

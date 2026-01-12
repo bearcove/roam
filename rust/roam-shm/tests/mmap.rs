@@ -1,6 +1,9 @@
 //! Integration tests for file-backed mmap segments.
 //!
 //! These tests verify cross-process IPC using mmap.
+//!
+//! shm[verify shm.file.create]
+//! shm[verify shm.file.attach]
 
 use roam_frame::{Frame, MsgDesc, Payload};
 use roam_shm::{AddPeerOptions, SegmentConfig, ShmGuest, ShmHost, SpawnArgs, msg_type};
@@ -158,6 +161,8 @@ fn test_file_backed_multiple_guests() {
 ///
 /// This test forks a child process that attaches to the same segment
 /// and exchanges messages with the parent (host).
+///
+/// shm[verify shm.architecture]
 #[test]
 #[cfg(unix)]
 fn test_cross_process_ipc() {
@@ -234,6 +239,12 @@ fn test_cross_process_ipc() {
 /// 1. Host reserves a slot via add_peer()
 /// 2. Child process attaches using attach_with_ticket()
 /// 3. Bidirectional communication works
+///
+/// shm[verify shm.spawn.ticket]
+/// shm[verify shm.spawn.args]
+/// shm[verify shm.spawn.guest-init]
+/// shm[verify shm.spawn.reserved-state]
+/// shm[verify shm.doorbell.socketpair]
 #[test]
 #[cfg(unix)]
 fn test_spawn_ticket_workflow() {
@@ -399,7 +410,8 @@ fn test_release_reserved_slot() {
     assert_eq!(ticket2.peer_id.get(), 1);
 }
 
-/// Test growing a variable-size slot pool by adding extents.
+/// shm[verify shm.varslot.extents]
+/// shm[verify shm.varslot.classes]
 #[test]
 fn test_grow_size_class() {
     let dir = tempfile::tempdir().unwrap();
