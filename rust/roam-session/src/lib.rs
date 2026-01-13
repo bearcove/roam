@@ -2069,42 +2069,31 @@ impl ConnectionHandle {
             loop {
                 iteration += 1;
                 trace!("drain loop iteration {}", iteration);
-                // Build a future that drains one item from any active receiver
-                let drain_one = async {
-                    for (i, (channel_id, rx)) in drains.iter_mut().enumerate() {
-                        if drain_active[i] {
-                            trace!("drain_one: waiting on channel {}", channel_id);
-                            match rx.recv().await {
-                                Some(data) => {
-                                    debug!(
-                                        "drain_one: received {} bytes on channel {}",
-                                        data.len(),
-                                        channel_id
-                                    );
-                                    let _ = task_tx
-                                        .send(DriverMessage::Data {
-                                            channel_id: *channel_id,
-                                            payload: data,
-                                        })
-                                        .await;
-                                    return Some((i, true)); // Got data, still open
-                                }
-                                None => {
-                                    debug!("drain_one: channel {} closed", channel_id);
-                                    // Channel closed, send Close
-                                    let _ = task_tx
-                                        .send(DriverMessage::Close {
-                                            channel_id: *channel_id,
-                                        })
-                                        .await;
-                                    return Some((i, false)); // Closed
-                                }
+
+                // Count active drains
+                let active_count = drain_active.iter().filter(|&&a| a).count();
+                if active_count == 0 {
+                    // All drains inactive, just wait for response
+                    debug!("drain loop: all drains inactive, waiting for response");
+                    return response_future.await;
+                }
+
+                // Poll all active drain receivers concurrently using select_all
+                // We build the futures inline and collect them
+                let drain_futures =
+                    futures_util::future::select_all(drains.iter_mut().enumerate().filter_map(
+                        |(i, (channel_id, rx))| {
+                            if drain_active[i] {
+                                let channel_id = *channel_id;
+                                Some(Box::pin(async move {
+                                    let result = rx.recv().await;
+                                    (i, channel_id, result)
+                                }))
+                            } else {
+                                None
                             }
-                        }
-                    }
-                    // All drains inactive, just wait forever
-                    std::future::pending().await
-                };
+                        },
+                    ));
 
                 tokio::select! {
                     biased;
@@ -2114,9 +2103,34 @@ impl ConnectionHandle {
                         return result;
                     }
 
-                    Some((i, still_open)) = drain_one => {
-                        debug!("drain loop: drain {} still_open={}", i, still_open);
-                        drain_active[i] = still_open;
+                    ((i, channel_id, data), _index, _remaining) = drain_futures => {
+                        match data {
+                            Some(payload) => {
+                                debug!(
+                                    "drain loop: received {} bytes on channel {}",
+                                    payload.len(),
+                                    channel_id
+                                );
+                                // Send data to driver
+                                let _ = task_tx
+                                    .send(DriverMessage::Data {
+                                        channel_id,
+                                        payload,
+                                    })
+                                    .await;
+                                // Keep drain active
+                                debug!("drain loop: drain {} still active", i);
+                            }
+                            None => {
+                                debug!("drain loop: channel {} closed", channel_id);
+                                // Channel closed, send Close
+                                let _ = task_tx
+                                    .send(DriverMessage::Close { channel_id })
+                                    .await;
+                                // Mark drain as inactive
+                                drain_active[i] = false;
+                            }
+                        }
                     }
                 }
             }
