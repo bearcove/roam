@@ -54,8 +54,8 @@ use std::time::Duration;
 
 use facet::Facet;
 use roam_session::{
-    ChannelError, ChannelRegistry, ConnectionHandle, HandleCommand, RoamError, Role,
-    ServiceDispatcher, TaskMessage, TransportError,
+    ChannelError, ChannelRegistry, ConnectionHandle, DriverMessage, RoamError, Role,
+    ServiceDispatcher, TransportError,
 };
 use roam_wire::{Hello, Message};
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -828,11 +828,12 @@ pub struct Driver<T, D> {
     role: Role,
     negotiated: Negotiated,
     handle: ConnectionHandle,
-    command_rx: mpsc::Receiver<HandleCommand>,
+    /// Unified channel for all messages (Call/Data/Close/Response).
+    /// Single channel ensures FIFO ordering.
+    driver_rx: mpsc::Receiver<DriverMessage>,
     server_channel_registry: ChannelRegistry,
     pending_responses: HashMap<u64, oneshot::Sender<Result<Vec<u8>, TransportError>>>,
     in_flight_server_requests: std::collections::HashSet<u64>,
-    task_rx: mpsc::Receiver<TaskMessage>,
 }
 
 impl<T, D> Driver<T, D>
@@ -846,12 +847,9 @@ where
             tokio::select! {
                 biased;
 
-                Some(msg) = self.task_rx.recv() => {
-                    self.handle_task_message(msg).await?;
-                }
-
-                Some(cmd) = self.command_rx.recv() => {
-                    self.handle_command(cmd).await?;
+                // All messages go through a single channel - FIFO ordering guaranteed
+                Some(msg) = self.driver_rx.recv() => {
+                    self.handle_driver_message(msg).await?;
                 }
 
                 result = self.io.recv_timeout(Duration::from_secs(30)) => {
@@ -865,37 +863,10 @@ where
         }
     }
 
-    async fn handle_task_message(&mut self, msg: TaskMessage) -> Result<(), ConnectionError> {
-        let wire_msg = match msg {
-            TaskMessage::Data {
-                channel_id,
-                payload,
-            } => Message::Data {
-                channel_id,
-                payload,
-            },
-            TaskMessage::Close { channel_id } => Message::Close { channel_id },
-            TaskMessage::Response {
-                request_id,
-                payload,
-            } => {
-                if !self.in_flight_server_requests.remove(&request_id) {
-                    return Ok(());
-                }
-                Message::Response {
-                    request_id,
-                    metadata: Vec::new(),
-                    payload,
-                }
-            }
-        };
-        self.io.send(&wire_msg).await?;
-        Ok(())
-    }
-
-    async fn handle_command(&mut self, cmd: HandleCommand) -> Result<(), ConnectionError> {
-        match cmd {
-            HandleCommand::Call {
+    /// Handle a message from the unified driver channel.
+    async fn handle_driver_message(&mut self, msg: DriverMessage) -> Result<(), ConnectionError> {
+        match msg {
+            DriverMessage::Call {
                 request_id,
                 method_id,
                 metadata,
@@ -912,6 +883,35 @@ where
                     payload,
                 };
                 self.io.send(&req).await?;
+            }
+            DriverMessage::Data {
+                channel_id,
+                payload,
+            } => {
+                let wire_msg = Message::Data {
+                    channel_id,
+                    payload,
+                };
+                self.io.send(&wire_msg).await?;
+            }
+            DriverMessage::Close { channel_id } => {
+                let wire_msg = Message::Close { channel_id };
+                self.io.send(&wire_msg).await?;
+            }
+            DriverMessage::Response {
+                request_id,
+                payload,
+            } => {
+                // Only send response if request is still in-flight
+                if !self.in_flight_server_requests.remove(&request_id) {
+                    return Ok(());
+                }
+                let wire_msg = Message::Response {
+                    request_id,
+                    metadata: vec![],
+                    payload,
+                };
+                self.io.send(&wire_msg).await?;
             }
         }
         Ok(())
@@ -1189,12 +1189,11 @@ where
         initial_credit: our_credit.min(peer_credit),
     };
 
-    // Create channels
-    let (command_tx, command_rx) = mpsc::channel(64);
-    let (task_tx, task_rx) = mpsc::channel(64);
+    // Create single unified channel for all messages (Call/Data/Close/Response).
+    // Single channel ensures FIFO ordering.
+    let (driver_tx, driver_rx) = mpsc::channel(256);
 
-    let handle =
-        ConnectionHandle::new(command_tx, role, negotiated.initial_credit, task_tx.clone());
+    let handle = ConnectionHandle::new(driver_tx.clone(), role, negotiated.initial_credit);
 
     let driver = Driver {
         io,
@@ -1202,14 +1201,13 @@ where
         role,
         negotiated: negotiated.clone(),
         handle: handle.clone(),
-        command_rx,
+        driver_rx,
         server_channel_registry: ChannelRegistry::new_with_credit(
             negotiated.initial_credit,
-            task_tx,
+            driver_tx,
         ),
         pending_responses: HashMap::new(),
         in_flight_server_requests: std::collections::HashSet::new(),
-        task_rx,
     };
 
     Ok((handle, driver))
@@ -1237,12 +1235,12 @@ impl ServiceDispatcher for NoDispatcher {
         request_id: u64,
         registry: &mut ChannelRegistry,
     ) -> Pin<Box<dyn Future<Output = ()> + Send + 'static>> {
-        let task_tx = registry.task_tx();
+        let driver_tx = registry.driver_tx();
         Box::pin(async move {
             let response: Result<(), RoamError<()>> = Err(RoamError::UnknownMethod);
             let payload = facet_postcard::to_vec(&response).unwrap_or_default();
-            let _ = task_tx
-                .send(TaskMessage::Response {
+            let _ = driver_tx
+                .send(DriverMessage::Response {
                     request_id,
                     payload,
                 })
