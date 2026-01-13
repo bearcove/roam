@@ -1950,6 +1950,7 @@ dependencies = [
  "roam-frame",
  "roam-wire",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -1958,6 +1959,7 @@ version = "0.5.0"
 dependencies = [
  "facet-postcard",
  "libc",
+ "roam",
  "roam-frame",
  "roam-session",
  "roam-stream",

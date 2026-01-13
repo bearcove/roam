@@ -5,6 +5,9 @@
 //! Canonical definitions live in `docs/content/spec/_index.md`,
 //! `docs/content/rust-spec/_index.md`, and `docs/content/shm-spec/_index.md`.
 
+#[macro_use]
+mod macros;
+
 use std::marker::PhantomData;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -2061,14 +2064,23 @@ impl ConnectionHandle {
 
             // Track which drains are still active
             let mut drain_active: Vec<bool> = vec![true; drains.len()];
+            let mut iteration = 0;
 
             loop {
+                iteration += 1;
+                trace!("drain loop iteration {}", iteration);
                 // Build a future that drains one item from any active receiver
                 let drain_one = async {
                     for (i, (channel_id, rx)) in drains.iter_mut().enumerate() {
                         if drain_active[i] {
+                            trace!("drain_one: waiting on channel {}", channel_id);
                             match rx.recv().await {
                                 Some(data) => {
+                                    debug!(
+                                        "drain_one: received {} bytes on channel {}",
+                                        data.len(),
+                                        channel_id
+                                    );
                                     let _ = task_tx
                                         .send(DriverMessage::Data {
                                             channel_id: *channel_id,
@@ -2078,6 +2090,7 @@ impl ConnectionHandle {
                                     return Some((i, true)); // Got data, still open
                                 }
                                 None => {
+                                    debug!("drain_one: channel {} closed", channel_id);
                                     // Channel closed, send Close
                                     let _ = task_tx
                                         .send(DriverMessage::Close {
@@ -2097,10 +2110,12 @@ impl ConnectionHandle {
                     biased;
 
                     result = &mut response_future => {
+                        debug!("drain loop: response arrived, exiting");
                         return result;
                     }
 
                     Some((i, still_open)) = drain_one => {
+                        debug!("drain loop: drain {} still_open={}", i, still_open);
                         drain_active[i] = still_open;
                     }
                 }

@@ -33,3 +33,11 @@ tempfile = "3"
 libc = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt", "time"] }
 roam-session = { path = "../roam-session" }
+roam = { path = "../roam" }
+
+[[bin]]
+name = "guest_process"
+path = "tests/support/guest_process_main.rs"
+required-features = ["tokio"]
+test = false
+bench = false
