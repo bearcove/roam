@@ -5,12 +5,13 @@
 
 use std::collections::HashMap;
 
-use roam_schema::{ServiceDetail, contains_stream};
+use facet_core::Shape;
+use roam_schema::{MethodDetail, ServiceDetail, contains_stream};
 use roam_session::ConnectionHandle;
 
 use crate::{
     BoxFuture, BridgeError, BridgeMetadata, BridgeResponse, BridgeService, ProtocolErrorKind,
-    transcode::{json_to_postcard, postcard_to_json},
+    transcode::{json_to_postcard, postcard_to_json_with_shape},
 };
 
 /// A generic bridge service that wraps a roam connection.
@@ -22,14 +23,20 @@ pub struct GenericBridgeService {
     handle: ConnectionHandle,
     /// Service metadata (name, methods, types).
     detail: &'static ServiceDetail,
-    /// Precomputed method IDs for fast lookup.
-    method_ids: HashMap<String, MethodInfo>,
+    /// Precomputed method info for fast lookup.
+    methods: HashMap<String, MethodInfo>,
 }
 
 /// Cached method information for fast lookup.
 struct MethodInfo {
     method_id: u64,
     has_channels: bool,
+    /// The return type shape (for decoding responses).
+    return_shape: &'static Shape,
+    /// The error type shape (for decoding user errors), if any.
+    /// For methods returning Result<T, E>, this is E's shape.
+    #[allow(dead_code)]
+    error_shape: Option<&'static Shape>,
 }
 
 impl GenericBridgeService {
@@ -39,18 +46,23 @@ impl GenericBridgeService {
     /// * `handle` - The roam connection handle for making RPC calls
     /// * `detail` - Static service metadata (from generated code)
     pub fn new(handle: ConnectionHandle, detail: &'static ServiceDetail) -> Self {
-        let mut method_ids = HashMap::new();
+        let mut methods = HashMap::new();
 
         for method in &detail.methods {
             let method_id = roam_hash::method_id_from_detail(method);
             let has_channels = method.args.iter().any(|a| contains_stream(a.ty))
                 || contains_stream(method.return_type);
 
-            method_ids.insert(
+            // Extract return type and error type from the method signature
+            let (return_shape, error_shape) = extract_result_types(method);
+
+            methods.insert(
                 method.method_name.to_string(),
                 MethodInfo {
                     method_id,
                     has_channels,
+                    return_shape,
+                    error_shape,
                 },
             );
         }
@@ -58,9 +70,33 @@ impl GenericBridgeService {
         Self {
             handle,
             detail,
-            method_ids,
+            methods,
         }
     }
+}
+
+/// Extract the success and error types from a method's return type.
+///
+/// roam methods return `Result<T, RoamError<E>>` where:
+/// - T is the success type
+/// - E is the user error type (or Never for infallible methods)
+fn extract_result_types(method: &MethodDetail) -> (&'static Shape, Option<&'static Shape>) {
+    let return_shape = method.return_type;
+
+    // The return type should be Result<T, RoamError<E>>
+    // We need to extract T for success responses and E for user errors
+    if let facet_core::Def::Result(result_def) = return_shape.def {
+        let success_shape = result_def.t();
+
+        // The error type is RoamError<E>, extract E from its type params
+        let roam_error_shape = result_def.e();
+        let user_error_shape = roam_error_shape.type_params.first().map(|e| e.shape);
+
+        return (success_shape, user_error_shape);
+    }
+
+    // Fallback: use the return type as-is (shouldn't happen for roam methods)
+    (return_shape, None)
 }
 
 impl BridgeService for GenericBridgeService {
@@ -76,7 +112,7 @@ impl BridgeService for GenericBridgeService {
     ) -> BoxFuture<'a, Result<BridgeResponse, BridgeError>> {
         Box::pin(async move {
             // Look up method
-            let method_info = self.method_ids.get(method_name).ok_or_else(|| {
+            let method_info = self.methods.get(method_name).ok_or_else(|| {
                 // r[bridge.response.protocol-error]
                 BridgeError::new(
                     http::StatusCode::OK,
@@ -115,9 +151,10 @@ impl BridgeService for GenericBridgeService {
 
             match response_bytes[0] {
                 0x00 => {
-                    // Result::Ok(value) - transcode the value part
+                    // Result::Ok(value) - transcode the value part using the return shape
                     let value_bytes = &response_bytes[1..];
-                    let json_bytes = postcard_to_json(value_bytes)?;
+                    let json_bytes =
+                        postcard_to_json_with_shape(value_bytes, method_info.return_shape)?;
                     Ok(BridgeResponse::Success(json_bytes))
                 }
                 0x01 => {
@@ -129,8 +166,15 @@ impl BridgeService for GenericBridgeService {
                         0x00 => {
                             // RoamError::User(E) - transcode the error value
                             let error_bytes = &response_bytes[2..];
-                            let json_bytes = postcard_to_json(error_bytes)?;
-                            Ok(BridgeResponse::UserError(json_bytes))
+                            // Use error shape if available, otherwise return raw
+                            if let Some(error_shape) = method_info.error_shape {
+                                let json_bytes =
+                                    postcard_to_json_with_shape(error_bytes, error_shape)?;
+                                Ok(BridgeResponse::UserError(json_bytes))
+                            } else {
+                                // No error type (Never) - shouldn't have user errors
+                                Ok(BridgeResponse::UserError(b"null".to_vec()))
+                            }
                         }
                         0x01 => {
                             // RoamError::UnknownMethod

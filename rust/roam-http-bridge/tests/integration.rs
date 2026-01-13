@@ -251,13 +251,10 @@ async fn test_echo_via_http_bridge() {
     let status = response.status();
     let body_text = response.text().await.unwrap();
 
-    if status != 200 {
-        eprintln!("Response status: {}", status);
-        eprintln!("Response body: {}", body_text);
-    }
-
     assert_eq!(status, 200, "Body was: {}", body_text);
 
+    // TODO: This test is currently expected to fail until facet-rs/facet#1753 lands
+    // (need to_vec_with_shape for Value → typed postcard encoding)
     let body: String = serde_json::from_str(&body_text).unwrap();
     assert_eq!(body, "hello world");
 }
