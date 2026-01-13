@@ -431,29 +431,44 @@ fn generate_client_method(
         quote! { (#(#arg_names),*) }
     };
 
-    // Return type - Result<Result<T, RoamError<E>>, C::Error>
+    // Return type and error type depend on whether method is fallible
     let return_type = method.return_type();
-    let client_return = format_client_return_type(&return_type, roam);
+    let (ok_ty, err_ty, client_return) = format_client_return_type(&return_type, roam);
 
     quote! {
         #method_doc
         pub async fn #method_name(&self, #(#params),*) -> #client_return {
             let mut args = #args_tuple;
-            let payload = #roam::session::Caller::call(&self.caller, #method_id_mod::#method_name(), &mut args).await?;
-            #roam::session::CallError::decode_response(&payload).map_err(Into::into)
+            let payload = #roam::session::Caller::call(&self.caller, #method_id_mod::#method_name(), &mut args)
+                .await
+                .map_err(#roam::session::CallError::from)?;
+            #roam::session::decode_response::<#ok_ty, #err_ty>(&payload)
         }
     }
 }
 
-/// Format the return type as Result<Result<T, RoamError<E>>, C::Error> for client.
-fn format_client_return_type(return_type: &Type, roam: &TokenStream2) -> TokenStream2 {
+/// Format the return type as Result<T, CallError<E>> for client.
+///
+/// Returns (ok_type, err_type, full_return_type) for use in codegen.
+fn format_client_return_type(
+    return_type: &Type,
+    roam: &TokenStream2,
+) -> (TokenStream2, TokenStream2, TokenStream2) {
     if let Some((ok_ty, err_ty)) = return_type.as_result() {
         let ok_tokens = ok_ty.to_token_stream();
         let err_tokens = err_ty.to_token_stream();
-        quote! { Result<Result<#ok_tokens, #roam::session::RoamError<#err_tokens>>, C::Error> }
+        (
+            ok_tokens.clone(),
+            err_tokens.clone(),
+            quote! { Result<#ok_tokens, #roam::session::CallError<#err_tokens>> },
+        )
     } else {
         let ty_tokens = return_type.to_token_stream();
-        quote! { Result<Result<#ty_tokens, #roam::session::RoamError<#roam::session::Never>>, C::Error> }
+        (
+            ty_tokens.clone(),
+            quote! { #roam::session::Never },
+            quote! { Result<#ty_tokens, #roam::session::CallError<#roam::session::Never>> },
+        )
     }
 }
 
