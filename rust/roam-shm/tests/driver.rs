@@ -328,7 +328,7 @@ fn create_host_and_two_guests() -> (ShmHost, ShmGuest, ShmGuest) {
     let host = ShmHost::create_heap(config).unwrap();
     let region = host.region();
 
-    let guest1 = ShmGuest::attach(region.clone()).unwrap();
+    let guest1 = ShmGuest::attach(region).unwrap();
     let guest2 = ShmGuest::attach(region).unwrap();
 
     (host, guest1, guest2)

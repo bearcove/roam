@@ -621,7 +621,7 @@ struct PeerConnectionState {
 /// let ticket2 = host.add_peer(options2)?;
 ///
 /// // Create driver with different dispatchers per peer
-/// let (driver, handles) = MultiPeerHostDriver::new(host)
+/// let (driver, handles) = MultiPeerHostDriver::builder(host)
 ///     // Simple peer only needs lifecycle dispatcher
 ///     .add_peer(ticket1.peer_id(), CellLifecycleDispatcher::new(lifecycle.clone()))
 ///     // Complex peer needs routed dispatcher for bidirectional RPC
@@ -721,7 +721,7 @@ impl MultiPeerHostDriverBuilder {
 
 impl MultiPeerHostDriver {
     /// Create a new builder for the multi-peer host driver.
-    pub fn new(host: ShmHost) -> MultiPeerHostDriverBuilder {
+    pub fn builder(host: ShmHost) -> MultiPeerHostDriverBuilder {
         MultiPeerHostDriverBuilder {
             host,
             peers: Vec::new(),
@@ -815,10 +815,10 @@ impl MultiPeerHostDriver {
                 payload,
             } => {
                 // Only send if this request is still in-flight
-                if let Some(state) = self.peers.get_mut(&peer_id) {
-                    if !state.in_flight_server_requests.remove(&request_id) {
-                        return Ok(());
-                    }
+                if let Some(state) = self.peers.get_mut(&peer_id)
+                    && !state.in_flight_server_requests.remove(&request_id)
+                {
+                    return Ok(());
                 }
                 Message::Response {
                     request_id,
@@ -870,10 +870,10 @@ impl MultiPeerHostDriver {
                 payload,
             } => {
                 // Route to waiting caller
-                if let Some(state) = self.peers.get_mut(&peer_id) {
-                    if let Some(tx) = state.pending_responses.remove(&request_id) {
-                        let _ = tx.send(Ok(payload));
-                    }
+                if let Some(state) = self.peers.get_mut(&peer_id)
+                    && let Some(tx) = state.pending_responses.remove(&request_id)
+                {
+                    let _ = tx.send(Ok(payload));
                 }
             }
             Message::Cancel { request_id: _ } => {
@@ -1039,10 +1039,7 @@ impl MultiPeerHostDriver {
         })?;
 
         self.host.send(peer_id, frame).map_err(|e| {
-            ShmConnectionError::Io(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                format!("send error: {:?}", e),
-            ))
+            ShmConnectionError::Io(std::io::Error::other(format!("send error: {:?}", e)))
         })
     }
 
@@ -1078,7 +1075,7 @@ impl MultiPeerHostDriver {
 ///
 /// This is a convenience function that creates a `MultiPeerHostDriver` for
 /// scenarios where all peers use the same dispatcher type. For heterogeneous
-/// dispatchers (different types per peer), use `MultiPeerHostDriver::new()`
+/// dispatchers (different types per peer), use `MultiPeerHostDriver::builder()`
 /// directly with the builder pattern.
 ///
 /// # Arguments
@@ -1119,7 +1116,7 @@ where
     D: ServiceDispatcher + 'static,
     I: IntoIterator<Item = (PeerId, D)>,
 {
-    let mut builder = MultiPeerHostDriver::new(host);
+    let mut builder = MultiPeerHostDriver::builder(host);
     for (peer_id, dispatcher) in peers {
         builder = builder.add_peer(peer_id, dispatcher);
     }
