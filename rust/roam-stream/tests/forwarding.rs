@@ -13,7 +13,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
 use roam_session::{
-    Caller, ChannelRegistry, ForwardingDispatcher, RoamError, Rx, ServiceDispatcher, Tx, channel,
+    ChannelRegistry, ForwardingDispatcher, RoamError, Rx, ServiceDispatcher, Tx, channel,
     dispatch_call, dispatch_unknown_method,
 };
 use roam_stream::{Connector, HandshakeConfig, NoDispatcher, accept, connect};

@@ -1276,6 +1276,31 @@ fn collect_channel_ids_recursive(peek: facet::Peek<'_, '_>, ids: &mut Vec<u64>) 
                 collect_channel_ids_recursive(field_peek, ids);
             }
         }
+        return;
+    }
+
+    // Recurse into Option<T> (specialized handling)
+    if let Ok(po) = peek.into_option() {
+        if let Some(inner) = po.value() {
+            collect_channel_ids_recursive(inner, ids);
+        }
+        return;
+    }
+
+    // Recurse into enum variants (for other enums with data)
+    if let Ok(pe) = peek.into_enum() {
+        // Try to get the first field of the active variant (e.g., Some(T) has one field)
+        if let Ok(Some(variant_peek)) = pe.field(0) {
+            collect_channel_ids_recursive(variant_peek, ids);
+        }
+        return;
+    }
+
+    // Recurse into sequences (e.g., Vec<Tx<T>>)
+    if let Ok(pl) = peek.into_list() {
+        for element in pl.iter() {
+            collect_channel_ids_recursive(element, ids);
+        }
     }
 }
 
@@ -1289,7 +1314,10 @@ pub fn patch_channel_ids<T: Facet<'static>>(args: &mut T, channels: &[u64]) {
     patch_channel_ids_recursive(poke, channels, &mut idx);
 }
 
-fn patch_channel_ids_recursive(poke: facet::Poke<'_, '_>, channels: &[u64], idx: &mut usize) {
+#[allow(unsafe_code)]
+fn patch_channel_ids_recursive(mut poke: facet::Poke<'_, '_>, channels: &[u64], idx: &mut usize) {
+    use facet::Def;
+
     let shape = poke.shape();
 
     // Check if this is an Rx or Tx type
@@ -1308,14 +1336,64 @@ fn patch_channel_ids_recursive(poke: facet::Poke<'_, '_>, channels: &[u64], idx:
         return;
     }
 
-    // Recurse into struct/tuple fields
-    if let Ok(mut ps) = poke.into_struct() {
-        let field_count = ps.field_count();
-        for i in 0..field_count {
-            if let Ok(field_poke) = ps.field(i) {
-                patch_channel_ids_recursive(field_poke, channels, idx);
+    // Dispatch based on the shape's definition
+    match shape.def {
+        Def::Scalar => {}
+
+        // Recurse into struct/tuple fields
+        _ if poke.is_struct() => {
+            let mut ps = poke.into_struct().expect("is_struct was true");
+            let field_count = ps.field_count();
+            for i in 0..field_count {
+                if let Ok(field_poke) = ps.field(i) {
+                    patch_channel_ids_recursive(field_poke, channels, idx);
+                }
             }
         }
+
+        // Recurse into Option<T>
+        Def::Option(_) => {
+            // Option is represented as an enum, use into_enum to access its value
+            if let Ok(mut pe) = poke.into_enum()
+                && let Ok(Some(inner_poke)) = pe.field(0)
+            {
+                patch_channel_ids_recursive(inner_poke, channels, idx);
+            }
+        }
+
+        // Recurse into list elements (e.g., Vec<Tx<T>>)
+        Def::List(list_def) => {
+            let len = {
+                let peek = poke.as_peek();
+                peek.into_list().map(|pl| pl.len()).unwrap_or(0)
+            };
+            // Get mutable access to elements via VTable (no PokeList exists)
+            if let Some(get_mut_fn) = list_def.vtable.get_mut {
+                let element_shape = list_def.t;
+                let data_ptr = poke.data_mut();
+                for i in 0..len {
+                    // SAFETY: We have exclusive mutable access via poke, index < len, shape is correct
+                    let element_ptr = unsafe { (get_mut_fn)(data_ptr, i, element_shape) };
+                    if let Some(ptr) = element_ptr {
+                        // SAFETY: ptr points to a valid element with the correct shape
+                        let element_poke =
+                            unsafe { facet::Poke::from_raw_parts(ptr, element_shape) };
+                        patch_channel_ids_recursive(element_poke, channels, idx);
+                    }
+                }
+            }
+        }
+
+        // Other enum variants
+        _ if poke.is_enum() => {
+            if let Ok(mut pe) = poke.into_enum()
+                && let Ok(Some(variant_poke)) = pe.field(0)
+            {
+                patch_channel_ids_recursive(variant_poke, channels, idx);
+            }
+        }
+
+        _ => {}
     }
 }
 
@@ -2773,5 +2851,104 @@ mod tests {
         let mut rx = remote.rx;
         let result = rx.recv().await;
         assert!(matches!(result, Ok(None)));
+    }
+
+    // ========================================================================
+    // Channel ID Collection Tests
+    // ========================================================================
+
+    // r[verify call.request.channels]
+    #[test]
+    fn collect_channel_ids_simple_tx() {
+        let tx: Tx<i32> = Tx::try_from(42u64).unwrap();
+        let ids = collect_channel_ids(&tx);
+        assert_eq!(ids, vec![42]);
+    }
+
+    // r[verify call.request.channels]
+    #[test]
+    fn collect_channel_ids_simple_rx() {
+        let rx: Rx<i32> = Rx::try_from(99u64).unwrap();
+        let ids = collect_channel_ids(&rx);
+        assert_eq!(ids, vec![99]);
+    }
+
+    // r[verify call.request.channels]
+    #[test]
+    fn collect_channel_ids_tuple() {
+        let rx: Rx<String> = Rx::try_from(10u64).unwrap();
+        let tx: Tx<String> = Tx::try_from(20u64).unwrap();
+        let args = (rx, tx);
+        let ids = collect_channel_ids(&args);
+        assert_eq!(ids, vec![10, 20]);
+    }
+
+    // r[verify call.request.channels]
+    #[test]
+    fn collect_channel_ids_nested_in_struct() {
+        #[derive(facet::Facet)]
+        struct StreamArgs {
+            input: Rx<i32>,
+            output: Tx<i32>,
+            count: u32,
+        }
+
+        let args = StreamArgs {
+            input: Rx::try_from(100u64).unwrap(),
+            output: Tx::try_from(200u64).unwrap(),
+            count: 5,
+        };
+        let ids = collect_channel_ids(&args);
+        assert_eq!(ids, vec![100, 200]);
+    }
+
+    // r[verify call.request.channels]
+    #[test]
+    fn collect_channel_ids_option_some() {
+        let tx: Tx<i32> = Tx::try_from(55u64).unwrap();
+        let args: Option<Tx<i32>> = Some(tx);
+        let ids = collect_channel_ids(&args);
+        assert_eq!(ids, vec![55]);
+    }
+
+    // r[verify call.request.channels]
+    #[test]
+    fn collect_channel_ids_option_none() {
+        let args: Option<Tx<i32>> = None;
+        let ids = collect_channel_ids(&args);
+        assert!(ids.is_empty());
+    }
+
+    // r[verify call.request.channels]
+    #[test]
+    fn collect_channel_ids_vec() {
+        let tx1: Tx<i32> = Tx::try_from(1u64).unwrap();
+        let tx2: Tx<i32> = Tx::try_from(2u64).unwrap();
+        let tx3: Tx<i32> = Tx::try_from(3u64).unwrap();
+        let args: Vec<Tx<i32>> = vec![tx1, tx2, tx3];
+        let ids = collect_channel_ids(&args);
+        assert_eq!(ids, vec![1, 2, 3]);
+    }
+
+    // r[verify call.request.channels]
+    #[test]
+    fn collect_channel_ids_deeply_nested() {
+        #[derive(facet::Facet)]
+        struct Outer {
+            inner: Inner,
+        }
+
+        #[derive(facet::Facet)]
+        struct Inner {
+            stream: Tx<u8>,
+        }
+
+        let args = Outer {
+            inner: Inner {
+                stream: Tx::try_from(777u64).unwrap(),
+            },
+        };
+        let ids = collect_channel_ids(&args);
+        assert_eq!(ids, vec![777]);
     }
 }
