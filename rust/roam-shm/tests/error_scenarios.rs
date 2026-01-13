@@ -8,14 +8,16 @@
 //!
 //! shm[verify shm.guest.attach-failure]
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use roam_frame::{Frame, MsgDesc, Payload};
+use roam_shm::AddPeerOptions;
 use roam_shm::guest::{AttachError, SendError, ShmGuest};
 use roam_shm::host::ShmHost;
 use roam_shm::layout::{SegmentConfig, SegmentHeader};
 use roam_shm::msg_type;
-use roam_shm::AddPeerOptions;
 
 // =============================================================================
 // Guest Never Connects Scenarios

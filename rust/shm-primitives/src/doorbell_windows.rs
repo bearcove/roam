@@ -9,7 +9,9 @@ use std::string::String;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use tokio::io::Interest;
-use tokio::net::windows::named_pipe::{ClientOptions, NamedPipeClient, NamedPipeServer, ServerOptions};
+use tokio::net::windows::named_pipe::{
+    ClientOptions, NamedPipeClient, NamedPipeServer, ServerOptions,
+};
 
 use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE};
 
@@ -246,8 +248,8 @@ pub fn validate_handle(handle: HANDLE) -> io::Result<()> {
 ///
 /// shm[impl shm.spawn.fd-inheritance]
 pub fn set_handle_inheritable(handle: HANDLE) -> io::Result<()> {
-    use windows_sys::Win32::Foundation::SetHandleInformation;
     use windows_sys::Win32::Foundation::HANDLE_FLAG_INHERIT;
+    use windows_sys::Win32::Foundation::SetHandleInformation;
 
     let result = unsafe { SetHandleInformation(handle, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT) };
     if result == 0 {

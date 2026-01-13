@@ -10,8 +10,8 @@ use std::path::{Path, PathBuf};
 
 use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
 use windows_sys::Win32::System::Memory::{
-    CreateFileMappingW, MapViewOfFile, UnmapViewOfFile, FILE_MAP_ALL_ACCESS,
-    MEMORY_MAPPED_VIEW_ADDRESS, PAGE_READWRITE,
+    CreateFileMappingW, FILE_MAP_ALL_ACCESS, MEMORY_MAPPED_VIEW_ADDRESS, MapViewOfFile,
+    PAGE_READWRITE, UnmapViewOfFile,
 };
 
 use crate::Region;
@@ -65,11 +65,11 @@ impl MmapRegion {
         let mapping_handle = unsafe {
             CreateFileMappingW(
                 file_handle,
-                std::ptr::null(),      // default security
-                PAGE_READWRITE,        // read/write access
-                (size >> 32) as u32,   // high-order DWORD of size
-                size as u32,           // low-order DWORD of size
-                std::ptr::null(),      // no name (file-backed)
+                std::ptr::null(),    // default security
+                PAGE_READWRITE,      // read/write access
+                (size >> 32) as u32, // high-order DWORD of size
+                size as u32,         // low-order DWORD of size
+                std::ptr::null(),    // no name (file-backed)
             )
         };
 
@@ -82,9 +82,9 @@ impl MmapRegion {
             MapViewOfFile(
                 mapping_handle,
                 FILE_MAP_ALL_ACCESS,
-                0,          // offset high
-                0,          // offset low
-                size,       // bytes to map (0 = entire file)
+                0,    // offset high
+                0,    // offset low
+                size, // bytes to map (0 = entire file)
             )
         };
 
@@ -142,15 +142,7 @@ impl MmapRegion {
         }
 
         // Map view of file
-        let ptr = unsafe {
-            MapViewOfFile(
-                mapping_handle,
-                FILE_MAP_ALL_ACCESS,
-                0,
-                0,
-                size,
-            )
-        };
+        let ptr = unsafe { MapViewOfFile(mapping_handle, FILE_MAP_ALL_ACCESS, 0, 0, size) };
 
         if ptr.Value.is_null() {
             unsafe { CloseHandle(mapping_handle) };
@@ -262,15 +254,7 @@ impl MmapRegion {
         }
 
         // 5. Map new view
-        let ptr = unsafe {
-            MapViewOfFile(
-                mapping_handle,
-                FILE_MAP_ALL_ACCESS,
-                0,
-                0,
-                new_size,
-            )
-        };
+        let ptr = unsafe { MapViewOfFile(mapping_handle, FILE_MAP_ALL_ACCESS, 0, 0, new_size) };
 
         if ptr.Value.is_null() {
             unsafe { CloseHandle(mapping_handle) };
