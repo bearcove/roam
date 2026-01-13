@@ -1493,20 +1493,101 @@ impl ServiceDispatcher for ForwardingDispatcher {
                     .await;
             })
         } else {
-            // Streaming calls with channels are not yet supported by ForwardingDispatcher.
-            // Return an error immediately.
+            // Streaming call - set up bidirectional channel forwarding
             //
-            // TODO: Implement bidirectional channel forwarding for streaming methods.
-            // This requires:
-            // 1. Allocating upstream channel IDs
-            // 2. Setting up forwarding tasks for Data/Close messages
-            // 3. Handling channel lifecycle correctly
+            // For each downstream channel ID, we:
+            // 1. Allocate an upstream channel ID
+            // 2. Set up forwarding: downstream → upstream (for Rx channels)
+            // 3. Set up forwarding: upstream → downstream (for Tx channels)
+            //
+            // Since we don't know channel direction without schema, we set up
+            // both directions for all channels. Only the active direction will
+            // carry data.
+
+            let mut upstream_channels = Vec::with_capacity(channels.len());
+            let upstream_task_tx = upstream.task_tx();
+
+            for &downstream_id in &channels {
+                let upstream_id = upstream.alloc_channel_id();
+                upstream_channels.push(upstream_id);
+
+                // Downstream → Upstream forwarding:
+                // When client sends Data on downstream_id, forward to upstream
+                let (ds_to_us_tx, mut ds_to_us_rx) = mpsc::channel::<Vec<u8>>(64);
+                registry.register_incoming(downstream_id, ds_to_us_tx);
+
+                let upstream_task_tx_clone = upstream_task_tx.clone();
+                tokio::spawn(async move {
+                    while let Some(data) = ds_to_us_rx.recv().await {
+                        if upstream_task_tx_clone
+                            .send(TaskMessage::Data {
+                                channel_id: upstream_id,
+                                payload: data,
+                            })
+                            .await
+                            .is_err()
+                        {
+                            break;
+                        }
+                    }
+                    // Stream closed, forward Close to upstream
+                    let _ = upstream_task_tx_clone
+                        .send(TaskMessage::Close {
+                            channel_id: upstream_id,
+                        })
+                        .await;
+                });
+
+                // Upstream → Downstream forwarding:
+                // When server sends Data on upstream_id, forward to downstream
+                let (us_to_ds_tx, mut us_to_ds_rx) = mpsc::channel::<Vec<u8>>(64);
+                upstream.register_incoming(upstream_id, us_to_ds_tx);
+
+                let downstream_task_tx = task_tx.clone();
+                tokio::spawn(async move {
+                    while let Some(data) = us_to_ds_rx.recv().await {
+                        if downstream_task_tx
+                            .send(TaskMessage::Data {
+                                channel_id: downstream_id,
+                                payload: data,
+                            })
+                            .await
+                            .is_err()
+                        {
+                            break;
+                        }
+                    }
+                    // Stream closed, forward Close to downstream
+                    let _ = downstream_task_tx
+                        .send(TaskMessage::Close {
+                            channel_id: downstream_id,
+                        })
+                        .await;
+                });
+            }
+
+            // Make the upstream call with mapped channel IDs
             Box::pin(async move {
-                // Return Cancelled error for streaming calls
+                let response = upstream
+                    .call_raw_with_channels(method_id, upstream_channels, payload)
+                    .await;
+
+                let response_payload = match response {
+                    Ok(bytes) => bytes,
+                    Err(TransportError::Encode(_)) => {
+                        // Should not happen for raw call
+                        vec![1, 2] // Err(InvalidPayload)
+                    }
+                    Err(TransportError::ConnectionClosed) | Err(TransportError::DriverGone) => {
+                        // Connection to upstream failed - return Cancelled
+                        vec![1, 3] // Err(Cancelled)
+                    }
+                };
+
                 let _ = task_tx
                     .send(TaskMessage::Response {
                         request_id,
-                        payload: vec![1, 3], // Err(Cancelled)
+                        payload: response_payload,
                     })
                     .await;
             })
@@ -2127,6 +2208,14 @@ impl ConnectionHandle {
             .lock()
             .unwrap()
             .receive_credit(channel_id, bytes);
+    }
+
+    /// Get a clone of the task message sender.
+    ///
+    /// Used for forwarding/proxy scenarios where messages need to be sent
+    /// on this connection's wire.
+    pub fn task_tx(&self) -> mpsc::Sender<TaskMessage> {
+        self.shared.channel_registry.lock().unwrap().task_tx()
     }
 }
 
