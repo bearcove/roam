@@ -1236,18 +1236,17 @@ fn collect_channel_ids_recursive(peek: facet::Peek<'_, '_>, ids: &mut Vec<u64>) 
     let shape = peek.shape();
 
     // Check if this is an Rx or Tx type
-    if shape.module_path == Some("roam_session") {
-        if shape.type_identifier == "Rx" || shape.type_identifier == "Tx" {
-            // Read the channel_id field
-            if let Ok(ps) = peek.into_struct() {
-                if let Ok(channel_id_field) = ps.field_by_name("channel_id")
-                    && let Ok(&channel_id) = channel_id_field.get::<ChannelId>()
-                {
-                    ids.push(channel_id);
-                }
-            }
-            return;
+    if shape.module_path == Some("roam_session")
+        && (shape.type_identifier == "Rx" || shape.type_identifier == "Tx")
+    {
+        // Read the channel_id field
+        if let Ok(ps) = peek.into_struct()
+            && let Ok(channel_id_field) = ps.field_by_name("channel_id")
+            && let Ok(&channel_id) = channel_id_field.get::<ChannelId>()
+        {
+            ids.push(channel_id);
         }
+        return;
     }
 
     // Recurse into struct/tuple fields
@@ -1275,20 +1274,19 @@ fn patch_channel_ids_recursive(poke: facet::Poke<'_, '_>, channels: &[u64], idx:
     let shape = poke.shape();
 
     // Check if this is an Rx or Tx type
-    if shape.module_path == Some("roam_session") {
-        if shape.type_identifier == "Rx" || shape.type_identifier == "Tx" {
-            // Overwrite the channel_id field
-            if let Ok(mut ps) = poke.into_struct() {
-                if let Ok(mut channel_id_field) = ps.field_by_name("channel_id")
-                    && let Ok(channel_id_ref) = channel_id_field.get_mut::<ChannelId>()
-                    && *idx < channels.len()
-                {
-                    *channel_id_ref = channels[*idx];
-                    *idx += 1;
-                }
-            }
-            return;
+    if shape.module_path == Some("roam_session")
+        && (shape.type_identifier == "Rx" || shape.type_identifier == "Tx")
+    {
+        // Overwrite the channel_id field
+        if let Ok(mut ps) = poke.into_struct()
+            && let Ok(mut channel_id_field) = ps.field_by_name("channel_id")
+            && let Ok(channel_id_ref) = channel_id_field.get_mut::<ChannelId>()
+            && *idx < channels.len()
+        {
+            *channel_id_ref = channels[*idx];
+            *idx += 1;
         }
+        return;
     }
 
     // Recurse into struct/tuple fields
