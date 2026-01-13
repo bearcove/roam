@@ -812,7 +812,14 @@ export const testbed_streamingHandlers = new Map<bigint, ChannelingMethodHandler
       const _divisor_r = decodeI64(buf, offset); const divisor = _divisor_r.value; offset = _divisor_r.next;
       if (offset !== buf.length) throw new Error("args: trailing bytes");
       const result = await handler.divide(dividend, divisor);
-      taskSender({ kind: 'response', requestId, payload: encodeResultOk(/* Result type encoding not yet implemented */ new Uint8Array(0)) });
+      if (result.ok) {
+        taskSender({ kind: 'response', requestId, payload: concat(encodeU8(0), encodeI64(result.value)) });
+      } else {
+        taskSender({ kind: 'response', requestId, payload: concat(encodeU8(1), encodeU8(0), (() => { switch (result.error.tag) {
+      case 'DivisionByZero': return encodeEnumVariant(0);
+      case 'Overflow': return encodeEnumVariant(1);
+      default: throw new Error('unknown enum variant'); } })()) });
+      }
     } catch (e) {
       taskSender({ kind: 'response', requestId, payload: encodeResultErr(encodeInvalidPayload()) });
     }
@@ -824,7 +831,14 @@ export const testbed_streamingHandlers = new Map<bigint, ChannelingMethodHandler
       const _id_r = decodeU32(buf, offset); const id = _id_r.value; offset = _id_r.next;
       if (offset !== buf.length) throw new Error("args: trailing bytes");
       const result = await handler.lookup(id);
-      taskSender({ kind: 'response', requestId, payload: encodeResultOk(/* Result type encoding not yet implemented */ new Uint8Array(0)) });
+      if (result.ok) {
+        taskSender({ kind: 'response', requestId, payload: concat(encodeU8(0), concat(encodeString(result.value.name), encodeU8(result.value.age), encodeOption(result.value.email, (v) => encodeString(v)))) });
+      } else {
+        taskSender({ kind: 'response', requestId, payload: concat(encodeU8(1), encodeU8(0), (() => { switch (result.error.tag) {
+      case 'NotFound': return encodeEnumVariant(0);
+      case 'AccessDenied': return encodeEnumVariant(1);
+      default: throw new Error('unknown enum variant'); } })()) });
+      }
     } catch (e) {
       taskSender({ kind: 'response', requestId, payload: encodeResultErr(encodeInvalidPayload()) });
     }

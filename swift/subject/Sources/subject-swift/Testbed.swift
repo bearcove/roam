@@ -181,7 +181,27 @@ public final class TestbedClient: TestbedCaller {
         let payload = Data(payloadBytes)
         let response = try await connection.call(methodId: 0xc3964cbee4b1d590, payload: payload)
         var offset = 0
-        let result: Any = () // unsupported type
+        let _result_disc = try decodeU8(from: response, offset: &offset)
+        let result: Result<Int64, MathError>
+        switch _result_disc {
+        case 0:
+            let _result_ok = try decodeI64(from: response, offset: &offset)
+            result = .success(_result_ok)
+        case 1:
+            let __result_err_disc = try decodeU8(from: response, offset: &offset)
+            let _result_err: MathError
+            switch __result_err_disc {
+            case 0:
+                _result_err = .divisionByZero
+            case 1:
+                _result_err = .overflow
+            default:
+                throw RoamError.decodeError("unknown enum variant")
+            }
+            result = .failure(_result_err)
+        default:
+            throw RoamError.decodeError("invalid Result discriminant")
+        }
         return result
     }
 
@@ -191,7 +211,30 @@ public final class TestbedClient: TestbedCaller {
         let payload = Data(payloadBytes)
         let response = try await connection.call(methodId: 0xe71a0faedd014e59, payload: payload)
         var offset = 0
-        let result: Any = () // unsupported type
+        let _result_disc = try decodeU8(from: response, offset: &offset)
+        let result: Result<Person, LookupError>
+        switch _result_disc {
+        case 0:
+            let __result_ok_name = try decodeString(from: response, offset: &offset)
+            let __result_ok_age = try decodeU8(from: response, offset: &offset)
+            let __result_ok_email = try decodeOption(from: response, offset: &offset, decoder: { data, off in try decodeString(from: data, offset: &off) })
+            let _result_ok = Person(name: __result_ok_name, age: __result_ok_age, email: __result_ok_email)
+            result = .success(_result_ok)
+        case 1:
+            let __result_err_disc = try decodeU8(from: response, offset: &offset)
+            let _result_err: LookupError
+            switch __result_err_disc {
+            case 0:
+                _result_err = .notFound
+            case 1:
+                _result_err = .accessDenied
+            default:
+                throw RoamError.decodeError("unknown enum variant")
+            }
+            result = .failure(_result_err)
+        default:
+            throw RoamError.decodeError("invalid Result discriminant")
+        }
         return result
     }
 
@@ -540,14 +583,28 @@ public final class TestbedDispatcher {
         let dividend = try decodeI64(from: payload, offset: &offset)
         let divisor = try decodeI64(from: payload, offset: &offset)
         let result = try await handler.divide(dividend: dividend, divisor: divisor)
-        return Data(encodeResultOk(result, encoder: { _ in [] }))
+        return Data(encodeResultOk(result, encoder: { switch $0 { case .success(let v): return [UInt8(0)] + { encodeI64($0) }(v); case .failure(let e): return [UInt8(1)] + { v in
+    switch v {
+    case .divisionByZero:
+        return [UInt8(0)]
+    case .overflow:
+        return [UInt8(1)]
+    }
+}(e) } }))
     }
 
     private func dispatchlookup(payload: Data) async throws -> Data {
         var offset = 0
         let id = try decodeU32(from: payload, offset: &offset)
         let result = try await handler.lookup(id: id)
-        return Data(encodeResultOk(result, encoder: { _ in [] }))
+        return Data(encodeResultOk(result, encoder: { switch $0 { case .success(let v): return [UInt8(0)] + { encodeString($0.name) + encodeU8($0.age) + encodeOption($0.email, encoder: { encodeString($0) }) }(v); case .failure(let e): return [UInt8(1)] + { v in
+    switch v {
+    case .notFound:
+        return [UInt8(0)]
+    case .accessDenied:
+        return [UInt8(1)]
+    }
+}(e) } }))
     }
 
     private func dispatchsum(payload: Data) async throws -> Data {
@@ -830,7 +887,14 @@ public final class TestbedStreamingDispatcher {
             let dividend = try decodeI64(from: payload, offset: &offset)
             let divisor = try decodeI64(from: payload, offset: &offset)
             let result = try await handler.divide(dividend: dividend, divisor: divisor)
-            taskSender(.response(requestId: requestId, payload: encodeResultOk(result, encoder: { _ in [] })))
+            taskSender(.response(requestId: requestId, payload: { switch result { case .success(let v): return [UInt8(0)] + { encodeI64($0) }(v); case .failure(let e): return [UInt8(1), UInt8(0)] + { v in
+    switch v {
+    case .divisionByZero:
+        return [UInt8(0)]
+    case .overflow:
+        return [UInt8(1)]
+    }
+}(e) } }()))
         } catch {
             taskSender(.response(requestId: requestId, payload: encodeInvalidPayloadError()))
         }
@@ -841,7 +905,14 @@ public final class TestbedStreamingDispatcher {
             var offset = 0
             let id = try decodeU32(from: payload, offset: &offset)
             let result = try await handler.lookup(id: id)
-            taskSender(.response(requestId: requestId, payload: encodeResultOk(result, encoder: { _ in [] })))
+            taskSender(.response(requestId: requestId, payload: { switch result { case .success(let v): return [UInt8(0)] + { encodeString($0.name) + encodeU8($0.age) + encodeOption($0.email, encoder: { encodeString($0) }) }(v); case .failure(let e): return [UInt8(1), UInt8(0)] + { v in
+    switch v {
+    case .notFound:
+        return [UInt8(0)]
+    case .accessDenied:
+        return [UInt8(1)]
+    }
+}(e) } }()))
         } catch {
             taskSender(.response(requestId: requestId, payload: encodeInvalidPayloadError()))
         }
