@@ -1946,7 +1946,6 @@ version = "0.5.0"
 dependencies = [
  "facet",
  "facet-postcard",
- "futures-util",
  "roam-frame",
  "roam-wire",
  "tokio",
@@ -1967,6 +1966,8 @@ dependencies = [
  "shm-primitives",
  "tempfile",
  "tokio",
+ "tracing",
+ "tracing-subscriber",
  "ur-taking-me-with-you",
 ]
 

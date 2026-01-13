@@ -26,9 +26,7 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::host::ShmHost;
 use crate::peer::PeerId;
-use crate::transport::{
-    OwnedShmHostTransport, ShmGuestTransport, frame_to_message, message_to_frame,
-};
+use crate::transport::{ShmGuestTransport, frame_to_message, message_to_frame};
 
 /// Negotiated connection parameters from SHM segment header.
 ///
@@ -92,8 +90,7 @@ impl From<std::io::Error> for ShmConnectionError {
 /// This must be spawned or awaited to drive the connection forward.
 /// Use [`ConnectionHandle`] to make outgoing calls.
 ///
-/// The type parameter `T` is the transport type (e.g., `ShmGuestTransport` or
-/// `OwnedShmHostTransport`).
+/// The type parameter `T` is the transport type (e.g., `ShmGuestTransport`).
 pub struct ShmDriver<T, D> {
     io: T,
     dispatcher: D,
@@ -153,21 +150,33 @@ where
     /// Run the driver until the connection closes.
     pub async fn run(mut self) -> Result<(), ShmConnectionError> {
         loop {
+            trace!("driver: starting select loop");
             tokio::select! {
                 biased;
 
                 // Handle all driver messages (Call/Data/Close/Response).
                 // Single channel ensures FIFO ordering.
                 Some(msg) = self.driver_rx.recv() => {
+                    debug!("driver: received driver message");
                     self.handle_driver_message(msg).await?;
                 }
 
                 // Handle incoming messages from peer
                 result = MessageTransport::recv_timeout(&mut self.io, Duration::from_secs(30)) => {
+                    debug!("driver: received message from peer");
                     match self.handle_recv(result).await {
-                        Ok(true) => continue,
-                        Ok(false) => return Ok(()), // Clean shutdown
-                        Err(e) => return Err(e),
+                        Ok(true) => {
+                            debug!("driver: handle_recv returned Ok(true), continuing");
+                            continue;
+                        }
+                        Ok(false) => {
+                            debug!("driver: handle_recv returned Ok(false), shutting down");
+                            return Ok(());
+                        }
+                        Err(e) => {
+                            debug!("driver: handle_recv returned Err, shutting down");
+                            return Err(e);
+                        }
                     }
                 }
             }
@@ -188,6 +197,7 @@ where
                 payload,
                 response_tx,
             } => {
+                debug!("handle_driver_message: Call req={}", request_id);
                 // Store the response channel
                 self.pending_responses.insert(request_id, response_tx);
 
@@ -203,11 +213,21 @@ where
             DriverMessage::Data {
                 channel_id,
                 payload,
-            } => Message::Data {
-                channel_id,
-                payload,
-            },
-            DriverMessage::Close { channel_id } => Message::Close { channel_id },
+            } => {
+                debug!(
+                    "handle_driver_message: Data ch={}, {} bytes",
+                    channel_id,
+                    payload.len()
+                );
+                Message::Data {
+                    channel_id,
+                    payload,
+                }
+            }
+            DriverMessage::Close { channel_id } => {
+                debug!("handle_driver_message: Close ch={}", channel_id);
+                Message::Close { channel_id }
+            }
             DriverMessage::Response {
                 request_id,
                 payload,
@@ -224,7 +244,9 @@ where
                 }
             }
         };
+        debug!("handle_driver_message: sending wire message");
         MessageTransport::send(&mut self.io, &wire_msg).await?;
+        debug!("handle_driver_message: wire message sent");
         Ok(())
     }
 
@@ -364,6 +386,11 @@ where
         channel_id: u64,
         payload: Vec<u8>,
     ) -> Result<(), ShmConnectionError> {
+        debug!(
+            "handle_data called for channel {}, {} bytes",
+            channel_id,
+            payload.len()
+        );
         if channel_id == 0 {
             return Err(self.goodbye("streaming.id.zero-reserved").await);
         }
@@ -374,12 +401,18 @@ where
 
         // Try server registry first, then client registry
         let result = if self.server_channel_registry.contains_incoming(channel_id) {
-            self.server_channel_registry
+            debug!("routing to server_channel_registry");
+            let res = self
+                .server_channel_registry
                 .route_data(channel_id, payload)
-                .await
+                .await;
+            debug!("server_channel_registry.route_data returned {:?}", res);
+            res
         } else if self.handle.contains_channel(channel_id) {
+            debug!("routing to client handle");
             self.handle.route_data(channel_id, payload).await
         } else {
+            debug!("channel {} unknown", channel_id);
             Err(ChannelError::Unknown)
         };
 
@@ -494,71 +527,6 @@ where
         transport,
         dispatcher,
         Role::Initiator,
-        negotiated,
-        handle.clone(),
-        driver_tx,
-        driver_rx,
-    );
-
-    (handle, driver)
-}
-
-/// Establish an SHM connection as the host for a specific peer.
-///
-/// Returns a handle for making calls and a driver future that must be spawned.
-///
-/// **Note:** This function takes ownership of the `ShmHost`. For scenarios with
-/// multiple guests, you'll need a different architecture (e.g., shared host with
-/// per-peer message routing).
-///
-/// # Arguments
-///
-/// * `host` - The SHM host (takes ownership)
-/// * `peer_id` - The peer ID to communicate with
-/// * `dispatcher` - Service dispatcher for handling incoming requests
-///
-/// # Example
-///
-/// ```ignore
-/// use roam_shm::{ShmHost, SegmentConfig, PeerId};
-/// use roam_shm::driver::establish_host_peer;
-///
-/// let host = ShmHost::create("/dev/shm/myapp", SegmentConfig::default())?;
-/// let peer_id = PeerId::new(1).unwrap();
-/// let (handle, driver) = establish_host_peer(host, peer_id, dispatcher);
-/// tokio::spawn(driver.run());
-/// // Use handle to make calls to the guest
-/// ```
-pub fn establish_host_peer<D>(
-    host: ShmHost,
-    peer_id: PeerId,
-    dispatcher: D,
-) -> (ConnectionHandle, ShmDriver<OwnedShmHostTransport, D>)
-where
-    D: ServiceDispatcher,
-{
-    let transport = OwnedShmHostTransport::new(host, peer_id);
-
-    // Get config from segment
-    let config = transport.config();
-    let negotiated = ShmNegotiated {
-        max_payload_size: config.max_payload_size,
-        initial_credit: config.initial_credit,
-    };
-
-    // Create single unified channel for all messages (Call/Data/Close/Response).
-    // Single channel ensures FIFO ordering.
-    let (driver_tx, driver_rx) = mpsc::channel(256);
-
-    // Host is acceptor (uses even stream IDs)
-    // Use infinite credit for now (matches current roam-stream behavior).
-    let initial_credit = u32::MAX;
-    let handle = ConnectionHandle::new(driver_tx.clone(), Role::Acceptor, initial_credit);
-
-    let driver = ShmDriver::new(
-        transport,
-        dispatcher,
-        Role::Acceptor,
         negotiated,
         handle.clone(),
         driver_tx,

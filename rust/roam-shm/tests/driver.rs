@@ -9,7 +9,7 @@
 #![cfg(feature = "tokio")]
 
 use roam_session::{Rx, Tx};
-use roam_shm::driver::{establish_guest, establish_host_peer, establish_multi_peer_host};
+use roam_shm::driver::{establish_guest, establish_multi_peer_host};
 use roam_shm::guest::ShmGuest;
 use roam_shm::host::ShmHost;
 use roam_shm::layout::SegmentConfig;
@@ -91,8 +91,12 @@ async fn guest_calls_host_echo() {
     let guest_transport = ShmGuestTransport::new(guest);
     let (guest_handle, guest_driver) = establish_guest(guest_transport, dispatcher.clone());
 
-    // Set up host-side driver (server)
-    let (host_handle, host_driver) = establish_host_peer(host, peer_id, dispatcher);
+    // Set up host-side driver (server) - use multi-peer architecture
+    let (host_driver, mut handles, _host_driver_handle) = establish_multi_peer_host::<
+        TestbedDispatcher<TestbedImpl>,
+        _,
+    >(host, vec![(peer_id, dispatcher)]);
+    let host_handle = handles.remove(&peer_id).unwrap();
 
     // Spawn both drivers
     let guest_driver_handle = tokio::spawn(guest_driver.run());
@@ -126,7 +130,12 @@ async fn guest_calls_host_add() {
 
     let guest_transport = ShmGuestTransport::new(guest);
     let (guest_handle, guest_driver) = establish_guest(guest_transport, dispatcher.clone());
-    let (_host_handle, host_driver) = establish_host_peer(host, peer_id, dispatcher);
+
+    let (host_driver, mut handles, _host_driver_handle) = establish_multi_peer_host::<
+        TestbedDispatcher<TestbedImpl>,
+        _,
+    >(host, vec![(peer_id, dispatcher)]);
+    let _host_handle = handles.remove(&peer_id).unwrap();
 
     tokio::spawn(guest_driver.run());
     tokio::spawn(host_driver.run());
@@ -146,7 +155,12 @@ async fn host_calls_guest() {
 
     let guest_transport = ShmGuestTransport::new(guest);
     let (_guest_handle, guest_driver) = establish_guest(guest_transport, dispatcher.clone());
-    let (host_handle, host_driver) = establish_host_peer(host, peer_id, dispatcher);
+
+    let (host_driver, mut handles, _host_driver_handle) = establish_multi_peer_host::<
+        TestbedDispatcher<TestbedImpl>,
+        _,
+    >(host, vec![(peer_id, dispatcher)]);
+    let host_handle = handles.remove(&peer_id).unwrap();
 
     tokio::spawn(guest_driver.run());
     tokio::spawn(host_driver.run());
@@ -167,7 +181,12 @@ async fn unknown_method_returns_error() {
 
     let guest_transport = ShmGuestTransport::new(guest);
     let (guest_handle, guest_driver) = establish_guest(guest_transport, dispatcher.clone());
-    let (_host_handle, host_driver) = establish_host_peer(host, peer_id, dispatcher);
+
+    let (host_driver, mut handles, _host_driver_handle) = establish_multi_peer_host::<
+        TestbedDispatcher<TestbedImpl>,
+        _,
+    >(host, vec![(peer_id, dispatcher)]);
+    let _host_handle = handles.remove(&peer_id).unwrap();
 
     tokio::spawn(guest_driver.run());
     tokio::spawn(host_driver.run());
@@ -189,7 +208,12 @@ async fn multiple_sequential_calls() {
 
     let guest_transport = ShmGuestTransport::new(guest);
     let (guest_handle, guest_driver) = establish_guest(guest_transport, dispatcher.clone());
-    let (_host_handle, host_driver) = establish_host_peer(host, peer_id, dispatcher);
+
+    let (host_driver, mut handles, _host_driver_handle) = establish_multi_peer_host::<
+        TestbedDispatcher<TestbedImpl>,
+        _,
+    >(host, vec![(peer_id, dispatcher)]);
+    let _host_handle = handles.remove(&peer_id).unwrap();
 
     tokio::spawn(guest_driver.run());
     tokio::spawn(host_driver.run());
@@ -213,6 +237,14 @@ async fn multiple_sequential_calls() {
 /// shm[verify shm.handshake]
 #[tokio::test]
 async fn client_streaming_sum() {
+    #[cfg(feature = "tracing")]
+    {
+        let _ = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::DEBUG)
+            .with_test_writer()
+            .try_init();
+    }
+
     let (host, guest) = create_host_and_guest();
     let peer_id = guest.peer_id();
 
@@ -221,7 +253,13 @@ async fn client_streaming_sum() {
 
     let guest_transport = ShmGuestTransport::new(guest);
     let (guest_handle, guest_driver) = establish_guest(guest_transport, dispatcher.clone());
-    let (_host_handle, host_driver) = establish_host_peer(host, peer_id, dispatcher);
+
+    // Use multi-peer host driver (correct architecture for host side)
+    let (host_driver, mut handles, _host_driver_handle) = establish_multi_peer_host::<
+        TestbedDispatcher<TestbedImpl>,
+        _,
+    >(host, vec![(peer_id, dispatcher)]);
+    let _host_handle = handles.remove(&peer_id).unwrap();
 
     tokio::spawn(guest_driver.run());
     tokio::spawn(host_driver.run());
@@ -235,13 +273,16 @@ async fn client_streaming_sum() {
     // Spawn task to send numbers (before calling)
     let sender = tokio::spawn(async move {
         for i in 1..=10 {
-            eprintln!("sending {i}");
-            if let Err(e) = tx.send(&i).await {
-                eprintln!("send failed: {e}");
-                break;
+            eprintln!("CLIENT: sending {i}");
+            match tx.send(&i).await {
+                Ok(()) => eprintln!("CLIENT: sent {i} successfully"),
+                Err(e) => {
+                    eprintln!("CLIENT: send failed: {e}");
+                    break;
+                }
             }
         }
-        eprintln!("sender done");
+        eprintln!("CLIENT: sender done, dropping tx");
     });
 
     // Call and await the result
@@ -266,7 +307,12 @@ async fn server_streaming_generate() {
 
     let guest_transport = ShmGuestTransport::new(guest);
     let (guest_handle, guest_driver) = establish_guest(guest_transport, dispatcher.clone());
-    let (_host_handle, host_driver) = establish_host_peer(host, peer_id, dispatcher);
+
+    let (host_driver, mut handles, _host_driver_handle) = establish_multi_peer_host::<
+        TestbedDispatcher<TestbedImpl>,
+        _,
+    >(host, vec![(peer_id, dispatcher)]);
+    let _host_handle = handles.remove(&peer_id).unwrap();
 
     tokio::spawn(guest_driver.run());
     tokio::spawn(host_driver.run());
@@ -340,35 +386,25 @@ async fn multi_peer_host_two_guests() {
     tokio::spawn(host_driver.run());
 
     // Both guests can make calls
+    let client1 = TestbedClient::new(guest1_handle.clone());
     let input1 = "Hello from guest 1".to_string();
-    let payload1 = facet_postcard::to_vec(&input1).unwrap();
-    let response1 = guest1_handle.call_raw(1, payload1).await.unwrap();
-    assert_eq!(response1[0], 0);
-    let result1: String = facet_postcard::from_slice(&response1[1..]).unwrap();
+    let result1 = client1.echo(input1.clone()).await.unwrap();
     assert_eq!(result1, input1);
 
+    let client2 = TestbedClient::new(guest2_handle.clone());
     let input2 = "Hello from guest 2".to_string();
-    let payload2 = facet_postcard::to_vec(&input2).unwrap();
-    let response2 = guest2_handle.call_raw(1, payload2).await.unwrap();
-    assert_eq!(response2[0], 0);
-    let result2: String = facet_postcard::from_slice(&response2[1..]).unwrap();
+    let result2 = client2.echo(input2.clone()).await.unwrap();
     assert_eq!(result2, input2);
 
     // Host can call specific guests
-    let host_handle1 = host_handles.get(&peer_id1).unwrap();
+    let host_client1 = TestbedClient::new(host_handles.get(&peer_id1).unwrap().clone());
     let input3 = "Hello to guest 1 from host".to_string();
-    let payload3 = facet_postcard::to_vec(&input3).unwrap();
-    let response3 = host_handle1.call_raw(1, payload3).await.unwrap();
-    assert_eq!(response3[0], 0);
-    let result3: String = facet_postcard::from_slice(&response3[1..]).unwrap();
+    let result3 = host_client1.echo(input3.clone()).await.unwrap();
     assert_eq!(result3, input3);
 
-    let host_handle2 = host_handles.get(&peer_id2).unwrap();
+    let host_client2 = TestbedClient::new(host_handles.get(&peer_id2).unwrap().clone());
     let input4 = "Hello to guest 2 from host".to_string();
-    let payload4 = facet_postcard::to_vec(&input4).unwrap();
-    let response4 = host_handle2.call_raw(1, payload4).await.unwrap();
-    assert_eq!(response4[0], 0);
-    let result4: String = facet_postcard::from_slice(&response4[1..]).unwrap();
+    let result4 = host_client2.echo(input4.clone()).await.unwrap();
     assert_eq!(result4, input4);
 }
 
@@ -400,33 +436,21 @@ async fn multi_peer_concurrent_calls() {
     tokio::spawn(host_driver.run());
 
     // Make concurrent calls from both guests
-    let task1 = {
-        let handle = guest1_handle.clone();
-        tokio::spawn(async move {
-            for i in 0i32..5 {
-                let args = (i, 100);
-                let payload = facet_postcard::to_vec(&args).unwrap();
-                let response = handle.call_raw(2, payload).await.unwrap();
-                assert_eq!(response[0], 0);
-                let result: i32 = facet_postcard::from_slice(&response[1..]).unwrap();
-                assert_eq!(result, i + 100);
-            }
-        })
-    };
+    let client1 = TestbedClient::new(guest1_handle.clone());
+    let task1 = tokio::spawn(async move {
+        for i in 0i32..5 {
+            let result = client1.add((i, 100)).await.unwrap();
+            assert_eq!(result, i + 100);
+        }
+    });
 
-    let task2 = {
-        let handle = guest2_handle.clone();
-        tokio::spawn(async move {
-            for i in 0i32..5 {
-                let args = (i, 200);
-                let payload = facet_postcard::to_vec(&args).unwrap();
-                let response = handle.call_raw(2, payload).await.unwrap();
-                assert_eq!(response[0], 0);
-                let result: i32 = facet_postcard::from_slice(&response[1..]).unwrap();
-                assert_eq!(result, i + 200);
-            }
-        })
-    };
+    let client2 = TestbedClient::new(guest2_handle.clone());
+    let task2 = tokio::spawn(async move {
+        for i in 0i32..5 {
+            let result = client2.add((i, 200)).await.unwrap();
+            assert_eq!(result, i + 200);
+        }
+    });
 
     task1.await.unwrap();
     task2.await.unwrap();
