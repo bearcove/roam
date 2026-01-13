@@ -11,7 +11,7 @@ use roam_session::ConnectionHandle;
 
 use crate::{
     BoxFuture, BridgeError, BridgeMetadata, BridgeResponse, BridgeService, ProtocolErrorKind,
-    transcode::{json_to_postcard, postcard_to_json_with_shape},
+    transcode::{json_args_to_postcard, postcard_to_json_with_shape},
 };
 
 /// A generic bridge service that wraps a roam connection.
@@ -31,11 +31,12 @@ pub struct GenericBridgeService {
 struct MethodInfo {
     method_id: u64,
     has_channels: bool,
+    /// The argument type shapes (for encoding requests).
+    arg_shapes: Vec<&'static Shape>,
     /// The return type shape (for decoding responses).
     return_shape: &'static Shape,
     /// The error type shape (for decoding user errors), if any.
     /// For methods returning Result<T, E>, this is E's shape.
-    #[allow(dead_code)]
     error_shape: Option<&'static Shape>,
 }
 
@@ -53,6 +54,9 @@ impl GenericBridgeService {
             let has_channels = method.args.iter().any(|a| contains_stream(a.ty))
                 || contains_stream(method.return_type);
 
+            // Collect arg shapes for encoding requests
+            let arg_shapes: Vec<&'static Shape> = method.args.iter().map(|a| a.ty).collect();
+
             // Extract return type and error type from the method signature
             let (return_shape, error_shape) = extract_result_types(method);
 
@@ -61,6 +65,7 @@ impl GenericBridgeService {
                 MethodInfo {
                     method_id,
                     has_channels,
+                    arg_shapes,
                     return_shape,
                     error_shape,
                 },
@@ -77,25 +82,23 @@ impl GenericBridgeService {
 
 /// Extract the success and error types from a method's return type.
 ///
-/// roam methods return `Result<T, RoamError<E>>` where:
-/// - T is the success type
-/// - E is the user error type (or Never for infallible methods)
+/// After Issue #19, methods have natural return types:
+/// - Infallible methods return `T` directly
+/// - Fallible methods return `Result<T, E>` where E is the user error type
+///
+/// The wire protocol always wraps in Result with protocol errors,
+/// but the schema reflects the natural signature.
 fn extract_result_types(method: &MethodDetail) -> (&'static Shape, Option<&'static Shape>) {
     let return_shape = method.return_type;
 
-    // The return type should be Result<T, RoamError<E>>
-    // We need to extract T for success responses and E for user errors
+    // Check if the return type is Result<T, E>
     if let facet_core::Def::Result(result_def) = return_shape.def {
         let success_shape = result_def.t();
-
-        // The error type is RoamError<E>, extract E from its type params
-        let roam_error_shape = result_def.e();
-        let user_error_shape = roam_error_shape.type_params.first().map(|e| e.shape);
-
-        return (success_shape, user_error_shape);
+        let error_shape = result_def.e();
+        return (success_shape, Some(error_shape));
     }
 
-    // Fallback: use the return type as-is (shouldn't happen for roam methods)
+    // Infallible method: return type is T directly, no user error possible
     (return_shape, None)
 }
 
@@ -128,8 +131,8 @@ impl BridgeService for GenericBridgeService {
             }
 
             // r[bridge.json.facet]
-            // Transcode JSON → postcard
-            let postcard_payload = json_to_postcard(json_body)?;
+            // Transcode JSON array → postcard tuple using arg shapes
+            let postcard_payload = json_args_to_postcard(json_body, &method_info.arg_shapes)?;
 
             // Convert metadata to wire format
             let wire_metadata = metadata.to_wire_metadata();
@@ -142,9 +145,8 @@ impl BridgeService for GenericBridgeService {
                 .map_err(|e| BridgeError::backend_unavailable(format!("Call failed: {e}")))?;
 
             // Parse the response envelope
-            // The response is a postcard-encoded Result<T, RoamError<E>>
-            // Postcard encodes Result as: 0x00 + value_bytes for Ok, 0x01 + error_bytes for Err
-            // RoamError<E> variants: User(E)=0, UnknownMethod=1, InvalidPayload=2, Cancelled=3
+            // The response is wrapped: 0x00 + value_bytes for Ok, 0x01 + error_bytes for Err
+            // Error variants: User(0) + E, UnknownMethod(1), InvalidPayload(2), Cancelled(3)
             if response_bytes.is_empty() {
                 return Err(BridgeError::internal("Empty response from backend"));
             }
@@ -158,13 +160,13 @@ impl BridgeService for GenericBridgeService {
                     Ok(BridgeResponse::Success(json_bytes))
                 }
                 0x01 => {
-                    // Result::Err(RoamError<E>) - decode which error variant
+                    // Result::Err - decode which error variant
                     if response_bytes.len() < 2 {
                         return Err(BridgeError::internal("Truncated error response"));
                     }
                     match response_bytes[1] {
                         0x00 => {
-                            // RoamError::User(E) - transcode the error value
+                            // User error - transcode the error value
                             let error_bytes = &response_bytes[2..];
                             // Use error shape if available, otherwise return raw
                             if let Some(error_shape) = method_info.error_shape {
@@ -177,23 +179,23 @@ impl BridgeService for GenericBridgeService {
                             }
                         }
                         0x01 => {
-                            // RoamError::UnknownMethod
+                            // UnknownMethod
                             Ok(BridgeResponse::ProtocolError(
                                 ProtocolErrorKind::UnknownMethod,
                             ))
                         }
                         0x02 => {
-                            // RoamError::InvalidPayload
+                            // InvalidPayload
                             Ok(BridgeResponse::ProtocolError(
                                 ProtocolErrorKind::InvalidPayload,
                             ))
                         }
                         0x03 => {
-                            // RoamError::Cancelled
+                            // Cancelled
                             Ok(BridgeResponse::ProtocolError(ProtocolErrorKind::Cancelled))
                         }
                         tag => Err(BridgeError::internal(format!(
-                            "Unknown RoamError variant: {tag}"
+                            "Unknown error variant: {tag}"
                         ))),
                     }
                 }

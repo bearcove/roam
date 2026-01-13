@@ -11,7 +11,9 @@ use std::net::SocketAddr;
 use axum::Router;
 use roam_http_bridge::{BridgeRouter, GenericBridgeService};
 use roam_stream::{Connector, HandshakeConfig, NoDispatcher, accept, connect};
-use spec_proto::{Testbed, TestbedDispatcher, testbed_service_detail};
+use spec_proto::{
+    LookupError, MathError, Person, Testbed, TestbedDispatcher, testbed_service_detail,
+};
 use tokio::net::{TcpListener, TcpStream};
 
 /// Simple Testbed implementation for testing.
@@ -19,58 +21,59 @@ use tokio::net::{TcpListener, TcpStream};
 struct TestbedImpl;
 
 impl Testbed for TestbedImpl {
-    async fn echo(
-        &self,
-        message: String,
-    ) -> Result<String, roam_session::RoamError<roam_session::Never>> {
-        Ok(message)
+    async fn echo(&self, message: String) -> String {
+        message
     }
 
-    async fn reverse(
-        &self,
-        message: String,
-    ) -> Result<String, roam_session::RoamError<roam_session::Never>> {
-        Ok(message.chars().rev().collect())
+    async fn reverse(&self, message: String) -> String {
+        message.chars().rev().collect()
     }
 
-    async fn sum(
-        &self,
-        mut numbers: roam_session::Rx<i32>,
-    ) -> Result<i64, roam_session::RoamError<roam_session::Never>> {
+    async fn divide(&self, dividend: i64, divisor: i64) -> Result<i64, MathError> {
+        if divisor == 0 {
+            Err(MathError::DivisionByZero)
+        } else {
+            Ok(dividend / divisor)
+        }
+    }
+
+    async fn lookup(&self, id: u32) -> Result<Person, LookupError> {
+        match id {
+            1 => Ok(Person {
+                name: "Alice".to_string(),
+                age: 30,
+                email: Some("alice@example.com".to_string()),
+            }),
+            _ => Err(LookupError::NotFound),
+        }
+    }
+
+    async fn sum(&self, mut numbers: roam_session::Rx<i32>) -> i64 {
         let mut total: i64 = 0;
         while let Some(n) = numbers.recv().await.ok().flatten() {
             total += n as i64;
         }
-        Ok(total)
+        total
     }
 
-    async fn generate(
-        &self,
-        count: u32,
-        output: roam_session::Tx<i32>,
-    ) -> Result<(), roam_session::RoamError<roam_session::Never>> {
+    async fn generate(&self, count: u32, output: roam_session::Tx<i32>) {
         for i in 0..count as i32 {
             let _ = output.send(&i).await;
         }
-        Ok(())
     }
 
     async fn transform(
         &self,
         mut input: roam_session::Rx<String>,
         output: roam_session::Tx<String>,
-    ) -> Result<(), roam_session::RoamError<roam_session::Never>> {
+    ) {
         while let Some(s) = input.recv().await.ok().flatten() {
             let _ = output.send(&s.to_uppercase()).await;
         }
-        Ok(())
     }
 
-    async fn echo_point(
-        &self,
-        point: spec_proto::Point,
-    ) -> Result<spec_proto::Point, roam_session::RoamError<roam_session::Never>> {
-        Ok(point)
+    async fn echo_point(&self, point: spec_proto::Point) -> spec_proto::Point {
+        point
     }
 
     async fn create_person(
@@ -78,42 +81,31 @@ impl Testbed for TestbedImpl {
         name: String,
         age: u8,
         email: Option<String>,
-    ) -> Result<spec_proto::Person, roam_session::RoamError<roam_session::Never>> {
-        Ok(spec_proto::Person { name, age, email })
+    ) -> spec_proto::Person {
+        spec_proto::Person { name, age, email }
     }
 
-    async fn rectangle_area(
-        &self,
-        rect: spec_proto::Rectangle,
-    ) -> Result<f64, roam_session::RoamError<roam_session::Never>> {
+    async fn rectangle_area(&self, rect: spec_proto::Rectangle) -> f64 {
         let width = (rect.bottom_right.x - rect.top_left.x).abs() as f64;
         let height = (rect.bottom_right.y - rect.top_left.y).abs() as f64;
-        Ok(width * height)
+        width * height
     }
 
-    async fn parse_color(
-        &self,
-        name: String,
-    ) -> Result<Option<spec_proto::Color>, roam_session::RoamError<roam_session::Never>> {
-        let color = match name.to_lowercase().as_str() {
+    async fn parse_color(&self, name: String) -> Option<spec_proto::Color> {
+        match name.to_lowercase().as_str() {
             "red" => Some(spec_proto::Color::Red),
             "green" => Some(spec_proto::Color::Green),
             "blue" => Some(spec_proto::Color::Blue),
             _ => None,
-        };
-        Ok(color)
+        }
     }
 
-    async fn shape_area(
-        &self,
-        shape: spec_proto::Shape,
-    ) -> Result<f64, roam_session::RoamError<roam_session::Never>> {
-        let area = match shape {
+    async fn shape_area(&self, shape: spec_proto::Shape) -> f64 {
+        match shape {
             spec_proto::Shape::Circle { radius } => std::f64::consts::PI * radius * radius,
             spec_proto::Shape::Rectangle { width, height } => width * height,
             spec_proto::Shape::Point => 0.0,
-        };
-        Ok(area)
+        }
     }
 
     async fn create_canvas(
@@ -121,36 +113,26 @@ impl Testbed for TestbedImpl {
         name: String,
         shapes: Vec<spec_proto::Shape>,
         background: spec_proto::Color,
-    ) -> Result<spec_proto::Canvas, roam_session::RoamError<roam_session::Never>> {
-        Ok(spec_proto::Canvas {
+    ) -> spec_proto::Canvas {
+        spec_proto::Canvas {
             name,
             shapes,
             background,
-        })
+        }
     }
 
-    async fn process_message(
-        &self,
-        msg: spec_proto::Message,
-    ) -> Result<spec_proto::Message, roam_session::RoamError<roam_session::Never>> {
-        Ok(msg)
+    async fn process_message(&self, msg: spec_proto::Message) -> spec_proto::Message {
+        msg
     }
 
-    async fn get_points(
-        &self,
-        count: u32,
-    ) -> Result<Vec<spec_proto::Point>, roam_session::RoamError<roam_session::Never>> {
-        let points = (0..count as i32)
+    async fn get_points(&self, count: u32) -> Vec<spec_proto::Point> {
+        (0..count as i32)
             .map(|i| spec_proto::Point { x: i, y: i * 2 })
-            .collect();
-        Ok(points)
+            .collect()
     }
 
-    async fn swap_pair(
-        &self,
-        pair: (i32, String),
-    ) -> Result<(String, i32), roam_session::RoamError<roam_session::Never>> {
-        Ok((pair.1, pair.0))
+    async fn swap_pair(&self, pair: (i32, String)) -> (String, i32) {
+        (pair.1, pair.0)
     }
 }
 
@@ -169,7 +151,7 @@ async fn start_roam_server() -> (SocketAddr, tokio::task::JoinHandle<()>) {
                     .await
                     .unwrap();
                 let _ = handle;
-                driver.run().await;
+                let _ = driver.run().await;
             });
         }
     });

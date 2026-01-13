@@ -38,7 +38,7 @@ pub use error::{BridgeError, ProtocolErrorKind};
 pub use metadata::BridgeMetadata;
 pub use router::BridgeRouter;
 pub use service::GenericBridgeService;
-pub use transcode::{json_to_postcard, postcard_to_json_with_shape};
+pub use transcode::{json_args_to_postcard, postcard_to_json_with_shape};
 
 use roam_schema::ServiceDetail;
 use std::future::Future;

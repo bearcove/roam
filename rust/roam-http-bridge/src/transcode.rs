@@ -10,18 +10,47 @@ use crate::BridgeError;
 use facet_core::Shape;
 use facet_value::Value;
 
-/// Transcode JSON bytes to postcard bytes.
+/// Transcode JSON array to postcard bytes using arg shapes.
 ///
 /// r[bridge.json.facet]
-/// JSON → Value → postcard
-pub fn json_to_postcard(json: &[u8]) -> Result<Vec<u8>, BridgeError> {
+/// JSON array → Value elements → postcard tuple (concatenated)
+///
+/// The JSON body is an array of arguments `[arg0, arg1, ...]`.
+/// Each argument is serialized using its corresponding shape from the method signature.
+/// The result is the concatenation of the serialized arguments, which is how
+/// postcard encodes tuples.
+pub fn json_args_to_postcard(
+    json: &[u8],
+    arg_shapes: &[&'static Shape],
+) -> Result<Vec<u8>, BridgeError> {
     // Parse JSON into Value (JSON is self-describing)
     let value: Value = facet_json::from_slice(json)
         .map_err(|e| BridgeError::bad_request(format!("Invalid JSON: {e}")))?;
 
-    // Serialize Value to postcard
-    facet_postcard::to_vec(&value)
-        .map_err(|e| BridgeError::internal(format!("Postcard serialization failed: {e}")))
+    // Must be an array
+    let args = value.as_array().ok_or_else(|| {
+        BridgeError::bad_request("Request body must be a JSON array of arguments")
+    })?;
+
+    // Check argument count matches
+    if args.len() != arg_shapes.len() {
+        return Err(BridgeError::bad_request(format!(
+            "Expected {} arguments, got {}",
+            arg_shapes.len(),
+            args.len()
+        )));
+    }
+
+    // Serialize each argument using its shape and concatenate
+    // This produces the same bytes as serializing a typed tuple
+    let mut result = Vec::new();
+    for (arg, shape) in args.iter().zip(arg_shapes.iter()) {
+        let bytes = facet_postcard::to_vec_with_shape(arg, shape)
+            .map_err(|e| BridgeError::bad_request(format!("Failed to encode argument: {e}")))?;
+        result.extend(bytes);
+    }
+
+    Ok(result)
 }
 
 /// Transcode postcard bytes to JSON bytes using shape information.
@@ -55,37 +84,66 @@ mod tests {
     }
 
     #[test]
-    fn test_json_to_postcard() {
-        let json = br#"{"x": 10, "y": 20}"#;
-        let postcard = json_to_postcard(json).unwrap();
-        // Should produce valid postcard bytes
-        assert!(!postcard.is_empty());
+    fn test_json_args_to_postcard_single_string() {
+        // JSON array: ["hello world"]
+        // Arg shapes: [String]
+        let json = br#"["hello world"]"#;
+        let shapes: &[&'static Shape] = &[<String as Facet>::SHAPE];
+        let postcard = json_args_to_postcard(json, shapes).unwrap();
+
+        // Compare to typed tuple serialization
+        let typed_tuple: (String,) = ("hello world".to_string(),);
+        let expected = facet_postcard::to_vec(&typed_tuple).unwrap();
+
+        assert_eq!(postcard, expected);
     }
 
     #[test]
-    fn test_array_vs_tuple_encoding() {
-        // JSON array: ["hello world"]
-        let json = br#"["hello world"]"#;
-        let value: Value = facet_json::from_slice(json).unwrap();
-        let value_postcard = facet_postcard::to_vec(&value).unwrap();
-        eprintln!("Value from JSON array: {:?}", value);
-        eprintln!("Value postcard bytes: {:?}", value_postcard);
+    fn test_json_args_to_postcard_two_ints() {
+        // JSON array: [10, 20]
+        // Arg shapes: [i64, i64]
+        let json = br#"[10, 20]"#;
+        let shapes: &[&'static Shape] = &[<i64 as Facet>::SHAPE, <i64 as Facet>::SHAPE];
+        let postcard = json_args_to_postcard(json, shapes).unwrap();
 
-        // Typed tuple: ("hello world",)
-        let typed_tuple: (String,) = ("hello world".to_string(),);
-        let typed_postcard = facet_postcard::to_vec(&typed_tuple).unwrap();
-        eprintln!("Typed tuple postcard bytes: {:?}", typed_postcard);
+        // Compare to typed tuple serialization
+        let typed_tuple: (i64, i64) = (10, 20);
+        let expected = facet_postcard::to_vec(&typed_tuple).unwrap();
 
-        // Plain string
-        let typed_string = "hello world".to_string();
-        let string_postcard = facet_postcard::to_vec(&typed_string).unwrap();
-        eprintln!("Plain string postcard bytes: {:?}", string_postcard);
+        assert_eq!(postcard, expected);
+    }
 
-        // Are they the same?
-        eprintln!(
-            "Value bytes == Typed tuple bytes: {}",
-            value_postcard == typed_postcard
-        );
+    #[test]
+    fn test_json_args_to_postcard_struct() {
+        // JSON array: [{"x": 10, "y": 20}]
+        // Arg shapes: [Point]
+        let json = br#"[{"x": 10, "y": 20}]"#;
+        let shapes: &[&'static Shape] = &[Point::SHAPE];
+        let postcard = json_args_to_postcard(json, shapes).unwrap();
+
+        // Compare to typed tuple serialization
+        let typed_tuple: (Point,) = (Point { x: 10, y: 20 },);
+        let expected = facet_postcard::to_vec(&typed_tuple).unwrap();
+
+        assert_eq!(postcard, expected);
+    }
+
+    #[test]
+    fn test_json_args_wrong_count() {
+        let json = br#"["hello", "world"]"#;
+        let shapes: &[&'static Shape] = &[<String as Facet>::SHAPE];
+        let result = json_args_to_postcard(json, shapes);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().message.contains("Expected 1 arguments"));
+    }
+
+    #[test]
+    fn test_json_args_not_array() {
+        let json = br#"{"message": "hello"}"#;
+        let shapes: &[&'static Shape] = &[<String as Facet>::SHAPE];
+        let result = json_args_to_postcard(json, shapes);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().message.contains("must be a JSON array"));
     }
 
     #[test]
@@ -127,11 +185,5 @@ mod tests {
             obj.get("y").unwrap().as_number().unwrap().to_i64(),
             Some(20)
         );
-    }
-
-    #[test]
-    fn test_invalid_json() {
-        let result = json_to_postcard(b"not valid json");
-        assert!(result.is_err());
     }
 }
