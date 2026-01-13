@@ -4,6 +4,7 @@ use facet::Facet;
 use roam_hash::method_id_from_detail;
 use roam_schema::{ArgDetail, MethodDetail};
 use roam_wire::{Hello, Message, MetadataValue};
+use spec_proto::MathError;
 use spec_tests::harness::{accept_subject, our_hello, run_async};
 use spec_tests::testbed::method_id;
 

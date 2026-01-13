@@ -1050,7 +1050,7 @@ impl Default for RequestIdGenerator {
 ///
 /// - `A`: Args tuple type (must implement Facet for deserialization)
 /// - `R`: Result ok type (must implement Facet for serialization)
-/// - `E`: Result error type (must implement Facet for serialization)
+/// - `E`: User error type (must implement Facet for serialization)
 /// - `F`: Handler closure type
 /// - `Fut`: Future returned by handler
 ///
@@ -1066,6 +1066,9 @@ impl Default for RequestIdGenerator {
 ///     })
 /// }
 /// ```
+///
+/// The handler returns `Result<R, E>` - user errors are automatically wrapped
+/// in `RoamError::User(e)` for wire serialization.
 pub fn dispatch_call<A, R, E, F, Fut>(
     payload: Vec<u8>,
     request_id: u64,
@@ -1077,7 +1080,7 @@ where
     R: Facet<'static> + Send,
     E: Facet<'static> + Send,
     F: FnOnce(A) -> Fut + Send + 'static,
-    Fut: std::future::Future<Output = Result<R, RoamError<E>>> + Send + 'static,
+    Fut: std::future::Future<Output = Result<R, E>> + Send + 'static,
 {
     // Deserialize args
     let mut args: A = match facet_postcard::from_slice(&payload) {
@@ -1085,7 +1088,7 @@ where
         Err(_) => {
             let task_tx = registry.task_tx();
             return Box::pin(async move {
-                // InvalidPayload error
+                // InvalidPayload error: Result::Err(1) + RoamError::InvalidPayload(2)
                 let _ = task_tx
                     .send(TaskMessage::Response {
                         request_id,
@@ -1105,6 +1108,7 @@ where
         let result = handler(args).await;
         let payload = match result {
             Ok(result) => {
+                // Result::Ok(0) + serialized value
                 let mut out = vec![0u8];
                 match facet_postcard::to_vec(&result) {
                     Ok(bytes) => out.extend(bytes),
@@ -1112,8 +1116,70 @@ where
                 }
                 out
             }
-            Err(_e) => vec![1, 1],
+            Err(user_error) => {
+                // Result::Err(1) + RoamError::User(0) + serialized user error
+                let mut out = vec![1u8, 0u8];
+                match facet_postcard::to_vec(&user_error) {
+                    Ok(bytes) => out.extend(bytes),
+                    Err(_) => return,
+                }
+                out
+            }
         };
+        let _ = task_tx
+            .send(TaskMessage::Response {
+                request_id,
+                payload,
+            })
+            .await;
+    })
+}
+
+/// Dispatch helper for infallible methods (those that return `T` instead of `Result<T, E>`).
+///
+/// Same as `dispatch_call` but for handlers that cannot fail at the application level.
+pub fn dispatch_call_infallible<A, R, F, Fut>(
+    payload: Vec<u8>,
+    request_id: u64,
+    registry: &mut ChannelRegistry,
+    handler: F,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'static>>
+where
+    A: Facet<'static> + Send,
+    R: Facet<'static> + Send,
+    F: FnOnce(A) -> Fut + Send + 'static,
+    Fut: std::future::Future<Output = R> + Send + 'static,
+{
+    // Deserialize args
+    let mut args: A = match facet_postcard::from_slice(&payload) {
+        Ok(args) => args,
+        Err(_) => {
+            let task_tx = registry.task_tx();
+            return Box::pin(async move {
+                // InvalidPayload error: Result::Err(1) + RoamError::InvalidPayload(2)
+                let _ = task_tx
+                    .send(TaskMessage::Response {
+                        request_id,
+                        payload: vec![1, 2],
+                    })
+                    .await;
+            });
+        }
+    };
+
+    // Bind streams via reflection
+    registry.bind_streams(&mut args);
+
+    let task_tx = registry.task_tx();
+
+    Box::pin(async move {
+        let result = handler(args).await;
+        // Result::Ok(0) + serialized value
+        let mut payload = vec![0u8];
+        match facet_postcard::to_vec(&result) {
+            Ok(bytes) => payload.extend(bytes),
+            Err(_) => return,
+        }
         let _ = task_tx
             .send(TaskMessage::Response {
                 request_id,
