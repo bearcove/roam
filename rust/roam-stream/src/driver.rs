@@ -899,6 +899,7 @@ where
                 request_id,
                 method_id,
                 metadata,
+                channels,
                 payload,
                 response_tx,
             } => {
@@ -907,6 +908,7 @@ where
                     request_id,
                     method_id,
                     metadata,
+                    channels,
                     payload,
                 };
                 self.io.send(&req).await?;
@@ -957,9 +959,10 @@ where
                 request_id,
                 method_id,
                 metadata,
+                channels,
                 payload,
             } => {
-                self.handle_incoming_request(request_id, method_id, metadata, payload)
+                self.handle_incoming_request(request_id, method_id, metadata, channels, payload)
                     .await?;
             }
             Message::Response {
@@ -996,6 +999,7 @@ where
         request_id: u64,
         method_id: u64,
         metadata: Vec<(String, roam_wire::MetadataValue)>,
+        channels: Vec<u64>,
         payload: Vec<u8>,
     ) -> Result<(), ConnectionError> {
         if !self.in_flight_server_requests.insert(request_id) {
@@ -1015,6 +1019,7 @@ where
         let handler_fut = self.dispatcher.dispatch(
             method_id,
             payload,
+            channels,
             request_id,
             &mut self.server_channel_registry,
         );
@@ -1228,6 +1233,7 @@ impl ServiceDispatcher for NoDispatcher {
         &self,
         _method_id: u64,
         _payload: Vec<u8>,
+        _channels: Vec<u64>,
         request_id: u64,
         registry: &mut ChannelRegistry,
     ) -> Pin<Box<dyn Future<Output = ()> + Send + 'static>> {

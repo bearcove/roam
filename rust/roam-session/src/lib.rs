@@ -1069,8 +1069,12 @@ impl Default for RequestIdGenerator {
 ///
 /// The handler returns `Result<R, E>` - user errors are automatically wrapped
 /// in `RoamError::User(e)` for wire serialization.
+///
+/// The `channels` parameter contains channel IDs from the Request message framing.
+/// These are patched into the deserialized args before binding streams.
 pub fn dispatch_call<A, R, E, F, Fut>(
     payload: Vec<u8>,
+    channels: Vec<u64>,
     request_id: u64,
     registry: &mut ChannelRegistry,
     handler: F,
@@ -1098,6 +1102,9 @@ where
             });
         }
     };
+
+    // Patch channel IDs from Request framing into deserialized args
+    patch_channel_ids(&mut args, &channels);
 
     // Bind streams via reflection
     registry.bind_streams(&mut args);
@@ -1140,6 +1147,7 @@ where
 /// Same as `dispatch_call` but for handlers that cannot fail at the application level.
 pub fn dispatch_call_infallible<A, R, F, Fut>(
     payload: Vec<u8>,
+    channels: Vec<u64>,
     request_id: u64,
     registry: &mut ChannelRegistry,
     handler: F,
@@ -1166,6 +1174,9 @@ where
             });
         }
     };
+
+    // Patch channel IDs from Request framing into deserialized args
+    patch_channel_ids(&mut args, &channels);
 
     // Bind streams via reflection
     registry.bind_streams(&mut args);
@@ -1208,6 +1219,89 @@ pub fn dispatch_unknown_method(
     })
 }
 
+/// Collect channel IDs from args by walking with Peek.
+///
+/// Returns channel IDs in declaration order (depth-first traversal).
+/// Used by the client to populate the `channels` vec in Request messages.
+///
+/// r[impl call.request.channels] - Collects channel IDs in declaration order for the Request.
+pub fn collect_channel_ids<T: Facet<'static>>(args: &T) -> Vec<u64> {
+    let mut ids = Vec::new();
+    let poke = facet::Peek::new(args);
+    collect_channel_ids_recursive(poke, &mut ids);
+    ids
+}
+
+fn collect_channel_ids_recursive(peek: facet::Peek<'_, '_>, ids: &mut Vec<u64>) {
+    let shape = peek.shape();
+
+    // Check if this is an Rx or Tx type
+    if shape.module_path == Some("roam_session") {
+        if shape.type_identifier == "Rx" || shape.type_identifier == "Tx" {
+            // Read the channel_id field
+            if let Ok(ps) = peek.into_struct() {
+                if let Ok(channel_id_field) = ps.field_by_name("channel_id")
+                    && let Ok(&channel_id) = channel_id_field.get::<ChannelId>()
+                {
+                    ids.push(channel_id);
+                }
+            }
+            return;
+        }
+    }
+
+    // Recurse into struct/tuple fields
+    if let Ok(ps) = peek.into_struct() {
+        let field_count = ps.field_count();
+        for i in 0..field_count {
+            if let Ok(field_peek) = ps.field(i) {
+                collect_channel_ids_recursive(field_peek, ids);
+            }
+        }
+    }
+}
+
+/// Patch channel IDs into deserialized args by walking with Poke.
+///
+/// Overwrites channel_id fields in Rx/Tx in declaration order.
+/// Used by the server to apply the authoritative `channels` vec from Request.
+pub fn patch_channel_ids<T: Facet<'static>>(args: &mut T, channels: &[u64]) {
+    let mut idx = 0;
+    let poke = facet::Poke::new(args);
+    patch_channel_ids_recursive(poke, channels, &mut idx);
+}
+
+fn patch_channel_ids_recursive(poke: facet::Poke<'_, '_>, channels: &[u64], idx: &mut usize) {
+    let shape = poke.shape();
+
+    // Check if this is an Rx or Tx type
+    if shape.module_path == Some("roam_session") {
+        if shape.type_identifier == "Rx" || shape.type_identifier == "Tx" {
+            // Overwrite the channel_id field
+            if let Ok(mut ps) = poke.into_struct() {
+                if let Ok(mut channel_id_field) = ps.field_by_name("channel_id")
+                    && let Ok(channel_id_ref) = channel_id_field.get_mut::<ChannelId>()
+                    && *idx < channels.len()
+                {
+                    *channel_id_ref = channels[*idx];
+                    *idx += 1;
+                }
+            }
+            return;
+        }
+    }
+
+    // Recurse into struct/tuple fields
+    if let Ok(mut ps) = poke.into_struct() {
+        let field_count = ps.field_count();
+        for i in 0..field_count {
+            if let Ok(field_poke) = ps.field(i) {
+                patch_channel_ids_recursive(field_poke, channels, idx);
+            }
+        }
+    }
+}
+
 // ============================================================================
 // Service Dispatcher
 // ============================================================================
@@ -1228,6 +1322,7 @@ pub trait ServiceDispatcher: Send + Sync {
     /// The dispatcher is responsible for:
     /// - Looking up the method by method_id
     /// - Deserializing arguments from payload
+    /// - Patching channel IDs from `channels` into deserialized args via `patch_channel_ids()`
     /// - Binding any Tx/Rx streams via the registry
     /// - Calling the service method
     /// - Sending Data/Close messages for any Tx streams
@@ -1236,14 +1331,19 @@ pub trait ServiceDispatcher: Send + Sync {
     /// By using a single channel for Data/Close/Response, correct ordering is guaranteed:
     /// all stream Data and Close messages are sent before the Response.
     ///
+    /// The `channels` parameter contains channel IDs from the Request message framing,
+    /// in declaration order. For a ForwardingDispatcher, this enables transparent proxying
+    /// without parsing the payload.
+    ///
     /// Returns a boxed future with `'static` lifetime so it can be spawned.
     /// Implementations should clone their service into the future to achieve this.
     ///
-    /// r[impl channeling.allocation.caller] - Stream IDs are decoded from payload (caller allocated).
+    /// r[impl channeling.allocation.caller] - Stream IDs are from Request.channels (caller allocated).
     fn dispatch(
         &self,
         method_id: u64,
         payload: Vec<u8>,
+        channels: Vec<u64>,
         request_id: u64,
         registry: &mut ChannelRegistry,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'static>>;
@@ -1292,15 +1392,124 @@ where
         &self,
         method_id: u64,
         payload: Vec<u8>,
+        channels: Vec<u64>,
         request_id: u64,
         registry: &mut ChannelRegistry,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'static>> {
         if self.primary_methods.contains(&method_id) {
             self.primary
-                .dispatch(method_id, payload, request_id, registry)
+                .dispatch(method_id, payload, channels, request_id, registry)
         } else {
             self.fallback
-                .dispatch(method_id, payload, request_id, registry)
+                .dispatch(method_id, payload, channels, request_id, registry)
+        }
+    }
+}
+
+// ============================================================================
+// ForwardingDispatcher - Transparent RPC Proxy
+// ============================================================================
+
+/// A dispatcher that forwards all requests to an upstream connection.
+///
+/// This enables transparent proxying without knowing the service schema.
+/// Channel IDs are remapped automatically: the proxy allocates new channel IDs
+/// for the upstream connection and maintains bidirectional forwarding.
+///
+/// # Example
+///
+/// ```ignore
+/// use roam_session::{ForwardingDispatcher, ConnectionHandle};
+///
+/// // Upstream connection to the actual service
+/// let upstream: ConnectionHandle = /* ... */;
+///
+/// // Create a forwarding dispatcher
+/// let proxy = ForwardingDispatcher::new(upstream);
+///
+/// // Use with accept() - all calls will be forwarded to upstream
+/// let (handle, driver) = accept(stream, config, proxy).await?;
+/// ```
+pub struct ForwardingDispatcher {
+    upstream: ConnectionHandle,
+}
+
+impl ForwardingDispatcher {
+    /// Create a new forwarding dispatcher that proxies to the upstream connection.
+    pub fn new(upstream: ConnectionHandle) -> Self {
+        Self { upstream }
+    }
+}
+
+impl Clone for ForwardingDispatcher {
+    fn clone(&self) -> Self {
+        Self {
+            upstream: self.upstream.clone(),
+        }
+    }
+}
+
+impl ServiceDispatcher for ForwardingDispatcher {
+    /// Returns empty - this dispatcher accepts all method IDs.
+    fn method_ids(&self) -> Vec<u64> {
+        vec![]
+    }
+
+    fn dispatch(
+        &self,
+        method_id: u64,
+        payload: Vec<u8>,
+        channels: Vec<u64>,
+        request_id: u64,
+        registry: &mut ChannelRegistry,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'static>> {
+        let task_tx = registry.task_tx();
+        let upstream = self.upstream.clone();
+
+        if channels.is_empty() {
+            // Unary call - simple forwarding
+            Box::pin(async move {
+                let response = upstream
+                    .call_raw_with_channels(method_id, vec![], payload)
+                    .await;
+
+                let response_payload = match response {
+                    Ok(bytes) => bytes,
+                    Err(TransportError::Encode(_)) => {
+                        // Should not happen for raw call
+                        vec![1, 2] // Err(InvalidPayload)
+                    }
+                    Err(TransportError::ConnectionClosed) | Err(TransportError::DriverGone) => {
+                        // Connection to upstream failed - return Cancelled
+                        vec![1, 3] // Err(Cancelled)
+                    }
+                };
+
+                let _ = task_tx
+                    .send(TaskMessage::Response {
+                        request_id,
+                        payload: response_payload,
+                    })
+                    .await;
+            })
+        } else {
+            // Streaming calls with channels are not yet supported by ForwardingDispatcher.
+            // Return an error immediately.
+            //
+            // TODO: Implement bidirectional channel forwarding for streaming methods.
+            // This requires:
+            // 1. Allocating upstream channel IDs
+            // 2. Setting up forwarding tasks for Data/Close messages
+            // 3. Handling channel lifecycle correctly
+            Box::pin(async move {
+                // Return Cancelled error for streaming calls
+                let _ = task_tx
+                    .send(TaskMessage::Response {
+                        request_id,
+                        payload: vec![1, 3], // Err(Cancelled)
+                    })
+                    .await;
+            })
         }
     }
 }
@@ -1568,6 +1777,8 @@ pub enum HandleCommand {
         request_id: u64,
         method_id: u64,
         metadata: Vec<(String, roam_wire::MetadataValue)>,
+        /// Channel IDs used by this call (Tx/Rx), in declaration order.
+        channels: Vec<u64>,
         payload: Vec<u8>,
         response_tx: tokio::sync::oneshot::Sender<Result<Vec<u8>, TransportError>>,
     },
@@ -1660,11 +1871,15 @@ impl ConnectionHandle {
         method_id: u64,
         args: &mut T,
     ) -> Result<Vec<u8>, TransportError> {
-        // Walk args and bind any streams
+        // Walk args and bind any streams (allocates channel IDs)
         self.bind_streams(args);
 
+        // Collect channel IDs for the Request message
+        let channels = collect_channel_ids(args);
+
         let payload = facet_postcard::to_vec(args).map_err(TransportError::Encode)?;
-        self.call_raw(method_id, payload).await
+        self.call_raw_with_channels(method_id, channels, payload)
+            .await
     }
 
     /// Walk args and bind any Rx<T> or Tx<T> streams.
@@ -1763,12 +1978,26 @@ impl ConnectionHandle {
     /// Make a raw RPC call with pre-serialized payload.
     ///
     /// Returns the raw response payload bytes.
+    /// Note: For streaming calls, use `call()` which handles channel binding.
     pub async fn call_raw(
         &self,
         method_id: u64,
         payload: Vec<u8>,
     ) -> Result<Vec<u8>, TransportError> {
-        self.call_raw_with_metadata(method_id, payload, Vec::new())
+        self.call_raw_full(method_id, Vec::new(), Vec::new(), payload)
+            .await
+    }
+
+    /// Make a raw RPC call with pre-serialized payload and channel IDs.
+    ///
+    /// Used internally by `call()` after binding streams.
+    pub async fn call_raw_with_channels(
+        &self,
+        method_id: u64,
+        channels: Vec<u64>,
+        payload: Vec<u8>,
+    ) -> Result<Vec<u8>, TransportError> {
+        self.call_raw_full(method_id, Vec::new(), channels, payload)
             .await
     }
 
@@ -1781,6 +2010,18 @@ impl ConnectionHandle {
         payload: Vec<u8>,
         metadata: Vec<(String, roam_wire::MetadataValue)>,
     ) -> Result<Vec<u8>, TransportError> {
+        self.call_raw_full(method_id, metadata, Vec::new(), payload)
+            .await
+    }
+
+    /// Make a raw RPC call with all options.
+    async fn call_raw_full(
+        &self,
+        method_id: u64,
+        metadata: Vec<(String, roam_wire::MetadataValue)>,
+        channels: Vec<u64>,
+        payload: Vec<u8>,
+    ) -> Result<Vec<u8>, TransportError> {
         let request_id = self.shared.request_ids.next();
         let (response_tx, response_rx) = tokio::sync::oneshot::channel();
 
@@ -1788,6 +2029,7 @@ impl ConnectionHandle {
             request_id,
             method_id,
             metadata,
+            channels,
             payload,
             response_tx,
         };

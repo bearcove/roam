@@ -223,6 +223,7 @@ where
                 request_id,
                 method_id,
                 metadata,
+                channels,
                 payload,
                 response_tx,
             } => {
@@ -234,6 +235,7 @@ where
                     request_id,
                     method_id,
                     metadata,
+                    channels,
                     payload,
                 };
                 MessageTransport::send(&mut self.io, &req).await?;
@@ -293,9 +295,10 @@ where
                 request_id,
                 method_id,
                 metadata,
+                channels,
                 payload,
             } => {
-                self.handle_incoming_request(request_id, method_id, metadata, payload)
+                self.handle_incoming_request(request_id, method_id, metadata, channels, payload)
                     .await?;
             }
             Message::Response {
@@ -339,6 +342,7 @@ where
         request_id: u64,
         method_id: u64,
         metadata: Vec<(String, roam_wire::MetadataValue)>,
+        channels: Vec<u64>,
         payload: Vec<u8>,
     ) -> Result<(), ShmConnectionError> {
         // Duplicate detection
@@ -362,6 +366,7 @@ where
         let handler_fut = self.dispatcher.dispatch(
             method_id,
             payload,
+            channels,
             request_id,
             &mut self.server_channel_registry,
         );
@@ -849,6 +854,7 @@ impl MultiPeerHostDriver {
                 request_id,
                 method_id,
                 metadata,
+                channels,
                 payload,
                 response_tx,
             } => {
@@ -862,6 +868,7 @@ impl MultiPeerHostDriver {
                     request_id,
                     method_id,
                     metadata,
+                    channels,
                     payload,
                 };
                 self.send_to_peer(peer_id, &req).await?;
@@ -895,10 +902,13 @@ impl MultiPeerHostDriver {
                 request_id,
                 method_id,
                 metadata,
+                channels,
                 payload,
             } => {
-                self.handle_incoming_request(peer_id, request_id, method_id, metadata, payload)
-                    .await?;
+                self.handle_incoming_request(
+                    peer_id, request_id, method_id, metadata, channels, payload,
+                )
+                .await?;
             }
             Message::Response {
                 request_id,
@@ -941,6 +951,7 @@ impl MultiPeerHostDriver {
         request_id: u64,
         method_id: u64,
         metadata: Vec<(String, roam_wire::MetadataValue)>,
+        channels: Vec<u64>,
         payload: Vec<u8>,
     ) -> Result<(), ShmConnectionError> {
         let state = match self.peers.get_mut(&peer_id) {
@@ -971,6 +982,7 @@ impl MultiPeerHostDriver {
         let handler_fut = state.dispatcher.dispatch(
             method_id,
             payload,
+            channels,
             request_id,
             &mut state.server_channel_registry,
         );
