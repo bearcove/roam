@@ -16,8 +16,8 @@ use tokio::task::JoinHandle;
 
 use crate::framing::CobsFramed;
 use roam_session::{
-    Caller, ConnectError, ConnectionError, ConnectionHandle, Driver, HandshakeConfig,
-    ResponseData, RetryPolicy, ServiceDispatcher, TransportError,
+    Caller, ConnectError, ConnectionError, ConnectionHandle, Driver, HandshakeConfig, ResponseData,
+    RetryPolicy, ServiceDispatcher, TransportError,
 };
 
 /// A factory that creates new byte-stream connections on demand.
@@ -177,13 +177,10 @@ where
 
         let framed = CobsFramed::new(stream);
 
-        let (handle, driver) = roam_session::initiate_framed(
-            framed,
-            self.config.clone(),
-            self.dispatcher.clone(),
-        )
-        .await
-        .map_err(|e| ConnectError::ConnectFailed(connection_error_to_io(e)))?;
+        let (handle, driver) =
+            roam_session::initiate_framed(framed, self.config.clone(), self.dispatcher.clone())
+                .await
+                .map_err(|e| ConnectError::ConnectFailed(connection_error_to_io(e)))?;
 
         let driver_handle = tokio::spawn(async move { driver.run().await });
 
@@ -284,6 +281,10 @@ where
                     return Err(TransportError::ConnectionClosed);
                 }
                 Err(ConnectError::Rpc(e)) => return Err(e),
+                Err(ConnectError::Rejected(_)) => {
+                    // Virtual connection rejected - this shouldn't happen for link-level connect
+                    return Err(TransportError::ConnectionClosed);
+                }
             };
 
             match handle.call(method_id, args).await {

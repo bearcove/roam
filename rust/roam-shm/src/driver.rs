@@ -41,6 +41,9 @@ fn msg_type_name(msg: &Message) -> &'static str {
         Message::Close { .. } => "Close",
         Message::Reset { .. } => "Reset",
         Message::Credit { .. } => "Credit",
+        Message::Connect { .. } => "Connect",
+        Message::Accept { .. } => "Accept",
+        Message::Reject { .. } => "Reject",
     }
 }
 
@@ -211,6 +214,7 @@ where
     ) -> Result<(), ShmConnectionError> {
         let wire_msg = match msg {
             DriverMessage::Call {
+                conn_id,
                 request_id,
                 method_id,
                 metadata,
@@ -224,6 +228,7 @@ where
 
                 // Send the request
                 Message::Request {
+                    conn_id,
                     request_id,
                     method_id,
                     metadata,
@@ -232,6 +237,7 @@ where
                 }
             }
             DriverMessage::Data {
+                conn_id,
                 channel_id,
                 payload,
             } => {
@@ -241,15 +247,23 @@ where
                     payload.len()
                 );
                 Message::Data {
+                    conn_id,
                     channel_id,
                     payload,
                 }
             }
-            DriverMessage::Close { channel_id } => {
+            DriverMessage::Close {
+                conn_id,
+                channel_id,
+            } => {
                 trace!("handle_driver_message: Close ch={}", channel_id);
-                Message::Close { channel_id }
+                Message::Close {
+                    conn_id,
+                    channel_id,
+                }
             }
             DriverMessage::Response {
+                conn_id,
                 request_id,
                 channels,
                 payload,
@@ -265,11 +279,19 @@ where
                     diag.complete_request(request_id);
                 }
                 Message::Response {
+                    conn_id,
                     request_id,
                     metadata: Vec::new(),
                     channels,
                     payload,
                 }
+            }
+            DriverMessage::Connect { response_tx, .. } => {
+                // SHM doesn't support virtual connections - reject immediately
+                let _ = response_tx.send(Err(roam_session::ConnectError::Rejected(
+                    "virtual connections not supported over SHM".into(),
+                )));
+                return Ok(());
             }
         };
         trace!("handle_driver_message: sending wire message");
@@ -338,6 +360,15 @@ where
                     )
                     .await);
             }
+            Message::Connect { .. } => {
+                // TODO: Handle incoming virtual connection requests
+            }
+            Message::Accept { .. } => {
+                // TODO: Handle virtual connection acceptance
+            }
+            Message::Reject { .. } => {
+                // TODO: Handle virtual connection rejection
+            }
             Message::Goodbye { .. } => {
                 // Fail all pending responses
                 for (_, tx) in self.pending_responses.drain() {
@@ -351,6 +382,7 @@ where
                 metadata,
                 channels,
                 payload,
+                ..
             } => {
                 debug!(
                     request_id,
@@ -363,9 +395,9 @@ where
             }
             Message::Response {
                 request_id,
-                metadata: _,
                 channels,
                 payload,
+                ..
             } => {
                 // Route to waiting caller
                 if let Some(tx) = self.pending_responses.remove(&request_id) {
@@ -373,19 +405,20 @@ where
                 }
                 // Unknown response IDs are ignored per spec
             }
-            Message::Cancel { request_id: _ } => {
+            Message::Cancel { .. } => {
                 // TODO: Implement cancellation
             }
             Message::Data {
                 channel_id,
                 payload,
+                ..
             } => {
                 self.handle_data(channel_id, payload).await?;
             }
-            Message::Close { channel_id } => {
+            Message::Close { channel_id, .. } => {
                 self.handle_close(channel_id).await?;
             }
-            Message::Reset { channel_id } => {
+            Message::Reset { channel_id, .. } => {
                 self.handle_reset(channel_id)?;
             }
             Message::Credit { .. } => {
@@ -434,7 +467,10 @@ where
                 diag.complete_request(request_id);
             }
             return Err(self
-                .goodbye(rule_id, format!("Invalid metadata for request_id={}", request_id))
+                .goodbye(
+                    rule_id,
+                    format!("Invalid metadata for request_id={}", request_id),
+                )
                 .await);
         }
 
@@ -458,7 +494,9 @@ where
         }
 
         // Dispatch - spawn as a task so message loop can continue.
+        let conn_id = self.server_channel_registry.conn_id();
         let handler_fut = self.dispatcher.dispatch(
+            conn_id,
             method_id,
             payload,
             channels,
@@ -610,6 +648,7 @@ where
         if let Err(_e) = MessageTransport::send(
             &mut self.io,
             &Message::Goodbye {
+                conn_id: roam_wire::ConnectionId::ROOT,
                 reason: rule_id.into(),
             },
         )
@@ -680,6 +719,7 @@ where
     // Use infinite credit for now (matches current roam-stream behavior).
     let initial_credit = u32::MAX;
     let handle = ConnectionHandle::new_with_diagnostics(
+        roam_wire::ConnectionId::ROOT,
         driver_tx.clone(),
         Role::Initiator,
         initial_credit,
@@ -1123,6 +1163,7 @@ impl MultiPeerHostDriver {
                 // Host is acceptor (uses even stream IDs)
                 let initial_credit = u32::MAX;
                 let handle = ConnectionHandle::new_with_diagnostics(
+                    roam_wire::ConnectionId::ROOT,
                     driver_tx.clone(),
                     Role::Acceptor,
                     initial_credit,
@@ -1226,6 +1267,7 @@ impl MultiPeerHostDriver {
     ) -> Result<(), ShmConnectionError> {
         let wire_msg = match msg {
             DriverMessage::Call {
+                conn_id,
                 request_id,
                 method_id,
                 metadata,
@@ -1246,6 +1288,7 @@ impl MultiPeerHostDriver {
 
                 // Send the request
                 Message::Request {
+                    conn_id,
                     request_id,
                     method_id,
                     metadata,
@@ -1254,14 +1297,23 @@ impl MultiPeerHostDriver {
                 }
             }
             DriverMessage::Data {
+                conn_id,
                 channel_id,
                 payload,
             } => Message::Data {
+                conn_id,
                 channel_id,
                 payload,
             },
-            DriverMessage::Close { channel_id } => Message::Close { channel_id },
+            DriverMessage::Close {
+                conn_id,
+                channel_id,
+            } => Message::Close {
+                conn_id,
+                channel_id,
+            },
             DriverMessage::Response {
+                conn_id,
                 request_id,
                 channels,
                 payload,
@@ -1278,11 +1330,19 @@ impl MultiPeerHostDriver {
                     }
                 }
                 Message::Response {
+                    conn_id,
                     request_id,
                     metadata: Vec::new(),
                     channels,
                     payload,
                 }
+            }
+            DriverMessage::Connect { response_tx, .. } => {
+                // SHM doesn't support virtual connections - reject immediately
+                let _ = response_tx.send(Err(roam_session::ConnectError::Rejected(
+                    "virtual connections not supported over SHM".into(),
+                )));
+                return Ok(());
             }
         };
 
@@ -1304,6 +1364,15 @@ impl MultiPeerHostDriver {
                         "Received Hello message over SHM (not supported)".into(),
                     )
                     .await);
+            }
+            Message::Connect { .. } => {
+                // TODO: Handle incoming virtual connection requests
+            }
+            Message::Accept { .. } => {
+                // TODO: Handle virtual connection acceptance
+            }
+            Message::Reject { .. } => {
+                // TODO: Handle virtual connection rejection
             }
             Message::Goodbye { .. } => {
                 // Fail all pending responses for this peer
@@ -1330,6 +1399,7 @@ impl MultiPeerHostDriver {
                 metadata,
                 channels,
                 payload,
+                ..
             } => {
                 debug!(
                     request_id,
@@ -1344,9 +1414,9 @@ impl MultiPeerHostDriver {
             }
             Message::Response {
                 request_id,
-                metadata: _,
                 channels,
                 payload,
+                ..
             } => {
                 // Route to waiting caller
                 if let Some(state) = self.peers.get_mut(&peer_id)
@@ -1355,19 +1425,20 @@ impl MultiPeerHostDriver {
                     let _ = tx.send(Ok(ResponseData { payload, channels }));
                 }
             }
-            Message::Cancel { request_id: _ } => {
+            Message::Cancel { .. } => {
                 // TODO: Implement cancellation
             }
             Message::Data {
                 channel_id,
                 payload,
+                ..
             } => {
                 self.handle_data(peer_id, channel_id, payload).await?;
             }
-            Message::Close { channel_id } => {
+            Message::Close { channel_id, .. } => {
                 self.handle_close(peer_id, channel_id).await?;
             }
-            Message::Reset { channel_id } => {
+            Message::Reset { channel_id, .. } => {
                 self.handle_reset(peer_id, channel_id)?;
             }
             Message::Credit { .. } => {
@@ -1414,7 +1485,10 @@ impl MultiPeerHostDriver {
             trace!(request_id, method_id, name = %diag.name, "recording incoming request");
             diag.record_incoming_request(request_id, method_id, None);
         } else {
-            trace!(request_id, method_id, "diagnostic_state is None, not tracking incoming request");
+            trace!(
+                request_id,
+                method_id, "diagnostic_state is None, not tracking incoming request"
+            );
         }
 
         // Validate metadata
@@ -1459,7 +1533,9 @@ impl MultiPeerHostDriver {
             channels = ?channels,
             "handle_incoming_request: dispatching with channels"
         );
+        let conn_id = state.server_channel_registry.conn_id();
         let handler_fut = state.dispatcher.dispatch(
+            conn_id,
             method_id,
             payload,
             channels,
@@ -1511,9 +1587,7 @@ impl MultiPeerHostDriver {
         let in_client = state.handle.contains_channel(channel_id);
         trace!(
             channel_id,
-            in_server,
-            in_client,
-            "handle_data: checking channel registries"
+            in_server, in_client, "handle_data: checking channel registries"
         );
 
         let result = if in_server {
@@ -1777,6 +1851,7 @@ impl MultiPeerHostDriver {
             .send_to_peer(
                 peer_id,
                 &Message::Goodbye {
+                    conn_id: roam_wire::ConnectionId::ROOT,
                     reason: rule_id.into(),
                 },
             )

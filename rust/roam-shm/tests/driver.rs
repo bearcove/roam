@@ -135,6 +135,7 @@ fn setup_test() -> TestFixture {
         .add_peer(roam_shm::spawn::AddPeerOptions {
             peer_name: Some("test-guest".to_string()),
             on_death: None,
+            ..Default::default()
         })
         .unwrap();
 
@@ -310,6 +311,7 @@ fn setup_multi_peer_test() -> MultiPeerFixture {
         .add_peer(roam_shm::spawn::AddPeerOptions {
             peer_name: Some("guest-1".to_string()),
             on_death: None,
+            ..Default::default()
         })
         .unwrap();
     let peer_id1 = ticket1.peer_id;
@@ -321,6 +323,7 @@ fn setup_multi_peer_test() -> MultiPeerFixture {
         .add_peer(roam_shm::spawn::AddPeerOptions {
             peer_name: Some("guest-2".to_string()),
             on_death: None,
+            ..Default::default()
         })
         .unwrap();
     let peer_id2 = ticket2.peer_id;
@@ -436,6 +439,7 @@ async fn test_dynamic_peer_creation_no_preregistration() {
         .create_peer(roam_shm::spawn::AddPeerOptions {
             peer_name: Some("dynamic-peer-1".to_string()),
             on_death: None,
+            ..Default::default()
         })
         .await
         .unwrap();
@@ -461,6 +465,7 @@ async fn test_dynamic_peer_creation_no_preregistration() {
         .create_peer(roam_shm::spawn::AddPeerOptions {
             peer_name: Some("dynamic-peer-2".to_string()),
             on_death: None,
+            ..Default::default()
         })
         .await
         .unwrap();
@@ -476,6 +481,7 @@ async fn test_dynamic_peer_creation_no_preregistration() {
         .create_peer(roam_shm::spawn::AddPeerOptions {
             peer_name: Some("dynamic-peer-3".to_string()),
             on_death: None,
+            ..Default::default()
         })
         .await
         .unwrap();
@@ -518,6 +524,7 @@ async fn test_lazy_spawn_real_processes() {
         .create_peer(roam_shm::spawn::AddPeerOptions {
             peer_name: Some("guest1".to_string()),
             on_death: None,
+            ..Default::default()
         })
         .await
         .expect("failed to create peer 1");
@@ -557,6 +564,7 @@ async fn test_lazy_spawn_real_processes() {
         .create_peer(roam_shm::spawn::AddPeerOptions {
             peer_name: Some("guest2".to_string()),
             on_death: None,
+            ..Default::default()
         })
         .await
         .expect("failed to create peer 2");
@@ -639,6 +647,7 @@ async fn host_to_guest_backpressure_streaming() {
         .add_peer(roam_shm::spawn::AddPeerOptions {
             peer_name: Some("slow-guest".to_string()),
             on_death: None,
+            ..Default::default()
         })
         .unwrap();
     let peer_id = ticket.peer_id;
@@ -745,6 +754,7 @@ async fn host_to_guest_backpressure_host_streaming() {
         .add_peer(roam_shm::spawn::AddPeerOptions {
             peer_name: Some("slow-consumer".to_string()),
             on_death: None,
+            ..Default::default()
         })
         .unwrap();
     let peer_id = ticket.peer_id;
@@ -845,6 +855,7 @@ async fn slot_exhaustion_should_not_corrupt_channel_state() {
         .add_peer(roam_shm::spawn::AddPeerOptions {
             peer_name: Some("concurrent-test".to_string()),
             on_death: None,
+            ..Default::default()
         })
         .unwrap();
     let peer_id = ticket.peer_id;
@@ -878,11 +889,7 @@ async fn slot_exhaustion_should_not_corrupt_channel_state() {
         let client = TestbedClient::new(host_handle.clone());
         let handle = tokio::spawn(async move {
             // Large payload to force slot allocation - ~5KB like dodeca's HTML payloads
-            let large_input = format!(
-                "concurrent_call_{:04}_{}",
-                i,
-                "X".repeat(PAYLOAD_SIZE)
-            );
+            let large_input = format!("concurrent_call_{:04}_{}", i, "X".repeat(PAYLOAD_SIZE));
             match client.echo(large_input.clone()).await {
                 Ok(result) => {
                     assert_eq!(result, large_input);
@@ -892,7 +899,10 @@ async fn slot_exhaustion_should_not_corrupt_channel_state() {
                     // Backpressure errors are acceptable - protocol violations are NOT
                     let err_str = format!("{:?}", e);
                     if err_str.contains("streaming.unknown") {
-                        panic!("BUG: slot exhaustion caused protocol violation: {}", err_str);
+                        panic!(
+                            "BUG: slot exhaustion caused protocol violation: {}",
+                            err_str
+                        );
                     }
                     Err(e)
                 }
@@ -968,6 +978,7 @@ async fn streaming_errors_should_not_corrupt_channel_state() {
         .add_peer(roam_shm::spawn::AddPeerOptions {
             peer_name: Some("streaming-errors-test".to_string()),
             on_death: None,
+            ..Default::default()
         })
         .unwrap();
     let peer_id = ticket.peer_id;
@@ -1030,7 +1041,10 @@ async fn streaming_errors_should_not_corrupt_channel_state() {
                 Err(e) => {
                     let err_str = format!("{:?}", e);
                     if err_str.contains("streaming.unknown") {
-                        panic!("BUG: streaming error caused protocol violation: {}", err_str);
+                        panic!(
+                            "BUG: streaming error caused protocol violation: {}",
+                            err_str
+                        );
                     }
                     Err(e)
                 }
@@ -1114,6 +1128,7 @@ async fn mixed_calls_with_slot_exhaustion() {
         .add_peer(roam_shm::spawn::AddPeerOptions {
             peer_name: Some("mixed-calls-test".to_string()),
             on_death: None,
+            ..Default::default()
         })
         .unwrap();
     let peer_id = ticket.peer_id;
@@ -1296,6 +1311,7 @@ async fn recursive_calls_with_slot_exhaustion() {
         .add_peer(roam_shm::spawn::AddPeerOptions {
             peer_name: Some("recursive-test".to_string()),
             on_death: None,
+            ..Default::default()
         })
         .unwrap();
     let peer_id = ticket.peer_id;
@@ -1326,8 +1342,10 @@ async fn recursive_calls_with_slot_exhaustion() {
 
                 match tokio::time::timeout(
                     std::time::Duration::from_secs(5),
-                    client.host_process(depth - 1)
-                ).await {
+                    client.host_process(depth - 1),
+                )
+                .await
+                {
                     Ok(Ok(r)) => {
                         eprintln!("GUEST: got result {} for depth {}", r, depth);
                         r + 1
@@ -1357,7 +1375,10 @@ async fn recursive_calls_with_slot_exhaustion() {
                     eprintln!("GUEST[depth={}]: received '{}'", depth, msg);
                     count += 1;
                 }
-                eprintln!("GUEST[depth={}]: stream ended after {} messages", depth, count);
+                eprintln!(
+                    "GUEST[depth={}]: stream ended after {} messages",
+                    depth, count
+                );
                 count
             });
 
@@ -1387,8 +1408,10 @@ async fn recursive_calls_with_slot_exhaustion() {
 
                 match tokio::time::timeout(
                     std::time::Duration::from_secs(10),
-                    client.host_process_streaming(depth - 1, rx)
-                ).await {
+                    client.host_process_streaming(depth - 1, rx),
+                )
+                .await
+                {
                     Ok(Ok(r)) => {
                         eprintln!("GUEST: nested streaming result {} for depth {}", r, depth);
                         r + 1
@@ -1432,8 +1455,10 @@ async fn recursive_calls_with_slot_exhaustion() {
 
                 match tokio::time::timeout(
                     std::time::Duration::from_secs(5),
-                    client.process(depth - 1)
-                ).await {
+                    client.process(depth - 1),
+                )
+                .await
+                {
                     Ok(Ok(r)) => {
                         eprintln!("HOST: got result {} for depth {}", r, depth);
                         r + 1
@@ -1463,7 +1488,10 @@ async fn recursive_calls_with_slot_exhaustion() {
                     eprintln!("HOST[depth={}]: received '{}'", depth, msg);
                     count += 1;
                 }
-                eprintln!("HOST[depth={}]: stream ended after {} messages", depth, count);
+                eprintln!(
+                    "HOST[depth={}]: stream ended after {} messages",
+                    depth, count
+                );
                 count
             });
 
@@ -1493,8 +1521,10 @@ async fn recursive_calls_with_slot_exhaustion() {
 
                 match tokio::time::timeout(
                     std::time::Duration::from_secs(10),
-                    client.process_streaming(depth - 1, rx)
-                ).await {
+                    client.process_streaming(depth - 1, rx),
+                )
+                .await
+                {
                     Ok(Ok(r)) => {
                         eprintln!("HOST: nested streaming result {} for depth {}", r, depth);
                         r + 1
@@ -1519,15 +1549,17 @@ async fn recursive_calls_with_slot_exhaustion() {
         }
     }
 
-    let cell_impl = CellServiceImpl { to_host: guest_to_host.clone() };
-    let host_impl = HostServiceImpl { to_guest: host_to_guest.clone() };
+    let cell_impl = CellServiceImpl {
+        to_host: guest_to_host.clone(),
+    };
+    let host_impl = HostServiceImpl {
+        to_guest: host_to_guest.clone(),
+    };
 
     let guest_transport = ShmGuestTransport::from_spawn_args(spawn_args).unwrap();
     // Guest provides CellService, uses guest_outbound to call host
-    let (guest_outbound, guest_driver) = establish_guest(
-        guest_transport,
-        CellServiceDispatcher::new(cell_impl)
-    );
+    let (guest_outbound, guest_driver) =
+        establish_guest(guest_transport, CellServiceDispatcher::new(cell_impl));
 
     // Host provides HostService, uses host_outbound to call guest
     let (host_driver, mut handles, _driver_handle) =
@@ -1536,7 +1568,7 @@ async fn recursive_calls_with_slot_exhaustion() {
 
     // Wire up the callbacks
     let _ = guest_to_host.set(guest_outbound.clone()); // guest calls host via guest's outbound
-    let _ = host_to_guest.set(host_outbound.clone());  // host calls guest via host's outbound
+    let _ = host_to_guest.set(host_outbound.clone()); // host calls guest via host's outbound
 
     let guest_driver_handle = tokio::spawn(guest_driver.run());
     let host_driver_handle = tokio::spawn(host_driver.run());
@@ -1546,10 +1578,7 @@ async fn recursive_calls_with_slot_exhaustion() {
     // Test 1: Simple recursive call (should work)
     eprintln!("\n=== Test 1: depth=2 (should succeed) ===");
     let client = CellServiceClient::new(host_outbound.clone());
-    let result = tokio::time::timeout(
-        std::time::Duration::from_secs(10),
-        client.process(2)
-    ).await;
+    let result = tokio::time::timeout(std::time::Duration::from_secs(10), client.process(2)).await;
 
     match &result {
         Ok(Ok(n)) => eprintln!("depth=2 returned {}", n),
@@ -1559,10 +1588,8 @@ async fn recursive_calls_with_slot_exhaustion() {
 
     // Test 2: Deeper recursion - might exhaust slots
     eprintln!("\n=== Test 2: depth=10 (may exhaust slots) ===");
-    let result2 = tokio::time::timeout(
-        std::time::Duration::from_secs(10),
-        client.process(10)
-    ).await;
+    let result2 =
+        tokio::time::timeout(std::time::Duration::from_secs(10), client.process(10)).await;
 
     match &result2 {
         Ok(Ok(n)) => eprintln!("depth=10 returned {}", n),
@@ -1570,7 +1597,10 @@ async fn recursive_calls_with_slot_exhaustion() {
             let err_str = format!("{:?}", e);
             eprintln!("depth=10 failed: {}", err_str);
             if err_str.contains("streaming.unknown") {
-                panic!("BUG: recursive calls caused protocol violation: {}", err_str);
+                panic!(
+                    "BUG: recursive calls caused protocol violation: {}",
+                    err_str
+                );
             }
         }
         Err(_) => eprintln!("depth=10 timed out (expected with slot exhaustion)"),
@@ -1582,10 +1612,8 @@ async fn recursive_calls_with_slot_exhaustion() {
     for i in 0..5 {
         let client = CellServiceClient::new(host_outbound.clone());
         tasks.push(tokio::spawn(async move {
-            let result = tokio::time::timeout(
-                std::time::Duration::from_secs(10),
-                client.process(5)
-            ).await;
+            let result =
+                tokio::time::timeout(std::time::Duration::from_secs(10), client.process(5)).await;
             (i, result)
         }));
     }
@@ -1614,8 +1642,14 @@ async fn recursive_calls_with_slot_exhaustion() {
     eprintln!("Guest driver alive: {}", guest_alive);
     eprintln!("Host driver alive: {}", host_alive);
 
-    assert!(guest_alive, "Guest driver crashed - likely protocol violation");
-    assert!(host_alive, "Host driver crashed - likely protocol violation");
+    assert!(
+        guest_alive,
+        "Guest driver crashed - likely protocol violation"
+    );
+    assert!(
+        host_alive,
+        "Host driver crashed - likely protocol violation"
+    );
 }
 
 /// Test recursive STREAMING calls: each level holds an open stream while making nested calls.
@@ -1646,6 +1680,7 @@ async fn recursive_streaming_calls_with_slot_exhaustion() {
         .add_peer(roam_shm::spawn::AddPeerOptions {
             peer_name: Some("recursive-streaming-test".to_string()),
             on_death: None,
+            ..Default::default()
         })
         .unwrap();
     let peer_id = ticket.peer_id;
@@ -1678,7 +1713,10 @@ async fn recursive_streaming_calls_with_slot_exhaustion() {
                     eprintln!("GUEST[depth={}]: received '{}'", depth, msg);
                     count += 1;
                 }
-                eprintln!("GUEST[depth={}]: stream ended after {} messages", depth, count);
+                eprintln!(
+                    "GUEST[depth={}]: stream ended after {} messages",
+                    depth, count
+                );
                 count
             });
 
@@ -1707,8 +1745,10 @@ async fn recursive_streaming_calls_with_slot_exhaustion() {
 
                 match tokio::time::timeout(
                     std::time::Duration::from_secs(10),
-                    client.host_process_streaming(depth - 1, rx)
-                ).await {
+                    client.host_process_streaming(depth - 1, rx),
+                )
+                .await
+                {
                     Ok(Ok(r)) => {
                         eprintln!("GUEST: nested streaming result {} for depth {}", r, depth);
                         r + 1
@@ -1753,7 +1793,10 @@ async fn recursive_streaming_calls_with_slot_exhaustion() {
                     eprintln!("HOST[depth={}]: received '{}'", depth, msg);
                     count += 1;
                 }
-                eprintln!("HOST[depth={}]: stream ended after {} messages", depth, count);
+                eprintln!(
+                    "HOST[depth={}]: stream ended after {} messages",
+                    depth, count
+                );
                 count
             });
 
@@ -1782,8 +1825,10 @@ async fn recursive_streaming_calls_with_slot_exhaustion() {
 
                 match tokio::time::timeout(
                     std::time::Duration::from_secs(10),
-                    client.process_streaming(depth - 1, rx)
-                ).await {
+                    client.process_streaming(depth - 1, rx),
+                )
+                .await
+                {
                     Ok(Ok(r)) => {
                         eprintln!("HOST: nested streaming result {} for depth {}", r, depth);
                         r + 1
@@ -1807,14 +1852,16 @@ async fn recursive_streaming_calls_with_slot_exhaustion() {
         }
     }
 
-    let cell_impl = CellServiceImpl { to_host: guest_to_host.clone() };
-    let host_impl = HostServiceImpl { to_guest: host_to_guest.clone() };
+    let cell_impl = CellServiceImpl {
+        to_host: guest_to_host.clone(),
+    };
+    let host_impl = HostServiceImpl {
+        to_guest: host_to_guest.clone(),
+    };
 
     let guest_transport = ShmGuestTransport::from_spawn_args(spawn_args).unwrap();
-    let (guest_outbound, guest_driver) = establish_guest(
-        guest_transport,
-        CellServiceDispatcher::new(cell_impl)
-    );
+    let (guest_outbound, guest_driver) =
+        establish_guest(guest_transport, CellServiceDispatcher::new(cell_impl));
 
     let (host_driver, mut handles, _driver_handle) =
         establish_multi_peer_host(host, vec![(peer_id, HostServiceDispatcher::new(host_impl))]);
@@ -1845,8 +1892,9 @@ async fn recursive_streaming_calls_with_slot_exhaustion() {
     let client = CellServiceClient::new(host_outbound.clone());
     let result = tokio::time::timeout(
         std::time::Duration::from_secs(15),
-        client.process_streaming(2, rx)
-    ).await;
+        client.process_streaming(2, rx),
+    )
+    .await;
 
     match &result {
         Ok(Ok(n)) => eprintln!("streaming depth=2 returned {}", n),
@@ -1874,8 +1922,9 @@ async fn recursive_streaming_calls_with_slot_exhaustion() {
 
     let result2 = tokio::time::timeout(
         std::time::Duration::from_secs(30),
-        client.process_streaming(6, rx2)
-    ).await;
+        client.process_streaming(6, rx2),
+    )
+    .await;
 
     match &result2 {
         Ok(Ok(n)) => eprintln!("streaming depth=6 returned {}", n),
@@ -1883,7 +1932,10 @@ async fn recursive_streaming_calls_with_slot_exhaustion() {
             let err_str = format!("{:?}", e);
             eprintln!("streaming depth=6 failed: {}", err_str);
             if err_str.contains("streaming.unknown") {
-                panic!("BUG: deep streaming recursive calls caused protocol violation: {}", err_str);
+                panic!(
+                    "BUG: deep streaming recursive calls caused protocol violation: {}",
+                    err_str
+                );
             }
         }
         Err(_) => eprintln!("streaming depth=6 timed out (may be expected with slot exhaustion)"),
@@ -1908,8 +1960,9 @@ async fn recursive_streaming_calls_with_slot_exhaustion() {
         tasks.push(tokio::spawn(async move {
             let result = tokio::time::timeout(
                 std::time::Duration::from_secs(20),
-                client.process_streaming(3, rx)
-            ).await;
+                client.process_streaming(3, rx),
+            )
+            .await;
             (i, result)
         }));
     }
@@ -1938,6 +1991,12 @@ async fn recursive_streaming_calls_with_slot_exhaustion() {
     eprintln!("Guest driver alive: {}", guest_alive);
     eprintln!("Host driver alive: {}", host_alive);
 
-    assert!(guest_alive, "Guest driver crashed - likely protocol violation");
-    assert!(host_alive, "Host driver crashed - likely protocol violation");
+    assert!(
+        guest_alive,
+        "Guest driver crashed - likely protocol violation"
+    );
+    assert!(
+        host_alive,
+        "Host driver crashed - likely protocol violation"
+    );
 }

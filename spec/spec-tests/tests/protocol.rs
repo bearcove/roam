@@ -111,7 +111,7 @@ fn handshake_unknown_hello_variant_triggers_goodbye() {
                 .map_err(|e| e.to_string())?
             {
                 None => break,
-                Some(Message::Goodbye { reason }) => {
+                Some(Message::Goodbye { reason, .. }) => {
                     saw_goodbye = Some(reason);
                     break;
                 }
@@ -154,6 +154,7 @@ fn rpc_payload_over_max_triggers_goodbye() {
 
         // Send an oversized Request payload (17 bytes).
         let req = Message::Request {
+            conn_id: roam_wire::ConnectionId::ROOT,
             request_id: 1,
             method_id: 1,
             metadata: metadata_empty(),
@@ -171,7 +172,7 @@ fn rpc_payload_over_max_triggers_goodbye() {
                 .map_err(|e| e.to_string())?
             {
                 None => break,
-                Some(Message::Goodbye { reason: r }) => {
+                Some(Message::Goodbye { reason: r, .. }) => {
                     reason = Some(r);
                     break;
                 }
@@ -213,9 +214,12 @@ fn channel_id_zero_triggers_goodbye() {
             .map_err(|e| e.to_string())?;
 
         // Violate stream-id=0 reserved.
-        io.send(&Message::Close { channel_id: 0 })
-            .await
-            .map_err(|e| e.to_string())?;
+        io.send(&Message::Close {
+            conn_id: roam_wire::ConnectionId::ROOT,
+            channel_id: 0,
+        })
+        .await
+        .map_err(|e| e.to_string())?;
 
         let mut reason = None::<String>;
         for _ in 0..10 {
@@ -225,7 +229,7 @@ fn channel_id_zero_triggers_goodbye() {
                 .map_err(|e| e.to_string())?
             {
                 None => break,
-                Some(Message::Goodbye { reason: r }) => {
+                Some(Message::Goodbye { reason: r, .. }) => {
                     reason = Some(r);
                     break;
                 }
@@ -269,6 +273,7 @@ fn stream_unknown_id_triggers_goodbye() {
         // Send Data on a stream ID that was never opened.
         // (Stream ID 42 was never established via Request/Response)
         io.send(&Message::Data {
+            conn_id: roam_wire::ConnectionId::ROOT,
             channel_id: 42,
             payload: vec![0u8; 4],
         })
@@ -283,7 +288,7 @@ fn stream_unknown_id_triggers_goodbye() {
                 .map_err(|e| e.to_string())?
             {
                 None => break,
-                Some(Message::Goodbye { reason: r }) => {
+                Some(Message::Goodbye { reason: r, .. }) => {
                     reason = Some(r);
                     break;
                 }
@@ -325,6 +330,7 @@ fn stream_data_id_zero_triggers_goodbye() {
 
         // Send Data with channel_id=0 (reserved).
         io.send(&Message::Data {
+            conn_id: roam_wire::ConnectionId::ROOT,
             channel_id: 0,
             payload: vec![0u8; 4],
         })
@@ -339,7 +345,7 @@ fn stream_data_id_zero_triggers_goodbye() {
                 .map_err(|e| e.to_string())?
             {
                 None => break,
-                Some(Message::Goodbye { reason: r }) => {
+                Some(Message::Goodbye { reason: r, .. }) => {
                     reason = Some(r);
                     break;
                 }

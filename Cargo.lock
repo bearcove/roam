@@ -2237,6 +2237,7 @@ dependencies = [
  "roam-schema",
  "roam-service-macros",
  "roam-session",
+ "roam-wire",
  "tracing",
 ]
 

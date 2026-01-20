@@ -98,6 +98,7 @@ async fn handle_connection(stream: TcpStream) -> Result<(), Box<dyn std::error::
                 let response_payload = dispatch_method(method_id, &payload)?;
 
                 io.send(&Message::Response {
+                    conn_id: roam_wire::ConnectionId::ROOT,
                     request_id,
                     metadata: vec![],
                     channels: vec![],

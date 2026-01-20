@@ -70,6 +70,7 @@ fn setup_tracing_test() -> TracingTestFixture {
         .add_peer(roam_shm::spawn::AddPeerOptions {
             peer_name: Some("tracing-guest".to_string()),
             on_death: None,
+            ..Default::default()
         })
         .unwrap();
 

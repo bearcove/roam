@@ -32,8 +32,14 @@ fn format_message(msg: &Message, direction: &str) -> String {
             } => format!(
                 "{direction} Hello::V1 {{ max_payload: {max_payload_size}, credit: {initial_channel_credit} }}"
             ),
+            Hello::V2 {
+                max_payload_size,
+                initial_channel_credit,
+            } => format!(
+                "{direction} Hello::V2 {{ max_payload: {max_payload_size}, credit: {initial_channel_credit} }}"
+            ),
         },
-        Message::Goodbye { reason } => format!("{direction} Goodbye {{ reason: {reason:?} }}"),
+        Message::Goodbye { reason, .. } => format!("{direction} Goodbye {{ reason: {reason:?} }}"),
         Message::Request {
             request_id,
             method_id,
@@ -51,19 +57,29 @@ fn format_message(msg: &Message, direction: &str) -> String {
             "{direction} Response {{ id: {request_id}, payload: {} bytes }}",
             payload.len()
         ),
-        Message::Cancel { request_id } => format!("{direction} Cancel {{ id: {request_id} }}"),
+        Message::Cancel { request_id, .. } => format!("{direction} Cancel {{ id: {request_id} }}"),
         Message::Data {
             channel_id,
             payload,
+            ..
         } => format!(
             "{direction} Data {{ stream: {channel_id}, payload: {} bytes }}",
             payload.len()
         ),
-        Message::Close { channel_id } => format!("{direction} Close {{ stream: {channel_id} }}"),
-        Message::Reset { channel_id } => format!("{direction} Reset {{ stream: {channel_id} }}"),
-        Message::Credit { channel_id, bytes } => {
+        Message::Close { channel_id, .. } => {
+            format!("{direction} Close {{ stream: {channel_id} }}")
+        }
+        Message::Reset { channel_id, .. } => {
+            format!("{direction} Reset {{ stream: {channel_id} }}")
+        }
+        Message::Credit {
+            channel_id, bytes, ..
+        } => {
             format!("{direction} Credit {{ stream: {channel_id}, bytes: {bytes} }}")
         }
+        Message::Connect { .. } => format!("{direction} Connect {{ ... }}"),
+        Message::Accept { .. } => format!("{direction} Accept {{ ... }}"),
+        Message::Reject { .. } => format!("{direction} Reject {{ ... }}"),
     }
 }
 
@@ -340,6 +356,7 @@ pub mod wire_server {
                             .map_err(|e| format!("decode echo args: {e}"))?;
                         let response_payload = encode_ok(&args.0)?;
                         io.send(&Message::Response {
+                            conn_id: roam_wire::ConnectionId::ROOT,
                             request_id,
                             metadata: metadata_empty(),
                             channels: vec![],
@@ -354,6 +371,7 @@ pub mod wire_server {
                         let reversed: String = args.0.chars().rev().collect();
                         let response_payload = encode_ok(&reversed)?;
                         io.send(&Message::Response {
+                            conn_id: roam_wire::ConnectionId::ROOT,
                             request_id,
                             metadata: metadata_empty(),
                             channels: vec![],
@@ -382,6 +400,7 @@ pub mod wire_server {
                             let data_payload = facet_postcard::to_vec(&i)
                                 .map_err(|e| format!("encode data: {e}"))?;
                             io.send(&Message::Data {
+                                conn_id: roam_wire::ConnectionId::ROOT,
                                 channel_id,
                                 payload: data_payload,
                             })
@@ -390,13 +409,17 @@ pub mod wire_server {
                         }
 
                         // Send Close
-                        io.send(&Message::Close { channel_id })
-                            .await
-                            .map_err(|e| format!("send close: {e}"))?;
+                        io.send(&Message::Close {
+                            conn_id: roam_wire::ConnectionId::ROOT,
+                            channel_id,
+                        })
+                        .await
+                        .map_err(|e| format!("send close: {e}"))?;
 
                         // Send Response
                         let response_payload = encode_ok(&())?;
                         io.send(&Message::Response {
+                            conn_id: roam_wire::ConnectionId::ROOT,
                             request_id,
                             metadata: metadata_empty(),
                             channels: vec![],
@@ -412,6 +435,7 @@ pub mod wire_server {
                         // Unknown method - send error response
                         let response_payload = vec![0x01, 0x01]; // Result::Err, RoamError::UnknownMethod
                         io.send(&Message::Response {
+                            conn_id: roam_wire::ConnectionId::ROOT,
                             request_id,
                             metadata: metadata_empty(),
                             channels: vec![],
@@ -425,6 +449,7 @@ pub mod wire_server {
                 Message::Data {
                     channel_id,
                     payload,
+                    ..
                 } => {
                     // Accumulate data for the channel
                     if let Some(data) = channels.get_mut(&channel_id) {
@@ -434,7 +459,7 @@ pub mod wire_server {
                     }
                 }
 
-                Message::Close { channel_id } => {
+                Message::Close { channel_id, .. } => {
                     // Channel closed - if this was a sum request, send the response
                     if let Some((request_id, sum_channel_id)) = pending_sum.take()
                         && sum_channel_id == channel_id
@@ -443,6 +468,7 @@ pub mod wire_server {
                         let sum: i64 = data.iter().map(|&x| x as i64).sum();
                         let response_payload = encode_ok(&sum)?;
                         io.send(&Message::Response {
+                            conn_id: roam_wire::ConnectionId::ROOT,
                             request_id,
                             metadata: metadata_empty(),
                             channels: vec![],

@@ -69,7 +69,7 @@ pub fn message_to_frame(msg: &Message) -> Result<Frame, ConvertError> {
             Err(ConvertError::HelloNotSupported)
         }
 
-        Message::Goodbye { reason } => {
+        Message::Goodbye { reason, .. } => {
             // Goodbye uses the payload for the reason string
             let mut desc = MsgDesc::new(msg_type::GOODBYE, 0, 0);
             let reason_bytes = reason.as_bytes();
@@ -92,6 +92,7 @@ pub fn message_to_frame(msg: &Message) -> Result<Frame, ConvertError> {
             metadata,
             channels,
             payload,
+            ..
         } => {
             // shm[impl shm.metadata.in-payload]
             // Encode metadata + channels + payload together
@@ -120,6 +121,7 @@ pub fn message_to_frame(msg: &Message) -> Result<Frame, ConvertError> {
             metadata,
             channels,
             payload,
+            ..
         } => {
             // shm[impl shm.metadata.in-payload]
             let combined = encode_response_payload(metadata, channels, payload);
@@ -142,7 +144,7 @@ pub fn message_to_frame(msg: &Message) -> Result<Frame, ConvertError> {
             })
         }
 
-        Message::Cancel { request_id } => {
+        Message::Cancel { request_id, .. } => {
             let desc = MsgDesc::new(msg_type::CANCEL, *request_id as u32, 0);
             Ok(Frame {
                 desc,
@@ -153,6 +155,7 @@ pub fn message_to_frame(msg: &Message) -> Result<Frame, ConvertError> {
         Message::Data {
             channel_id,
             payload,
+            ..
         } => {
             let mut desc = MsgDesc::new(msg_type::DATA, *channel_id as u32, 0);
 
@@ -172,7 +175,7 @@ pub fn message_to_frame(msg: &Message) -> Result<Frame, ConvertError> {
             })
         }
 
-        Message::Close { channel_id } => {
+        Message::Close { channel_id, .. } => {
             let desc = MsgDesc::new(msg_type::CLOSE, *channel_id as u32, 0);
             Ok(Frame {
                 desc,
@@ -180,12 +183,18 @@ pub fn message_to_frame(msg: &Message) -> Result<Frame, ConvertError> {
             })
         }
 
-        Message::Reset { channel_id } => {
+        Message::Reset { channel_id, .. } => {
             let desc = MsgDesc::new(msg_type::RESET, *channel_id as u32, 0);
             Ok(Frame {
                 desc,
                 payload: Payload::Inline,
             })
+        }
+
+        Message::Connect { .. } | Message::Accept { .. } | Message::Reject { .. } => {
+            // Virtual connection messages are not supported in SHM transport
+            // SHM has a 1:1 relationship between segments and connections
+            Err(ConvertError::HelloNotSupported) // TODO: add a proper variant
         }
 
         Message::Credit { .. } => {
@@ -202,10 +211,13 @@ pub fn message_to_frame(msg: &Message) -> Result<Frame, ConvertError> {
 pub fn frame_to_message(frame: Frame) -> Result<Message, ConvertError> {
     let payload_bytes = frame.payload_bytes();
 
+    // SHM transport always uses ROOT connection ID since it's a 1:1 mapping
+    let conn_id = roam_wire::ConnectionId::ROOT;
+
     match frame.desc.msg_type {
         msg_type::GOODBYE => {
             let reason = String::from_utf8_lossy(payload_bytes).into_owned();
-            Ok(Message::Goodbye { reason })
+            Ok(Message::Goodbye { conn_id, reason })
         }
 
         msg_type::REQUEST => {
@@ -213,6 +225,7 @@ pub fn frame_to_message(frame: Frame) -> Result<Message, ConvertError> {
                 .map_err(|e| ConvertError::DecodeError(e.to_string()))?;
 
             Ok(Message::Request {
+                conn_id,
                 request_id: frame.desc.id as u64,
                 method_id: frame.desc.method_id,
                 metadata,
@@ -226,6 +239,7 @@ pub fn frame_to_message(frame: Frame) -> Result<Message, ConvertError> {
                 .map_err(|e| ConvertError::DecodeError(e.to_string()))?;
 
             Ok(Message::Response {
+                conn_id,
                 request_id: frame.desc.id as u64,
                 metadata,
                 channels,
@@ -234,19 +248,23 @@ pub fn frame_to_message(frame: Frame) -> Result<Message, ConvertError> {
         }
 
         msg_type::CANCEL => Ok(Message::Cancel {
+            conn_id,
             request_id: frame.desc.id as u64,
         }),
 
         msg_type::DATA => Ok(Message::Data {
+            conn_id,
             channel_id: frame.desc.id as u64,
             payload: payload_bytes.to_vec(),
         }),
 
         msg_type::CLOSE => Ok(Message::Close {
+            conn_id,
             channel_id: frame.desc.id as u64,
         }),
 
         msg_type::RESET => Ok(Message::Reset {
+            conn_id,
             channel_id: frame.desc.id as u64,
         }),
 
@@ -298,16 +316,13 @@ fn encode_response_payload(
 
 /// Decode metadata + channels + payload for Request messages.
 fn decode_request_payload(data: &[u8]) -> DecodedRequestPayload {
-    tracing::debug!(
-        data_len = data.len(),
-        "decode_request_payload: input"
-    );
+    tracing::debug!(data_len = data.len(), "decode_request_payload: input");
     if data.is_empty() {
         tracing::debug!("decode_request_payload: empty data, returning empty");
         return Ok((Vec::new(), Vec::new(), Vec::new()));
     }
-    let combined: CombinedPayload = facet_postcard::from_slice(data)
-        .map_err(|e| format!("decode error: {}", e))?;
+    let combined: CombinedPayload =
+        facet_postcard::from_slice(data).map_err(|e| format!("decode error: {}", e))?;
     tracing::debug!(
         channels = ?combined.channels,
         "decode_request_payload: decoded"
@@ -320,8 +335,8 @@ fn decode_response_payload(data: &[u8]) -> DecodedResponsePayload {
     if data.is_empty() {
         return Ok((Vec::new(), Vec::new(), Vec::new()));
     }
-    let combined: CombinedPayload = facet_postcard::from_slice(data)
-        .map_err(|e| format!("decode error: {}", e))?;
+    let combined: CombinedPayload =
+        facet_postcard::from_slice(data).map_err(|e| format!("decode error: {}", e))?;
     Ok((combined.metadata, combined.channels, combined.payload))
 }
 
@@ -678,11 +693,12 @@ mod async_transport {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use roam_wire::Hello;
+    use roam_wire::{ConnectionId, Hello};
 
     #[test]
     fn roundtrip_request() {
         let msg = Message::Request {
+            conn_id: ConnectionId::ROOT,
             request_id: 42,
             method_id: 123,
             metadata: vec![(
@@ -702,6 +718,7 @@ mod tests {
     #[test]
     fn roundtrip_request_with_channels() {
         let msg = Message::Request {
+            conn_id: ConnectionId::ROOT,
             request_id: 42,
             method_id: 123,
             metadata: vec![],
@@ -718,6 +735,7 @@ mod tests {
     #[test]
     fn roundtrip_response() {
         let msg = Message::Response {
+            conn_id: ConnectionId::ROOT,
             request_id: 99,
             metadata: vec![],
             channels: vec![],
@@ -733,6 +751,7 @@ mod tests {
     #[test]
     fn roundtrip_response_with_channels() {
         let msg = Message::Response {
+            conn_id: ConnectionId::ROOT,
             request_id: 99,
             metadata: vec![],
             channels: vec![2, 4, 6],
@@ -748,6 +767,7 @@ mod tests {
     #[test]
     fn roundtrip_data() {
         let msg = Message::Data {
+            conn_id: ConnectionId::ROOT,
             channel_id: 7,
             payload: b"stream chunk".to_vec(),
         };
@@ -761,10 +781,20 @@ mod tests {
     #[test]
     fn roundtrip_control_messages() {
         let messages = vec![
-            Message::Cancel { request_id: 10 },
-            Message::Close { channel_id: 20 },
-            Message::Reset { channel_id: 30 },
+            Message::Cancel {
+                conn_id: ConnectionId::ROOT,
+                request_id: 10,
+            },
+            Message::Close {
+                conn_id: ConnectionId::ROOT,
+                channel_id: 20,
+            },
+            Message::Reset {
+                conn_id: ConnectionId::ROOT,
+                channel_id: 30,
+            },
             Message::Goodbye {
+                conn_id: ConnectionId::ROOT,
                 reason: "shutdown".to_string(),
             },
         ];
@@ -792,6 +822,7 @@ mod tests {
     #[test]
     fn credit_not_supported() {
         let msg = Message::Credit {
+            conn_id: ConnectionId::ROOT,
             channel_id: 1,
             bytes: 1024,
         };
@@ -806,6 +837,7 @@ mod tests {
     fn inline_payload() {
         // Small payload should be inlined
         let msg = Message::Data {
+            conn_id: ConnectionId::ROOT,
             channel_id: 1,
             payload: b"tiny".to_vec(),
         };
@@ -819,6 +851,7 @@ mod tests {
     fn large_payload() {
         // Large payload should not be inlined
         let msg = Message::Data {
+            conn_id: ConnectionId::ROOT,
             channel_id: 1,
             payload: vec![0u8; 100],
         };

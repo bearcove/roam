@@ -42,6 +42,7 @@ impl ServiceDispatcher for TestService {
 
     fn dispatch(
         &self,
+        _conn_id: roam_wire::ConnectionId,
         method_id: u64,
         payload: Vec<u8>,
         channels: Vec<u64>,

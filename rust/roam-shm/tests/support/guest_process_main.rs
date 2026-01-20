@@ -13,6 +13,7 @@ use roam_session::{ChannelRegistry, Rx, ServiceDispatcher, Tx, dispatch_call};
 use roam_shm::driver::establish_guest;
 use roam_shm::spawn::{SpawnArgs, die_with_parent};
 use roam_shm::transport::ShmGuestTransport;
+use roam_wire::ConnectionId;
 use std::pin::Pin;
 
 /// Test service matching the one in driver.rs tests
@@ -26,6 +27,7 @@ impl ServiceDispatcher for TestService {
 
     fn dispatch(
         &self,
+        _conn_id: ConnectionId,
         method_id: u64,
         payload: Vec<u8>,
         channels: Vec<u64>,
