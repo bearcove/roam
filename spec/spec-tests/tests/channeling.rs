@@ -56,6 +56,8 @@ async fn hello_exchange(io: &mut spec_tests::harness::CobsFramed) -> Result<(), 
 // r[verify channeling.data] - Data messages carry stream payloads
 // r[verify channeling.close] - Close terminates stream gracefully
 // r[verify channeling.id.parity] - Client uses odd stream IDs (initiator)
+// r[verify channeling.caller-pov] - Rx<i32> means caller receives (server sends), but here caller transmits via the channel
+// r[verify channeling.allocation.caller] - Caller allocates channel ID (channel_id = 1)
 #[test]
 fn streaming_sum_client_to_server() {
     run_async(async {

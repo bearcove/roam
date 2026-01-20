@@ -199,6 +199,13 @@ pub async fn spawn_subject(peer_addr: &str) -> Result<Child, String> {
 }
 
 pub async fn accept_subject() -> Result<(CobsFramed, Child), String> {
+    accept_subject_with_options(false).await
+}
+
+/// Accept subject with option to enable incoming virtual connections.
+pub async fn accept_subject_with_options(
+    accept_connections: bool,
+) -> Result<(CobsFramed, Child), String> {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .map_err(|e| format!("bind: {e}"))?;
@@ -206,7 +213,7 @@ pub async fn accept_subject() -> Result<(CobsFramed, Child), String> {
         .local_addr()
         .map_err(|e| format!("local_addr: {e}"))?;
 
-    let child = spawn_subject(&addr.to_string()).await?;
+    let child = spawn_subject_with_options(&addr.to_string(), accept_connections).await?;
 
     let (stream, _) = tokio::time::timeout(Duration::from_secs(5), listener.accept())
         .await
@@ -214,6 +221,40 @@ pub async fn accept_subject() -> Result<(CobsFramed, Child), String> {
         .map_err(|e| format!("accept: {e}"))?;
 
     Ok((CobsFramed::new(stream), child))
+}
+
+/// Spawn subject with option to enable incoming virtual connections.
+pub async fn spawn_subject_with_options(
+    peer_addr: &str,
+    accept_connections: bool,
+) -> Result<Child, String> {
+    let cmd = subject_cmd();
+
+    let mut command = Command::new("sh");
+    command
+        .current_dir(workspace_root())
+        .arg("-lc")
+        .arg(cmd)
+        .env("PEER_ADDR", peer_addr)
+        .stdin(Stdio::null())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit());
+
+    if accept_connections {
+        command.env("ACCEPT_CONNECTIONS", "1");
+    }
+
+    let mut child = command
+        .spawn()
+        .map_err(|e| format!("failed to spawn subject: {e}"))?;
+
+    // If it exits immediately, surface that early.
+    tokio::time::sleep(Duration::from_millis(10)).await;
+    if let Some(status) = child.try_wait().map_err(|e| e.to_string())? {
+        return Err(format!("subject exited immediately with {status}"));
+    }
+
+    Ok(child)
 }
 
 /// Spawn subject in client mode with the given scenario.

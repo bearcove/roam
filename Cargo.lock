@@ -2402,8 +2402,10 @@ dependencies = [
  "facet",
  "facet-postcard",
  "futures-util",
+ "roam",
  "roam-session",
  "roam-wire",
+ "spec-proto",
  "tokio",
 ]
 

@@ -584,7 +584,8 @@ impl ConnectionState {
             initial_credit,
             diagnostic_state,
         );
-        let server_channel_registry = ChannelRegistry::new_with_credit(initial_credit, driver_tx);
+        let server_channel_registry =
+            ChannelRegistry::new_with_credit_and_role(conn_id, initial_credit, driver_tx, role);
         Self {
             conn_id,
             handle,

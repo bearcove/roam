@@ -1135,10 +1135,18 @@ impl ChannelRegistry {
     /// Bind a Tx<T> stream for server-side dispatch.
     ///
     /// Server sends data to client on this stream.
-    /// Sets the driver_tx directly so Tx::send() writes DriverMessage::Data to the wire.
+    /// Sets the conn_id and driver_tx so Tx::send() writes DriverMessage::Data to the wire.
     /// When the Tx is dropped, it sends DriverMessage::Close automatically.
     fn bind_tx_stream(&mut self, poke: facet::Poke<'_, '_>) {
         if let Ok(mut ps) = poke.into_struct() {
+            // Set conn_id so Data/Close messages go to the correct virtual connection
+            // r[impl core.conn.independence]
+            if let Ok(mut conn_id_field) = ps.field_by_name("conn_id")
+                && let Ok(id_ref) = conn_id_field.get_mut::<roam_wire::ConnectionId>()
+            {
+                *id_ref = self.conn_id;
+            }
+
             // Set driver_tx so Tx::send() can write directly to the wire
             if let Ok(mut driver_tx_field) = ps.field_by_name("driver_tx")
                 && let Ok(slot) = driver_tx_field.get_mut::<DriverTxSlot>()

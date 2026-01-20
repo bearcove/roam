@@ -161,7 +161,7 @@ fn rpc_echo_roundtrip() {
     .unwrap();
 }
 
-// r[verify call.error.user-error] - User error from fallible method is returned as RoamError::User(E)
+// r[verify call.error.user] - User error from fallible method is returned as RoamError::User(E)
 // r[verify call.response.encoding] - Response is POSTCARD Result<T, RoamError<E>>
 #[test]
 fn rpc_user_error_roundtrip() {
@@ -239,6 +239,7 @@ fn rpc_user_error_roundtrip() {
 
 // r[verify call.error.unknown-method] - Unknown method_id returns UnknownMethod error
 // r[verify call.error.roam-error] - Protocol errors use RoamError variants
+// r[verify call.error.protocol] - UnknownMethod is a protocol-level error (discriminant 1)
 #[test]
 fn rpc_unknown_method_returns_unknownmethod_error() {
     ensure_expected_ids();
