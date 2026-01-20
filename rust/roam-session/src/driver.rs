@@ -1300,7 +1300,26 @@ where
 
     // Wait for peer Hello with timeout
     let peer_hello = match io.recv_timeout(Duration::from_secs(5)).await {
-        Ok(Some(Message::Hello(h))) => h,
+        Ok(Some(Message::Hello(Hello::V2 {
+            max_payload_size,
+            initial_channel_credit,
+        }))) => Hello::V2 {
+            max_payload_size,
+            initial_channel_credit,
+        },
+        Ok(Some(Message::Hello(Hello::V1 { .. }))) => {
+            // V1 is no longer supported - reject it
+            let _ = io
+                .send(&Message::Goodbye {
+                    conn_id: ConnectionId::ROOT,
+                    reason: "message.hello.unknown-version".into(),
+                })
+                .await;
+            return Err(ConnectionError::ProtocolViolation {
+                rule_id: "message.hello.unknown-version",
+                context: "received Hello::V1, but V1 is no longer supported".into(),
+            });
+        }
         Ok(Some(_)) => {
             let _ = io
                 .send(&Message::Goodbye {
@@ -1316,7 +1335,7 @@ where
         Ok(None) => return Err(ConnectionError::Closed),
         Err(e) => {
             let raw = io.last_decoded();
-            let is_unknown_hello = raw.len() >= 2 && raw[0] == 0x00 && raw[1] != 0x00;
+            let is_unknown_hello = raw.len() >= 2 && raw[0] == 0x00 && raw[1] > 0x01;
             let version = if is_unknown_hello { raw[1] } else { 0 };
 
             if is_unknown_hello {
@@ -1335,26 +1354,20 @@ where
         }
     };
 
-    // Negotiate parameters
+    // Negotiate parameters (both sides MUST use V2)
     let (our_max, our_credit) = match &our_hello {
-        Hello::V1 {
-            max_payload_size,
-            initial_channel_credit,
-        }
-        | Hello::V2 {
+        Hello::V2 {
             max_payload_size,
             initial_channel_credit,
         } => (*max_payload_size, *initial_channel_credit),
+        Hello::V1 { .. } => unreachable!("we always send V2"),
     };
     let (peer_max, peer_credit) = match &peer_hello {
-        Hello::V1 {
-            max_payload_size,
-            initial_channel_credit,
-        }
-        | Hello::V2 {
+        Hello::V2 {
             max_payload_size,
             initial_channel_credit,
         } => (*max_payload_size, *initial_channel_credit),
+        Hello::V1 { .. } => unreachable!("V1 is rejected above"),
     };
 
     let negotiated = Negotiated {

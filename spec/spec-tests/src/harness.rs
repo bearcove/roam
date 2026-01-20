@@ -107,7 +107,7 @@ pub fn run_async<T>(f: impl std::future::Future<Output = T>) -> T {
 }
 
 pub fn our_hello(max_payload_size: u32) -> Hello {
-    Hello::V1 {
+    Hello::V2 {
         max_payload_size,
         initial_channel_credit: 64 * 1024,
     }
@@ -290,7 +290,10 @@ pub mod wire_server {
             .ok_or("connection closed before hello")?;
 
         match msg {
-            Message::Hello(Hello::V1 { .. }) => {}
+            Message::Hello(Hello::V2 { .. }) => {}
+            Message::Hello(Hello::V1 { .. }) => {
+                return Err("received Hello::V1, but V1 is no longer supported".to_string());
+            }
             other => return Err(format!("expected Hello, got {other:?}")),
         }
 

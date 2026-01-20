@@ -98,8 +98,12 @@ fn rpc_echo_roundtrip() {
             .await
             .map_err(|e| e.to_string())?
             .ok_or_else(|| "expected Hello from subject".to_string())?;
-        if !matches!(msg, Message::Hello(Hello::V1 { .. })) {
-            return Err(format!("first message must be Hello, got {msg:?}"));
+        match msg {
+            Message::Hello(Hello::V2 { .. }) => {}
+            Message::Hello(Hello::V1 { .. }) => {
+                return Err("received Hello::V1, but V1 is no longer supported".to_string());
+            }
+            _ => return Err(format!("first message must be Hello, got {msg:?}")),
         }
 
         io.send(&Message::Hello(our_hello(1024 * 1024)))
