@@ -229,12 +229,39 @@ impl From<TransportError> for ConnectError {
 /// Accept a connection with a pre-framed transport (e.g., WebSocket).
 ///
 /// Use this when the transport already provides message framing.
-/// Returns a handle for making calls and a driver that must be spawned.
+/// Returns:
+/// - A handle for making calls on connection 0 (root)
+/// - A receiver for incoming virtual connection requests
+/// - A driver that must be spawned
+///
+/// The `IncomingConnections` receiver allows accepting sub-connections opened
+/// by the remote peer. If you don't need sub-connections, you can drop it and
+/// all Connect requests will be automatically rejected.
+///
+/// # Example
+///
+/// ```ignore
+/// let (handle, incoming, driver) = accept_framed(transport, config, dispatcher).await?;
+///
+/// // Spawn the driver
+/// spawn(driver.run());
+///
+/// // Optionally handle incoming connections in another task
+/// spawn(async move {
+///     while let Some(conn) = incoming.recv().await {
+///         let sub_handle = conn.accept(vec![]).await?;
+///         // Use sub_handle for this virtual connection...
+///     }
+/// });
+///
+/// // Use handle for calls on the root connection
+/// let response = handle.call_raw(method_id, payload).await?;
+/// ```
 pub async fn accept_framed<T, D>(
     transport: T,
     config: HandshakeConfig,
     dispatcher: D,
-) -> Result<(ConnectionHandle, Driver<T, D>), ConnectionError>
+) -> Result<(ConnectionHandle, IncomingConnections, Driver<T, D>), ConnectionError>
 where
     T: MessageTransport,
     D: ServiceDispatcher,
@@ -352,7 +379,7 @@ where
             .await
             .map_err(ConnectError::ConnectFailed)?;
 
-        let (handle, driver) = establish(
+        let (handle, _incoming, driver) = establish(
             transport,
             self.config.to_hello(),
             self.dispatcher.clone(),
@@ -360,6 +387,9 @@ where
         )
         .await
         .map_err(|e| ConnectError::ConnectFailed(connection_error_to_io(e)))?;
+
+        // Note: We drop `_incoming` - this client doesn't accept sub-connections.
+        // Any Connect requests from the server will be automatically rejected.
 
         // Spawn driver using runtime abstraction (works on native and WASM)
         spawn(async move {
@@ -574,7 +604,7 @@ impl ConnectionState {
 
 /// An incoming virtual connection request.
 ///
-/// Received via `take_incoming_connections()` on connection 0.
+/// Received via the `IncomingConnections` receiver returned from `accept_framed()`.
 /// Call `accept()` to accept the connection and get a handle,
 /// or `reject()` to refuse it.
 pub struct IncomingConnection {
@@ -687,38 +717,6 @@ where
             .expect("root connection always exists")
             .handle
             .clone()
-    }
-
-    /// Start accepting incoming virtual connections.
-    ///
-    /// Returns a receiver that yields `IncomingConnection` for each `Connect`
-    /// request received from the remote peer. Call `accept()` or `reject()`
-    /// on each incoming connection.
-    ///
-    /// r[impl core.conn.accept-required]
-    ///
-    /// This can only be called once. Subsequent calls will panic.
-    /// Only the root connection can accept incoming connections.
-    ///
-    /// # Example
-    ///
-    /// ```ignore
-    /// let mut incoming = driver.take_incoming_connections();
-    ///
-    /// // In a separate task:
-    /// while let Some(conn) = incoming.recv().await {
-    ///     // Accept all incoming connections
-    ///     let handle = conn.accept(vec![]).await?;
-    ///     // Use handle...
-    /// }
-    /// ```
-    pub fn take_incoming_connections(&mut self) -> Receiver<IncomingConnection> {
-        if self.incoming_connections_tx.is_some() {
-            panic!("take_incoming_connections() can only be called once");
-        }
-        let (tx, rx) = channel(64);
-        self.incoming_connections_tx = Some(tx);
-        rx
     }
 
     /// Run the driver until the connection closes.
@@ -891,6 +889,9 @@ where
                 metadata,
                 response_tx,
             } => {
+                // r[impl message.connect.initiate]
+                // r[impl message.connect.request-id]
+                // r[impl message.connect.metadata]
                 // Store pending connect request
                 self.pending_connects
                     .insert(request_id, PendingConnect { response_tx });
@@ -986,6 +987,9 @@ where
                 conn_id,
                 metadata: _,
             } => {
+                // r[impl message.accept.response]
+                // r[impl message.accept.metadata]
+                // r[impl core.conn.id-allocation]
                 // Handle response to our outgoing Connect request
                 if let Some(pending) = self.pending_connects.remove(&request_id) {
                     // Create connection state for the new virtual connection
@@ -1007,6 +1011,8 @@ where
                 reason,
                 metadata: _,
             } => {
+                // r[impl message.reject.response]
+                // r[impl message.reject.reason]
                 // Handle rejection of our outgoing Connect request
                 if let Some(pending) = self.pending_connects.remove(&request_id) {
                     let _ = pending
@@ -1268,12 +1274,19 @@ where
 /// Initiate a connection with a pre-framed transport (e.g., WebSocket).
 ///
 /// Use this when establishing a connection as the initiator (client).
-/// Returns a handle for making calls and a driver that must be spawned.
+/// Returns:
+/// - A handle for making calls on connection 0 (root)
+/// - A receiver for incoming virtual connection requests
+/// - A driver that must be spawned
+///
+/// For clients that don't need to accept sub-connections, you can drop
+/// the `IncomingConnections` receiver and all Connect requests from
+/// the server will be automatically rejected.
 pub async fn initiate_framed<T, D>(
     transport: T,
     config: HandshakeConfig,
     dispatcher: D,
-) -> Result<(ConnectionHandle, Driver<T, D>), ConnectionError>
+) -> Result<(ConnectionHandle, IncomingConnections, Driver<T, D>), ConnectionError>
 where
     T: MessageTransport,
     D: ServiceDispatcher,
@@ -1285,12 +1298,21 @@ where
 // establish() - Perform handshake and create driver (internal)
 // ============================================================================
 
+/// Receiver for incoming virtual connection requests.
+///
+/// Returned from `accept_framed()`. Each item is an `IncomingConnection`
+/// that can be accepted or rejected.
+///
+/// If this receiver is dropped, all pending and future Connect requests
+/// will be automatically rejected with "not listening".
+pub type IncomingConnections = Receiver<IncomingConnection>;
+
 async fn establish<T, D>(
     mut io: T,
     our_hello: Hello,
     dispatcher: D,
     role: Role,
-) -> Result<(ConnectionHandle, Driver<T, D>), ConnectionError>
+) -> Result<(ConnectionHandle, IncomingConnections, Driver<T, D>), ConnectionError>
 where
     T: MessageTransport,
     D: ServiceDispatcher,
@@ -1392,6 +1414,10 @@ where
     let mut connections = HashMap::new();
     connections.insert(ConnectionId::ROOT, root_conn);
 
+    // Create channel for incoming connection requests
+    // r[impl core.conn.accept-required]
+    let (incoming_connections_tx, incoming_connections_rx) = channel(64);
+
     // Create channel for incoming connection responses (Accept/Reject from app code)
     let (incoming_response_tx, incoming_response_rx) = channel(64);
 
@@ -1406,13 +1432,13 @@ where
         next_conn_id: 1, // 0 is ROOT, start allocating at 1
         pending_connects: HashMap::new(),
         next_connect_request_id: 1,
-        incoming_connections_tx: None, // Not listening by default
+        incoming_connections_tx: Some(incoming_connections_tx), // Always created upfront
         incoming_response_rx: Some(incoming_response_rx),
         incoming_response_tx,
         diagnostic_state: None,
     };
 
-    Ok((handle, driver))
+    Ok((handle, incoming_connections_rx, driver))
 }
 
 // ============================================================================

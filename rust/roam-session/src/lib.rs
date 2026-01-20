@@ -15,8 +15,8 @@ pub mod transport;
 
 pub use driver::{
     ConnectError, ConnectionError, Driver, FramedClient, HandshakeConfig, IncomingConnection,
-    MessageConnector, Negotiated, NoDispatcher, RetryPolicy, accept_framed, connect_framed,
-    connect_framed_with_policy, initiate_framed,
+    IncomingConnections, MessageConnector, Negotiated, NoDispatcher, RetryPolicy, accept_framed,
+    connect_framed, connect_framed_with_policy, initiate_framed,
 };
 pub use transport::MessageTransport;
 

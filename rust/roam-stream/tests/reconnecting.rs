@@ -106,7 +106,7 @@ async fn start_test_server(service: TestService) -> (SocketAddr, tokio::task::Jo
         while let Ok((stream, _)) = listener.accept().await {
             let service = service.clone();
             tokio::spawn(async move {
-                if let Ok((handle, driver)) =
+                if let Ok((handle, _incoming, driver)) =
                     accept(stream, HandshakeConfig::default(), service).await
                 {
                     let _ = driver.run().await;
