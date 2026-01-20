@@ -1061,7 +1061,10 @@ impl ChannelRegistry {
     }
 
     /// Recursively walk a Poke value looking for Rx/Tx streams to bind.
-    fn bind_streams_recursive(&mut self, poke: facet::Poke<'_, '_>) {
+    #[allow(unsafe_code)]
+    fn bind_streams_recursive(&mut self, mut poke: facet::Poke<'_, '_>) {
+        use facet::Def;
+
         let shape = poke.shape();
 
         trace!(
@@ -1083,18 +1086,66 @@ impl ChannelRegistry {
             }
         }
 
-        // Recurse into struct/tuple fields
-        // (Tuples are represented as structs with numeric field indices in facet)
-        if let Ok(mut ps) = poke.into_struct() {
-            let field_count = ps.field_count();
-            trace!(field_count, "bind_streams_recursive: recursing into struct");
-            for i in 0..field_count {
-                if let Ok(field_poke) = ps.field(i) {
-                    self.bind_streams_recursive(field_poke);
+        // Dispatch based on the shape's definition
+        match shape.def {
+            Def::Scalar => {}
+
+            // Recurse into struct/tuple fields
+            _ if poke.is_struct() => {
+                let mut ps = poke.into_struct().expect("is_struct was true");
+                let field_count = ps.field_count();
+                trace!(field_count, "bind_streams_recursive: recursing into struct");
+                for i in 0..field_count {
+                    if let Ok(field_poke) = ps.field(i) {
+                        self.bind_streams_recursive(field_poke);
+                    }
                 }
             }
+
+            // Recurse into Option<T>
+            Def::Option(_) => {
+                // Option is represented as an enum, use into_enum to access its value
+                if let Ok(mut pe) = poke.into_enum()
+                    && let Ok(Some(inner_poke)) = pe.field(0)
+                {
+                    self.bind_streams_recursive(inner_poke);
+                }
+            }
+
+            // Recurse into list elements (e.g., Vec<Tx<T>>)
+            Def::List(list_def) => {
+                let len = {
+                    let peek = poke.as_peek();
+                    peek.into_list().map(|pl| pl.len()).unwrap_or(0)
+                };
+                // Get mutable access to elements via VTable (no PokeList exists)
+                if let Some(get_mut_fn) = list_def.vtable.get_mut {
+                    let element_shape = list_def.t;
+                    let data_ptr = poke.data_mut();
+                    for i in 0..len {
+                        // SAFETY: We have exclusive mutable access via poke, index < len, shape is correct
+                        let element_ptr = unsafe { (get_mut_fn)(data_ptr, i, element_shape) };
+                        if let Some(ptr) = element_ptr {
+                            // SAFETY: ptr points to a valid element with the correct shape
+                            let element_poke =
+                                unsafe { facet::Poke::from_raw_parts(ptr, element_shape) };
+                            self.bind_streams_recursive(element_poke);
+                        }
+                    }
+                }
+            }
+
+            // Other enum variants
+            _ if poke.is_enum() => {
+                if let Ok(mut pe) = poke.into_enum()
+                    && let Ok(Some(variant_poke)) = pe.field(0)
+                {
+                    self.bind_streams_recursive(variant_poke);
+                }
+            }
+
+            _ => {}
         }
-        // TODO: Handle enums, arrays, etc. if needed
     }
 
     /// Bind an Rx<T> stream for server-side dispatch.
@@ -2588,11 +2639,14 @@ impl ConnectionHandle {
     }
 
     /// Recursively walk a Poke value looking for Rx/Tx streams to bind.
+    #[allow(unsafe_code)]
     fn bind_streams_recursive(
         &self,
-        poke: facet::Poke<'_, '_>,
+        mut poke: facet::Poke<'_, '_>,
         drains: &mut Vec<(ChannelId, Receiver<Vec<u8>>)>,
     ) {
+        use facet::Def;
+
         let shape = poke.shape();
 
         // Check if this is an Rx or Tx type
@@ -2606,16 +2660,65 @@ impl ConnectionHandle {
             }
         }
 
-        // Recurse into struct fields
-        if let Ok(mut ps) = poke.into_struct() {
-            let field_count = ps.field_count();
-            for i in 0..field_count {
-                if let Ok(field_poke) = ps.field(i) {
-                    self.bind_streams_recursive(field_poke, drains);
+        // Dispatch based on the shape's definition
+        match shape.def {
+            Def::Scalar => {}
+
+            // Recurse into struct/tuple fields
+            _ if poke.is_struct() => {
+                let mut ps = poke.into_struct().expect("is_struct was true");
+                let field_count = ps.field_count();
+                for i in 0..field_count {
+                    if let Ok(field_poke) = ps.field(i) {
+                        self.bind_streams_recursive(field_poke, drains);
+                    }
                 }
             }
+
+            // Recurse into Option<T>
+            Def::Option(_) => {
+                // Option is represented as an enum, use into_enum to access its value
+                if let Ok(mut pe) = poke.into_enum()
+                    && let Ok(Some(inner_poke)) = pe.field(0)
+                {
+                    self.bind_streams_recursive(inner_poke, drains);
+                }
+            }
+
+            // Recurse into list elements (e.g., Vec<Tx<T>>)
+            Def::List(list_def) => {
+                let len = {
+                    let peek = poke.as_peek();
+                    peek.into_list().map(|pl| pl.len()).unwrap_or(0)
+                };
+                // Get mutable access to elements via VTable (no PokeList exists)
+                if let Some(get_mut_fn) = list_def.vtable.get_mut {
+                    let element_shape = list_def.t;
+                    let data_ptr = poke.data_mut();
+                    for i in 0..len {
+                        // SAFETY: We have exclusive mutable access via poke, index < len, shape is correct
+                        let element_ptr = unsafe { (get_mut_fn)(data_ptr, i, element_shape) };
+                        if let Some(ptr) = element_ptr {
+                            // SAFETY: ptr points to a valid element with the correct shape
+                            let element_poke =
+                                unsafe { facet::Poke::from_raw_parts(ptr, element_shape) };
+                            self.bind_streams_recursive(element_poke, drains);
+                        }
+                    }
+                }
+            }
+
+            // Other enum variants
+            _ if poke.is_enum() => {
+                if let Ok(mut pe) = poke.into_enum()
+                    && let Ok(Some(variant_poke)) = pe.field(0)
+                {
+                    self.bind_streams_recursive(variant_poke, drains);
+                }
+            }
+
+            _ => {}
         }
-        // TODO: Handle tuples, enums, arrays, etc.
     }
 
     /// Bind an Rx<T> stream - caller passes receiver, keeps sender.
@@ -2981,7 +3084,10 @@ impl ConnectionHandle {
     }
 
     /// Recursively walk a Poke value looking for Rx streams to bind in responses.
-    fn bind_response_streams_recursive(&self, poke: facet::Poke<'_, '_>) {
+    #[allow(unsafe_code)]
+    fn bind_response_streams_recursive(&self, mut poke: facet::Poke<'_, '_>) {
+        use facet::Def;
+
         let shape = poke.shape();
 
         // Check if this is an Rx type - only Rx needs binding in responses
@@ -2991,16 +3097,65 @@ impl ConnectionHandle {
             return;
         }
 
-        // Recurse into struct/tuple fields
-        if let Ok(mut ps) = poke.into_struct() {
-            let field_count = ps.field_count();
-            for i in 0..field_count {
-                if let Ok(field_poke) = ps.field(i) {
-                    self.bind_response_streams_recursive(field_poke);
+        // Dispatch based on the shape's definition
+        match shape.def {
+            Def::Scalar => {}
+
+            // Recurse into struct/tuple fields
+            _ if poke.is_struct() => {
+                let mut ps = poke.into_struct().expect("is_struct was true");
+                let field_count = ps.field_count();
+                for i in 0..field_count {
+                    if let Ok(field_poke) = ps.field(i) {
+                        self.bind_response_streams_recursive(field_poke);
+                    }
                 }
             }
+
+            // Recurse into Option<T>
+            Def::Option(_) => {
+                // Option is represented as an enum, use into_enum to access its value
+                if let Ok(mut pe) = poke.into_enum()
+                    && let Ok(Some(inner_poke)) = pe.field(0)
+                {
+                    self.bind_response_streams_recursive(inner_poke);
+                }
+            }
+
+            // Recurse into list elements (e.g., Vec<Rx<T>>)
+            Def::List(list_def) => {
+                let len = {
+                    let peek = poke.as_peek();
+                    peek.into_list().map(|pl| pl.len()).unwrap_or(0)
+                };
+                // Get mutable access to elements via VTable (no PokeList exists)
+                if let Some(get_mut_fn) = list_def.vtable.get_mut {
+                    let element_shape = list_def.t;
+                    let data_ptr = poke.data_mut();
+                    for i in 0..len {
+                        // SAFETY: We have exclusive mutable access via poke, index < len, shape is correct
+                        let element_ptr = unsafe { (get_mut_fn)(data_ptr, i, element_shape) };
+                        if let Some(ptr) = element_ptr {
+                            // SAFETY: ptr points to a valid element with the correct shape
+                            let element_poke =
+                                unsafe { facet::Poke::from_raw_parts(ptr, element_shape) };
+                            self.bind_response_streams_recursive(element_poke);
+                        }
+                    }
+                }
+            }
+
+            // Other enum variants
+            _ if poke.is_enum() => {
+                if let Ok(mut pe) = poke.into_enum()
+                    && let Ok(Some(variant_poke)) = pe.field(0)
+                {
+                    self.bind_response_streams_recursive(variant_poke);
+                }
+            }
+
+            _ => {}
         }
-        // TODO: Handle enums, arrays, etc. if needed
     }
 
     /// Bind a single Rx<T> stream from a response.

@@ -34,7 +34,7 @@ use std::time::Duration;
 
 use facet::Facet;
 
-use crate::runtime::{Mutex, Receiver, channel, sleep, spawn};
+use crate::runtime::{Mutex, Receiver, channel, sleep, spawn, spawn_with_abort};
 use crate::{
     ChannelError, ChannelRegistry, ConnectionHandle, DriverMessage, MessageTransport, ResponseData,
     RoamError, Role, ServiceDispatcher, TransportError,
@@ -555,7 +555,8 @@ fn connection_error_to_io(e: ConnectionError) -> io::Error {
 ///
 /// r[impl core.conn.independence]
 struct ConnectionState {
-    /// The connection ID.
+    /// The connection ID (for debugging/logging).
+    #[allow(dead_code)]
     conn_id: ConnectionId,
     /// Client-side handle for making calls on this connection.
     handle: ConnectionHandle,
@@ -564,8 +565,9 @@ struct ConnectionState {
     /// Pending responses (request_id -> response sender).
     pending_responses:
         HashMap<u64, crate::runtime::OneshotSender<Result<ResponseData, TransportError>>>,
-    /// In-flight server requests (for duplicate detection).
-    in_flight_server_requests: std::collections::HashSet<u64>,
+    /// In-flight server requests with their abort handles.
+    /// r[impl call.cancel.best-effort] - We track abort handles to allow best-effort cancellation.
+    in_flight_server_requests: HashMap<u64, crate::runtime::AbortHandle>,
 }
 
 impl ConnectionState {
@@ -591,7 +593,7 @@ impl ConnectionState {
             handle,
             server_channel_registry,
             pending_responses: HashMap::new(),
-            in_flight_server_requests: std::collections::HashSet::new(),
+            in_flight_server_requests: HashMap::new(),
         }
     }
 
@@ -599,6 +601,13 @@ impl ConnectionState {
     fn fail_pending_responses(&mut self) {
         for (_, tx) in self.pending_responses.drain() {
             let _ = tx.send(Err(TransportError::ConnectionClosed));
+        }
+    }
+
+    /// Abort all in-flight server requests (connection closing).
+    fn abort_in_flight_requests(&mut self) {
+        for (_, abort_handle) in self.in_flight_server_requests.drain() {
+            abort_handle.abort();
         }
     }
 }
@@ -694,8 +703,6 @@ pub struct Driver<T, D> {
     next_conn_id: u64,
     /// Pending outgoing Connect requests (request_id -> response channel).
     pending_connects: HashMap<u64, PendingConnect>,
-    /// Next Connect request ID.
-    next_connect_request_id: u64,
     /// Channel for incoming connection requests (only root can accept).
     /// r[impl core.conn.accept-required]
     incoming_connections_tx: Option<crate::runtime::Sender<IncomingConnection>>,
@@ -871,8 +878,10 @@ where
                 payload,
             } => {
                 // Check that the request is in-flight for this connection
+                // r[impl call.cancel.best-effort] - If cancelled, abort handle was removed,
+                // so this will return None and we won't send a duplicate response.
                 let should_send = if let Some(conn) = self.connections.get_mut(&conn_id) {
-                    conn.in_flight_server_requests.remove(&request_id)
+                    conn.in_flight_server_requests.remove(&request_id).is_some()
                 } else {
                     false
                 };
@@ -1031,6 +1040,7 @@ where
                     // Goodbye on root closes entire link
                     for (_, mut conn) in self.connections.drain() {
                         conn.fail_pending_responses();
+                        conn.abort_in_flight_requests();
                     }
                     return Err(ConnectionError::Closed);
                 } else {
@@ -1038,6 +1048,7 @@ where
                     // r[impl core.conn.lifecycle]
                     if let Some(mut conn) = self.connections.remove(&conn_id) {
                         conn.fail_pending_responses();
+                        conn.abort_in_flight_requests();
                     }
                 }
             }
@@ -1070,10 +1081,12 @@ where
                 // Unknown conn_id or request_id - ignore
             }
             Message::Cancel {
-                conn_id: _,
-                request_id: _,
+                conn_id,
+                request_id,
             } => {
-                // TODO: Implement cancellation
+                // r[impl call.cancel.message] - Cancel requests callee stop processing.
+                // r[impl call.cancel.best-effort] - Cancellation is best-effort.
+                self.handle_cancel(conn_id, request_id).await?;
             }
             Message::Data {
                 conn_id,
@@ -1124,17 +1137,15 @@ where
         };
 
         // r[impl call.request-id.duplicate-detection]
-        if !conn.in_flight_server_requests.insert(request_id) {
+        if conn.in_flight_server_requests.contains_key(&request_id) {
             return Err(self.goodbye("call.request-id.duplicate-detection").await);
         }
 
         if let Err(rule_id) = roam_wire::validate_metadata(&metadata) {
-            conn.in_flight_server_requests.remove(&request_id);
             return Err(self.goodbye(rule_id).await);
         }
 
         if payload.len() as u32 > self.negotiated.max_payload_size {
-            conn.in_flight_server_requests.remove(&request_id);
             return Err(self.goodbye("flow.call.payload-limit").await);
         }
 
@@ -1146,9 +1157,54 @@ where
             request_id,
             &mut conn.server_channel_registry,
         );
-        spawn(async move {
+
+        // r[impl call.cancel.best-effort] - Store abort handle for cancellation support
+        let abort_handle = spawn_with_abort(async move {
             handler_fut.await;
         });
+        conn.in_flight_server_requests
+            .insert(request_id, abort_handle);
+        Ok(())
+    }
+
+    /// Handle a Cancel message from the remote peer.
+    ///
+    /// r[impl call.cancel.message] - Cancel requests callee stop processing.
+    /// r[impl call.cancel.best-effort] - Cancellation is best-effort; handler may have completed.
+    /// r[impl call.cancel.no-response-required] - We still send a Cancelled response.
+    async fn handle_cancel(
+        &mut self,
+        conn_id: ConnectionId,
+        request_id: u64,
+    ) -> Result<(), ConnectionError> {
+        // Get the connection
+        let conn = match self.connections.get_mut(&conn_id) {
+            Some(c) => c,
+            None => {
+                // Unknown connection - ignore (may have been closed)
+                return Ok(());
+            }
+        };
+
+        // Remove and abort the in-flight request if it exists
+        if let Some(abort_handle) = conn.in_flight_server_requests.remove(&request_id) {
+            // Abort the handler task (best-effort)
+            abort_handle.abort();
+
+            // Send a Cancelled response
+            // r[impl call.cancel.best-effort] - The callee MUST still send a Response.
+            let wire_msg = Message::Response {
+                conn_id,
+                request_id,
+                metadata: vec![],
+                channels: vec![],
+                // Cancelled error: Result::Err(1) + RoamError::Cancelled(3)
+                payload: vec![1, 3],
+            };
+            self.io.send(&wire_msg).await?;
+        }
+        // If request not found, it already completed - nothing to do
+
         Ok(())
     }
 
@@ -1251,9 +1307,10 @@ where
     }
 
     async fn goodbye(&mut self, rule_id: &'static str) -> ConnectionError {
-        // Fail all pending responses on all connections
+        // Fail all pending responses and abort in-flight requests on all connections
         for (_, conn) in self.connections.iter_mut() {
             conn.fail_pending_responses();
+            conn.abort_in_flight_requests();
         }
 
         let _ = self
@@ -1435,7 +1492,6 @@ where
         connections,
         next_conn_id: 1, // 0 is ROOT, start allocating at 1
         pending_connects: HashMap::new(),
-        next_connect_request_id: 1,
         incoming_connections_tx: Some(incoming_connections_tx), // Always created upfront
         incoming_response_rx: Some(incoming_response_rx),
         incoming_response_tx,

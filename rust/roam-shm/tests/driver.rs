@@ -147,12 +147,14 @@ fn setup_test() -> TestFixture {
 
     // Create guest transport from spawn args (consumes doorbell handle)
     let guest_transport = ShmGuestTransport::from_spawn_args(spawn_args).unwrap();
-    let (guest_handle, guest_driver) = establish_guest(guest_transport, dispatcher.clone());
+    let (guest_handle, _guest_incoming, guest_driver) =
+        establish_guest(guest_transport, dispatcher.clone());
 
-    let (host_driver, mut handles, _host_driver_handle) = establish_multi_peer_host::<
-        TestbedDispatcher<TestbedImpl>,
-        _,
-    >(host, vec![(peer_id, dispatcher)]);
+    let (host_driver, mut handles, _host_incoming, _host_driver_handle) =
+        establish_multi_peer_host::<TestbedDispatcher<TestbedImpl>, _>(
+            host,
+            vec![(peer_id, dispatcher)],
+        );
     let host_handle = handles.remove(&peer_id).unwrap();
 
     tokio::spawn(guest_driver.run());
@@ -333,11 +335,13 @@ fn setup_multi_peer_test() -> MultiPeerFixture {
     let dispatcher = TestbedDispatcher::new(TestbedImpl);
 
     // Set up guest drivers
-    let (guest1_handle, guest1_driver) = establish_guest(guest1_transport, dispatcher.clone());
-    let (guest2_handle, guest2_driver) = establish_guest(guest2_transport, dispatcher.clone());
+    let (guest1_handle, _guest1_incoming, guest1_driver) =
+        establish_guest(guest1_transport, dispatcher.clone());
+    let (guest2_handle, _guest2_incoming, guest2_driver) =
+        establish_guest(guest2_transport, dispatcher.clone());
 
     // Set up multi-peer host driver
-    let (host_driver, host_handles, _driver_handle) = establish_multi_peer_host(
+    let (host_driver, host_handles, _host_incoming, _driver_handle) = establish_multi_peer_host(
         host,
         vec![
             (peer_id1, TestbedDispatcher::new(TestbedImpl)),
@@ -424,7 +428,7 @@ async fn test_dynamic_peer_creation_no_preregistration() {
 
     // Build driver with ZERO pre-registered peers
     // This is the key: no need to call host.add_peer() before building
-    let (host_driver, initial_handles, driver_handle) =
+    let (host_driver, initial_handles, _host_incoming, driver_handle) =
         establish_multi_peer_host(host, Vec::<(PeerId, TestbedDispatcher<TestbedImpl>)>::new());
 
     // Verify we started with zero peers
@@ -511,7 +515,7 @@ async fn test_lazy_spawn_real_processes() {
     let host = ShmHost::create(&path, config).unwrap();
 
     // Build driver with ZERO pre-registered peers (true lazy spawning)
-    let (host_driver, initial_handles, driver_handle) =
+    let (host_driver, initial_handles, _host_incoming, driver_handle) =
         establish_multi_peer_host(host, Vec::<(PeerId, TestbedDispatcher<TestbedImpl>)>::new());
 
     assert_eq!(initial_handles.len(), 0, "should start with zero peers");
@@ -546,7 +550,7 @@ async fn test_lazy_spawn_real_processes() {
 
     // Register a dispatcher for this peer so we can get the handle
     let peer_id1 = ticket1.peer_id;
-    let peer1_handle = driver_handle
+    let (peer1_handle, _peer1_incoming) = driver_handle
         .add_peer(peer_id1, TestbedDispatcher::new(TestbedImpl))
         .await
         .expect("failed to add peer 1 dispatcher");
@@ -576,7 +580,7 @@ async fn test_lazy_spawn_real_processes() {
 
     // Register dispatcher for peer 2
     let peer_id2 = ticket2.peer_id;
-    let peer2_handle = driver_handle
+    let (peer2_handle, _peer2_incoming) = driver_handle
         .add_peer(peer_id2, TestbedDispatcher::new(TestbedImpl))
         .await
         .expect("failed to add peer 2 dispatcher");
@@ -657,9 +661,10 @@ async fn host_to_guest_backpressure_streaming() {
 
     // Create guest transport
     let guest_transport = ShmGuestTransport::from_spawn_args(spawn_args).unwrap();
-    let (_guest_handle, guest_driver) = establish_guest(guest_transport, dispatcher.clone());
+    let (_guest_handle, _guest_incoming, guest_driver) =
+        establish_guest(guest_transport, dispatcher.clone());
 
-    let (host_driver, mut handles, _driver_handle) =
+    let (host_driver, mut handles, _host_incoming, _driver_handle) =
         establish_multi_peer_host(host, vec![(peer_id, dispatcher)]);
     let host_handle = handles.remove(&peer_id).unwrap();
 
@@ -764,9 +769,10 @@ async fn host_to_guest_backpressure_host_streaming() {
 
     // Create guest transport
     let guest_transport = ShmGuestTransport::from_spawn_args(spawn_args).unwrap();
-    let (_guest_handle, guest_driver) = establish_guest(guest_transport, dispatcher.clone());
+    let (_guest_handle, _guest_incoming, guest_driver) =
+        establish_guest(guest_transport, dispatcher.clone());
 
-    let (host_driver, mut handles, _driver_handle) =
+    let (host_driver, mut handles, _host_incoming, _driver_handle) =
         establish_multi_peer_host(host, vec![(peer_id, dispatcher)]);
     let host_handle = handles.remove(&peer_id).unwrap();
 
@@ -864,9 +870,10 @@ async fn slot_exhaustion_should_not_corrupt_channel_state() {
     let dispatcher = TestbedDispatcher::new(TestbedImpl);
 
     let guest_transport = ShmGuestTransport::from_spawn_args(spawn_args).unwrap();
-    let (_guest_handle, guest_driver) = establish_guest(guest_transport, dispatcher.clone());
+    let (_guest_handle, _guest_incoming, guest_driver) =
+        establish_guest(guest_transport, dispatcher.clone());
 
-    let (host_driver, mut handles, _driver_handle) =
+    let (host_driver, mut handles, _host_incoming, _driver_handle) =
         establish_multi_peer_host(host, vec![(peer_id, dispatcher)]);
     let host_handle = handles.remove(&peer_id).unwrap();
 
@@ -987,9 +994,10 @@ async fn streaming_errors_should_not_corrupt_channel_state() {
     let dispatcher = TestbedDispatcher::new(TestbedImpl);
 
     let guest_transport = ShmGuestTransport::from_spawn_args(spawn_args).unwrap();
-    let (_guest_handle, guest_driver) = establish_guest(guest_transport, dispatcher.clone());
+    let (_guest_handle, _guest_incoming, guest_driver) =
+        establish_guest(guest_transport, dispatcher.clone());
 
-    let (host_driver, mut handles, _driver_handle) =
+    let (host_driver, mut handles, _host_incoming, _driver_handle) =
         establish_multi_peer_host(host, vec![(peer_id, dispatcher)]);
     let host_handle = handles.remove(&peer_id).unwrap();
 
@@ -1136,9 +1144,10 @@ async fn mixed_calls_with_slot_exhaustion() {
 
     let dispatcher = TestbedDispatcher::new(TestbedImpl);
     let guest_transport = ShmGuestTransport::from_spawn_args(spawn_args).unwrap();
-    let (_guest_handle, guest_driver) = establish_guest(guest_transport, dispatcher.clone());
+    let (_guest_handle, _guest_incoming, guest_driver) =
+        establish_guest(guest_transport, dispatcher.clone());
 
-    let (host_driver, mut handles, _driver_handle) =
+    let (host_driver, mut handles, _host_incoming, _driver_handle) =
         establish_multi_peer_host(host, vec![(peer_id, dispatcher)]);
     let host_handle = handles.remove(&peer_id).unwrap();
 
@@ -1558,11 +1567,11 @@ async fn recursive_calls_with_slot_exhaustion() {
 
     let guest_transport = ShmGuestTransport::from_spawn_args(spawn_args).unwrap();
     // Guest provides CellService, uses guest_outbound to call host
-    let (guest_outbound, guest_driver) =
+    let (guest_outbound, _guest_incoming, guest_driver) =
         establish_guest(guest_transport, CellServiceDispatcher::new(cell_impl));
 
     // Host provides HostService, uses host_outbound to call guest
-    let (host_driver, mut handles, _driver_handle) =
+    let (host_driver, mut handles, _host_incoming, _driver_handle) =
         establish_multi_peer_host(host, vec![(peer_id, HostServiceDispatcher::new(host_impl))]);
     let host_outbound = handles.remove(&peer_id).unwrap();
 
@@ -1860,10 +1869,10 @@ async fn recursive_streaming_calls_with_slot_exhaustion() {
     };
 
     let guest_transport = ShmGuestTransport::from_spawn_args(spawn_args).unwrap();
-    let (guest_outbound, guest_driver) =
+    let (guest_outbound, _guest_incoming, guest_driver) =
         establish_guest(guest_transport, CellServiceDispatcher::new(cell_impl));
 
-    let (host_driver, mut handles, _driver_handle) =
+    let (host_driver, mut handles, _host_incoming, _driver_handle) =
         establish_multi_peer_host(host, vec![(peer_id, HostServiceDispatcher::new(host_impl))]);
     let host_outbound = handles.remove(&peer_id).unwrap();
 
