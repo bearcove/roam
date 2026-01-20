@@ -620,6 +620,9 @@ impl IncomingConnection {
     /// Accept this connection and receive a handle for it.
     ///
     /// The `metadata` will be sent in the Accept message.
+    ///
+    /// Note: The returned `ConnectionHandle` cannot itself accept nested connections.
+    /// r[impl core.conn.only-root-accepts]
     pub async fn accept(
         self,
         metadata: roam_wire::Metadata,
