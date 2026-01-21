@@ -699,7 +699,7 @@ use std::collections::{HashMap, HashSet};
 pub struct ResponseData {
     /// The response payload bytes.
     pub payload: Vec<u8>,
-    /// Channel IDs for streams in the response (Rx<T> returned by the method).
+    /// Channel IDs for streams in the response (`Rx<T>` returned by the method).
     /// Client must register receivers for these channels.
     pub channels: Vec<u64>,
 }
@@ -2353,9 +2353,9 @@ pub trait Caller: Clone + Send + Sync + 'static {
         args: &mut T,
     ) -> Result<ResponseData, TransportError>;
 
-    /// Bind receivers for Rx<T> streams in the response.
+    /// Bind receivers for `Rx<T>` streams in the response.
     ///
-    /// After deserializing a response, any Rx<T> values in it are "hollow" -
+    /// After deserializing a response, any `Rx<T>` values in it are "hollow" -
     /// they have channel IDs but no actual receiver. This method walks the
     /// response and binds receivers for each Rx using the channel IDs from
     /// the Response message.
@@ -3054,11 +3054,11 @@ impl ConnectionHandle {
         self.shared.channel_registry.lock().unwrap().driver_tx()
     }
 
-    /// Bind receivers for Rx<T> streams in a deserialized response.
+    /// Bind receivers for `Rx<T>` streams in a deserialized response.
     ///
     /// After deserializing a response, any `Rx<T>` values are "hollow" - they have
     /// channel IDs but no actual receiver. This method walks the response using
-    /// reflection and binds receivers for each Rx<T> so data can be received.
+    /// reflection and binds receivers for each `Rx<T>` so data can be received.
     ///
     /// # How it works
     ///

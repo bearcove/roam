@@ -17,6 +17,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use roam_session::diagnostic::DiagnosticState;
 use roam_session::{
     ChannelError, ChannelRegistry, ConnectError, ConnectionHandle, DriverMessage, ResponseData,
     Role, ServiceDispatcher, TransportError,
@@ -136,7 +137,7 @@ impl VirtualConnectionState {
         driver_tx: mpsc::Sender<DriverMessage>,
         role: Role,
         initial_credit: u32,
-        diagnostic_state: Option<Arc<roam_session::diagnostic::DiagnosticState>>,
+        diagnostic_state: Option<Arc<DiagnosticState>>,
     ) -> Self {
         let handle = ConnectionHandle::new_with_diagnostics(
             conn_id,
@@ -274,7 +275,7 @@ pub struct ShmDriver<T, D> {
     incoming_response_tx: mpsc::Sender<IncomingConnectionResponse>,
 
     /// Diagnostic state for tracking in-flight requests (for SIGUSR1 dumps).
-    diagnostic_state: Option<Arc<roam_session::diagnostic::DiagnosticState>>,
+    diagnostic_state: Option<Arc<DiagnosticState>>,
 }
 
 impl<T, D> ShmDriver<T, D>
@@ -1106,7 +1107,7 @@ where
 pub fn establish_guest_with_diagnostics<D>(
     transport: ShmGuestTransport,
     dispatcher: D,
-    diagnostic_state: Option<Arc<roam_session::diagnostic::DiagnosticState>>,
+    diagnostic_state: Option<Arc<DiagnosticState>>,
 ) -> (
     ConnectionHandle,
     IncomingConnections,
@@ -1201,7 +1202,7 @@ struct PeerConnectionState {
     incoming_response_tx: mpsc::Sender<IncomingConnectionResponse>,
 
     /// Diagnostic state for tracking in-flight requests (for SIGUSR1 dumps).
-    diagnostic_state: Option<Arc<roam_session::diagnostic::DiagnosticState>>,
+    diagnostic_state: Option<Arc<DiagnosticState>>,
 }
 
 /// Command to control the multi-peer host driver.
@@ -1215,7 +1216,7 @@ enum ControlCommand {
     AddPeer {
         peer_id: PeerId,
         dispatcher: Box<dyn ServiceDispatcher>,
-        diagnostic_state: Option<Arc<roam_session::diagnostic::DiagnosticState>>,
+        diagnostic_state: Option<Arc<DiagnosticState>>,
         response: oneshot::Sender<(ConnectionHandle, IncomingConnections)>,
     },
 }
@@ -2796,7 +2797,7 @@ impl MultiPeerHostDriverHandle {
 
     /// Register a peer after it's ready, with optional diagnostic state for SIGUSR1 dumps.
     ///
-    /// Same as [`add_peer`] but allows passing a [`DiagnosticState`] to track
+    /// Same as [`Self::add_peer`] but allows passing a [`DiagnosticState`] to track
     /// in-flight requests for debugging.
     ///
     /// Returns a tuple of (ConnectionHandle, IncomingConnections) where IncomingConnections
@@ -2805,7 +2806,7 @@ impl MultiPeerHostDriverHandle {
         &self,
         peer_id: PeerId,
         dispatcher: D,
-        diagnostic_state: Option<Arc<roam_session::diagnostic::DiagnosticState>>,
+        diagnostic_state: Option<Arc<DiagnosticState>>,
     ) -> Result<(ConnectionHandle, IncomingConnections), ShmConnectionError>
     where
         D: ServiceDispatcher + 'static,
