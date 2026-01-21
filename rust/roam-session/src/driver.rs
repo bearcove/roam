@@ -1074,9 +1074,10 @@ where
             } => {
                 // Route to the correct connection
                 if let Some(conn) = self.connections.get_mut(&conn_id)
-                    && let Some(tx) = conn.pending_responses.remove(&request_id) {
-                        let _ = tx.send(Ok(ResponseData { payload, channels }));
-                    }
+                    && let Some(tx) = conn.pending_responses.remove(&request_id)
+                {
+                    let _ = tx.send(Ok(ResponseData { payload, channels }));
+                }
                 // Unknown conn_id or request_id - ignore
             }
             Message::Cancel {

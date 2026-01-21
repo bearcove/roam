@@ -143,14 +143,15 @@ impl ShmDiagnostics {
 
             // Show byte stats if available
             if let Some(ref tracked) = peer.tracked_state
-                && (tracked.bytes_sent > 0 || tracked.bytes_received > 0) {
-                    let _ = write!(
-                        output,
-                        " ({}↑ {}↓)",
-                        format_bytes(tracked.bytes_sent),
-                        format_bytes(tracked.bytes_received)
-                    );
-                }
+                && (tracked.bytes_sent > 0 || tracked.bytes_received > 0)
+            {
+                let _ = write!(
+                    output,
+                    " ({}↑ {}↓)",
+                    format_bytes(tracked.bytes_sent),
+                    format_bytes(tracked.bytes_received)
+                );
+            }
 
             let _ = writeln!(output);
         }
