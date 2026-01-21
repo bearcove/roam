@@ -9,7 +9,7 @@
 
 import {
   type Hello,
-  helloV1,
+  helloV2,
   messageHello,
   messageGoodbye,
   messageRequest,
@@ -889,7 +889,8 @@ async function waitForPeerHello<T extends MessageTransport>(
 
     if (msg.tag === "Hello") {
       // r[impl message.hello.unknown-version] - reject unknown Hello versions
-      if (msg.value.tag !== "V1") {
+      // Accept V1 (deprecated) and V2 (current)
+      if (msg.value.tag !== "V1" && msg.value.tag !== "V2") {
         await io.send(encodeMessage(messageGoodbye("message.hello.unknown-version")));
         io.close();
         throw ConnectionError.protocol({
@@ -911,7 +912,7 @@ async function waitForPeerHello<T extends MessageTransport>(
   }
 }
 
-/** Default Hello message. */
+/** Default Hello message (V2 for virtual connection support). */
 export function defaultHello(): Hello {
-  return helloV1(1024 * 1024, 64 * 1024);
+  return helloV2(1024 * 1024, 64 * 1024);
 }
