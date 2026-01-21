@@ -213,7 +213,10 @@ impl<T> AuditableReceiver<T> {
 ///
 /// The channel registers itself in a global registry, allowing SIGUSR1 handlers
 /// to dump the state of all queues via `dump_all_channels()`.
-pub fn channel<T>(name: impl Into<String>, capacity: usize) -> (AuditableSender<T>, AuditableReceiver<T>) {
+pub fn channel<T>(
+    name: impl Into<String>,
+    capacity: usize,
+) -> (AuditableSender<T>, AuditableReceiver<T>) {
     let (tx, rx) = mpsc::channel(capacity);
     let state = Arc::new(ChannelState {
         name: name.into(),
@@ -349,9 +352,9 @@ impl<K: std::hash::Hash + Eq + std::fmt::Debug + Clone, V> AuditableDequeMap<K, 
     pub fn entry(&mut self, key: K) -> &mut AuditableDeque<V> {
         let name_prefix = &self.name_prefix;
         let capacity = self.capacity_per_key;
-        self.inner.entry(key.clone()).or_insert_with(|| {
-            AuditableDeque::new(format!("{}{:?}", name_prefix, key), capacity)
-        })
+        self.inner
+            .entry(key.clone())
+            .or_insert_with(|| AuditableDeque::new(format!("{}{:?}", name_prefix, key), capacity))
     }
 
     /// Remove a deque.
