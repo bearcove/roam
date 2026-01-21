@@ -7,6 +7,9 @@ use std::fmt::Write as _;
 use std::sync::{Arc, LazyLock, RwLock, Weak};
 use std::time::Instant;
 
+/// A callback that appends diagnostic info to a string.
+pub type DiagnosticCallback = Box<dyn Fn(&mut String) + Send + Sync>;
+
 /// Global registry of all diagnostic states.
 /// Each connection/driver registers its state here.
 static DIAGNOSTIC_REGISTRY: LazyLock<RwLock<Vec<Weak<DiagnosticState>>>> =
@@ -124,7 +127,7 @@ pub struct DiagnosticState {
     channels: RwLock<HashMap<u64, OpenChannel>>,
 
     /// Custom diagnostic callbacks
-    custom_diagnostics: RwLock<Vec<Box<dyn Fn(&mut String) + Send + Sync>>>,
+    custom_diagnostics: RwLock<Vec<DiagnosticCallback>>,
 }
 
 impl DiagnosticState {
@@ -303,22 +306,22 @@ impl DiagnosticState {
         }
 
         // Check channels
-        if let Ok(channels) = self.channels.try_read() {
-            if !channels.is_empty() {
-                let tx_count = channels
-                    .values()
-                    .filter(|c| c.direction == ChannelDirection::Tx)
-                    .count();
-                let rx_count = channels
-                    .values()
-                    .filter(|c| c.direction == ChannelDirection::Rx)
-                    .count();
-                if tx_count > 0 {
-                    parts.push(format!("{}tx", tx_count));
-                }
-                if rx_count > 0 {
-                    parts.push(format!("{}rx", rx_count));
-                }
+        if let Ok(channels) = self.channels.try_read()
+            && !channels.is_empty()
+        {
+            let tx_count = channels
+                .values()
+                .filter(|c| c.direction == ChannelDirection::Tx)
+                .count();
+            let rx_count = channels
+                .values()
+                .filter(|c| c.direction == ChannelDirection::Rx)
+                .count();
+            if tx_count > 0 {
+                parts.push(format!("{}tx", tx_count));
+            }
+            if rx_count > 0 {
+                parts.push(format!("{}rx", rx_count));
             }
         }
 

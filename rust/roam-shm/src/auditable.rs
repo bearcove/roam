@@ -19,6 +19,10 @@ pub trait ChannelDiagnostic {
     fn capacity(&self) -> usize;
     /// Current number of items in the queue (approximate).
     fn len(&self) -> usize;
+    /// Returns true if the channel is empty.
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
 }
 
 /// Register a channel for diagnostics.
