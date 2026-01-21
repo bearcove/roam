@@ -195,6 +195,7 @@ export {
   type Negotiated,
   type ServiceDispatcher,
   type StreamingDispatcher,
+  type HelloExchangeOptions,
   helloExchangeAcceptor,
   helloExchangeInitiator,
   defaultHello,
