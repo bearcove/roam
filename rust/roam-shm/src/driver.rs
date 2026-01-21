@@ -1836,13 +1836,23 @@ impl MultiPeerHostDriver {
 
                     // Manually trigger an immediate SHM poll for this peer to catch any messages
                     // that arrived before the doorbell waiter task started waiting.
-                    let _ = self.ring_tx.send(peer_id);
+                    if self.ring_tx.send(peer_id).await.is_err() {
+                        trace!(
+                            "Initial ring notification failed for peer {:?}: driver shutting down",
+                            peer_id
+                        );
+                    }
                 } else {
                     error!("AddPeer: NO DOORBELL FOUND for {:?}!", peer_id);
                 }
 
                 // Send the handle and incoming connections receiver back to the caller
-                let _ = response.send((handle, incoming_connections_rx));
+                if response.send((handle, incoming_connections_rx)).is_err() {
+                    trace!(
+                        "AddPeer response channel closed for peer {:?}: caller dropped",
+                        peer_id
+                    );
+                }
             }
         }
     }
