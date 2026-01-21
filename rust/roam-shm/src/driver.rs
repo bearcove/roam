@@ -671,10 +671,10 @@ where
                 ..
             } => {
                 // Route to waiting caller on the appropriate connection
-                if let Some(conn) = self.connections.get_mut(&conn_id) {
-                    if let Some(tx) = conn.pending_responses.remove(&request_id) {
-                        let _ = tx.send(Ok(ResponseData { payload, channels }));
-                    }
+                if let Some(conn) = self.connections.get_mut(&conn_id)
+                    && let Some(tx) = conn.pending_responses.remove(&request_id)
+                {
+                    let _ = tx.send(Ok(ResponseData { payload, channels }));
                 }
                 // Unknown response IDs are ignored per spec
             }
@@ -1941,11 +1941,11 @@ impl MultiPeerHostDriver {
                     return Ok(());
                 }
                 // Mark request completed for diagnostics
-                if let Some(state) = self.peers.get(&peer_id) {
-                    if let Some(diag) = &state.diagnostic_state {
-                        trace!(request_id, name = %diag.name, "completing incoming request");
-                        diag.complete_request(request_id);
-                    }
+                if let Some(state) = self.peers.get(&peer_id)
+                    && let Some(diag) = &state.diagnostic_state
+                {
+                    trace!(request_id, name = %diag.name, "completing incoming request");
+                    diag.complete_request(request_id);
                 }
                 Message::Response {
                     conn_id,
@@ -2147,12 +2147,11 @@ impl MultiPeerHostDriver {
                 ..
             } => {
                 // Route to waiting caller on the appropriate connection
-                if let Some(state) = self.peers.get_mut(&peer_id) {
-                    if let Some(conn) = state.connections.get_mut(&conn_id) {
-                        if let Some(tx) = conn.pending_responses.remove(&request_id) {
-                            let _ = tx.send(Ok(ResponseData { payload, channels }));
-                        }
-                    }
+                if let Some(state) = self.peers.get_mut(&peer_id)
+                    && let Some(conn) = state.connections.get_mut(&conn_id)
+                    && let Some(tx) = conn.pending_responses.remove(&request_id)
+                {
+                    let _ = tx.send(Ok(ResponseData { payload, channels }));
                 }
                 // Unknown response IDs are ignored per spec
             }
@@ -2198,6 +2197,7 @@ impl MultiPeerHostDriver {
     }
 
     /// Handle an incoming request from a peer on a specific connection.
+    #[allow(clippy::too_many_arguments)]
     async fn handle_incoming_request(
         &mut self,
         peer_id: PeerId,
@@ -2265,10 +2265,10 @@ impl MultiPeerHostDriver {
 
         // Validate payload size
         if payload.len() as u32 > self.negotiated.max_payload_size {
-            if let Some(state) = self.peers.get_mut(&peer_id) {
-                if let Some(diag) = &state.diagnostic_state {
-                    diag.complete_request(request_id);
-                }
+            if let Some(state) = self.peers.get_mut(&peer_id)
+                && let Some(diag) = &state.diagnostic_state
+            {
+                diag.complete_request(request_id);
             }
             return Err(self
                 .goodbye(
@@ -2487,7 +2487,7 @@ impl MultiPeerHostDriver {
                 .goodbye(
                     peer_id,
                     "streaming.id.zero-reserved",
-                    format!("Close for reserved channel_id=0"),
+                    "Close for reserved channel_id=0".to_string(),
                 )
                 .await);
         }
