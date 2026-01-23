@@ -1,20 +1,18 @@
-//! Middleware for intercepting requests before dispatch.
+//! Middleware for intercepting requests after deserialization but before the handler.
 //!
-//! Middleware wraps a [`ServiceDispatcher`] and runs before the inner dispatcher,
-//! seeing the request context (including metadata). It can:
-//!
+//! Middleware can:
+//! - Inspect deserialized args via [`facet::Peek`] (reflection-based, no type knowledge needed)
 //! - Reject requests (e.g., authentication failure)
 //! - Add values to `Context::extensions` for handlers to retrieve
 //! - Log, trace, or meter requests
 //!
-//! Middleware does NOT see typed request/response payloads — that's the
-//! dispatcher's job. This keeps middleware simple and composable.
-//!
 //! # Example
 //!
 //! ```ignore
-//! use roam_session::{Middleware, WithMiddleware, Context, Rejection};
-//! use std::sync::Arc;
+//! use roam_session::{Middleware, Context, Rejection};
+//! use facet::Peek;
+//! use std::pin::Pin;
+//! use std::future::Future;
 //!
 //! struct AuthMiddleware { /* ... */ }
 //!
@@ -22,38 +20,35 @@
 //!     fn intercept<'a>(
 //!         &'a self,
 //!         ctx: &'a mut Context,
+//!         args: Peek<'_, 'static>,
 //!     ) -> Pin<Box<dyn Future<Output = Result<(), Rejection>> + Send + 'a>> {
 //!         Box::pin(async move {
 //!             // Check for auth token in metadata
 //!             let token = ctx.metadata.iter()
 //!                 .find(|(k, _)| k == "auth-token")
-//!                 .and_then(|(_, v)| v.as_string());
+//!                 .map(|(_, v)| v.as_string());
 //!
 //!             let Some(token) = token else {
 //!                 return Err(Rejection::unauthenticated("missing auth-token"));
 //!             };
 //!
-//!             // Validate token (async database lookup, etc.)
-//!             let user = validate_token(token).await?;
+//!             // Can also inspect args via reflection
+//!             // e.g., args.get("user_id") to check authorization
 //!
-//!             // Store user in extensions for handler access
-//!             ctx.extensions.insert(user);
+//!             // Store validated info in extensions for handler access
+//!             ctx.extensions.insert(AuthenticatedUser { token: token.to_string() });
 //!
 //!             Ok(())
 //!         })
 //!     }
 //! }
-//!
-//! // Wrap a dispatcher with middleware
-//! let dispatcher = WithMiddleware::new(
-//!     Arc::new(AuthMiddleware::new()),
-//!     MyServiceDispatcher::new(handler),
-//! );
 //! ```
 
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
+
+use facet::Peek;
 
 use crate::{ChannelRegistry, Context, DriverMessage, ServiceDispatcher};
 
@@ -126,10 +121,13 @@ impl Rejection {
     }
 }
 
-/// Middleware that can intercept requests before dispatch.
+/// Middleware that can intercept requests after deserialization.
 ///
-/// Middleware sees the request context (including metadata) but not the
-/// typed payload. It can:
+/// Middleware sees:
+/// - Request context (metadata, extensions, conn_id, method_id)
+/// - Deserialized args via [`Peek`] (reflection-based inspection)
+///
+/// Middleware can:
 /// - Reject the request by returning `Err(Rejection)`
 /// - Continue by returning `Ok(())`
 /// - Add values to `ctx.extensions` for handlers
@@ -137,127 +135,26 @@ impl Rejection {
 /// Middleware is async to support operations like database lookups for
 /// token validation.
 pub trait Middleware: Send + Sync {
-    /// Intercept a request before dispatch.
+    /// Intercept a request after deserialization but before the handler runs.
     ///
-    /// The context contains:
-    /// - `conn_id`: Which connection this request came from
-    /// - `method_id`: The method being called (as u64 hash)
-    /// - `metadata`: Key-value pairs from the request
-    /// - `extensions`: Where middleware can store values for handlers
+    /// # Arguments
     ///
-    /// Return `Ok(())` to continue to the dispatcher.
+    /// - `ctx`: Request context with metadata, extensions, conn_id, method_id
+    /// - `args`: Peek view of deserialized args (inspect via reflection)
+    ///
+    /// Return `Ok(())` to continue to the handler.
     /// Return `Err(rejection)` to reject the request.
     fn intercept<'a>(
         &'a self,
         ctx: &'a mut Context,
+        args: Peek<'_, 'static>,
     ) -> Pin<Box<dyn Future<Output = Result<(), Rejection>> + Send + 'a>>;
 }
 
-/// A dispatcher that runs middleware before delegating to an inner dispatcher.
-///
-/// # Type Parameters
-///
-/// - `D`: The inner dispatcher type
-///
-/// The middleware is stored as `Arc<dyn Middleware>` to allow sharing and
-/// to satisfy the `'static` bound on the returned future.
-pub struct WithMiddleware<D> {
-    middleware: Arc<dyn Middleware>,
-    inner: D,
-}
-
-impl<D> WithMiddleware<D>
-where
-    D: ServiceDispatcher,
-{
-    /// Create a new middleware-wrapped dispatcher.
-    pub fn new(middleware: Arc<dyn Middleware>, inner: D) -> Self {
-        Self { middleware, inner }
-    }
-}
-
-impl<D: Clone> Clone for WithMiddleware<D> {
-    fn clone(&self) -> Self {
-        Self {
-            middleware: self.middleware.clone(),
-            inner: self.inner.clone(),
-        }
-    }
-}
-
-impl<D> ServiceDispatcher for WithMiddleware<D>
-where
-    D: ServiceDispatcher + Clone + 'static,
-{
-    fn method_ids(&self) -> Vec<u64> {
-        self.inner.method_ids()
-    }
-
-    fn dispatch(
-        &self,
-        mut cx: Context,
-        payload: Vec<u8>,
-        registry: &mut ChannelRegistry,
-    ) -> Pin<Box<dyn Future<Output = ()> + Send + 'static>> {
-        // Capture what we need for the async block
-        let driver_tx = registry.driver_tx();
-        let conn_id = cx.conn_id;
-        let request_id = cx.request_id.raw();
-
-        // Clone middleware (Arc clone is cheap)
-        let middleware = self.middleware.clone();
-
-        // Clone inner dispatcher so we can call it in the async block
-        let inner = self.inner.clone();
-
-        // Do stream binding NOW, before the async block.
-        // If middleware rejects, these get cleaned up via drops (same as handler errors).
-        //
-        // We need to prepare everything the inner dispatcher needs, then call it
-        // inside the async block after middleware passes.
-        //
-        // The tricky part: inner.dispatch() needs &mut registry, but we can't
-        // hold that across the await. However, the inner dispatcher will also
-        // just extract what it needs and return a 'static future.
-        //
-        // Solution: We prepare a "dispatch continuation" that captures everything
-        // needed. For generated dispatchers, this means doing the bind_streams
-        // work here. For ForwardingDispatcher, it extracts what it needs.
-        //
-        // Actually, the simplest approach: call inner.dispatch() NOW to get
-        // its future, then conditionally run it after middleware.
-
-        let inner_future = inner.dispatch(cx.clone(), payload, registry);
-
-        Box::pin(async move {
-            // Run middleware (async)
-            match middleware.intercept(&mut cx).await {
-                Ok(()) => {
-                    // Middleware passed, run the inner dispatch
-                    inner_future.await
-                }
-                Err(_rejection) => {
-                    // Middleware rejected, send error response
-                    warn!(
-                        code = ?_rejection.code,
-                        message = %_rejection.message,
-                        "middleware rejected request"
-                    );
-                    let _ = driver_tx
-                        .send(DriverMessage::Response {
-                            conn_id,
-                            request_id,
-                            channels: Vec::new(),
-                            // Result::Err(1) + RoamError::InvalidPayload(2)
-                            // TODO: Add a proper rejection error variant to RoamError
-                            payload: vec![1, 2],
-                        })
-                        .await;
-                }
-            }
-        })
-    }
-}
+// TODO(roam-next): Remove WithMiddleware - it's incompatible with the new design.
+// The new design has middleware run AFTER deserialization (so it can Peek at args),
+// but WithMiddleware wraps a dispatcher and runs BEFORE the inner dispatcher deserializes.
+// Middleware should now be configured on the generated dispatcher directly via with_middleware().
 
 /// Middleware that does nothing (passes all requests through).
 ///
@@ -269,6 +166,7 @@ impl Middleware for NoopMiddleware {
     fn intercept<'a>(
         &'a self,
         _ctx: &'a mut Context,
+        _args: Peek<'_, 'static>,
     ) -> Pin<Box<dyn Future<Output = Result<(), Rejection>> + Send + 'a>> {
         Box::pin(async { Ok(()) })
     }
@@ -312,10 +210,11 @@ impl Middleware for MiddlewareStack {
     fn intercept<'a>(
         &'a self,
         ctx: &'a mut Context,
+        args: Peek<'_, 'static>,
     ) -> Pin<Box<dyn Future<Output = Result<(), Rejection>> + Send + 'a>> {
         Box::pin(async move {
             for layer in &self.layers {
-                layer.intercept(ctx).await?;
+                layer.intercept(ctx, args).await?;
             }
             Ok(())
         })
@@ -334,6 +233,7 @@ mod tests {
         fn intercept<'a>(
             &'a self,
             ctx: &'a mut Context,
+            _args: Peek<'_, 'static>,
         ) -> Pin<Box<dyn Future<Output = Result<(), Rejection>> + Send + 'a>> {
             let should_reject = self.should_reject;
             Box::pin(async move {
