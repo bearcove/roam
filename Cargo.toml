@@ -21,6 +21,7 @@ members = [
     "rust/shm-primitives",
     "rust/ur-taking-me-with-you",
     "rust/roam-task-local",
+    "rust/roam-next",
     # Compliance suite
     "spec/spec-proto",
     "spec/spec-tests",
@@ -72,6 +73,8 @@ libc = "0.2.180"
 facet = { version = "0.43.0", git = "https://github.com/facet-rs/facet", branch = "main", features = ["camino", "reflect"] }
 facet-core = { version = "0.43.0", git = "https://github.com/facet-rs/facet", branch = "main" }
 facet-postcard = { version = "0.43.0", git = "https://github.com/facet-rs/facet", branch = "main", features = ["camino"] }
+facet-reflect = { version = "0.43.0", git = "https://github.com/facet-rs/facet", branch = "main" }
+facet-format = { version = "0.43.0", git = "https://github.com/facet-rs/facet", branch = "main" }
 facet-pretty = { version = "0.43.0", git = "https://github.com/facet-rs/facet", branch = "main" }
 facet-json = { version = "0.43.0", git = "https://github.com/facet-rs/facet", branch = "main" }
 facet-value = { version = "0.43.0", git = "https://github.com/facet-rs/facet", branch = "main" }
