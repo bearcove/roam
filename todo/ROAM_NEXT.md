@@ -22,34 +22,46 @@ The prototype proves the concept works. Now we integrate it into roam-session.
 ### Non-Generic Helpers
 
 ```rust
-// Deserialize + run middleware (ONE copy, not N)
-pub async unsafe fn prepare(
+// Deserialize into pointer (SYNC, non-generic)
+pub unsafe fn deserialize_into(
+    ptr: *mut (),
+    shape: &'static Shape,
+    payload: &[u8],
+) -> Result<(), PrepareError>;
+
+// Patch channel IDs (SYNC, non-generic)
+pub unsafe fn patch_channel_ids_by_shape(
     args_ptr: *mut (),
     args_shape: &'static Shape,
-    payload: &[u8],
+    channels: &[u64],
+);
+
+// Run middleware (ASYNC, takes SendPeek which is Send-safe)
+pub async fn run_middleware(
+    send_peek: SendPeek<'_>,
     ctx: &mut Context,
     middleware: &[Arc<dyn Middleware>],
-) -> Result<(), DispatchError>;
+) -> Result<(), Rejection>;
 
-// Serialize and send OK response (ONE copy)
+// Serialize and send OK response (ASYNC, takes SendPeek)
 pub async fn send_ok_response(
-    result_ptr: *const (),
-    result_shape: &'static Shape,
+    result: SendPeek<'_>,
     driver_tx: &Sender<DriverMessage>,
     conn_id: ConnectionId,
     request_id: u64,
-    channels: Vec<u64>,
 );
 
-// Serialize and send error response (ONE copy)
+// Serialize and send error response (ASYNC, takes SendPeek)
 pub async fn send_error_response(
-    error_ptr: *const (),
-    error_shape: &'static Shape,
+    error: SendPeek<'_>,
     driver_tx: &Sender<DriverMessage>,
     conn_id: ConnectionId,
     request_id: u64,
 );
 ```
+
+**Key insight:** Async functions take `SendPeek` (which is `Send+Sync`) instead of raw
+pointers (which are not `Send`). This allows the Future's state to be `Send`.
 
 ### Middleware Trait (Peek-based)
 
@@ -92,56 +104,59 @@ fn dispatch_echo(&self, cx: Context, payload: Vec<u8>, registry: &mut ChannelReg
     let handler = self.handler.clone();
     let middleware = self.middleware.clone();
     let driver_tx = registry.driver_tx();
+    let dispatch_ctx = registry.dispatch_context();
+    let channels = cx.channels.clone();
     let conn_id = cx.conn_id;
     let request_id = cx.request_id.raw();
 
-    Box::pin(async move {
-        // 1. Allocate args on stack
-        let mut args = MaybeUninit::<(String,)>::uninit();
+    // === SYNC PHASE (before async block) ===
+    let mut args_slot = MaybeUninit::<(String,)>::uninit();
 
-        // 2. Prepare: deserialize + middleware (NON-GENERIC)
-        unsafe {
-            if let Err(e) = prepare(
-                args.as_mut_ptr().cast(),
-                <(String,)>::SHAPE,
-                &payload,
-                &mut cx,
-                &middleware,
-            ).await {
-                send_dispatch_error(e, driver_tx, conn_id, request_id).await;
+    // Deserialize (non-generic via Shape)
+    if let Err(e) = unsafe {
+        deserialize_into(args_slot.as_mut_ptr().cast(), <(String,)>::SHAPE, &payload)
+    } {
+        return Box::pin(async move { send_prepare_error(e, &driver_tx, conn_id, request_id).await });
+    }
+
+    // Patch channel IDs (non-generic via Shape)
+    unsafe { patch_channel_ids_by_shape(args_slot.as_mut_ptr().cast(), <(String,)>::SHAPE, &channels) };
+
+    // Bind streams (non-generic via Shape) - MUST be sync, needs registry
+    unsafe { registry.bind_streams_by_shape(args_slot.as_mut_ptr().cast(), <(String,)>::SHAPE) };
+
+    // Read args - moves ownership to async block
+    let args: (String,) = unsafe { args_slot.assume_init_read() };
+
+    // === ASYNC PHASE ===
+    Box::pin(DISPATCH_CONTEXT.scope(dispatch_ctx, async move {
+        let mut cx = cx;
+
+        // Run middleware (takes SendPeek, which is Send-safe)
+        if !middleware.is_empty() {
+            let send_peek = unsafe { SendPeek::new(Peek::unchecked_new(...)) };
+            if let Err(rejection) = run_middleware(send_peek, &mut cx, &middleware).await {
+                send_prepare_error(PrepareError::Rejected(rejection), &driver_tx, conn_id, request_id).await;
                 return;
             }
         }
 
-        // 3. Read args (monomorphized but tiny)
-        let (message,) = unsafe { args.assume_init_read() };
-
-        // 4. Call handler (monomorphized - unavoidable)
+        // Destructure and call handler (monomorphized - unavoidable)
+        let (message,) = args;
         let result = handler.echo(&cx, message).await;
 
-        // 5. Send response (NON-GENERIC)
-        match result {
+        // Send response (takes SendPeek, non-generic)
+        match &result {
             Ok(value) => {
-                send_ok_response(
-                    &value as *const _ as *const (),
-                    <String>::SHAPE,
-                    &driver_tx,
-                    conn_id,
-                    request_id,
-                    vec![], // channels from result
-                ).await;
+                let send_peek = unsafe { SendPeek::new(Peek::unchecked_new(...)) };
+                send_ok_response(send_peek, &driver_tx, conn_id, request_id).await;
             }
             Err(error) => {
-                send_error_response(
-                    &error as *const _ as *const (),
-                    <EchoError>::SHAPE,
-                    &driver_tx,
-                    conn_id,
-                    request_id,
-                ).await;
+                let send_peek = unsafe { SendPeek::new(Peek::unchecked_new(...)) };
+                send_error_response(send_peek, &driver_tx, conn_id, request_id).await;
             }
         }
-    })
+    }))
 }
 ```
 
@@ -177,15 +192,17 @@ let client = connect(connector, config, dispatcher);
 
 ### Phase 2: Update macro codegen (roam-macros)
 
-- [ ] **2.1** Add `middleware: Vec<Arc<dyn Middleware>>` field to generated dispatcher
-- [ ] **2.2** Add `with_middleware()` builder method
-- [ ] **2.3** Update generated `dispatch_*` methods to use new pattern:
+- [x] **2.1** Add `middleware: Vec<Arc<dyn Middleware>>` field to generated dispatcher
+- [x] **2.2** Add `with_middleware()` builder method
+- [x] **2.3** Update generated `dispatch_*` methods to use new pattern:
   - Allocate `MaybeUninit` for args
-  - Call `prepare()` with Shape
+  - Deserialize via `deserialize_into()` with Shape
+  - Patch channel IDs via `patch_channel_ids_by_shape()`
+  - Bind streams via `bind_streams_by_shape()`
   - Read args and call handler
-  - Call `send_*_response()` with Shape
-- [ ] **2.4** Handle channel ID patching via Poke (non-generic)
-- [ ] **2.5** Handle stream binding via Poke (non-generic)
+  - Create `SendPeek` and call `send_*_response()` (SendPeek is Send-safe)
+- [x] **2.4** Handle channel ID patching via Poke (non-generic) - `patch_channel_ids_by_shape()`
+- [x] **2.5** Handle stream binding via Poke (non-generic) - `bind_streams_by_shape()`
 
 ### Phase 3: Cleanup
 
@@ -199,16 +216,17 @@ let client = connect(connector, config, dispatcher);
 - [ ] Client-side middleware (intercept outgoing calls)
 - [ ] Middleware that can modify args (Poke, not just Peek)
 
-## Open Questions
+## Open Questions (Resolved)
 
-1. **Channel ID patching** - currently uses `patch_channel_ids()` which is generic.
-   Can we do this via Poke (non-generic)? The roam-next prototype has a TODO for this.
+1. **Channel ID patching** - ✅ Solved via `patch_channel_ids_by_shape()` using Poke (non-generic).
 
-2. **Stream binding** - currently `registry.bind_streams(&mut args)` uses reflection.
-   Should work as-is since it already uses Facet reflection.
+2. **Stream binding** - ✅ Solved via `bind_streams_by_shape()` in ChannelRegistry (non-generic).
 
-3. **Response channel collection** - `collect_channel_ids()` walks the result to find Tx/Rx.
-   This already uses reflection, should be fine.
+3. **Response channel collection** - ✅ Already non-generic via `collect_channel_ids_from_peek()`.
+
+4. **Send safety for async functions** - ✅ Solved by using `SendPeek` (Send+Sync wrapper around Peek)
+   instead of raw pointers. Async functions take SendPeek, generated code creates SendPeek before
+   calling async functions.
 
 ## Files to Modify
 

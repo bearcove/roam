@@ -28,8 +28,10 @@ use crate::{
 /// When a service handler creates a channel with `roam::channel()` and returns
 /// the Rx, the Tx needs to be bound to send Data over the wire. This context
 /// provides the channel ID allocator and driver_tx needed for binding.
+///
+/// This is public for use by generated dispatchers with `DISPATCH_CONTEXT.scope()`.
 #[derive(Clone)]
-pub(crate) struct DispatchContext {
+pub struct DispatchContext {
     pub(crate) conn_id: roam_wire::ConnectionId,
     pub(crate) channel_ids: Arc<ChannelIdAllocator>,
     pub(crate) driver_tx: Sender<DriverMessage>,
@@ -39,7 +41,9 @@ roam_task_local::task_local! {
     /// Task-local dispatch context. Using task_local instead of thread_local
     /// is critical: thread_local can leak across different async tasks that
     /// happen to run on the same worker thread, causing channel binding bugs.
-    pub(crate) static DISPATCH_CONTEXT: DispatchContext;
+    ///
+    /// This is public for use by generated dispatchers.
+    pub static DISPATCH_CONTEXT: DispatchContext;
 }
 
 /// Get the current dispatch context, if any.
@@ -578,20 +582,15 @@ pub unsafe fn patch_channel_ids_by_shape(
 /// 2. Serializes the result using Shape reflection
 /// 3. Sends the Response message via the driver channel
 ///
-/// # Safety
-///
-/// - `result_ptr` must point to valid, initialized memory matching `result_shape`
-#[allow(unsafe_code)]
-pub async unsafe fn send_ok_response(
-    result_ptr: *const (),
-    result_shape: &'static Shape,
+/// Takes `SendPeek` instead of a raw pointer because `SendPeek` is Send,
+/// allowing this async function's Future to be Send.
+pub async fn send_ok_response(
+    result: SendPeek<'_>,
     driver_tx: &Sender<DriverMessage>,
     conn_id: roam_wire::ConnectionId,
     request_id: u64,
 ) {
-    // SAFETY: result_ptr is valid and initialized (caller guarantees)
-    let peek =
-        unsafe { facet::Peek::unchecked_new(PtrConst::new(result_ptr.cast::<u8>()), result_shape) };
+    let peek = result.peek();
 
     // Collect channel IDs from the result (e.g., Rx<T> in return type)
     let response_channels = collect_channel_ids_from_peek(peek);
@@ -621,20 +620,15 @@ pub async unsafe fn send_ok_response(
 /// 1. Serializes the user error using Shape reflection
 /// 2. Sends the Response message with error encoding
 ///
-/// # Safety
-///
-/// - `error_ptr` must point to valid, initialized memory matching `error_shape`
-#[allow(unsafe_code)]
-pub async unsafe fn send_error_response(
-    error_ptr: *const (),
-    error_shape: &'static Shape,
+/// Takes `SendPeek` instead of a raw pointer because `SendPeek` is Send,
+/// allowing this async function's Future to be Send.
+pub async fn send_error_response(
+    error: SendPeek<'_>,
     driver_tx: &Sender<DriverMessage>,
     conn_id: roam_wire::ConnectionId,
     request_id: u64,
 ) {
-    // SAFETY: error_ptr is valid and initialized (caller guarantees)
-    let peek =
-        unsafe { facet::Peek::unchecked_new(PtrConst::new(error_ptr.cast::<u8>()), error_shape) };
+    let peek = error.peek();
 
     // Result::Err(1) + RoamError::User(0) + serialized user error
     let mut payload = vec![1u8, 0u8];
@@ -654,32 +648,20 @@ pub async unsafe fn send_error_response(
         .await;
 }
 
-/// Run middleware on owned args.
+/// Run middleware on args via SendPeek.
 ///
 /// This is called from the async block in generated dispatchers, after stream
-/// binding has completed synchronously. The args are owned at this point, so
-/// we can safely create a Peek to inspect them.
+/// binding has completed synchronously. The caller creates a `SendPeek` from
+/// the owned args and passes it here.
 ///
-/// # Safety
-///
-/// - `args_ptr` must point to valid, initialized, Send memory matching `args_shape`
-/// - The args must outlive the returned future
-#[allow(unsafe_code)]
-pub async unsafe fn run_middleware(
-    args_ptr: *const (),
-    args_shape: &'static Shape,
+/// Taking `SendPeek` instead of a raw pointer is critical: `SendPeek` is Send,
+/// so capturing it in an async Future is safe. Raw pointers are not Send, so
+/// passing them to an async function would make the Future not Send.
+pub async fn run_middleware(
+    send_peek: SendPeek<'_>,
     ctx: &mut Context,
     middleware: &[Arc<dyn Middleware>],
 ) -> Result<(), Rejection> {
-    if middleware.is_empty() {
-        return Ok(());
-    }
-
-    // SAFETY: args_ptr is valid, initialized, and Send (caller guarantees)
-    let peek =
-        unsafe { facet::Peek::unchecked_new(PtrConst::new(args_ptr.cast::<u8>()), args_shape) };
-    let send_peek = unsafe { SendPeek::new(peek) };
-
     for mw in middleware {
         mw.intercept(ctx, send_peek).await?;
     }

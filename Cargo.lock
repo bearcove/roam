@@ -2261,6 +2261,7 @@ name = "roam"
 version = "0.6.0"
 dependencies = [
  "facet",
+ "facet-core",
  "facet-postcard",
  "facet-pretty",
  "roam-hash",

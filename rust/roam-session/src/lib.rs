@@ -45,8 +45,8 @@ pub use flow_control::*;
 
 mod dispatch;
 pub use dispatch::*;
-// Re-export internal items needed by other modules
-pub(crate) use dispatch::{DispatchContext, get_dispatch_context};
+// Re-export internal items needed by channel binding
+pub(crate) use dispatch::get_dispatch_context;
 
 mod forwarding;
 pub use forwarding::*;

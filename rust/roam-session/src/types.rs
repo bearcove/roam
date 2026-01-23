@@ -228,9 +228,10 @@ impl ChannelRegistry {
 
     /// Get the dispatch context for response channel binding.
     ///
-    /// Used by `dispatch_call` and `dispatch_call_infallible` to set up
-    /// thread-local context so `roam::channel()` can create bound channels.
-    pub(crate) fn dispatch_context(&self) -> DispatchContext {
+    /// Used by dispatch methods to set up task-local context so
+    /// `roam::channel()` can create bound channels. The context should
+    /// be passed to `DISPATCH_CONTEXT.scope()` in the async block.
+    pub fn dispatch_context(&self) -> DispatchContext {
         DispatchContext {
             conn_id: self.conn_id,
             channel_ids: self.response_channel_ids.clone(),
