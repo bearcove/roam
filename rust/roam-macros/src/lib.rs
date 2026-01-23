@@ -308,14 +308,14 @@ fn generate_dispatcher(parsed: &ServiceTrait, roam: &TokenStream2) -> TokenStrea
 
             fn dispatch(
                 &self,
-                cx: &#roam::Context,
+                cx: #roam::Context,
                 payload: Vec<u8>,
                 registry: &mut #roam::session::ChannelRegistry,
             ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'static>> {
                 let method_id = cx.method_id().raw();
                 #(#dispatch_arms)*
                 else {
-                    #roam::session::dispatch_unknown_method(cx, registry)
+                    #roam::session::dispatch_unknown_method(&cx, registry)
                 }
             }
         }
@@ -382,17 +382,17 @@ fn generate_dispatch_method(method: &ServiceMethod, roam: &TokenStream2) -> Toke
     quote! {
         fn #dispatch_name(
             &self,
-            cx: &#roam::Context,
+            cx: #roam::Context,
             payload: Vec<u8>,
             registry: &mut #roam::session::ChannelRegistry,
         ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'static>> {
             let handler = self.handler.clone();
-            let cx_clone = cx.clone();
-            #dispatch_call(cx, payload, registry, move |args: #tuple_type| async move {
+            let cx_for_handler = cx.clone();
+            #dispatch_call(&cx, payload, registry, move |args: #tuple_type| async move {
                 use #roam::facet_pretty::FacetPretty;
                 if #method_name_str != "emit_tracing" { #roam::tracing::debug!(target: "roam::rpc", method = #method_name_str, args = %#args_log, "handling"); }
                 #args_binding
-                handler.#method_name(&cx_clone, #args_call).await
+                handler.#method_name(&cx_for_handler, #args_call).await
             })
         }
     }

@@ -169,7 +169,7 @@ let client = connect(connector, config, dispatcher);
 
 ### Phase 1: Update roam-session dispatch infrastructure
 
-- [ ] **1.1** Update `Middleware` trait to take `args: Peek<'_, 'static>`
+- [x] **1.1** Update `Middleware` trait to take `args: SendPeek` (Peek wrapper with unsafe Send/Sync)
 - [ ] **1.2** Add `prepare()` function (non-generic deserialize + middleware)
 - [ ] **1.3** Add `send_ok_response()` function (non-generic serialize + send)
 - [ ] **1.4** Add `send_error_response()` function (non-generic serialize + send)
