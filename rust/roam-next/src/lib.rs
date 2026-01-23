@@ -12,21 +12,24 @@
 //! # Generated code should be minimal
 //!
 //! ```ignore
-//! // What the macro generates - just type info + handler
+//! // What the macro generates - just type info + handler call
 //! match method_id {
 //!     0xABC => {
 //!         let mut args = MaybeUninit::<(String, i32)>::uninit();
-//!         runtime.dispatch(
-//!             args.as_mut_ptr().cast::<()>(),
-//!             <(String, i32)>::SHAPE,
-//!             response_shape,
-//!             payload,
-//!             |args_ptr| {
-//!                 // Only this closure is monomorphized
-//!                 let args = unsafe { args_ptr.cast::<(String, i32)>().read() };
-//!                 self.handler.create_user(args.0, args.1)
-//!             },
-//!         ).await
+//!
+//!         // Phase 1: Non-generic - deserialize + middleware via reflection
+//!         unsafe {
+//!             runtime.prepare(
+//!                 args.as_mut_ptr().cast::<()>(),
+//!                 <(String, i32)>::SHAPE,
+//!                 payload,
+//!                 ctx,
+//!             ).await?;
+//!         }
+//!
+//!         // Phase 2: Monomorphized - read args and call handler
+//!         let (name, age) = unsafe { args.assume_init_read() };
+//!         self.handler.create_user(name, age).await
 //!     }
 //! }
 //! ```
@@ -125,33 +128,29 @@ impl DispatchRuntime {
         self
     }
 
-    /// Dispatch a call using reflection.
+    /// Prepare a request for dispatch.
     ///
-    /// # Arguments
+    /// This does all the non-generic work:
+    /// - Deserializes payload into args_ptr
+    /// - Patches channel IDs (TODO)
+    /// - Binds streams (TODO)
+    /// - Runs middleware
     ///
-    /// - `args_ptr`: Pointer to uninitialized memory for args
-    /// - `args_shape`: Shape of the args type
-    /// - `payload`: Serialized args from wire
-    /// - `ctx`: Request context
-    /// - `handler`: Type-erased handler that will be called with initialized args
+    /// After this returns `Ok(())`, the caller can safely read from args_ptr
+    /// and call the handler. The caller is responsible for reading the args
+    /// (which moves them out) - failing to do so will leak memory.
     ///
     /// # Safety
     ///
-    /// - `args_ptr` must point to valid memory of the correct size/alignment for `args_shape`
-    /// - Caller must ensure the handler closure matches the args type
-    pub async unsafe fn dispatch<F, Fut, R>(
+    /// - `args_ptr` must point to valid, aligned, properly-sized uninitialized memory
+    /// - On success, caller MUST read from args_ptr (to take ownership of initialized value)
+    pub async unsafe fn prepare(
         &self,
         args_ptr: ErasedPtr,
         args_shape: &'static Shape,
         payload: &[u8],
         ctx: &mut Context,
-        handler: F,
-    ) -> Result<R, DispatchError>
-    where
-        F: FnOnce(ErasedPtr) -> Fut + Send,
-        Fut: Future<Output = R> + Send,
-        R: Send,
-    {
+    ) -> Result<(), DispatchError> {
         // 1. Deserialize into args_ptr using reflection
         self.deserialize_into(args_ptr, args_shape, payload)?;
 
@@ -162,6 +161,7 @@ impl DispatchRuntime {
         // self.bind_streams(args_ptr, args_shape, registry);
 
         // 4. Run middleware with Peek access to args
+        // SAFETY: args_ptr was just initialized by deserialize_into, args_shape matches
         let peek = unsafe {
             facet::Peek::unchecked_new(facet_core::PtrConst::new(args_ptr.cast::<u8>()), args_shape)
         };
@@ -171,12 +171,7 @@ impl DispatchRuntime {
                 .map_err(DispatchError::Rejected)?;
         }
 
-        // 5. Call handler (the one monomorphized part)
-        let result = handler(args_ptr).await;
-
-        // 6. TODO: Serialize response
-
-        Ok(result)
+        Ok(())
     }
 
     /// Deserialize payload into a type-erased pointer using Shape.
@@ -252,7 +247,7 @@ mod example_generated {
             &self,
             name: String,
             age: i32,
-        ) -> impl Future<Output = Result<User, CreateUserError>> + Send;
+        ) -> impl std::future::Future<Output = Result<User, CreateUserError>> + Send;
     }
 
     #[derive(Debug, Facet)]
@@ -275,34 +270,34 @@ mod example_generated {
     impl<H: MyService + Send + Sync> MyServiceDispatcher<H> {
         const CREATE_USER_METHOD_ID: u64 = 0xABC123;
 
-        async fn dispatch(&self, method_id: u64, payload: &[u8], ctx: &mut Context) {
+        async fn dispatch(
+            &self,
+            method_id: u64,
+            payload: &[u8],
+            ctx: &mut Context,
+        ) -> Result<(), DispatchError> {
             match method_id {
                 Self::CREATE_USER_METHOD_ID => {
-                    // Allocate space for args
+                    // Allocate space for args on the stack
                     let mut args = MaybeUninit::<(String, i32)>::uninit();
 
-                    // Dispatch via runtime - all reflection-based except the handler call
-                    // SAFETY: args points to valid, aligned, uninitialized memory for (String, i32).
-                    // dispatch() will initialize it via deserialize_into() before calling the closure.
-                    let result = unsafe {
+                    // Phase 1: Non-generic - deserialize + middleware via reflection
+                    // SAFETY: args points to valid, aligned memory for (String, i32)
+                    unsafe {
                         self.runtime
-                            .dispatch(
+                            .prepare(
                                 args.as_mut_ptr().cast::<()>(),
                                 <(String, i32)>::SHAPE,
                                 payload,
                                 ctx,
-                                |args_ptr| {
-                                    // Read args synchronously before the async block
-                                    // This avoids capturing the raw pointer across await
-                                    let (name, age) = args_ptr.cast::<(String, i32)>().read();
-                                    async move {
-                                        // This is the only monomorphized part
-                                        self.handler.create_user(name, age).await
-                                    }
-                                },
                             )
-                            .await
-                    };
+                            .await?;
+                    }
+
+                    // Phase 2: Monomorphized - read args and call handler directly
+                    // SAFETY: prepare() succeeded, so args is initialized
+                    let (name, age) = unsafe { args.assume_init_read() };
+                    let result = self.handler.create_user(name, age).await;
 
                     // TODO: serialize result and send response
                     let _ = result;
@@ -311,6 +306,7 @@ mod example_generated {
                     // Unknown method
                 }
             }
+            Ok(())
         }
     }
 }
