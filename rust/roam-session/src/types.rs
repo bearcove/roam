@@ -463,11 +463,11 @@ impl ChannelRegistry {
 
         // Check if this is an Rx or Tx type
         if shape.decl_id == crate::Rx::<()>::SHAPE.decl_id {
-            debug!("bind_streams_recursive: found Rx, binding");
+            trace!("bind_streams_recursive: found Rx");
             self.bind_rx_stream(poke);
             return;
         } else if shape.decl_id == crate::Tx::<()>::SHAPE.decl_id {
-            debug!("bind_streams_recursive: found Tx, binding");
+            trace!("bind_streams_recursive: found Tx");
             self.bind_tx_stream(poke);
             return;
         }
@@ -550,7 +550,7 @@ impl ChannelRegistry {
                 return;
             };
 
-            debug!(channel_id, "bind_rx_stream: registering incoming channel");
+            trace!(channel_id, "bind_rx_stream: registering incoming channel");
 
             // Create channel and set receiver slot
             let (tx, rx) = crate::runtime::channel(RX_STREAM_BUFFER_SIZE);
@@ -563,7 +563,7 @@ impl ChannelRegistry {
 
             // Register for incoming data routing
             self.register_incoming(channel_id, tx);
-            debug!(channel_id, "bind_rx_stream: channel registered");
+            trace!(channel_id, "bind_rx_stream: channel registered");
         } else {
             warn!("bind_rx_stream: could not convert poke to struct");
         }

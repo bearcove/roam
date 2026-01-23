@@ -484,16 +484,18 @@ fn generate_dispatch_method(method: &ServiceMethod, roam: &TokenStream2) -> Toke
             let conn_id = cx.conn_id;
             let request_id = cx.request_id.raw();
 
-            // 1. Allocate args on stack (SYNC)
+            // 1. Allocate args on stack
             let mut args_slot = MaybeUninit::<#tuple_type>::uninit();
 
-            // 2. Deserialize (SYNC) - non-generic via Shape
+            // 2. Prepare: deserialize, validate channels, patch IDs, bind streams (all SYNC)
             // SAFETY: args_slot is valid memory for tuple_type
             if let Err(e) = unsafe {
-                #roam::session::deserialize_into(
+                #roam::session::prepare_sync(
                     args_slot.as_mut_ptr().cast(),
                     <#tuple_type as #roam::facet::Facet>::SHAPE,
                     &payload,
+                    &channels,
+                    registry,
                 )
             } {
                 return Box::pin(async move {
@@ -501,36 +503,15 @@ fn generate_dispatch_method(method: &ServiceMethod, roam: &TokenStream2) -> Toke
                 });
             }
 
-            // 3. Patch channel IDs (SYNC) - non-generic via Shape
-            // SAFETY: args were just initialized by deserialize_into
-            unsafe {
-                #roam::session::patch_channel_ids_by_shape(
-                    args_slot.as_mut_ptr().cast(),
-                    <#tuple_type as #roam::facet::Facet>::SHAPE,
-                    &channels,
-                );
-            }
-
-            // 4. Bind streams (SYNC) - needs registry
-            // SAFETY: args are valid and initialized
-            unsafe {
-                registry.bind_streams_by_shape(
-                    args_slot.as_mut_ptr().cast(),
-                    <#tuple_type as #roam::facet::Facet>::SHAPE,
-                );
-            }
-
-            // 5. Read args (SYNC) - moves ownership for the async block
-            // SAFETY: args are fully initialized after steps 2-4
+            // 3. Read args - moves ownership for the async block
+            // SAFETY: args are fully initialized after prepare_sync
             let args: #tuple_type = unsafe { args_slot.assume_init_read() };
 
             Box::pin(#roam::session::DISPATCH_CONTEXT.scope(dispatch_ctx, async move {
                 let mut cx = cx;
 
-                // 6. Run middleware (ASYNC) - can peek at owned args
+                // 4. Run middleware (ASYNC)
                 if !middleware.is_empty() {
-                    // Create SendPeek from owned args. SendPeek is Send, so it can
-                    // safely be captured in the async Future state machine.
                     // SAFETY: args is valid, initialized, and the tuple type is Send
                     let send_peek = unsafe {
                         let peek = #roam::facet::Peek::unchecked_new(
@@ -555,7 +536,7 @@ fn generate_dispatch_method(method: &ServiceMethod, roam: &TokenStream2) -> Toke
                     }
                 }
 
-                // 7. Log and destructure args, call handler
+                // 5. Log, destructure args, call handler
                 use #roam::facet_pretty::FacetPretty;
                 if #method_name_str != "emit_tracing" {
                     #roam::tracing::debug!(target: "roam::rpc", method = #method_name_str, args = %#args_log, "handling");
@@ -563,7 +544,7 @@ fn generate_dispatch_method(method: &ServiceMethod, roam: &TokenStream2) -> Toke
                 #args_binding
                 let result = handler.#method_name(&cx, #args_call).await;
 
-                // 8. Send response (ASYNC) - non-generic via Shape
+                // 6. Send response
                 #send_response
             }))
         }
