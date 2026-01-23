@@ -171,9 +171,9 @@ let client = connect(connector, config, dispatcher);
 
 - [x] **1.1** Update `Middleware` trait to take `args: SendPeek` (Peek wrapper with unsafe Send/Sync)
 - [x] **1.2** Add `prepare()` function (non-generic deserialize + middleware)
-- [ ] **1.3** Add `send_ok_response()` function (non-generic serialize + send)
-- [ ] **1.4** Add `send_error_response()` function (non-generic serialize + send)
-- [ ] **1.5** Keep old `dispatch_call` temporarily for compatibility
+- [x] **1.3** Add `send_ok_response()` function (non-generic serialize + send)
+- [x] **1.4** Add `send_error_response()` function (non-generic serialize + send)
+- [x] **1.5** Keep old `dispatch_call` temporarily for compatibility (already exists)
 
 ### Phase 2: Update macro codegen (roam-macros)
 

@@ -558,6 +558,138 @@ unsafe fn patch_channel_ids_by_shape(
 }
 
 // ============================================================================
+// Non-Generic Response Helpers
+// ============================================================================
+
+/// Serialize and send an OK response using non-generic operations.
+///
+/// This function handles the response serialization and sending via reflection,
+/// avoiding monomorphization:
+///
+/// 1. Collects channel IDs from the result (for `Rx<T>` in return types)
+/// 2. Serializes the result using Shape reflection
+/// 3. Sends the Response message via the driver channel
+///
+/// # Safety
+///
+/// - `result_ptr` must point to valid, initialized memory matching `result_shape`
+#[allow(unsafe_code)]
+pub async unsafe fn send_ok_response(
+    result_ptr: *const (),
+    result_shape: &'static Shape,
+    driver_tx: &Sender<DriverMessage>,
+    conn_id: roam_wire::ConnectionId,
+    request_id: u64,
+) {
+    // SAFETY: result_ptr is valid and initialized (caller guarantees)
+    let peek =
+        unsafe { facet::Peek::unchecked_new(PtrConst::new(result_ptr.cast::<u8>()), result_shape) };
+
+    // Collect channel IDs from the result (e.g., Rx<T> in return type)
+    let response_channels = collect_channel_ids_from_peek(peek);
+
+    // Result::Ok(0) + serialized value
+    let mut payload = vec![0u8];
+    match facet_postcard::peek_to_vec(peek) {
+        Ok(bytes) => payload.extend(bytes),
+        Err(_) => return, // Serialization failed, can't send response
+    }
+
+    // Send Response with channel IDs
+    let _ = driver_tx
+        .send(DriverMessage::Response {
+            conn_id,
+            request_id,
+            channels: response_channels,
+            payload,
+        })
+        .await;
+}
+
+/// Serialize and send a user error response using non-generic operations.
+///
+/// This function handles error serialization and sending via reflection:
+///
+/// 1. Serializes the user error using Shape reflection
+/// 2. Sends the Response message with error encoding
+///
+/// # Safety
+///
+/// - `error_ptr` must point to valid, initialized memory matching `error_shape`
+#[allow(unsafe_code)]
+pub async unsafe fn send_error_response(
+    error_ptr: *const (),
+    error_shape: &'static Shape,
+    driver_tx: &Sender<DriverMessage>,
+    conn_id: roam_wire::ConnectionId,
+    request_id: u64,
+) {
+    // SAFETY: error_ptr is valid and initialized (caller guarantees)
+    let peek =
+        unsafe { facet::Peek::unchecked_new(PtrConst::new(error_ptr.cast::<u8>()), error_shape) };
+
+    // Result::Err(1) + RoamError::User(0) + serialized user error
+    let mut payload = vec![1u8, 0u8];
+    match facet_postcard::peek_to_vec(peek) {
+        Ok(bytes) => payload.extend(bytes),
+        Err(_) => return, // Serialization failed, can't send response
+    }
+
+    // Send Response (no channels for error responses)
+    let _ = driver_tx
+        .send(DriverMessage::Response {
+            conn_id,
+            request_id,
+            channels: Vec::new(),
+            payload,
+        })
+        .await;
+}
+
+/// Send a prepare error (deserialization or rejection) as a response.
+///
+/// This handles the common case where `prepare()` fails and we need to
+/// send an appropriate error response.
+pub async fn send_prepare_error(
+    error: PrepareError,
+    driver_tx: &Sender<DriverMessage>,
+    conn_id: roam_wire::ConnectionId,
+    request_id: u64,
+) {
+    let payload = match error {
+        PrepareError::Deserialize(_) => {
+            // InvalidPayload error: Result::Err(1) + RoamError::InvalidPayload(2)
+            vec![1, 2]
+        }
+        PrepareError::Rejected(rejection) => {
+            // For now, map rejections to a generic error
+            // TODO: Consider adding a Rejected variant to RoamError
+            // Result::Err(1) + RoamError::Internal(3) for now
+            let _ = rejection; // Suppress unused warning
+            vec![1, 3]
+        }
+    };
+
+    let _ = driver_tx
+        .send(DriverMessage::Response {
+            conn_id,
+            request_id,
+            channels: Vec::new(),
+            payload,
+        })
+        .await;
+}
+
+/// Collect channel IDs from a Peek value by walking its structure.
+///
+/// This is the non-generic version of `collect_channel_ids()`.
+fn collect_channel_ids_from_peek(peek: facet::Peek<'_, '_>) -> Vec<u64> {
+    let mut ids = Vec::new();
+    collect_channel_ids_recursive(peek, &mut ids);
+    ids
+}
+
+// ============================================================================
 // Channel ID Collection and Patching
 // ============================================================================
 
