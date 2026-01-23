@@ -11,7 +11,8 @@ use std::sync::Arc;
 use facet::Facet;
 
 use crate::{
-    ChannelId, ChannelIdAllocator, ChannelRegistry, DriverMessage, Rx, Tx, runtime::Sender,
+    ChannelId, ChannelIdAllocator, ChannelRegistry, DriverMessage, Extensions, Rx, Tx,
+    runtime::Sender,
 };
 
 // ============================================================================
@@ -51,9 +52,10 @@ pub(crate) fn get_dispatch_context() -> Option<DispatchContext> {
 /// Contains information about the request that may be useful to the handler:
 /// - `conn_id`: Which virtual connection the request came from
 /// - `metadata`: Key-value pairs sent with the request
+/// - `extensions`: Type-safe storage for values inserted by middleware
 ///
 /// This enables services to identify callers and access per-request metadata.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Context {
     /// The connection ID this request arrived on.
     ///
@@ -78,6 +80,12 @@ pub struct Context {
     ///
     /// Used for stream binding. Proxies can use this to remap channel IDs.
     pub channels: Vec<u64>,
+
+    /// Type-safe extension storage.
+    ///
+    /// Middleware can insert values here (e.g., authenticated user info)
+    /// that handlers can later retrieve.
+    pub extensions: Extensions,
 }
 
 impl Context {
@@ -95,6 +103,7 @@ impl Context {
             method_id,
             metadata,
             channels,
+            extensions: Extensions::new(),
         }
     }
 
@@ -121,6 +130,22 @@ impl Context {
     /// Get the channel IDs.
     pub fn channels(&self) -> &[u64] {
         &self.channels
+    }
+}
+
+impl Clone for Context {
+    fn clone(&self) -> Self {
+        Self {
+            conn_id: self.conn_id,
+            request_id: self.request_id,
+            method_id: self.method_id,
+            metadata: self.metadata.clone(),
+            channels: self.channels.clone(),
+            // Extensions are NOT cloned - each clone gets fresh extensions.
+            // This is intentional: middleware modifies extensions on its copy,
+            // but the inner dispatch already captured what it needs.
+            extensions: Extensions::new(),
+        }
     }
 }
 
@@ -557,7 +582,7 @@ pub trait ServiceDispatcher: Send + Sync {
     /// r[impl channeling.allocation.caller] - Stream IDs are from Request.channels (caller allocated).
     fn dispatch(
         &self,
-        cx: &Context,
+        cx: Context,
         payload: Vec<u8>,
         registry: &mut ChannelRegistry,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'static>>;
@@ -608,7 +633,7 @@ where
 
     fn dispatch(
         &self,
-        cx: &Context,
+        cx: Context,
         payload: Vec<u8>,
         registry: &mut ChannelRegistry,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'static>> {
