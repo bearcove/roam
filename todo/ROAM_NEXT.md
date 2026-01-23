@@ -206,10 +206,10 @@ let client = connect(connector, config, dispatcher);
 
 ### Phase 3: Cleanup
 
-- [ ] **3.1** Remove old generic `dispatch_call` / `dispatch_call_infallible`
-- [ ] **3.2** Remove `WithMiddleware` wrapper (superseded)
-- [ ] **3.3** Delete or merge `roam-next` crate (concepts moved to roam-session)
-- [ ] **3.4** Update any tests
+- [ ] **3.1** Remove old generic `dispatch_call` / `dispatch_call_infallible` - KEPT: still used by test dispatchers
+- [x] **3.2** Remove `WithMiddleware` wrapper (superseded) - was never implemented, only TODO comment removed
+- [x] **3.3** Delete `roam-next` crate (concepts moved to roam-session)
+- [x] **3.4** Update any tests - all 329 tests pass
 
 ### Phase 4: Future work (not this PR)
 

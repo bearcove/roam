@@ -196,11 +196,6 @@ pub trait Middleware: Send + Sync {
     ) -> Pin<Box<dyn Future<Output = Result<(), Rejection>> + Send + 'a>>;
 }
 
-// TODO(roam-next): Remove WithMiddleware - it's incompatible with the new design.
-// The new design has middleware run AFTER deserialization (so it can Peek at args),
-// but WithMiddleware wraps a dispatcher and runs BEFORE the inner dispatcher deserializes.
-// Middleware should now be configured on the generated dispatcher directly via with_middleware().
-
 /// Middleware that does nothing (passes all requests through).
 ///
 /// Useful as a default or for testing.

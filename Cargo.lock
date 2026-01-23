@@ -2360,17 +2360,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "roam-next"
-version = "0.6.0"
-dependencies = [
- "facet",
- "facet-core",
- "facet-format",
- "facet-postcard",
- "facet-reflect",
-]
-
-[[package]]
 name = "roam-schema"
 version = "0.6.0"
 dependencies = [

@@ -21,7 +21,6 @@ members = [
     "rust/shm-primitives",
     "rust/ur-taking-me-with-you",
     "rust/roam-task-local",
-    "rust/roam-next",
     # Compliance suite
     "spec/spec-proto",
     "spec/spec-tests",
