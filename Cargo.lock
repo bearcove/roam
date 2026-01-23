@@ -2346,7 +2346,6 @@ name = "roam-local"
 version = "0.6.0"
 dependencies = [
  "tokio",
- "tracing",
 ]
 
 [[package]]
@@ -2431,7 +2430,6 @@ dependencies = [
  "tempfile",
  "tokio",
  "tracing",
- "tracing-subscriber",
  "ur-taking-me-with-you",
 ]
 
@@ -2443,7 +2441,6 @@ dependencies = [
  "ctor",
  "facet",
  "facet-postcard",
- "futures-util",
  "roam",
  "roam-session",
  "roam-wire",
@@ -2464,7 +2461,6 @@ version = "0.6.0"
 dependencies = [
  "facet",
  "roam",
- "roam-session",
  "tokio",
  "tracing",
  "tracing-core",
