@@ -154,9 +154,7 @@ pub fn generate_client_impl(service: &ServiceDetail) -> String {
         };
 
         // Build CallerRequest
-        out.push_str(&format!(
-            "      const response = await this.caller.call({{\n"
-        ));
+        out.push_str("      const response = await this.caller.call({\n");
         out.push_str(&format!("        methodId: {}n,\n", hex_u64(id)));
         out.push_str(&format!(
             "        method: \"{}.{}\",\n",
