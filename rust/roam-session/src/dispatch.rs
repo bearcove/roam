@@ -9,10 +9,14 @@
 use std::sync::Arc;
 
 use facet::Facet;
+use facet_core::{PtrConst, PtrMut, PtrUninit, Shape};
+use facet_format::FormatDeserializer;
+use facet_postcard::PostcardParser;
+use facet_reflect::Partial;
 
 use crate::{
-    ChannelId, ChannelIdAllocator, ChannelRegistry, DriverMessage, Extensions, Rx, Tx,
-    runtime::Sender,
+    ChannelId, ChannelIdAllocator, ChannelRegistry, DriverMessage, Extensions, Middleware,
+    Rejection, Rx, SendPeek, Tx, runtime::Sender,
 };
 
 // ============================================================================
@@ -381,6 +385,176 @@ pub fn dispatch_unknown_method(
             })
             .await;
     })
+}
+
+// ============================================================================
+// Non-Generic Dispatch Infrastructure (roam-next)
+// ============================================================================
+
+/// Error during the prepare phase of dispatch.
+#[derive(Debug)]
+pub enum PrepareError {
+    /// Failed to deserialize the request payload.
+    Deserialize(String),
+    /// Middleware rejected the request.
+    Rejected(Rejection),
+}
+
+impl std::fmt::Display for PrepareError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PrepareError::Deserialize(msg) => write!(f, "deserialization error: {}", msg),
+            PrepareError::Rejected(r) => write!(f, "rejected: {}", r.message),
+        }
+    }
+}
+
+impl std::error::Error for PrepareError {}
+
+/// Prepare a request for dispatch using non-generic operations.
+///
+/// This function performs all the pre-handler work via reflection, avoiding
+/// monomorphization:
+///
+/// 1. Deserializes payload into `args_ptr` using the provided `args_shape`
+/// 2. Patches channel IDs from the request into deserialized args
+/// 3. Binds Tx/Rx streams via the registry
+/// 4. Runs middleware (which can inspect args via Peek)
+///
+/// After this returns `Ok(())`, the caller can safely read from `args_ptr`
+/// and call the handler.
+///
+/// # Safety
+///
+/// - `args_ptr` must point to valid, aligned, properly-sized uninitialized memory
+///   for the type described by `args_shape`
+/// - The args type must be `Send` (enforced by the `#[service]` macro)
+/// - On success, caller MUST read from `args_ptr` (to take ownership of the
+///   initialized value) - failing to do so will leak memory
+///
+/// # Example
+///
+/// ```ignore
+/// let mut args = MaybeUninit::<(String, i32)>::uninit();
+///
+/// unsafe {
+///     prepare(
+///         args.as_mut_ptr().cast(),
+///         <(String, i32)>::SHAPE,
+///         &payload,
+///         &mut ctx,
+///         &[],  // channels
+///         registry,
+///         &middleware,
+///     ).await?;
+/// }
+///
+/// // Now safe to read args
+/// let (name, age) = unsafe { args.assume_init_read() };
+/// ```
+#[allow(unsafe_code)]
+pub async unsafe fn prepare(
+    args_ptr: *mut (),
+    args_shape: &'static Shape,
+    payload: &[u8],
+    ctx: &mut Context,
+    channels: &[u64],
+    registry: &mut ChannelRegistry,
+    middleware: &[Arc<dyn Middleware>],
+) -> Result<(), PrepareError> {
+    // 1. Deserialize into args_ptr using reflection
+    deserialize_into(args_ptr, args_shape, payload)?;
+
+    // 2. Patch channel IDs from Request framing into deserialized args
+    debug!(channels = ?channels, "prepare: patching channel IDs");
+    // SAFETY: args_ptr was just initialized by deserialize_into
+    unsafe {
+        patch_channel_ids_by_shape(args_ptr, args_shape, channels);
+    }
+
+    // 3. Bind streams via reflection - THIS MUST HAPPEN SYNCHRONOUSLY
+    debug!("prepare: binding streams SYNC");
+    // SAFETY: args_ptr is valid and initialized
+    unsafe {
+        registry.bind_streams_by_shape(args_ptr, args_shape);
+    }
+    debug!("prepare: streams bound SYNC - channels should now be registered");
+
+    // 4. Run middleware with Peek access to args
+    if !middleware.is_empty() {
+        // SAFETY: args_ptr is valid, initialized, and the args type is Send
+        // (enforced by macro). We're not mutating during Peek lifetime.
+        let peek =
+            unsafe { facet::Peek::unchecked_new(PtrConst::new(args_ptr.cast::<u8>()), args_shape) };
+        let send_peek = unsafe { SendPeek::new(peek) };
+
+        for mw in middleware {
+            mw.intercept(ctx, send_peek)
+                .await
+                .map_err(PrepareError::Rejected)?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Deserialize payload into a type-erased pointer using Shape.
+///
+/// # Safety
+///
+/// - `ptr` must point to valid, properly aligned memory for the type described by `shape`
+/// - The memory must have at least `shape.layout.size()` bytes available
+/// - On success, the memory at `ptr` will be initialized with the deserialized value
+#[allow(unsafe_code)]
+fn deserialize_into(
+    ptr: *mut (),
+    shape: &'static Shape,
+    payload: &[u8],
+) -> Result<(), PrepareError> {
+    // Create a Partial that writes directly into caller-provided memory.
+    // This avoids heap allocation - the value is constructed in-place.
+    let ptr_uninit = PtrUninit::new(ptr.cast::<u8>());
+
+    // SAFETY: Caller guarantees ptr is valid, aligned, and properly sized
+    let partial: Partial<'_, false> = unsafe { Partial::from_raw(ptr_uninit, shape) }
+        .map_err(|e| PrepareError::Deserialize(e.to_string()))?;
+
+    // Use facet-format's FormatDeserializer with PostcardParser to deserialize.
+    // This is non-generic - it uses the Shape for all type information.
+    let parser = PostcardParser::new(payload);
+    let mut deserializer: FormatDeserializer<'_, false, _> = FormatDeserializer::new_owned(parser);
+    let partial = deserializer
+        .deserialize_into(partial)
+        .map_err(|e| PrepareError::Deserialize(e.to_string()))?;
+
+    // Validate the value is fully initialized and leave it in place.
+    // After this succeeds, the caller can safely read from ptr.
+    partial
+        .finish_in_place()
+        .map_err(|e| PrepareError::Deserialize(e.to_string()))?;
+
+    Ok(())
+}
+
+/// Patch channel IDs into deserialized args by walking with Poke (non-generic).
+///
+/// This is the non-generic version of `patch_channel_ids()`.
+///
+/// # Safety
+///
+/// - `args_ptr` must point to valid, initialized memory matching `args_shape`
+#[allow(unsafe_code)]
+unsafe fn patch_channel_ids_by_shape(
+    args_ptr: *mut (),
+    args_shape: &'static Shape,
+    channels: &[u64],
+) {
+    debug!(channels = ?channels, "patch_channel_ids_by_shape: patching channels from wire");
+    let mut idx = 0;
+    // SAFETY: Caller guarantees args_ptr is valid and initialized
+    let poke =
+        unsafe { facet::Poke::from_raw_parts(PtrMut::new(args_ptr.cast::<u8>()), args_shape) };
+    patch_channel_ids_recursive(poke, channels, &mut idx);
 }
 
 // ============================================================================

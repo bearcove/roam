@@ -432,6 +432,27 @@ impl ChannelRegistry {
         self.bind_streams_recursive(poke);
     }
 
+    /// Bind streams in args using a type-erased pointer and shape (non-generic).
+    ///
+    /// This is the non-generic version of [`Self::bind_streams`] for use with the
+    /// `prepare()` function.
+    ///
+    /// # Safety
+    ///
+    /// - `args_ptr` must point to valid, initialized memory matching `args_shape`
+    #[allow(unsafe_code)]
+    pub unsafe fn bind_streams_by_shape(
+        &mut self,
+        args_ptr: *mut (),
+        args_shape: &'static facet_core::Shape,
+    ) {
+        // SAFETY: Caller guarantees args_ptr is valid and initialized
+        let poke = unsafe {
+            facet::Poke::from_raw_parts(facet_core::PtrMut::new(args_ptr.cast::<u8>()), args_shape)
+        };
+        self.bind_streams_recursive(poke);
+    }
+
     /// Recursively walk a Poke value looking for Rx/Tx streams to bind.
     #[allow(unsafe_code)]
     fn bind_streams_recursive(&mut self, mut poke: facet::Poke<'_, '_>) {
