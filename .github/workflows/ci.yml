@@ -162,7 +162,7 @@ jobs:
         run: cargo xtask codegen --typescript
 
       - name: Install Playwright browsers
-        run: cd typescript && npx playwright install chromium
+        run: cd typescript && pnpm exec playwright install --with-deps chromium
 
       - name: Run TypeScript tests
         run: cd typescript && pnpm test
