@@ -10,12 +10,22 @@ use roam_telemetry::{LoggingExporter, TelemetryMiddleware};
 use tokio::net::{TcpListener, TcpStream};
 use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 
+// Custom struct argument
+#[derive(Clone, facet::Facet)]
+struct Person {
+    name: String,
+    age: u32,
+    #[facet(sensitive)]
+    email: Option<String>,
+}
+
 // Define a simple service
 #[roam::service]
 trait Calculator {
     async fn add(&self, a: i32, b: i32) -> i32;
     async fn multiply(&self, x: i32, y: i32) -> i32;
     async fn greet(&self, name: String, age: u32) -> String;
+    async fn register(&self, person: Person) -> String;
 }
 
 // Implement the service
@@ -33,6 +43,10 @@ impl Calculator for CalculatorService {
 
     async fn greet(&self, _cx: &roam::Context, name: String, age: u32) -> String {
         format!("Hello {}, you are {} years old!", name, age)
+    }
+
+    async fn register(&self, _cx: &roam::Context, person: Person) -> String {
+        format!("Registered: {}", person.name)
     }
 }
 
@@ -109,6 +123,15 @@ async fn main() {
 
     let result = calculator.greet("Alice".to_string(), 30).await.unwrap();
     println!("greet(\"Alice\", 30) = {}", result);
+
+    // Call with a custom struct containing a sensitive field
+    let person = Person {
+        name: "Bob".to_string(),
+        age: 25,
+        email: Some("bob@secret.com".to_string()),
+    };
+    let result = calculator.register(person).await.unwrap();
+    println!("register(Person {{ ... }}) = {}", result);
 
     println!("\n=== Done ===");
     println!("\nThe INFO lines above show the telemetry spans with:");
