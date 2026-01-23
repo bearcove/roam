@@ -10,7 +10,7 @@ use facet_pretty::PrettyPrinter;
 use roam_session::{Context, MethodOutcome, Middleware, Rejection, SendPeek};
 
 use crate::client::CurrentTrace;
-use crate::exporter::OtlpExporter;
+use crate::exporter::SpanExporter;
 use crate::otlp::{
     KeyValue, Span, SpanKind, Status, TraceContext, generate_span_id, generate_trace_id,
 };
@@ -158,18 +158,18 @@ impl PendingSpan {
 ///     .with_middleware(telemetry);
 /// ```
 #[derive(Clone)]
-pub struct TelemetryMiddleware {
-    exporter: OtlpExporter,
+pub struct TelemetryMiddleware<E> {
+    exporter: E,
 }
 
-impl TelemetryMiddleware {
+impl<E: SpanExporter> TelemetryMiddleware<E> {
     /// Create a new telemetry middleware with the given exporter.
-    pub fn new(exporter: OtlpExporter) -> Self {
+    pub fn new(exporter: E) -> Self {
         Self { exporter }
     }
 }
 
-impl Middleware for TelemetryMiddleware {
+impl<E: SpanExporter> Middleware for TelemetryMiddleware<E> {
     fn pre<'a>(
         &'a self,
         ctx: &'a mut Context,
