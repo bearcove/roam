@@ -463,7 +463,8 @@ pub async unsafe fn prepare(
     middleware: &[Arc<dyn Middleware>],
 ) -> Result<(), PrepareError> {
     // 1. Deserialize into args_ptr using reflection
-    deserialize_into(args_ptr, args_shape, payload)?;
+    // SAFETY: caller guarantees args_ptr is valid and properly sized
+    unsafe { deserialize_into(args_ptr, args_shape, payload) }?;
 
     // 2. Patch channel IDs from Request framing into deserialized args
     debug!(channels = ?channels, "prepare: patching channel IDs");
@@ -500,13 +501,18 @@ pub async unsafe fn prepare(
 
 /// Deserialize payload into a type-erased pointer using Shape.
 ///
+/// This is the non-generic deserialization function used by generated dispatchers.
+/// It deserializes directly into caller-provided memory (typically stack-allocated
+/// via `MaybeUninit`) to avoid heap allocation.
+///
 /// # Safety
 ///
 /// - `ptr` must point to valid, properly aligned memory for the type described by `shape`
 /// - The memory must have at least `shape.layout.size()` bytes available
 /// - On success, the memory at `ptr` will be initialized with the deserialized value
+/// - On error, the memory at `ptr` may be partially initialized and MUST NOT be read
 #[allow(unsafe_code)]
-fn deserialize_into(
+pub unsafe fn deserialize_into(
     ptr: *mut (),
     shape: &'static Shape,
     payload: &[u8],
@@ -538,13 +544,15 @@ fn deserialize_into(
 
 /// Patch channel IDs into deserialized args by walking with Poke (non-generic).
 ///
-/// This is the non-generic version of `patch_channel_ids()`.
+/// This is the non-generic version of `patch_channel_ids()`. It walks the
+/// deserialized args and overwrites the `channel_id` field of any `Rx<T>` or
+/// `Tx<T>` with the authoritative channel IDs from the request framing.
 ///
 /// # Safety
 ///
 /// - `args_ptr` must point to valid, initialized memory matching `args_shape`
 #[allow(unsafe_code)]
-unsafe fn patch_channel_ids_by_shape(
+pub unsafe fn patch_channel_ids_by_shape(
     args_ptr: *mut (),
     args_shape: &'static Shape,
     channels: &[u64],
@@ -644,6 +652,39 @@ pub async unsafe fn send_error_response(
             payload,
         })
         .await;
+}
+
+/// Run middleware on owned args.
+///
+/// This is called from the async block in generated dispatchers, after stream
+/// binding has completed synchronously. The args are owned at this point, so
+/// we can safely create a Peek to inspect them.
+///
+/// # Safety
+///
+/// - `args_ptr` must point to valid, initialized, Send memory matching `args_shape`
+/// - The args must outlive the returned future
+#[allow(unsafe_code)]
+pub async unsafe fn run_middleware(
+    args_ptr: *const (),
+    args_shape: &'static Shape,
+    ctx: &mut Context,
+    middleware: &[Arc<dyn Middleware>],
+) -> Result<(), Rejection> {
+    if middleware.is_empty() {
+        return Ok(());
+    }
+
+    // SAFETY: args_ptr is valid, initialized, and Send (caller guarantees)
+    let peek =
+        unsafe { facet::Peek::unchecked_new(PtrConst::new(args_ptr.cast::<u8>()), args_shape) };
+    let send_peek = unsafe { SendPeek::new(peek) };
+
+    for mw in middleware {
+        mw.intercept(ctx, send_peek).await?;
+    }
+
+    Ok(())
 }
 
 /// Send a prepare error (deserialization or rejection) as a response.
