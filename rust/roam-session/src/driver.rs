@@ -569,13 +569,12 @@ where
 
                 // SAFETY: args_ptr was created from valid, initialized, Send data
                 match unsafe {
-                    handle
-                        .call_with_metadata_by_shape(
-                            method_id,
-                            args_ptr.as_ptr(),
-                            args_shape,
-                            metadata.clone(),
-                        )
+                    handle.call_with_metadata_by_shape(
+                        method_id,
+                        args_ptr.as_ptr(),
+                        args_shape,
+                        metadata.clone(),
+                    )
                 }
                 .await
                 {

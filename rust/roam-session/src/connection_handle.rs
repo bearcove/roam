@@ -349,10 +349,7 @@ impl ConnectionHandle {
         // Collect channel IDs for the Request message using non-generic Peek
         // SAFETY: args_ptr is valid and initialized (was just walked by bind_streams)
         let peek = unsafe {
-            facet::Peek::unchecked_new(
-                facet_core::PtrConst::new(args_ptr.cast::<u8>()),
-                args_shape,
-            )
+            facet::Peek::unchecked_new(facet_core::PtrConst::new(args_ptr.cast::<u8>()), args_shape)
         };
         let channels = crate::dispatch::collect_channel_ids_from_peek_pub(peek);
         trace!(
@@ -363,10 +360,7 @@ impl ConnectionHandle {
 
         // Serialize using non-generic peek_to_vec
         let peek = unsafe {
-            facet::Peek::unchecked_new(
-                facet_core::PtrConst::new(args_ptr.cast::<u8>()),
-                args_shape,
-            )
+            facet::Peek::unchecked_new(facet_core::PtrConst::new(args_ptr.cast::<u8>()), args_shape)
         };
         let payload_result = facet_postcard::peek_to_vec(peek);
 
@@ -1089,8 +1083,9 @@ impl ConnectionHandle {
         }
 
         // SAFETY: response_ptr is valid and initialized
-        let poke =
-            unsafe { facet::Poke::from_raw_parts(PtrMut::new(response_ptr.cast::<u8>()), response_shape) };
+        let poke = unsafe {
+            facet::Poke::from_raw_parts(PtrMut::new(response_ptr.cast::<u8>()), response_shape)
+        };
         self.bind_response_streams_recursive(poke);
     }
 }

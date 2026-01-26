@@ -371,11 +371,9 @@ where
                     };
                     std::result::Result::Err(CallError::Roam(mapped))
                 }
-                DecodeOutcome::DeserializeFailed(msg) => {
-                    std::result::Result::Err(CallError::Protocol(DecodeError::DeserializeFailed(
-                        msg,
-                    )))
-                }
+                DecodeOutcome::DeserializeFailed(msg) => std::result::Result::Err(
+                    CallError::Protocol(DecodeError::DeserializeFailed(msg)),
+                ),
             }
         })
     }
@@ -458,11 +456,9 @@ where
                     };
                     std::result::Result::Err(CallError::Roam(mapped))
                 }
-                DecodeOutcome::DeserializeFailed(msg) => {
-                    std::result::Result::Err(CallError::Protocol(DecodeError::DeserializeFailed(
-                        msg,
-                    )))
-                }
+                DecodeOutcome::DeserializeFailed(msg) => std::result::Result::Err(
+                    CallError::Protocol(DecodeError::DeserializeFailed(msg)),
+                ),
             }
         })
     }
@@ -586,7 +582,8 @@ pub unsafe fn decode_response_into(
             match payload[1] {
                 0 => {
                     // User error: deserialize into err_ptr
-                    if let Err(e) = unsafe { deserialize_into_ptr(err_ptr, err_shape, &payload[2..]) }
+                    if let Err(e) =
+                        unsafe { deserialize_into_ptr(err_ptr, err_shape, &payload[2..]) }
                     {
                         return DecodeOutcome::DeserializeFailed(e);
                     }
