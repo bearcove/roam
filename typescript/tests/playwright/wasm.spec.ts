@@ -1,9 +1,18 @@
 import { test, expect } from "@playwright/test";
 import { spawn, type ChildProcess } from "node:child_process";
 import { setTimeout as sleep } from "node:timers/promises";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 
 // Root of the roam project
 const projectRoot = new URL("../../../", import.meta.url).pathname;
+
+// Check if wasm pkg exists - skip tests if not built
+const wasmPkgPath = join(projectRoot, "typescript/tests/browser-wasm/pkg/wasm_browser_tests.js");
+const wasmPkgExists = existsSync(wasmPkgPath);
+
+// Skip all tests in this file if wasm pkg doesn't exist
+test.skip(!wasmPkgExists, "Wasm pkg not built - run wasm-pack build first");
 
 let wsServer: ChildProcess | null = null;
 let viteServer: ChildProcess | null = null;
