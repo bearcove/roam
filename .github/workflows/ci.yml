@@ -195,6 +195,23 @@ jobs:
         env:
           SUBJECT_CMD: "sh swift/subject/subject-swift.sh"
 
+  rust-wasm:
+    name: Rust / WebAssembly
+    runs-on: depot-ubuntu-24.04-4
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Check roam-websocket for wasm32
+        run: cargo check --target wasm32-unknown-unknown -p roam-websocket
+
   rust-windows:
     name: Rust / Windows
     runs-on: depot-windows-2025-16
