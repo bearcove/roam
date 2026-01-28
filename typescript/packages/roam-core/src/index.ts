@@ -211,7 +211,6 @@ export {
 
 // Client middleware types
 export {
-  type ClientMetadataValue,
   Extensions,
   type ClientContext,
   type CallRequest,
@@ -232,7 +231,12 @@ export { CallBuilder, withMeta, type CallExecutor } from "./call_builder.ts";
 export { loggingMiddleware, type LoggingOptions, type ErrorDecoder } from "./logging.ts";
 
 // Metadata conversion utilities
-export { metadataMapToEntries, metadataEntriesToMap } from "./metadata.ts";
+export {
+  ClientMetadata,
+  type ClientMetadataValue,
+  clientMetadataToEntries,
+  metadataEntriesToClientMetadata,
+} from "./metadata.ts";
 
 // Type definitions for method handlers
 export type MethodHandler<H> = (handler: H, payload: Uint8Array) => Promise<Uint8Array>;

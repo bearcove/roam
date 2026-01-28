@@ -207,11 +207,9 @@ describe("factory functions", () => {
 describe("wire schemas", () => {
   it("HelloSchema has correct structure", () => {
     expect(HelloSchema.kind).toBe("enum");
-    expect(HelloSchema.variants).toHaveLength(2);
+    expect(HelloSchema.variants).toHaveLength(1);
     expect(HelloSchema.variants[0].name).toBe("V3");
     expect(HelloSchema.variants[0].discriminant).toBe(0);
-    expect(HelloSchema.variants[1].name).toBe("V2");
-    expect(HelloSchema.variants[1].discriminant).toBe(1);
   });
 
   it("MetadataValueSchema has correct structure", () => {
@@ -227,9 +225,10 @@ describe("wire schemas", () => {
 
   it("MetadataEntrySchema has correct structure", () => {
     expect(MetadataEntrySchema.kind).toBe("tuple");
-    expect(MetadataEntrySchema.elements).toHaveLength(2);
+    expect(MetadataEntrySchema.elements).toHaveLength(3);
     expect(MetadataEntrySchema.elements[0]).toEqual({ kind: "string" });
     expect(MetadataEntrySchema.elements[1]).toEqual({ kind: "ref", name: "MetadataValue" });
+    expect(MetadataEntrySchema.elements[2]).toEqual({ kind: "u64" });
   });
 
   it("MessageSchema has correct structure", () => {
