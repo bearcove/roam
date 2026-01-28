@@ -10,7 +10,7 @@
 import {
   type Hello,
   type MetadataEntry,
-  helloV2,
+  helloV3,
   messageHello,
   messageGoodbye,
   messageRequest,
@@ -1004,9 +1004,9 @@ async function waitForPeerHello<T extends MessageTransport>(
   }
 }
 
-/** Default Hello message (V2 for virtual connection support). */
+/** Default Hello message (V3 for metadata flags support). */
 export function defaultHello(): Hello {
-  return helloV2(1024 * 1024, 64 * 1024);
+  return helloV3(1024 * 1024, 64 * 1024);
 }
 
 /**
