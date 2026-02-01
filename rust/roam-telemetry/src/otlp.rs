@@ -130,14 +130,14 @@ impl KeyValue {
 
 /// Attribute value (only one field should be set).
 #[derive(Debug, Clone, Facet)]
-#[facet(rename_all = "camelCase")]
+#[facet(rename_all = "camelCase", skip_all_unless_truthy)]
 pub struct AnyValue {
-    #[facet(default, skip_serializing_if = Option::is_none)]
+    #[facet(default)]
     pub string_value: Option<String>,
     /// OTLP uses string for int64 to avoid JS precision loss.
-    #[facet(default, skip_serializing_if = Option::is_none)]
+    #[facet(default)]
     pub int_value: Option<String>,
-    #[facet(default, skip_serializing_if = Option::is_none)]
+    #[facet(default)]
     pub bool_value: Option<bool>,
 }
 
