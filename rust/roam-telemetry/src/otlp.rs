@@ -51,7 +51,7 @@ pub struct Span {
     /// 8-byte span ID as hex string (16 chars).
     pub span_id: String,
     /// Parent span ID (if any).
-    #[facet(default)]
+    #[facet(default, skip_serializing_if = Option::is_none)]
     pub parent_span_id: Option<String>,
     /// Span name (e.g., "Testbed.echo").
     pub name: String,
@@ -132,12 +132,12 @@ impl KeyValue {
 #[derive(Debug, Clone, Facet)]
 #[facet(rename_all = "camelCase")]
 pub struct AnyValue {
-    #[facet(default)]
+    #[facet(default, skip_serializing_if = Option::is_none)]
     pub string_value: Option<String>,
     /// OTLP uses string for int64 to avoid JS precision loss.
-    #[facet(default)]
+    #[facet(default, skip_serializing_if = Option::is_none)]
     pub int_value: Option<String>,
-    #[facet(default)]
+    #[facet(default, skip_serializing_if = Option::is_none)]
     pub bool_value: Option<bool>,
 }
 
