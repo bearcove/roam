@@ -143,15 +143,11 @@ impl ServiceDispatcher for ForwardingDispatcher {
                             debug!(
                                 upstream_id,
                                 downstream_id,
-                                "ForwardingDispatcher: forwarding task ended, sending Close"
+                                "ForwardingDispatcher: forwarding task ended"
                             );
-                            // Channel closed
-                            let _ = task_tx_clone
-                                .send(DriverMessage::Close {
-                                    conn_id,
-                                    channel_id: downstream_id,
-                                })
-                                .await;
+                            // Channel closed by upstream - no need to send Close downstream.
+                            // r[channeling.lifecycle.response-closes-pulls] - Rx channels are
+                            // implicitly closed when Response is sent.
                         });
                     }
                 }
@@ -223,13 +219,12 @@ impl ServiceDispatcher for ForwardingDispatcher {
                                 })
                                 .await;
                         }
-                        // Channel closed
-                        let _ = upstream_task_tx
-                            .send(DriverMessage::Close {
-                                conn_id: upstream_conn_id,
-                                channel_id: upstream_id,
-                            })
-                            .await;
+                        // Channel closed by downstream. Don't send Close upstream because:
+                        // 1. The upstream may be the sender on this channel (Tx with holder-semantics),
+                        //    in which case it has no registration for this channel_id.
+                        // 2. If upstream is the receiver, it will detect closure when we drop our
+                        //    sending side (the upstream_task_tx going out of scope stops Data flow).
+                        // This avoids protocol violations when forwarding through multiple hops.
                     });
                 }
 
@@ -246,13 +241,10 @@ impl ServiceDispatcher for ForwardingDispatcher {
                                 })
                                 .await;
                         }
-                        // Channel closed
-                        let _ = task_tx
-                            .send(DriverMessage::Close {
-                                conn_id,
-                                channel_id: downstream_id,
-                            })
-                            .await;
+                        // Channel closed by upstream - no need to send Close downstream.
+                        // The upstream closes by dropping its Tx or sending Response.
+                        // r[channeling.lifecycle.response-closes-pulls] - Rx channels are
+                        // implicitly closed when Response is sent.
                     });
                 }
 
