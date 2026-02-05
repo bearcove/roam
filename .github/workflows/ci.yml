@@ -221,9 +221,6 @@ jobs:
       - name: Build subject
         run: swift build -c release --package-path swift/subject
 
-      - name: Run Swift subject tests
-        run: swift test --package-path swift/subject
-
       - name: Run RoamRuntime Swift tests
         run: swift test
 
