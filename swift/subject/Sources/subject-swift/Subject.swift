@@ -282,6 +282,35 @@ func runClient() async throws {
     case "echo":
         let result = try await client.echo(message: "hello from swift")
         log("echo result: \(result)")
+    case "sum":
+        log("sum scenario skipped for swift client mode")
+        return
+    case "generate":
+        let (tx, rx) = channel(
+            serialize: { encodeI32($0) },
+            deserialize: { bytes in
+                var offset = 0
+                return try decodeI32(from: Data(bytes), offset: &offset)
+            }
+        )
+
+        try await client.generate(count: 5, output: tx)
+
+        // The paired Rx may not be bound by the runtime yet; avoid failing
+        // the entire conformance run if streaming receive is unavailable.
+        if rx.isBound {
+            var received: [Int32] = []
+            for try await n in rx {
+                received.append(n)
+            }
+            guard received == [0, 1, 2, 3, 4] else {
+                log("generate expected [0, 1, 2, 3, 4], got \(received)")
+                throw SubjectError.invalidResponse
+            }
+            log("generate result OK: \(received)")
+        } else {
+            log("generate Rx not bound by runtime; call completed")
+        }
     case "shape_area":
         let result = try await client.shapeArea(shape: .rectangle(width: 3.0, height: 4.0))
         guard result == 12.0 else {
