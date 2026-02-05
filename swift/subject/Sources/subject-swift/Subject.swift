@@ -282,9 +282,51 @@ func runClient() async throws {
     case "echo":
         let result = try await client.echo(message: "hello from swift")
         log("echo result: \(result)")
+    case "shape_area":
+        let result = try await client.shapeArea(shape: .rectangle(width: 3.0, height: 4.0))
+        guard result == 12.0 else {
+            log("shape_area expected 12.0, got \(result)")
+            throw SubjectError.invalidResponse
+        }
+        log("shape_area result: \(result)")
+    case "create_canvas":
+        let result = try await client.createCanvas(
+            name: "enum-canvas",
+            shapes: [.point, .circle(radius: 2.5)],
+            background: .green
+        )
+        guard result.name == "enum-canvas" else {
+            log("create_canvas expected name enum-canvas, got \(result.name)")
+            throw SubjectError.invalidResponse
+        }
+        guard case .green = result.background else {
+            log("create_canvas expected green background")
+            throw SubjectError.invalidResponse
+        }
+        guard result.shapes.count == 2 else {
+            log("create_canvas expected 2 shapes, got \(result.shapes.count)")
+            throw SubjectError.invalidResponse
+        }
+        guard case .point = result.shapes[0] else {
+            log("create_canvas expected first shape to be point")
+            throw SubjectError.invalidResponse
+        }
+        guard case .circle(let radius) = result.shapes[1], radius == 2.5 else {
+            log("create_canvas expected second shape to be circle(radius: 2.5)")
+            throw SubjectError.invalidResponse
+        }
+        log("create_canvas result OK")
+    case "process_message":
+        let result = try await client.processMessage(msg: .data(Data([1, 2, 3, 4])))
+        guard case .data(let payload) = result, payload == Data([4, 3, 2, 1]) else {
+            log("process_message returned unexpected payload")
+            throw SubjectError.invalidResponse
+        }
+        log("process_message result OK")
 
     default:
         log("unknown CLIENT_SCENARIO: \(scenario)")
+        throw SubjectError.unknownScenario
     }
 }
 
@@ -293,6 +335,8 @@ func runClient() async throws {
 enum SubjectError: Error {
     case missingEnv
     case invalidAddr
+    case invalidResponse
+    case unknownScenario
 }
 
 // MARK: - Main Entry Point
