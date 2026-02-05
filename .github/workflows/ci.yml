@@ -190,6 +190,9 @@ jobs:
       - name: Build subject
         run: swift build -c release --package-path swift/subject
 
+      - name: Run RoamRuntime Swift tests
+        run: swift test
+
       - name: Run spec tests
         run: cargo nextest run -p spec-tests
         env:
