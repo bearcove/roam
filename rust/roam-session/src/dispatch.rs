@@ -9,7 +9,7 @@
 use std::sync::Arc;
 
 use facet::Facet;
-use facet_core::{PtrConst, PtrMut, PtrUninit, Shape};
+use facet_core::{PtrConst, PtrMut, PtrUninit, Shape, Type, UserType};
 use facet_format::{FormatDeserializer, MetaSource};
 use facet_postcard::PostcardParser;
 use facet_reflect::{Partial, TypePlanCore};
@@ -588,6 +588,11 @@ pub unsafe fn count_channels_by_shape(args_ptr: *const (), args_shape: &'static 
 fn count_channels_recursive(peek: facet::Peek<'_, '_>) -> usize {
     let shape = peek.shape();
 
+    // Shape-driven fast path: skip entire subtrees that cannot contain streams.
+    if !shape_may_contain_channels(shape) {
+        return 0;
+    }
+
     // Check if this is an Rx or Tx type
     if shape.decl_id == Rx::<()>::SHAPE.decl_id || shape.decl_id == Tx::<()>::SHAPE.decl_id {
         return 1;
@@ -879,6 +884,11 @@ pub fn collect_channel_ids<T: Facet<'static>>(args: &T) -> Vec<u64> {
 fn collect_channel_ids_recursive(peek: facet::Peek<'_, '_>, ids: &mut Vec<u64>) {
     let shape = peek.shape();
 
+    // Shape-driven fast path: skip entire subtrees that cannot contain streams.
+    if !shape_may_contain_channels(shape) {
+        return;
+    }
+
     // Check if this is an Rx or Tx type
     if shape.decl_id == Rx::<()>::SHAPE.decl_id || shape.decl_id == Tx::<()>::SHAPE.decl_id {
         // Read the channel_id field
@@ -925,6 +935,99 @@ fn collect_channel_ids_recursive(peek: facet::Peek<'_, '_>, ids: &mut Vec<u64>) 
             collect_channel_ids_recursive(element, ids);
         }
     }
+}
+
+fn shape_may_contain_channels(shape: &'static Shape) -> bool {
+    fn inner(shape: &'static Shape, visiting: &mut Vec<*const Shape>) -> bool {
+        if shape.decl_id == Rx::<()>::SHAPE.decl_id || shape.decl_id == Tx::<()>::SHAPE.decl_id {
+            return true;
+        }
+
+        if shape.scalar_type().is_some() {
+            return false;
+        }
+
+        if shape.is_transparent()
+            && let Some(inner_shape) = shape.inner
+        {
+            return inner(inner_shape, visiting);
+        }
+
+        let ptr = shape as *const Shape;
+        if visiting.contains(&ptr) {
+            return false;
+        }
+        visiting.push(ptr);
+
+        let mut result = false;
+
+        match shape.def {
+            facet_core::Def::List(list_def) => {
+                result = inner(list_def.t(), visiting);
+            }
+            facet_core::Def::Array(array_def) => {
+                result = inner(array_def.t(), visiting);
+            }
+            facet_core::Def::Slice(slice_def) => {
+                result = inner(slice_def.t(), visiting);
+            }
+            facet_core::Def::Option(opt_def) => {
+                result = inner(opt_def.t(), visiting);
+            }
+            facet_core::Def::Map(map_def) => {
+                result = inner(map_def.k(), visiting) || inner(map_def.v(), visiting);
+            }
+            facet_core::Def::Set(set_def) => {
+                result = inner(set_def.t(), visiting);
+            }
+            facet_core::Def::Result(result_def) => {
+                result = inner(result_def.t(), visiting) || inner(result_def.e(), visiting);
+            }
+            facet_core::Def::Pointer(ptr_def) => {
+                if let Some(pointee) = ptr_def.pointee {
+                    result = inner(pointee, visiting);
+                }
+            }
+            facet_core::Def::DynamicValue(_) => {
+                // Dynamic value can contain arbitrary nested values, including streams.
+                result = true;
+            }
+            _ => {}
+        }
+
+        if !result {
+            match shape.ty {
+                Type::User(UserType::Struct(struct_type)) => {
+                    result = struct_type
+                        .fields
+                        .iter()
+                        .any(|field| inner(field.shape(), visiting));
+                }
+                Type::User(UserType::Enum(enum_type)) => {
+                    result = enum_type.variants.iter().any(|variant| {
+                        variant
+                            .data
+                            .fields
+                            .iter()
+                            .any(|field| inner(field.shape(), visiting))
+                    });
+                }
+                _ => {}
+            }
+        }
+
+        if !result {
+            result = shape
+                .type_params
+                .iter()
+                .any(|param| inner(param.shape, visiting));
+        }
+
+        visiting.pop();
+        result
+    }
+
+    inner(shape, &mut Vec::new())
 }
 
 /// Patch channel IDs into deserialized args by walking with Poke.

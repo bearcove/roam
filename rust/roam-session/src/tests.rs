@@ -359,3 +359,28 @@ fn collect_channel_ids_deeply_nested() {
     let ids = collect_channel_ids(&args);
     assert_eq!(ids, vec![777]);
 }
+
+// r[verify call.request.channels]
+#[test]
+fn collect_channel_ids_large_bytes_payload_is_empty() {
+    let args = vec![0xABu8; 512 * 1024];
+    let ids = collect_channel_ids(&args);
+    assert!(ids.is_empty());
+}
+
+// r[verify call.request.channels]
+#[test]
+fn collect_channel_ids_large_bytes_payload_with_stream() {
+    #[derive(facet::Facet)]
+    struct ResponseLike {
+        payload: Vec<u8>,
+        stream: Tx<u8>,
+    }
+
+    let args = ResponseLike {
+        payload: vec![0xCDu8; 512 * 1024],
+        stream: Tx::try_from(4242u64).unwrap(),
+    };
+    let ids = collect_channel_ids(&args);
+    assert_eq!(ids, vec![4242]);
+}
