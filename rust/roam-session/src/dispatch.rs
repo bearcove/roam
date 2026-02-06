@@ -6,11 +6,10 @@
 //! - [`ServiceDispatcher`] trait - implemented by generated service dispatchers
 //! - [`RoutedDispatcher`] - routes to different dispatchers by method ID
 
-use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use facet::Facet;
-use facet_core::{PtrConst, PtrMut, PtrUninit, Shape, Type, UserType};
+use facet_core::{PtrConst, PtrMut, PtrUninit, Shape};
 use facet_format::{FormatDeserializer, MetaSource};
 use facet_postcard::PostcardParser;
 use facet_reflect::{Partial, TypePlanCore};
@@ -823,11 +822,6 @@ pub fn collect_channel_ids<T: Facet<'static>>(args: &T) -> Vec<u64> {
 fn collect_channel_ids_recursive(peek: facet::Peek<'_, '_>, ids: &mut Vec<u64>) {
     let shape = peek.shape();
 
-    // Shape-driven fast path: skip entire subtrees that cannot contain streams.
-    if !shape_may_contain_channels(shape) {
-        return;
-    }
-
     // Check if this is an Rx or Tx type
     if shape.decl_id == Rx::<()>::SHAPE.decl_id || shape.decl_id == Tx::<()>::SHAPE.decl_id {
         // Read the channel_id field
@@ -867,138 +861,7 @@ fn collect_channel_ids_recursive(peek: facet::Peek<'_, '_>, ids: &mut Vec<u64>) 
                 Ok(None) | Err(_) => break,
             }
         }
-        return;
     }
-
-    // Recurse into list-like containers (Vec, arrays, slices)
-    if let Ok(pl) = peek.into_list_like() {
-        for element in pl.iter() {
-            collect_channel_ids_recursive(element, ids);
-        }
-        return;
-    }
-
-    // Recurse into map entries
-    if let Ok(pm) = peek.into_map() {
-        for (key, value) in pm.iter() {
-            collect_channel_ids_recursive(key, ids);
-            collect_channel_ids_recursive(value, ids);
-        }
-        return;
-    }
-
-    // Recurse into set entries
-    if let Ok(ps) = peek.into_set() {
-        for value in ps.iter() {
-            collect_channel_ids_recursive(value, ids);
-        }
-    }
-}
-
-fn shape_may_contain_channels(shape: &'static Shape) -> bool {
-    fn inner(
-        shape: &'static Shape,
-        in_progress: &mut HashSet<&'static Shape>,
-        memo: &mut HashMap<&'static Shape, bool>,
-    ) -> bool {
-        if let Some(&cached) = memo.get(shape) {
-            return cached;
-        }
-
-        if shape.decl_id == Rx::<()>::SHAPE.decl_id || shape.decl_id == Tx::<()>::SHAPE.decl_id {
-            memo.insert(shape, true);
-            return true;
-        }
-
-        if shape.scalar_type().is_some() {
-            memo.insert(shape, false);
-            return false;
-        }
-
-        if shape.is_transparent()
-            && let Some(inner_shape) = shape.inner
-        {
-            let result = inner(inner_shape, in_progress, memo);
-            memo.insert(shape, result);
-            return result;
-        }
-
-        if !in_progress.insert(shape) {
-            return false;
-        }
-
-        let mut result = false;
-
-        match shape.def {
-            facet_core::Def::List(list_def) => {
-                result = inner(list_def.t(), in_progress, memo);
-            }
-            facet_core::Def::Array(array_def) => {
-                result = inner(array_def.t(), in_progress, memo);
-            }
-            facet_core::Def::Slice(slice_def) => {
-                result = inner(slice_def.t(), in_progress, memo);
-            }
-            facet_core::Def::Option(opt_def) => {
-                result = inner(opt_def.t(), in_progress, memo);
-            }
-            facet_core::Def::Map(map_def) => {
-                result =
-                    inner(map_def.k(), in_progress, memo) || inner(map_def.v(), in_progress, memo);
-            }
-            facet_core::Def::Set(set_def) => {
-                result = inner(set_def.t(), in_progress, memo);
-            }
-            facet_core::Def::Result(result_def) => {
-                result = inner(result_def.t(), in_progress, memo)
-                    || inner(result_def.e(), in_progress, memo);
-            }
-            facet_core::Def::Pointer(ptr_def) => {
-                if let Some(pointee) = ptr_def.pointee {
-                    result = inner(pointee, in_progress, memo);
-                }
-            }
-            facet_core::Def::DynamicValue(_) => {
-                // DynamicValue (e.g. serde_json::Value-like) cannot carry Tx/Rx streams.
-                result = false;
-            }
-            _ => {}
-        }
-
-        if !result {
-            match shape.ty {
-                Type::User(UserType::Struct(struct_type)) => {
-                    result = struct_type
-                        .fields
-                        .iter()
-                        .any(|field| inner(field.shape(), in_progress, memo));
-                }
-                Type::User(UserType::Enum(enum_type)) => {
-                    result = enum_type.variants.iter().any(|variant| {
-                        variant
-                            .data
-                            .fields
-                            .iter()
-                            .any(|field| inner(field.shape(), in_progress, memo))
-                    });
-                }
-                _ => {}
-            }
-        }
-
-        if !result {
-            result = shape
-                .type_params
-                .iter()
-                .any(|param| inner(param.shape, in_progress, memo));
-        }
-
-        in_progress.remove(shape);
-        memo.insert(shape, result);
-        result
-    }
-
-    inner(shape, &mut HashSet::new(), &mut HashMap::new())
 }
 
 /// Patch channel IDs into deserialized args by walking with Poke.
@@ -1013,7 +876,7 @@ pub fn patch_channel_ids<T: Facet<'static>>(args: &mut T, channels: &[u64]) {
 }
 
 #[allow(unsafe_code)]
-fn patch_channel_ids_recursive(mut poke: facet::Poke<'_, '_>, channels: &[u64], idx: &mut usize) {
+fn patch_channel_ids_recursive(poke: facet::Poke<'_, '_>, channels: &[u64], idx: &mut usize) {
     use facet::Def;
 
     let shape = poke.shape();
@@ -1047,45 +910,17 @@ fn patch_channel_ids_recursive(mut poke: facet::Poke<'_, '_>, channels: &[u64], 
             }
         }
 
-        // Recurse into Option<T>
-        Def::Option(_) => {
-            // Option is represented as an enum, use into_enum to access its value
-            if let Ok(mut pe) = poke.into_enum()
-                && let Ok(Some(inner_poke)) = pe.field(0)
-            {
-                patch_channel_ids_recursive(inner_poke, channels, idx);
-            }
-        }
-
-        // Recurse into list elements (e.g., Vec<Tx<T>>)
-        Def::List(list_def) => {
-            let len = {
-                let peek = poke.as_peek();
-                peek.into_list().map(|pl| pl.len()).unwrap_or(0)
-            };
-            // Get mutable access to elements via VTable (no PokeList exists)
-            if let Some(get_mut_fn) = list_def.vtable.get_mut {
-                let element_shape = list_def.t;
-                let data_ptr = poke.data_mut();
-                for i in 0..len {
-                    // SAFETY: We have exclusive mutable access via poke, index < len, shape is correct
-                    let element_ptr = unsafe { (get_mut_fn)(data_ptr, i, element_shape) };
-                    if let Some(ptr) = element_ptr {
-                        // SAFETY: ptr points to a valid element with the correct shape
-                        let element_poke =
-                            unsafe { facet::Poke::from_raw_parts(ptr, element_shape) };
-                        patch_channel_ids_recursive(element_poke, channels, idx);
+        // Recurse into enum fields (includes Option<T>)
+        _ if poke.is_enum() => {
+            if let Ok(mut pe) = poke.into_enum() {
+                for i in 0usize.. {
+                    match pe.field(i) {
+                        Ok(Some(variant_poke)) => {
+                            patch_channel_ids_recursive(variant_poke, channels, idx)
+                        }
+                        Ok(None) | Err(_) => break,
                     }
                 }
-            }
-        }
-
-        // Other enum variants
-        _ if poke.is_enum() => {
-            if let Ok(mut pe) = poke.into_enum()
-                && let Ok(Some(variant_poke)) = pe.field(0)
-            {
-                patch_channel_ids_recursive(variant_poke, channels, idx);
             }
         }
 

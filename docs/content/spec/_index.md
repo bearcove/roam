@@ -539,11 +539,11 @@ Request {
 > r[call.request.channels.schema-driven]
 >
 > Channel discovery is defined by the method schema, not by byte-by-byte
-> inspection of payload values. Implementations MAY skip traversing runtime
-> subtrees whose shapes cannot contain `Tx<T>` or `Rx<T>` (for example
-> `Vec<u8>`, maps/sets/lists of non-stream element types, and other scalar-only
-> containers), as long as the resulting ordered channel list is identical to
-> full traversal.
+> inspection of payload values. Implementations MUST traverse only struct
+> fields (including tuples) and active enum variant fields when collecting
+> channel IDs. They MUST NOT traverse list or map container elements. For
+> example, `Vec<T>` values (lists) and `HashMap<K, V>` values (maps) are not
+> traversed for channel discovery.
 
 > r[call.request.payload-encoding]
 >
