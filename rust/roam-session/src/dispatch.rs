@@ -6,6 +6,7 @@
 //! - [`ServiceDispatcher`] trait - implemented by generated service dispatchers
 //! - [`RoutedDispatcher`] - routes to different dispatchers by method ID
 
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use facet::Facet;
@@ -494,9 +495,14 @@ pub unsafe fn prepare_sync(
     // SAFETY: caller guarantees args_ptr is valid and properly sized
     unsafe { deserialize_into(args_ptr, args_shape, payload) }?;
 
-    // 2. Count expected channels and validate
+    // 2. Collect expected channels and validate count
     // SAFETY: args_ptr was just initialized by deserialize_into
-    let expected_channels = unsafe { count_channels_by_shape(args_ptr, args_shape) };
+    let expected_channels = {
+        // SAFETY: args_ptr is valid and initialized by deserialize_into above.
+        let peek =
+            unsafe { facet::Peek::unchecked_new(PtrConst::new(args_ptr.cast::<u8>()), args_shape) };
+        collect_channel_ids_from_peek(peek).len()
+    };
     if channels.len() != expected_channels {
         return Err(PrepareError::ChannelCountMismatch {
             expected: expected_channels,
@@ -568,73 +574,6 @@ pub unsafe fn deserialize_into(
         .map_err(|e| PrepareError::Deserialize(e.to_string()))?;
 
     Ok(())
-}
-
-/// Count the number of Tx/Rx fields in args by walking with Peek (non-generic).
-///
-/// Used to validate that the request has the correct number of channel IDs.
-///
-/// # Safety
-///
-/// - `args_ptr` must point to valid, initialized memory matching `args_shape`
-#[allow(unsafe_code)]
-pub unsafe fn count_channels_by_shape(args_ptr: *const (), args_shape: &'static Shape) -> usize {
-    // SAFETY: Caller guarantees args_ptr is valid and initialized
-    let peek =
-        unsafe { facet::Peek::unchecked_new(PtrConst::new(args_ptr.cast::<u8>()), args_shape) };
-    count_channels_recursive(peek)
-}
-
-fn count_channels_recursive(peek: facet::Peek<'_, '_>) -> usize {
-    let shape = peek.shape();
-
-    // Shape-driven fast path: skip entire subtrees that cannot contain streams.
-    if !shape_may_contain_channels(shape) {
-        return 0;
-    }
-
-    // Check if this is an Rx or Tx type
-    if shape.decl_id == Rx::<()>::SHAPE.decl_id || shape.decl_id == Tx::<()>::SHAPE.decl_id {
-        return 1;
-    }
-
-    let mut count = 0;
-
-    // Recurse into struct/tuple fields
-    if let Ok(ps) = peek.into_struct() {
-        let field_count = ps.field_count();
-        for i in 0..field_count {
-            if let Ok(field_peek) = ps.field(i) {
-                count += count_channels_recursive(field_peek);
-            }
-        }
-        return count;
-    }
-
-    // Recurse into Option<T>
-    if let Ok(po) = peek.into_option() {
-        if let Some(inner) = po.value() {
-            count += count_channels_recursive(inner);
-        }
-        return count;
-    }
-
-    // Recurse into enum variants
-    if let Ok(pe) = peek.into_enum() {
-        if let Ok(Some(variant_peek)) = pe.field(0) {
-            count += count_channels_recursive(variant_peek);
-        }
-        return count;
-    }
-
-    // Recurse into sequences
-    if let Ok(pl) = peek.into_list() {
-        for element in pl.iter() {
-            count += count_channels_recursive(element);
-        }
-    }
-
-    count
 }
 
 /// Patch channel IDs into deserialized args by walking with Poke (non-generic).
@@ -922,75 +861,106 @@ fn collect_channel_ids_recursive(peek: facet::Peek<'_, '_>, ids: &mut Vec<u64>) 
 
     // Recurse into enum variants (for other enums with data)
     if let Ok(pe) = peek.into_enum() {
-        // Try to get the first field of the active variant (e.g., Some(T) has one field)
-        if let Ok(Some(variant_peek)) = pe.field(0) {
-            collect_channel_ids_recursive(variant_peek, ids);
+        for i in 0usize.. {
+            match pe.field(i) {
+                Ok(Some(variant_peek)) => collect_channel_ids_recursive(variant_peek, ids),
+                Ok(None) | Err(_) => break,
+            }
         }
         return;
     }
 
-    // Recurse into sequences (e.g., Vec<Tx<T>>)
-    if let Ok(pl) = peek.into_list() {
+    // Recurse into list-like containers (Vec, arrays, slices)
+    if let Ok(pl) = peek.into_list_like() {
         for element in pl.iter() {
             collect_channel_ids_recursive(element, ids);
+        }
+        return;
+    }
+
+    // Recurse into map entries
+    if let Ok(pm) = peek.into_map() {
+        for (key, value) in pm.iter() {
+            collect_channel_ids_recursive(key, ids);
+            collect_channel_ids_recursive(value, ids);
+        }
+        return;
+    }
+
+    // Recurse into set entries
+    if let Ok(ps) = peek.into_set() {
+        for value in ps.iter() {
+            collect_channel_ids_recursive(value, ids);
         }
     }
 }
 
 fn shape_may_contain_channels(shape: &'static Shape) -> bool {
-    fn inner(shape: &'static Shape, visiting: &mut Vec<*const Shape>) -> bool {
+    fn inner(
+        shape: &'static Shape,
+        in_progress: &mut HashSet<&'static Shape>,
+        memo: &mut HashMap<&'static Shape, bool>,
+    ) -> bool {
+        if let Some(&cached) = memo.get(shape) {
+            return cached;
+        }
+
         if shape.decl_id == Rx::<()>::SHAPE.decl_id || shape.decl_id == Tx::<()>::SHAPE.decl_id {
+            memo.insert(shape, true);
             return true;
         }
 
         if shape.scalar_type().is_some() {
+            memo.insert(shape, false);
             return false;
         }
 
         if shape.is_transparent()
             && let Some(inner_shape) = shape.inner
         {
-            return inner(inner_shape, visiting);
+            let result = inner(inner_shape, in_progress, memo);
+            memo.insert(shape, result);
+            return result;
         }
 
-        let ptr = shape as *const Shape;
-        if visiting.contains(&ptr) {
+        if !in_progress.insert(shape) {
             return false;
         }
-        visiting.push(ptr);
 
         let mut result = false;
 
         match shape.def {
             facet_core::Def::List(list_def) => {
-                result = inner(list_def.t(), visiting);
+                result = inner(list_def.t(), in_progress, memo);
             }
             facet_core::Def::Array(array_def) => {
-                result = inner(array_def.t(), visiting);
+                result = inner(array_def.t(), in_progress, memo);
             }
             facet_core::Def::Slice(slice_def) => {
-                result = inner(slice_def.t(), visiting);
+                result = inner(slice_def.t(), in_progress, memo);
             }
             facet_core::Def::Option(opt_def) => {
-                result = inner(opt_def.t(), visiting);
+                result = inner(opt_def.t(), in_progress, memo);
             }
             facet_core::Def::Map(map_def) => {
-                result = inner(map_def.k(), visiting) || inner(map_def.v(), visiting);
+                result =
+                    inner(map_def.k(), in_progress, memo) || inner(map_def.v(), in_progress, memo);
             }
             facet_core::Def::Set(set_def) => {
-                result = inner(set_def.t(), visiting);
+                result = inner(set_def.t(), in_progress, memo);
             }
             facet_core::Def::Result(result_def) => {
-                result = inner(result_def.t(), visiting) || inner(result_def.e(), visiting);
+                result = inner(result_def.t(), in_progress, memo)
+                    || inner(result_def.e(), in_progress, memo);
             }
             facet_core::Def::Pointer(ptr_def) => {
                 if let Some(pointee) = ptr_def.pointee {
-                    result = inner(pointee, visiting);
+                    result = inner(pointee, in_progress, memo);
                 }
             }
             facet_core::Def::DynamicValue(_) => {
-                // Dynamic value can contain arbitrary nested values, including streams.
-                result = true;
+                // DynamicValue (e.g. serde_json::Value-like) cannot carry Tx/Rx streams.
+                result = false;
             }
             _ => {}
         }
@@ -1001,7 +971,7 @@ fn shape_may_contain_channels(shape: &'static Shape) -> bool {
                     result = struct_type
                         .fields
                         .iter()
-                        .any(|field| inner(field.shape(), visiting));
+                        .any(|field| inner(field.shape(), in_progress, memo));
                 }
                 Type::User(UserType::Enum(enum_type)) => {
                     result = enum_type.variants.iter().any(|variant| {
@@ -1009,7 +979,7 @@ fn shape_may_contain_channels(shape: &'static Shape) -> bool {
                             .data
                             .fields
                             .iter()
-                            .any(|field| inner(field.shape(), visiting))
+                            .any(|field| inner(field.shape(), in_progress, memo))
                     });
                 }
                 _ => {}
@@ -1020,14 +990,15 @@ fn shape_may_contain_channels(shape: &'static Shape) -> bool {
             result = shape
                 .type_params
                 .iter()
-                .any(|param| inner(param.shape, visiting));
+                .any(|param| inner(param.shape, in_progress, memo));
         }
 
-        visiting.pop();
+        in_progress.remove(shape);
+        memo.insert(shape, result);
         result
     }
 
-    inner(shape, &mut Vec::new())
+    inner(shape, &mut HashSet::new(), &mut HashMap::new())
 }
 
 /// Patch channel IDs into deserialized args by walking with Poke.

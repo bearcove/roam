@@ -384,3 +384,83 @@ fn collect_channel_ids_large_bytes_payload_with_stream() {
     let ids = collect_channel_ids(&args);
     assert_eq!(ids, vec![4242]);
 }
+
+// r[verify call.request.channels]
+#[test]
+fn collect_channel_ids_enum_all_active_fields() {
+    #[derive(facet::Facet)]
+    #[allow(dead_code)]
+    #[repr(u8)]
+    enum Multi {
+        Unit = 0,
+        Pair(Vec<u8>, Tx<u8>) = 1,
+        Struct { left: Rx<u8>, right: Tx<u8> } = 2,
+    }
+
+    let pair = Multi::Pair(vec![1, 2, 3], Tx::try_from(11u64).unwrap());
+    let struct_variant = Multi::Struct {
+        left: Rx::try_from(22u64).unwrap(),
+        right: Tx::try_from(33u64).unwrap(),
+    };
+
+    assert_eq!(collect_channel_ids(&pair), vec![11]);
+    assert_eq!(collect_channel_ids(&struct_variant), vec![22, 33]);
+    assert!(collect_channel_ids(&Multi::Unit).is_empty());
+}
+
+// r[verify call.request.channels]
+#[test]
+fn collect_channel_ids_array_tuple_and_map_coverage() {
+    #[derive(facet::Facet)]
+    struct Complex {
+        tuple: (u32, Tx<u8>, [Rx<u8>; 2]),
+        map: std::collections::BTreeMap<String, Vec<u8>>,
+        bytes: [u8; 16],
+    }
+
+    let mut map = std::collections::BTreeMap::new();
+    map.insert("k".to_string(), vec![9, 9, 9]);
+
+    let value = Complex {
+        tuple: (
+            7,
+            Tx::try_from(100u64).unwrap(),
+            [Rx::try_from(101u64).unwrap(), Rx::try_from(102u64).unwrap()],
+        ),
+        map,
+        bytes: [0u8; 16],
+    };
+
+    let ids = collect_channel_ids(&value);
+    assert_eq!(ids, vec![100, 101, 102]);
+}
+
+// r[verify call.request.channels]
+#[test]
+fn collect_channel_ids_shared_shape_branches_not_order_sensitive() {
+    #[derive(facet::Facet)]
+    struct Leaf {
+        stream: Option<Tx<u8>>,
+        payload: Vec<u8>,
+    }
+
+    #[derive(facet::Facet)]
+    struct Root {
+        a: Leaf,
+        b: Leaf,
+    }
+
+    let value = Root {
+        a: Leaf {
+            stream: Some(Tx::try_from(5u64).unwrap()),
+            payload: vec![1; 64 * 1024],
+        },
+        b: Leaf {
+            stream: Some(Tx::try_from(6u64).unwrap()),
+            payload: vec![2; 64 * 1024],
+        },
+    };
+
+    let ids = collect_channel_ids(&value);
+    assert_eq!(ids, vec![5, 6]);
+}
