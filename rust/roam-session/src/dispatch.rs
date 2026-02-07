@@ -520,7 +520,7 @@ pub unsafe fn prepare_sync(
     trace!("prepare_sync: binding streams");
     // SAFETY: args_ptr is valid and initialized
     unsafe {
-        registry.bind_streams_by_shape(args_ptr, args_shape);
+        registry.bind_channels_by_shape(args_ptr, args_shape);
     }
 
     Ok(())

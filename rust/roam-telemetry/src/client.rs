@@ -251,8 +251,8 @@ impl<C: Caller> Caller for TracingCaller<C> {
         result
     }
 
-    fn bind_response_streams<T: Facet<'static>>(&self, response: &mut T, channels: &[u64]) {
-        self.inner.bind_response_streams(response, channels)
+    fn bind_response_channels<T: Facet<'static>>(&self, response: &mut T, channels: &[u64]) {
+        self.inner.bind_response_channels(response, channels)
     }
 
     #[allow(unsafe_code)]
@@ -269,7 +269,7 @@ impl<C: Caller> Caller for TracingCaller<C> {
     }
 
     #[allow(unsafe_code)]
-    unsafe fn bind_response_streams_by_shape(
+    unsafe fn bind_response_channels_by_shape(
         &self,
         response_ptr: *mut (),
         response_shape: &'static facet::Shape,
@@ -278,7 +278,7 @@ impl<C: Caller> Caller for TracingCaller<C> {
         // SAFETY: Caller guarantees response_ptr is valid and initialized
         unsafe {
             self.inner
-                .bind_response_streams_by_shape(response_ptr, response_shape, channels)
+                .bind_response_channels_by_shape(response_ptr, response_shape, channels)
         }
     }
 }

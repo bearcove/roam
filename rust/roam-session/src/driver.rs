@@ -527,9 +527,9 @@ where
         }
     }
 
-    fn bind_response_streams<R: Facet<'static>>(&self, response: &mut R, channels: &[u64]) {
+    fn bind_response_channels<R: Facet<'static>>(&self, response: &mut R, channels: &[u64]) {
         // FramedClient wraps a ConnectionHandle, but we don't have direct access to it
-        // during bind_response_streams. For reconnecting clients, response stream binding
+        // during bind_response_channels. For reconnecting clients, response stream binding
         // would need to be handled at a higher level or the client would need to store
         // the current handle.
         // For now, this is a no-op - FramedClient users should use ConnectionHandle
@@ -678,13 +678,13 @@ where
     }
 
     #[allow(unsafe_code)]
-    unsafe fn bind_response_streams_by_shape(
+    unsafe fn bind_response_channels_by_shape(
         &self,
         response_ptr: *mut (),
         response_shape: &'static facet_core::Shape,
         channels: &[u64],
     ) {
-        // Same as bind_response_streams - this is a no-op for FramedClient.
+        // Same as bind_response_channels - this is a no-op for FramedClient.
         // Users should use ConnectionHandle directly if they need response stream binding.
         let _ = (response_ptr, response_shape, channels);
     }

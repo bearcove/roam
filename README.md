@@ -17,13 +17,13 @@ pub trait Calculator {
     /// Fallible method — returns Result<T, E>
     async fn divide(&self, a: i32, b: i32) -> Result<i32, MathError>;
 
-    /// Streaming: client sends numbers, server returns sum
+    /// Channels: client sends numbers, server returns sum
     async fn sum(&self, numbers: Rx<i32>) -> i64;
 
-    /// Streaming: server sends numbers to client
+    /// Channels: server sends numbers to client
     async fn generate(&self, count: u32, output: Tx<i32>);
 
-    /// Bidirectional streaming
+    /// Bidirectional channels
     async fn transform(&self, input: Rx<String>, output: Tx<String>);
 }
 ```

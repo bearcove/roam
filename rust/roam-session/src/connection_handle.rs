@@ -187,14 +187,14 @@ impl ConnectionHandle {
         // This collects receivers that need to be drained but does NOT spawn
         let mut drains = Vec::new();
         trace!("ConnectionHandle::call: binding streams");
-        self.bind_streams(args, &mut drains);
+        self.bind_channels(args, &mut drains);
 
         // Collect channel IDs for the Request message
         let channels = collect_channel_ids(args);
         trace!(
             channels = ?channels,
             drain_count = drains.len(),
-            "ConnectionHandle::call: collected channels after bind_streams"
+            "ConnectionHandle::call: collected channels after bind_channels"
         );
 
         let payload = facet_postcard::to_vec(args).map_err(TransportError::Encode)?;
@@ -344,10 +344,10 @@ impl ConnectionHandle {
         // SAFETY: Caller guarantees args_ptr is valid and initialized
         let poke =
             unsafe { facet::Poke::from_raw_parts(PtrMut::new(args_ptr.cast::<u8>()), args_shape) };
-        self.bind_streams_recursive(poke, &mut drains);
+        self.bind_channels_recursive(poke, &mut drains);
 
         // Collect channel IDs for the Request message using non-generic Peek
-        // SAFETY: args_ptr is valid and initialized (was just walked by bind_streams)
+        // SAFETY: args_ptr is valid and initialized (was just walked by bind_channels)
         let peek = unsafe {
             facet::Peek::unchecked_new(facet_core::PtrConst::new(args_ptr.cast::<u8>()), args_shape)
         };
@@ -355,7 +355,7 @@ impl ConnectionHandle {
         trace!(
             channels = ?channels,
             drain_count = drains.len(),
-            "ConnectionHandle::call_by_shape: collected channels after bind_streams"
+            "ConnectionHandle::call_by_shape: collected channels after bind_channels"
         );
 
         // Serialize using non-generic peek_to_vec
@@ -488,18 +488,18 @@ impl ConnectionHandle {
 
     /// Walk args and bind any Rx<T> or Tx<T> channels.
     /// Collects (channel_id, receiver) pairs for Rx channels that need draining.
-    fn bind_streams<T: Facet<'static>>(
+    fn bind_channels<T: Facet<'static>>(
         &self,
         args: &mut T,
         drains: &mut Vec<(ChannelId, Receiver<Vec<u8>>)>,
     ) {
         let poke = facet::Poke::new(args);
-        self.bind_streams_recursive(poke, drains);
+        self.bind_channels_recursive(poke, drains);
     }
 
     /// Recursively walk a Poke value looking for Rx/Tx channels to bind.
     #[allow(unsafe_code)]
-    fn bind_streams_recursive(
+    fn bind_channels_recursive(
         &self,
         poke: facet::Poke<'_, '_>,
         drains: &mut Vec<(ChannelId, Receiver<Vec<u8>>)>,
@@ -510,10 +510,10 @@ impl ConnectionHandle {
 
         // Check if this is an Rx or Tx type
         if shape.decl_id == crate::Rx::<()>::SHAPE.decl_id {
-            self.bind_rx_stream(poke, drains);
+            self.bind_rx_channel(poke, drains);
             return;
         } else if shape.decl_id == crate::Tx::<()>::SHAPE.decl_id {
-            self.bind_tx_stream(poke);
+            self.bind_tx_channel(poke);
             return;
         }
 
@@ -527,7 +527,7 @@ impl ConnectionHandle {
                 let field_count = ps.field_count();
                 for i in 0..field_count {
                     if let Ok(field_poke) = ps.field(i) {
-                        self.bind_streams_recursive(field_poke, drains);
+                        self.bind_channels_recursive(field_poke, drains);
                     }
                 }
             }
@@ -538,7 +538,7 @@ impl ConnectionHandle {
                 if let Ok(mut pe) = poke.into_enum()
                     && let Ok(Some(inner_poke)) = pe.field(0)
                 {
-                    self.bind_streams_recursive(inner_poke, drains);
+                    self.bind_channels_recursive(inner_poke, drains);
                 }
             }
 
@@ -551,7 +551,7 @@ impl ConnectionHandle {
                 if let Ok(mut pe) = poke.into_enum()
                     && let Ok(Some(variant_poke)) = pe.field(0)
                 {
-                    self.bind_streams_recursive(variant_poke, drains);
+                    self.bind_channels_recursive(variant_poke, drains);
                 }
             }
 
@@ -561,7 +561,7 @@ impl ConnectionHandle {
 
     /// Bind an Rx<T> channel - caller passes receiver, keeps sender.
     /// Collects the receiver for draining (no spawning).
-    fn bind_rx_stream(
+    fn bind_rx_channel(
         &self,
         poke: facet::Poke<'_, '_>,
         drains: &mut Vec<(ChannelId, Receiver<Vec<u8>>)>,
@@ -569,7 +569,7 @@ impl ConnectionHandle {
         let channel_id = self.alloc_channel_id();
         debug!(
             channel_id,
-            "OutgoingBinder::bind_rx_stream: allocated channel_id for Rx"
+            "OutgoingBinder::bind_rx_channel: allocated channel_id for Rx"
         );
 
         if let Ok(mut ps) = poke.into_struct() {
@@ -580,7 +580,7 @@ impl ConnectionHandle {
                 debug!(
                     old_id = *id_ref,
                     new_id = channel_id,
-                    "OutgoingBinder::bind_rx_stream: overwriting channel_id"
+                    "OutgoingBinder::bind_rx_channel: overwriting channel_id"
                 );
                 *id_ref = channel_id;
             }
@@ -592,7 +592,7 @@ impl ConnectionHandle {
             {
                 debug!(
                     channel_id,
-                    "OutgoingBinder::bind_rx_stream: took receiver, adding to drains"
+                    "OutgoingBinder::bind_rx_channel: took receiver, adding to drains"
                 );
                 drains.push((channel_id, rx));
             }
@@ -601,11 +601,11 @@ impl ConnectionHandle {
 
     /// Bind a Tx<T> channel - caller passes sender, keeps receiver.
     /// We take the sender and register for incoming Data routing.
-    fn bind_tx_stream(&self, poke: facet::Poke<'_, '_>) {
+    fn bind_tx_channel(&self, poke: facet::Poke<'_, '_>) {
         let channel_id = self.alloc_channel_id();
         debug!(
             channel_id,
-            "OutgoingBinder::bind_tx_stream: allocated channel_id for Tx"
+            "OutgoingBinder::bind_tx_channel: allocated channel_id for Tx"
         );
 
         if let Ok(mut ps) = poke.into_struct() {
@@ -616,7 +616,7 @@ impl ConnectionHandle {
                 debug!(
                     old_id = *id_ref,
                     new_id = channel_id,
-                    "OutgoingBinder::bind_tx_stream: overwriting channel_id"
+                    "OutgoingBinder::bind_tx_channel: overwriting channel_id"
                 );
                 *id_ref = channel_id;
             }
@@ -628,7 +628,7 @@ impl ConnectionHandle {
             {
                 debug!(
                     channel_id,
-                    "OutgoingBinder::bind_tx_stream: took sender, registering for incoming"
+                    "OutgoingBinder::bind_tx_channel: took sender, registering for incoming"
                 );
                 // Register for incoming Data routing
                 self.register_incoming(channel_id, tx);
@@ -928,19 +928,19 @@ impl ConnectionHandle {
     /// IMPORTANT: The `channels` parameter contains the authoritative channel IDs
     /// from the Response framing. For forwarded connections (via ForwardingDispatcher),
     /// these IDs may differ from the IDs serialized in the payload. We patch them first.
-    pub fn bind_response_streams<T: Facet<'static>>(&self, response: &mut T, channels: &[u64]) {
+    pub fn bind_response_channels<T: Facet<'static>>(&self, response: &mut T, channels: &[u64]) {
         // Patch channel IDs from Response.channels into the deserialized response.
         // This is critical for ForwardingDispatcher where the payload contains upstream
         // channel IDs but channels[] contains the remapped downstream IDs.
         patch_channel_ids(response, channels);
 
         let poke = facet::Poke::new(response);
-        self.bind_response_streams_recursive(poke);
+        self.bind_response_channels_recursive(poke);
     }
 
     /// Recursively walk a Poke value looking for Rx channels to bind in responses.
     #[allow(unsafe_code)]
-    fn bind_response_streams_recursive(&self, poke: facet::Poke<'_, '_>) {
+    fn bind_response_channels_recursive(&self, poke: facet::Poke<'_, '_>) {
         use facet::Def;
 
         let shape = poke.shape();
@@ -962,7 +962,7 @@ impl ConnectionHandle {
                 let field_count = ps.field_count();
                 for i in 0..field_count {
                     if let Ok(field_poke) = ps.field(i) {
-                        self.bind_response_streams_recursive(field_poke);
+                        self.bind_response_channels_recursive(field_poke);
                     }
                 }
             }
@@ -973,7 +973,7 @@ impl ConnectionHandle {
                 if let Ok(mut pe) = poke.into_enum()
                     && let Ok(Some(inner_poke)) = pe.field(0)
                 {
-                    self.bind_response_streams_recursive(inner_poke);
+                    self.bind_response_channels_recursive(inner_poke);
                 }
             }
 
@@ -986,7 +986,7 @@ impl ConnectionHandle {
                 if let Ok(mut pe) = poke.into_enum()
                     && let Ok(Some(variant_poke)) = pe.field(0)
                 {
-                    self.bind_response_streams_recursive(variant_poke);
+                    self.bind_response_channels_recursive(variant_poke);
                 }
             }
 
@@ -1024,7 +1024,7 @@ impl ConnectionHandle {
 
     /// Bind receivers for `Rx<T>` channels in a deserialized response using reflection (non-generic).
     ///
-    /// This is the non-generic version of `bind_response_streams`. It uses Shape reflection
+    /// This is the non-generic version of `bind_response_channels`. It uses Shape reflection
     /// to avoid monomorphization.
     ///
     /// # Safety
@@ -1032,7 +1032,7 @@ impl ConnectionHandle {
     /// - `response_ptr` must point to valid, initialized memory matching `response_shape`
     #[doc(hidden)]
     #[allow(unsafe_code)]
-    pub unsafe fn bind_response_streams_by_shape(
+    pub unsafe fn bind_response_channels_by_shape(
         &self,
         response_ptr: *mut (),
         response_shape: &'static Shape,
@@ -1048,6 +1048,6 @@ impl ConnectionHandle {
         let poke = unsafe {
             facet::Poke::from_raw_parts(PtrMut::new(response_ptr.cast::<u8>()), response_shape)
         };
-        self.bind_response_streams_recursive(poke);
+        self.bind_response_channels_recursive(poke);
     }
 }

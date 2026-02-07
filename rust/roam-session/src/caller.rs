@@ -57,7 +57,7 @@ impl SendPtr {
 pub trait Caller: Clone + Send + Sync + 'static {
     /// Make an RPC call with the given method ID and arguments.
     ///
-    /// The arguments are mutable because stream bindings (Tx/Rx) need to be
+    /// The arguments are mutable because channel bindings (Tx/Rx) need to be
     /// assigned channel IDs before serialization.
     ///
     /// Returns ResponseData containing the payload and any response channel IDs.
@@ -72,7 +72,7 @@ pub trait Caller: Clone + Send + Sync + 'static {
 
     /// Make an RPC call with the given method ID and arguments.
     ///
-    /// The arguments are mutable because stream bindings (Tx/Rx) need to be
+    /// The arguments are mutable because channel bindings (Tx/Rx) need to be
     /// assigned channel IDs before serialization.
     ///
     /// Returns ResponseData containing the payload and any response channel IDs.
@@ -87,7 +87,7 @@ pub trait Caller: Clone + Send + Sync + 'static {
 
     /// Make an RPC call with the given method ID, arguments, and metadata.
     ///
-    /// The arguments are mutable because stream bindings (Tx/Rx) need to be
+    /// The arguments are mutable because channel bindings (Tx/Rx) need to be
     /// assigned channel IDs before serialization.
     ///
     /// Returns ResponseData containing the payload and any response channel IDs.
@@ -101,7 +101,7 @@ pub trait Caller: Clone + Send + Sync + 'static {
 
     /// Make an RPC call with the given method ID, arguments, and metadata.
     ///
-    /// The arguments are mutable because stream bindings (Tx/Rx) need to be
+    /// The arguments are mutable because channel bindings (Tx/Rx) need to be
     /// assigned channel IDs before serialization.
     ///
     /// Returns ResponseData containing the payload and any response channel IDs.
@@ -113,13 +113,13 @@ pub trait Caller: Clone + Send + Sync + 'static {
         metadata: roam_wire::Metadata,
     ) -> impl std::future::Future<Output = Result<ResponseData, TransportError>>;
 
-    /// Bind receivers for `Rx<T>` streams in the response.
+    /// Bind receivers for `Rx<T>` channels in the response.
     ///
     /// After deserializing a response, any `Rx<T>` values in it are "hollow" -
     /// they have channel IDs but no actual receiver. This method walks the
     /// response and binds receivers for each Rx using the channel IDs from
     /// the Response message.
-    fn bind_response_streams<T: Facet<'static>>(&self, response: &mut T, channels: &[u64]);
+    fn bind_response_channels<T: Facet<'static>>(&self, response: &mut T, channels: &[u64]);
 
     // ========================================================================
     // Non-generic methods (reduce monomorphization)
@@ -163,13 +163,13 @@ pub trait Caller: Clone + Send + Sync + 'static {
         metadata: roam_wire::Metadata,
     ) -> impl std::future::Future<Output = Result<ResponseData, TransportError>>;
 
-    /// Bind receivers for `Rx<T>` streams in the response using reflection (non-generic).
+    /// Bind receivers for `Rx<T>` channels in the response using reflection (non-generic).
     ///
     /// # Safety
     ///
     /// - `response_ptr` must point to valid, initialized memory matching `response_shape`
     #[doc(hidden)]
-    unsafe fn bind_response_streams_by_shape(
+    unsafe fn bind_response_channels_by_shape(
         &self,
         response_ptr: *mut (),
         response_shape: &'static Shape,
@@ -187,8 +187,8 @@ impl Caller for ConnectionHandle {
         ConnectionHandle::call_with_metadata(self, method_id, args, metadata).await
     }
 
-    fn bind_response_streams<T: Facet<'static>>(&self, response: &mut T, channels: &[u64]) {
-        ConnectionHandle::bind_response_streams(self, response, channels)
+    fn bind_response_channels<T: Facet<'static>>(&self, response: &mut T, channels: &[u64]) {
+        ConnectionHandle::bind_response_channels(self, response, channels)
     }
 
     #[allow(unsafe_code)]
@@ -234,7 +234,7 @@ impl Caller for ConnectionHandle {
     }
 
     #[allow(unsafe_code)]
-    unsafe fn bind_response_streams_by_shape(
+    unsafe fn bind_response_channels_by_shape(
         &self,
         response_ptr: *mut (),
         response_shape: &'static Shape,
@@ -242,7 +242,7 @@ impl Caller for ConnectionHandle {
     ) {
         // SAFETY: Caller guarantees response_ptr is valid and initialized
         unsafe {
-            ConnectionHandle::bind_response_streams_by_shape(
+            ConnectionHandle::bind_response_channels_by_shape(
                 self,
                 response_ptr,
                 response_shape,
@@ -371,7 +371,7 @@ where
                     let mut result = unsafe { ok_slot.assume_init() };
                     // SAFETY: result is valid and initialized
                     unsafe {
-                        caller.bind_response_streams_by_shape(
+                        caller.bind_response_channels_by_shape(
                             (&raw mut result).cast::<()>(),
                             Ok::SHAPE,
                             &response.channels,
@@ -456,7 +456,7 @@ where
                     let mut result = unsafe { ok_slot.assume_init() };
                     // SAFETY: result is valid and initialized
                     unsafe {
-                        caller.bind_response_streams_by_shape(
+                        caller.bind_response_channels_by_shape(
                             (&raw mut result).cast::<()>(),
                             Ok::SHAPE,
                             &response.channels,

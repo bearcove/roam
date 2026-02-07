@@ -423,26 +423,26 @@ impl ChannelRegistry {
     ///
     /// ```ignore
     /// let mut args = facet_postcard::from_slice::<(Rx<i32>, Tx<String>)>(&payload)?;
-    /// registry.bind_streams(&mut args);
+    /// registry.bind_channels(&mut args);
     /// let (input, output) = args;
     /// // ... call handler with input, output ...
     /// // When handler returns and Tx is dropped, Close is sent automatically
     /// ```
-    pub fn bind_streams<T: Facet<'static>>(&mut self, args: &mut T) {
+    pub fn bind_channels<T: Facet<'static>>(&mut self, args: &mut T) {
         let poke = facet::Poke::new(args);
-        self.bind_streams_recursive(poke);
+        self.bind_channels_recursive(poke);
     }
 
     /// Bind streams in args using a type-erased pointer and shape (non-generic).
     ///
-    /// This is the non-generic version of [`Self::bind_streams`] for use with the
+    /// This is the non-generic version of [`Self::bind_channels`] for use with the
     /// `prepare()` function.
     ///
     /// # Safety
     ///
     /// - `args_ptr` must point to valid, initialized memory matching `args_shape`
     #[allow(unsafe_code)]
-    pub unsafe fn bind_streams_by_shape(
+    pub unsafe fn bind_channels_by_shape(
         &mut self,
         args_ptr: *mut (),
         args_shape: &'static facet_core::Shape,
@@ -451,24 +451,24 @@ impl ChannelRegistry {
         let poke = unsafe {
             facet::Poke::from_raw_parts(facet_core::PtrMut::new(args_ptr.cast::<u8>()), args_shape)
         };
-        self.bind_streams_recursive(poke);
+        self.bind_channels_recursive(poke);
     }
 
     /// Recursively walk a Poke value looking for Rx/Tx channels to bind.
     #[allow(unsafe_code)]
-    fn bind_streams_recursive(&mut self, poke: facet::Poke<'_, '_>) {
+    fn bind_channels_recursive(&mut self, poke: facet::Poke<'_, '_>) {
         use facet::Def;
 
         let shape = poke.shape();
 
         // Check if this is an Rx or Tx type
         if shape.decl_id == crate::Rx::<()>::SHAPE.decl_id {
-            trace!("bind_streams_recursive: found Rx");
-            self.bind_rx_stream(poke);
+            trace!("bind_channels_recursive: found Rx");
+            self.bind_rx_channel(poke);
             return;
         } else if shape.decl_id == crate::Tx::<()>::SHAPE.decl_id {
-            trace!("bind_streams_recursive: found Tx");
-            self.bind_tx_stream(poke);
+            trace!("bind_channels_recursive: found Tx");
+            self.bind_tx_channel(poke);
             return;
         }
 
@@ -480,10 +480,13 @@ impl ChannelRegistry {
             _ if poke.is_struct() => {
                 let mut ps = poke.into_struct().expect("is_struct was true");
                 let field_count = ps.field_count();
-                trace!(field_count, "bind_streams_recursive: recursing into struct");
+                trace!(
+                    field_count,
+                    "bind_channels_recursive: recursing into struct"
+                );
                 for i in 0..field_count {
                     if let Ok(field_poke) = ps.field(i) {
-                        self.bind_streams_recursive(field_poke);
+                        self.bind_channels_recursive(field_poke);
                     }
                 }
             }
@@ -494,7 +497,7 @@ impl ChannelRegistry {
                 if let Ok(mut pe) = poke.into_enum()
                     && let Ok(Some(inner_poke)) = pe.field(0)
                 {
-                    self.bind_streams_recursive(inner_poke);
+                    self.bind_channels_recursive(inner_poke);
                 }
             }
 
@@ -507,7 +510,7 @@ impl ChannelRegistry {
                 if let Ok(mut pe) = poke.into_enum()
                     && let Ok(Some(variant_poke)) = pe.field(0)
                 {
-                    self.bind_streams_recursive(variant_poke);
+                    self.bind_channels_recursive(variant_poke);
                 }
             }
 
@@ -519,7 +522,7 @@ impl ChannelRegistry {
     ///
     /// Server receives data from client on this channel.
     /// Creates a channel, sets the receiver slot, registers the sender for routing.
-    fn bind_rx_stream(&mut self, poke: facet::Poke<'_, '_>) {
+    fn bind_rx_channel(&mut self, poke: facet::Poke<'_, '_>) {
         if let Ok(mut ps) = poke.into_struct() {
             // Get the channel_id that was deserialized from the wire
             let channel_id = if let Ok(channel_id_field) = ps.field_by_name("channel_id")
@@ -527,11 +530,11 @@ impl ChannelRegistry {
             {
                 *id_ref
             } else {
-                warn!("bind_rx_stream: could not get channel_id field");
+                warn!("bind_rx_channel: could not get channel_id field");
                 return;
             };
 
-            trace!(channel_id, "bind_rx_stream: registering incoming channel");
+            trace!(channel_id, "bind_rx_channel: registering incoming channel");
 
             // Create channel and set receiver slot
             let (tx, rx) = crate::runtime::channel(RX_STREAM_BUFFER_SIZE);
@@ -544,9 +547,9 @@ impl ChannelRegistry {
 
             // Register for incoming data routing
             self.register_incoming(channel_id, tx);
-            trace!(channel_id, "bind_rx_stream: channel registered");
+            trace!(channel_id, "bind_rx_channel: channel registered");
         } else {
-            warn!("bind_rx_stream: could not convert poke to struct");
+            warn!("bind_rx_channel: could not convert poke to struct");
         }
     }
 
@@ -555,7 +558,7 @@ impl ChannelRegistry {
     /// Server sends data to client on this channel.
     /// Sets the conn_id and driver_tx so Tx::send() writes DriverMessage::Data to the wire.
     /// When the Tx is dropped, it sends DriverMessage::Close automatically.
-    fn bind_tx_stream(&mut self, poke: facet::Poke<'_, '_>) {
+    fn bind_tx_channel(&mut self, poke: facet::Poke<'_, '_>) {
         if let Ok(mut ps) = poke.into_struct() {
             // Set conn_id so Data/Close messages go to the correct virtual connection
             // r[impl core.conn.independence]
