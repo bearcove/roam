@@ -110,7 +110,7 @@ fn generate_imports(service: &ServiceDetail, w: &mut CodeWriter<&mut String>) {
     use crate::cw_writeln;
     use roam_schema::{ShapeKind, classify_shape, is_rx, is_tx};
 
-    // Check if any method uses streaming
+    // Check if any method uses channels
     let has_streaming = service.methods.iter().any(|m| {
         m.args.iter().any(|a| is_tx(a.ty) || is_rx(a.ty))
             || is_tx(m.return_type)

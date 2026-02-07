@@ -90,13 +90,13 @@ pub enum DriverMessage {
         payload: Vec<u8>,
         response_tx: OneshotSender<Result<ResponseData, TransportError>>,
     },
-    /// Send a Data message on a stream.
+    /// Send a Data message on a channel.
     Data {
         conn_id: roam_wire::ConnectionId,
         channel_id: ChannelId,
         payload: Vec<u8>,
     },
-    /// Send a Close message to end a stream.
+    /// Send a Close message to end a channel.
     Close {
         conn_id: roam_wire::ConnectionId,
         channel_id: ChannelId,
@@ -105,7 +105,7 @@ pub enum DriverMessage {
     Response {
         conn_id: roam_wire::ConnectionId,
         request_id: u64,
-        /// Channel IDs for streams in the response (Tx/Rx returned by the method).
+        /// Channel IDs for channels in the response (Tx/Rx returned by the method).
         channels: Vec<u64>,
         payload: Vec<u8>,
     },
@@ -120,44 +120,44 @@ pub enum DriverMessage {
     },
 }
 
-/// Registry of active streams for a connection.
+/// Registry of active channels for a connection.
 ///
-/// Handles incoming streams (Data from wire → `Rx<T>` / `Tx<T>` handles).
-/// For outgoing streams (server `Tx<T>` args), spawned tasks drain receivers
+/// Handles incoming channels (Data from wire → `Rx<T>` / `Tx<T>` handles).
+/// For outgoing channels (server `Tx<T>` args), spawned tasks drain receivers
 /// and send Data/Close messages via `driver_tx`.
 ///
-/// r[impl channeling.unknown] - Unknown stream IDs cause Goodbye.
+/// r[impl channeling.unknown] - Unknown channel IDs cause Goodbye.
 pub struct ChannelRegistry {
     /// Connection ID this registry belongs to.
     conn_id: roam_wire::ConnectionId,
 
-    /// Streams where we receive Data messages (backing `Rx<T>` or `Tx<T>` handles on our side).
+    /// Channels where we receive Data messages (backing `Rx<T>` or `Tx<T>` handles on our side).
     /// Key: channel_id, Value: sender to route Data payloads to the handle.
     incoming: HashMap<ChannelId, Sender<Vec<u8>>>,
 
-    /// Stream IDs that have been closed.
+    /// Channel IDs that have been closed.
     /// Used to detect data-after-close violations.
     ///
-    /// r[impl channeling.data-after-close] - Track closed streams.
+    /// r[impl channeling.data-after-close] - Track closed channels.
     closed: HashSet<ChannelId>,
 
     // ========================================================================
     // Flow Control
     // ========================================================================
-    /// r[impl flow.channel.credit-based] - Credit tracking for incoming streams.
+    /// r[impl flow.channel.credit-based] - Credit tracking for incoming channels.
     /// r[impl flow.channel.all-transports] - Flow control applies to all transports.
     /// This is the credit we've granted to the peer - bytes they can still send us.
     /// Decremented when we receive Data, incremented when we send Credit.
     incoming_credit: HashMap<ChannelId, u32>,
 
-    /// r[impl flow.channel.credit-based] - Credit tracking for outgoing streams.
+    /// r[impl flow.channel.credit-based] - Credit tracking for outgoing channels.
     /// r[impl flow.channel.all-transports] - Flow control applies to all transports.
     /// This is the credit peer granted us - bytes we can still send them.
     /// Decremented when we send Data, incremented when we receive Credit.
     outgoing_credit: HashMap<ChannelId, u32>,
 
-    /// Initial credit to grant new streams.
-    /// r[impl flow.channel.initial-credit] - Each stream starts with this credit.
+    /// Initial credit to grant new channels.
+    /// r[impl flow.channel.initial-credit] - Each channel starts with this credit.
     initial_credit: u32,
 
     /// Unified channel for all messages to the driver.
@@ -180,7 +180,7 @@ impl ChannelRegistry {
     /// - Acceptor (server) uses even IDs
     /// - Initiator (client) uses odd IDs
     ///
-    /// r[impl flow.channel.initial-credit] - Each stream starts with this credit.
+    /// r[impl flow.channel.initial-credit] - Each channel starts with this credit.
     pub fn new_with_credit_and_role(
         conn_id: roam_wire::ConnectionId,
         initial_credit: u32,
@@ -202,7 +202,7 @@ impl ChannelRegistry {
     /// Create a new registry with the given initial credit and driver channel.
     /// Uses ROOT conn_id and Acceptor role for backward compatibility (server-side usage).
     ///
-    /// r[impl flow.channel.initial-credit] - Each stream starts with this credit.
+    /// r[impl flow.channel.initial-credit] - Each channel starts with this credit.
     pub fn new_with_credit(initial_credit: u32, driver_tx: Sender<DriverMessage>) -> Self {
         Self::new_with_credit_and_role(
             roam_wire::ConnectionId::ROOT,
@@ -252,35 +252,35 @@ impl ChannelRegistry {
         self.response_channel_ids.clone()
     }
 
-    /// Register an incoming stream.
+    /// Register an incoming channel.
     ///
     /// The connection layer will route Data messages for this channel_id to the sender.
     /// Used for both `Rx<T>` (caller receives from callee) and `Tx<T>` (callee sends to caller).
     ///
-    /// r[impl flow.channel.initial-credit] - Stream starts with initial credit.
+    /// r[impl flow.channel.initial-credit] - Channel starts with initial credit.
     pub fn register_incoming(&mut self, channel_id: ChannelId, tx: Sender<Vec<u8>>) {
         self.incoming.insert(channel_id, tx);
         // Grant initial credit - peer can send us this many bytes
         self.incoming_credit.insert(channel_id, self.initial_credit);
     }
 
-    /// Register credit tracking for an outgoing stream.
+    /// Register credit tracking for an outgoing channel.
     ///
     /// The actual receiver is NOT stored here - the driver owns it directly.
-    /// This only sets up credit tracking for the stream.
+    /// This only sets up credit tracking for the channel.
     ///
-    /// r[impl flow.channel.initial-credit] - Stream starts with initial credit.
+    /// r[impl flow.channel.initial-credit] - Channel starts with initial credit.
     pub fn register_outgoing_credit(&mut self, channel_id: ChannelId) {
         // Assume peer grants us initial credit - we can send them this many bytes
         self.outgoing_credit.insert(channel_id, self.initial_credit);
     }
 
-    /// Route a Data message payload to the appropriate incoming stream.
+    /// Route a Data message payload to the appropriate incoming channel.
     ///
     /// Returns Ok(()) if routed successfully, Err(ChannelError) otherwise.
     ///
     /// r[impl channeling.data] - Data messages routed by channel_id.
-    /// r[impl channeling.data-after-close] - Reject data on closed streams.
+    /// r[impl channeling.data-after-close] - Reject data on closed channels.
     /// r[impl flow.channel.credit-overrun] - Reject if data exceeds remaining credit.
     /// r[impl flow.channel.credit-consume] - Deduct bytes from remaining credit.
     /// r[impl flow.channel.byte-accounting] - Credit measured in payload bytes.
@@ -307,8 +307,8 @@ impl ChannelRegistry {
             // r[impl flow.channel.credit-consume] - Deduct from credit
             *credit -= payload_len;
         }
-        // Note: if no credit entry exists, the stream may not be registered yet
-        // (e.g., Rx stream created by callee). In that case, skip credit check.
+        // Note: if no credit entry exists, the channel may not be registered yet
+        // (e.g., Rx channel created by callee). In that case, skip credit check.
 
         if let Some(tx) = self.incoming.get(&channel_id) {
             Ok((tx.clone(), payload))
@@ -317,12 +317,12 @@ impl ChannelRegistry {
         }
     }
 
-    /// Route a Data message payload to the appropriate incoming stream.
+    /// Route a Data message payload to the appropriate incoming channel.
     ///
     /// Returns Ok(()) if routed successfully, Err(ChannelError) otherwise.
     ///
     /// r[impl channeling.data] - Data messages routed by channel_id.
-    /// r[impl channeling.data-after-close] - Reject data on closed streams.
+    /// r[impl channeling.data-after-close] - Reject data on closed channels.
     /// r[impl flow.channel.credit-overrun] - Reject if data exceeds remaining credit.
     /// r[impl flow.channel.credit-consume] - Deduct bytes from remaining credit.
     /// r[impl flow.channel.byte-accounting] - Credit measured in payload bytes.
@@ -337,11 +337,11 @@ impl ChannelRegistry {
         Ok(())
     }
 
-    /// Close an incoming stream (remove from registry).
+    /// Close an incoming channel (remove from registry).
     ///
     /// Dropping the sender will cause the `Rx<T>`'s recv() to return None.
     ///
-    /// r[impl channeling.close] - Close terminates the stream.
+    /// r[impl channeling.close] - Close terminates the channel.
     /// r[impl flow.channel.close-exempt] - Close doesn't consume credit.
     pub fn close(&mut self, channel_id: ChannelId) {
         self.incoming.remove(&channel_id);
@@ -350,9 +350,9 @@ impl ChannelRegistry {
         self.closed.insert(channel_id);
     }
 
-    /// Reset a stream (remove from registry, discard credit).
+    /// Reset a channel (remove from registry, discard credit).
     ///
-    /// r[impl channeling.reset] - Reset terminates the stream abruptly.
+    /// r[impl channeling.reset] - Reset terminates the channel abruptly.
     /// r[impl channeling.reset.credit] - Outstanding credit is lost on reset.
     pub fn reset(&mut self, channel_id: ChannelId) {
         self.incoming.remove(&channel_id);
@@ -361,7 +361,7 @@ impl ChannelRegistry {
         self.closed.insert(channel_id);
     }
 
-    /// Receive a Credit message - add credit for an outgoing stream.
+    /// Receive a Credit message - add credit for an outgoing channel.
     ///
     /// r[impl flow.channel.credit-grant] - Credit message adds to available credit.
     /// r[impl flow.channel.credit-additive] - Credit accumulates additively.
@@ -370,52 +370,52 @@ impl ChannelRegistry {
             // r[impl flow.channel.credit-additive] - Add to existing credit
             *credit = credit.saturating_add(bytes);
         }
-        // If no entry, stream may be closed or unknown - ignore
+        // If no entry, channel may be closed or unknown - ignore
     }
 
-    /// Check if a stream ID is registered (either incoming or outgoing credit).
+    /// Check if a channel ID is registered (either incoming or outgoing credit).
     pub fn contains(&self, channel_id: ChannelId) -> bool {
         self.incoming.contains_key(&channel_id) || self.outgoing_credit.contains_key(&channel_id)
     }
 
-    /// Check if a stream ID is registered as incoming.
+    /// Check if a channel ID is registered as incoming.
     pub fn contains_incoming(&self, channel_id: ChannelId) -> bool {
         self.incoming.contains_key(&channel_id)
     }
 
-    /// Check if a stream ID has outgoing credit registered.
+    /// Check if a channel ID has outgoing credit registered.
     pub fn contains_outgoing(&self, channel_id: ChannelId) -> bool {
         self.outgoing_credit.contains_key(&channel_id)
     }
 
-    /// Check if a stream has been closed.
+    /// Check if a channel has been closed.
     pub fn is_closed(&self, channel_id: ChannelId) -> bool {
         self.closed.contains(&channel_id)
     }
 
-    /// Get the number of active outgoing streams (by credit tracking).
+    /// Get the number of active outgoing channels (by credit tracking).
     pub fn outgoing_count(&self) -> usize {
         self.outgoing_credit.len()
     }
 
-    /// Get remaining credit for an outgoing stream.
+    /// Get remaining credit for an outgoing channel.
     ///
-    /// Returns None if stream is not registered.
+    /// Returns None if channel is not registered.
     pub fn outgoing_credit(&self, channel_id: ChannelId) -> Option<u32> {
         self.outgoing_credit.get(&channel_id).copied()
     }
 
-    /// Get remaining credit we've granted for an incoming stream.
+    /// Get remaining credit we've granted for an incoming channel.
     ///
-    /// Returns None if stream is not registered.
+    /// Returns None if channel is not registered.
     pub fn incoming_credit(&self, channel_id: ChannelId) -> Option<u32> {
         self.incoming_credit.get(&channel_id).copied()
     }
 
-    /// Bind streams in deserialized args for server-side dispatch.
+    /// Bind channels in deserialized args for server-side dispatch.
     ///
     /// Walks the args using Poke reflection to find any `Rx<T>` or `Tx<T>` fields.
-    /// For each stream found:
+    /// For each channel found:
     /// - For `Rx<T>`: creates a channel, sets the receiver slot, registers for incoming data
     /// - For `Tx<T>`: sets the task_tx so send() writes directly to the wire
     ///
@@ -433,7 +433,7 @@ impl ChannelRegistry {
         self.bind_channels_recursive(poke);
     }
 
-    /// Bind streams in args using a type-erased pointer and shape (non-generic).
+    /// Bind channels in args using a type-erased pointer and shape (non-generic).
     ///
     /// This is the non-generic version of [`Self::bind_channels`] for use with the
     /// `prepare()` function.

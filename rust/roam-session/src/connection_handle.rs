@@ -58,10 +58,10 @@ pub(crate) struct HandleShared {
     pub(crate) driver_tx: Sender<DriverMessage>,
     /// Request ID generator.
     pub(crate) request_ids: RequestIdGenerator,
-    /// Stream ID allocator.
+    /// Channel ID allocator.
     pub(crate) channel_ids: ChannelIdAllocator,
-    /// Stream registry for routing incoming data.
-    /// Protected by a mutex since handles may create streams concurrently.
+    /// Channel registry for routing incoming data.
+    /// Protected by a mutex since handles may create channels concurrently.
     pub(crate) channel_registry: std::sync::Mutex<ChannelRegistry>,
     /// Optional diagnostic state for SIGUSR1 dumps.
     pub(crate) diagnostic_state: Option<Arc<crate::diagnostic::DiagnosticState>>,
@@ -135,33 +135,33 @@ impl ConnectionHandle {
         self.shared.diagnostic_state.as_ref()
     }
 
-    /// Make a typed RPC call with automatic serialization and stream binding.
+    /// Make a typed RPC call with automatic serialization and channel binding.
     ///
     /// Walks the args using Poke reflection to find any `Rx<T>` or `Tx<T>` fields,
-    /// binds stream IDs, and sets up the stream infrastructure before serialization.
+    /// binds channel IDs, and sets up the channel infrastructure before serialization.
     ///
     /// # Arguments
     ///
     /// * `method_id` - The method ID to call
     /// * `args` - Arguments to serialize (typically a tuple of all method args).
-    ///   Must be mutable so stream IDs can be assigned.
+    ///   Must be mutable so channel IDs can be assigned.
     ///
-    /// # Stream Binding
+    /// # Channel Binding
     ///
     /// For `Rx<T>` in args (caller passes receiver, keeps sender to push data):
-    /// - Allocates a stream ID
+    /// - Allocates a channel ID
     /// - Takes the receiver and spawns a task to drain it, sending Data messages
     /// - The caller keeps the `Tx<T>` from `roam::channel()` to send values
     ///
     /// For `Tx<T>` in args (caller passes sender, keeps receiver to pull data):
-    /// - Allocates a stream ID
+    /// - Allocates a channel ID
     /// - Takes the sender and registers for incoming Data routing
     /// - The caller keeps the `Rx<T>` from `roam::channel()` to receive values
     ///
     /// # Example
     ///
     /// ```ignore
-    /// // For a streaming method sum(numbers: Rx<i32>) -> i64
+    /// // For a channeled method sum(numbers: Rx<i32>) -> i64
     /// let (tx, rx) = roam::channel::<i32>();
     /// let response = handle.call(method_id::SUM, &mut (rx,)).await?;
     /// // tx.send(&42).await to push values
@@ -183,10 +183,10 @@ impl ConnectionHandle {
         args: &mut T,
         metadata: roam_wire::Metadata,
     ) -> Result<ResponseData, TransportError> {
-        // Walk args and bind any streams (allocates channel IDs)
+        // Walk args and bind any channels (allocates channel IDs)
         // This collects receivers that need to be drained but does NOT spawn
         let mut drains = Vec::new();
-        trace!("ConnectionHandle::call: binding streams");
+        trace!("ConnectionHandle::call: binding channels");
         self.bind_channels(args, &mut drains);
 
         // Collect channel IDs for the Request message
@@ -336,10 +336,10 @@ impl ConnectionHandle {
         // Do all pointer work synchronously BEFORE creating the async block.
         // This ensures the raw pointer doesn't need to be captured by the future.
 
-        // Walk args and bind any streams (allocates channel IDs)
+        // Walk args and bind any channels (allocates channel IDs)
         // This collects receivers that need to be drained but does NOT spawn
         let mut drains = Vec::new();
-        trace!("ConnectionHandle::call_by_shape: binding streams");
+        trace!("ConnectionHandle::call_by_shape: binding channels");
 
         // SAFETY: Caller guarantees args_ptr is valid and initialized
         let poke =
@@ -639,7 +639,7 @@ impl ConnectionHandle {
     /// Make a raw RPC call with pre-serialized payload.
     ///
     /// Returns the raw response payload bytes.
-    /// Note: For streaming calls, use `call()` which handles channel binding.
+    /// Note: For channeled calls, use `call()` which handles channel binding.
     pub async fn call_raw(
         &self,
         method_id: u64,
@@ -652,7 +652,7 @@ impl ConnectionHandle {
 
     /// Make a raw RPC call with pre-serialized payload and channel IDs.
     ///
-    /// Used internally by `call()` after binding streams.
+    /// Used internally by `call()` after binding channels.
     /// Returns ResponseData so caller can handle response channels.
     pub(crate) async fn call_raw_with_channels(
         &self,
@@ -795,9 +795,9 @@ impl ConnectionHandle {
             .map_err(|_| crate::ConnectError::ConnectFailed(std::io::Error::other("driver gone")))?
     }
 
-    /// Allocate a stream ID for an outgoing stream.
+    /// Allocate a channel ID for an outgoing channel.
     ///
-    /// Used internally when binding streams during call().
+    /// Used internally when binding channels during call().
     pub fn alloc_channel_id(&self) -> ChannelId {
         self.shared.channel_ids.next()
     }
@@ -809,7 +809,7 @@ impl ConnectionHandle {
         self.shared.request_ids.next()
     }
 
-    /// Register an incoming stream (we receive data from peer).
+    /// Register an incoming channel (we receive data from peer).
     ///
     /// Used when schema has `Tx<T>` (callee sends to caller) - we receive that data.
     pub fn register_incoming(&self, channel_id: ChannelId, tx: Sender<Vec<u8>>) {
@@ -824,7 +824,7 @@ impl ConnectionHandle {
             .register_incoming(channel_id, tx);
     }
 
-    /// Register credit tracking for an outgoing stream.
+    /// Register credit tracking for an outgoing channel.
     ///
     /// The actual receiver is owned by the driver, not the registry.
     pub fn register_outgoing_credit(&self, channel_id: ChannelId) {
@@ -839,7 +839,7 @@ impl ConnectionHandle {
             .register_outgoing_credit(channel_id);
     }
 
-    /// Route incoming stream data to the appropriate Rx.
+    /// Route incoming channel data to the appropriate Rx.
     pub async fn route_data(
         &self,
         channel_id: ChannelId,
@@ -857,7 +857,7 @@ impl ConnectionHandle {
         Ok(())
     }
 
-    /// Close an incoming stream.
+    /// Close an incoming channel.
     pub fn close_channel(&self, channel_id: ChannelId) {
         // Track channel close for diagnostics
         if let Some(diag) = &self.shared.diagnostic_state {
@@ -870,7 +870,7 @@ impl ConnectionHandle {
             .close(channel_id);
     }
 
-    /// Reset a stream.
+    /// Reset a channel.
     pub fn reset_channel(&self, channel_id: ChannelId) {
         // Track channel close for diagnostics
         if let Some(diag) = &self.shared.diagnostic_state {
@@ -883,7 +883,7 @@ impl ConnectionHandle {
             .reset(channel_id);
     }
 
-    /// Check if a stream exists.
+    /// Check if a channel exists.
     pub fn contains_channel(&self, channel_id: ChannelId) -> bool {
         self.shared
             .channel_registry
@@ -892,7 +892,7 @@ impl ConnectionHandle {
             .contains(channel_id)
     }
 
-    /// Receive credit for an outgoing stream.
+    /// Receive credit for an outgoing channel.
     pub fn receive_credit(&self, channel_id: ChannelId, bytes: u32) {
         self.shared
             .channel_registry

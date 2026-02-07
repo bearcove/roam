@@ -46,7 +46,7 @@ use roam_wire::{ConnectionId, Hello, Message};
 pub struct Negotiated {
     /// Effective max payload size (min of both peers).
     pub max_payload_size: u32,
-    /// Initial stream credit (min of both peers).
+    /// Initial channel credit (min of both peers).
     pub initial_credit: u32,
 }
 
@@ -529,11 +529,11 @@ where
 
     fn bind_response_channels<R: Facet<'static>>(&self, response: &mut R, channels: &[u64]) {
         // FramedClient wraps a ConnectionHandle, but we don't have direct access to it
-        // during bind_response_channels. For reconnecting clients, response stream binding
+        // during bind_response_channels. For reconnecting clients, response channel binding
         // would need to be handled at a higher level or the client would need to store
         // the current handle.
         // For now, this is a no-op - FramedClient users should use ConnectionHandle
-        // directly if they need response stream binding.
+        // directly if they need response channel binding.
         let _ = (response, channels);
     }
 
@@ -685,7 +685,7 @@ where
         channels: &[u64],
     ) {
         // Same as bind_response_channels - this is a no-op for FramedClient.
-        // Users should use ConnectionHandle directly if they need response stream binding.
+        // Users should use ConnectionHandle directly if they need response channel binding.
         let _ = (response_ptr, response_shape, channels);
     }
 }

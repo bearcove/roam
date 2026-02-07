@@ -330,11 +330,11 @@ where
 
     fn bind_response_channels<R: Facet<'static>>(&self, response: &mut R, channels: &[u64]) {
         // Client wraps a ConnectionHandle, but we don't have direct access to it
-        // during bind_response_channels. For reconnecting clients, response stream binding
+        // during bind_response_channels. For reconnecting clients, response channel binding
         // would need to be handled at a higher level or the client would need to store
         // the current handle.
         // For now, this is a no-op - Client users should use ConnectionHandle
-        // directly if they need response stream binding.
+        // directly if they need response channel binding.
         let _ = (response, channels);
     }
 
@@ -413,7 +413,7 @@ where
         response_shape: &'static facet::Shape,
         channels: &[u64],
     ) {
-        // Same as bind_response_channels - this is a no-op for Client.
+        // Same as bind_response_channels - this is a no-op for reconnecting Client.
         let _ = (response_ptr, response_shape, channels);
     }
 }

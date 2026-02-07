@@ -95,7 +95,7 @@ pub struct Context {
 
     /// Channel IDs from the request, in argument declaration order.
     ///
-    /// Used for stream binding. Proxies can use this to remap channel IDs.
+    /// Used for channel binding. Proxies can use this to remap channel IDs.
     pub channels: Vec<u64>,
 
     /// Type-safe extension storage.
@@ -236,7 +236,7 @@ impl Clone for Context {
 /// in `RoamError::User(e)` for wire serialization.
 ///
 /// The `channels` parameter contains channel IDs from the Request message framing.
-/// These are patched into the deserialized args before binding streams.
+/// These are patched into the deserialized args before binding channels.
 #[allow(unsafe_code)]
 pub fn dispatch_call<A, R, E, F, Fut>(
     cx: &Context,
@@ -448,7 +448,7 @@ impl std::error::Error for PrepareError {}
 ///
 /// # Why Sync?
 ///
-/// Stream binding requires `&mut ChannelRegistry`, which cannot be held across
+/// Channel binding requires `&mut ChannelRegistry`, which cannot be held across
 /// await points. This function must complete before the async block starts.
 ///
 /// # Safety
@@ -516,8 +516,8 @@ pub unsafe fn prepare_sync(
         patch_channel_ids_by_shape(args_ptr, args_shape, channels);
     }
 
-    // 4. Bind streams via reflection
-    trace!("prepare_sync: binding streams");
+    // 4. Bind channels via reflection
+    trace!("prepare_sync: binding channels");
     // SAFETY: args_ptr is valid and initialized
     unsafe {
         registry.bind_channels_by_shape(args_ptr, args_shape);
@@ -701,7 +701,7 @@ pub async fn send_error_response(
 
 /// Run pre-middleware on args via SendPeek.
 ///
-/// This is called from the async block in generated dispatchers, after stream
+/// This is called from the async block in generated dispatchers, after channel
 /// binding has completed synchronously. The caller creates a `SendPeek` from
 /// the owned args and passes it here.
 ///
@@ -933,7 +933,7 @@ fn patch_channel_ids_recursive(poke: facet::Poke<'_, '_>, channels: &[u64], idx:
 /// Trait for dispatching requests to a service.
 ///
 /// The dispatcher handles both simple and channeling methods uniformly.
-/// Stream binding is done via reflection (Poke) on the deserialized args.
+/// Channel binding is done via reflection (Poke) on the deserialized args.
 pub trait ServiceDispatcher: Send + Sync {
     /// Returns the method IDs this dispatcher handles.
     ///
@@ -947,13 +947,13 @@ pub trait ServiceDispatcher: Send + Sync {
     /// - Looking up the method by `cx.method_id()`
     /// - Deserializing arguments from payload
     /// - Patching channel IDs from `cx.channels()` into deserialized args via `patch_channel_ids()`
-    /// - Binding any Tx/Rx streams via the registry
+    /// - Binding any Tx/Rx channels via the registry
     /// - Calling the service method
-    /// - Sending Data/Close messages for any Tx streams
+    /// - Sending Data/Close messages for any Tx channels
     /// - Sending the Response message via DriverMessage::Response
     ///
     /// By using a single channel for Data/Close/Response, correct ordering is guaranteed:
-    /// all stream Data and Close messages are sent before the Response.
+    /// all channel Data and Close messages are sent before the Response.
     ///
     /// The `cx.channels()` contains channel IDs from the Request message framing,
     /// in declaration order. For a ForwardingDispatcher, this enables transparent proxying
@@ -962,7 +962,7 @@ pub trait ServiceDispatcher: Send + Sync {
     /// Returns a boxed future with `'static` lifetime so it can be spawned.
     /// Implementations should clone their service into the future to achieve this.
     ///
-    /// r[impl channeling.allocation.caller] - Stream IDs are from Request.channels (caller allocated).
+    /// r[impl channeling.allocation.caller] - Channel IDs are from Request.channels (caller allocated).
     fn dispatch(
         &self,
         cx: Context,
