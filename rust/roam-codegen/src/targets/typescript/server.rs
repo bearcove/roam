@@ -61,7 +61,7 @@ pub fn generate_channel_handlers(service: &ServiceDetail) -> String {
     // Generate channel handler map.
     out.push_str(&format!("// Channel handlers for {service_name}\n"));
     out.push_str(&format!(
-        "export const {service_name_lower}_streamingHandlers = new Map<bigint, ChannelingMethodHandler<{service_name}Handler>>([\n"
+        "export const {service_name_lower}_channelingHandlers = new Map<bigint, ChannelingMethodHandler<{service_name}Handler>>([\n"
     ));
 
     for method in &service.methods {

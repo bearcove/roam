@@ -795,7 +795,7 @@ export class Connection<T extends MessageTransport = MessageTransport> {
       // r[impl call.lifecycle.single-response] - Exactly one Response per Request.
       await this.io.send(encodeMessage(messageResponse(msg.requestId, responsePayload)));
 
-      // Flush any outgoing stream data that handlers may have queued
+      // Flush any outgoing channel data that handlers may have queued
       await this.flushOutgoing();
       return;
     }
@@ -1062,7 +1062,7 @@ export class ConnectionCaller<T extends MessageTransport = MessageTransport> imp
       ),
     );
 
-    // Flush outgoing streams
+    // Flush outgoing channels
     await this.conn.flushOutgoing();
 
     // Wait for response and decode

@@ -125,7 +125,7 @@ mod tests {
         assert!(code.contains("protocol EchoCaller"));
         assert!(code.contains("protocol EchoHandler"));
         assert!(code.contains("EchoClient"));
-        assert!(code.contains("EchoStreamingDispatcher"));
+        assert!(code.contains("EchoChannelingDispatcher"));
         assert!(code.contains("EchoMethodId"));
     }
 }

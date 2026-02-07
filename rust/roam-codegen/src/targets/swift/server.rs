@@ -213,7 +213,11 @@ fn generate_channeling_dispatcher(service: &ServiceDetail) -> String {
     let mut w = CodeWriter::with_indent_spaces(&mut out, 4);
     let service_name = service.name.to_upper_camel_case();
 
-    cw_writeln!(w, "public final class {service_name}StreamingDispatcher {{").unwrap();
+    cw_writeln!(
+        w,
+        "public final class {service_name}ChannelingDispatcher {{"
+    )
+    .unwrap();
     {
         let _indent = w.indent();
         cw_writeln!(w, "private let handler: {service_name}Handler").unwrap();
@@ -697,7 +701,7 @@ mod tests {
         let service = sample_service();
         let code = generate_channeling_dispatcher(&service);
 
-        assert!(code.contains("class EchoStreamingDispatcher"));
+        assert!(code.contains("class EchoChannelingDispatcher"));
         assert!(code.contains("preregisterChannels"));
         assert!(code.contains("IncomingChannelRegistry"));
     }
