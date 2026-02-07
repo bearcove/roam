@@ -6,7 +6,7 @@
 //! - Client interface and implementation for making RPC calls
 //! - Server handler interface for implementing services
 //! - Encoding/decoding logic for all types
-//! - Runtime schema information for streaming channel binding
+//! - Runtime schema information for channel binding
 
 pub mod client;
 pub mod decode;

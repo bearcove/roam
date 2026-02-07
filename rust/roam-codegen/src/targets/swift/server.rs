@@ -19,7 +19,7 @@ use crate::render::hex_u64;
 pub fn generate_server(service: &ServiceDetail) -> String {
     let mut out = String::new();
     out.push_str(&generate_handler_protocol(service));
-    out.push_str(&generate_dispatcher(service));
+    // Emit only the channel-capable dispatcher.
     out.push_str(&generate_streaming_dispatcher(service));
     out
 }
@@ -73,6 +73,7 @@ fn generate_handler_protocol(service: &ServiceDetail) -> String {
     out
 }
 
+#[cfg(test)]
 /// Generate dispatcher for handling incoming calls.
 fn generate_dispatcher(service: &ServiceDetail) -> String {
     let mut out = String::new();
@@ -126,6 +127,7 @@ fn generate_dispatcher(service: &ServiceDetail) -> String {
     out
 }
 
+#[cfg(test)]
 /// Generate a single dispatch method for non-streaming dispatcher.
 fn generate_dispatch_method(w: &mut CodeWriter<&mut String>, method: &MethodDetail) {
     let method_name = method.method_name.to_lower_camel_case();
@@ -186,6 +188,7 @@ fn generate_dispatch_method(w: &mut CodeWriter<&mut String>, method: &MethodDeta
     w.writeln("}").unwrap();
 }
 
+#[cfg(test)]
 /// Generate code to decode method arguments (for dispatcher).
 fn generate_decode_args(w: &mut CodeWriter<&mut String>, args: &[roam_schema::ArgDetail]) {
     if args.is_empty() {

@@ -8,8 +8,16 @@ use facet_reflect::TypePlanCore;
 
 static TYPE_PLAN_CACHE: LazyLock<Mutex<HashMap<usize, Arc<TypePlanCore>>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
-static DISABLE_CACHE: LazyLock<bool> =
-    LazyLock::new(|| std::env::var_os("ROAM_DISABLE_TYPE_PLAN_CACHE").is_some());
+static DISABLE_CACHE: LazyLock<bool> = LazyLock::new(|| {
+    let Ok(value) = std::env::var("ROAM_DISABLE_TYPE_PLAN_CACHE") else {
+        return false;
+    };
+
+    matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "1" | "true" | "yes" | "on"
+    )
+});
 
 #[allow(unsafe_code)]
 pub(crate) fn get_type_plan(shape: &'static Shape) -> Result<Arc<TypePlanCore>, String> {

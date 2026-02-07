@@ -486,8 +486,8 @@ impl ConnectionHandle {
         }
     }
 
-    /// Walk args and bind any Rx<T> or Tx<T> streams.
-    /// Collects (channel_id, receiver) pairs for Rx streams that need draining.
+    /// Walk args and bind any Rx<T> or Tx<T> channels.
+    /// Collects (channel_id, receiver) pairs for Rx channels that need draining.
     fn bind_streams<T: Facet<'static>>(
         &self,
         args: &mut T,
@@ -497,11 +497,11 @@ impl ConnectionHandle {
         self.bind_streams_recursive(poke, drains);
     }
 
-    /// Recursively walk a Poke value looking for Rx/Tx streams to bind.
+    /// Recursively walk a Poke value looking for Rx/Tx channels to bind.
     #[allow(unsafe_code)]
     fn bind_streams_recursive(
         &self,
-        mut poke: facet::Poke<'_, '_>,
+        poke: facet::Poke<'_, '_>,
         drains: &mut Vec<(ChannelId, Receiver<Vec<u8>>)>,
     ) {
         use facet::Def;
@@ -542,28 +542,9 @@ impl ConnectionHandle {
                 }
             }
 
-            // Recurse into list elements (e.g., Vec<Tx<T>>)
-            Def::List(list_def) => {
-                let len = {
-                    let peek = poke.as_peek();
-                    peek.into_list().map(|pl| pl.len()).unwrap_or(0)
-                };
-                // Get mutable access to elements via VTable (no PokeList exists)
-                if let Some(get_mut_fn) = list_def.vtable.get_mut {
-                    let element_shape = list_def.t;
-                    let data_ptr = poke.data_mut();
-                    for i in 0..len {
-                        // SAFETY: We have exclusive mutable access via poke, index < len, shape is correct
-                        let element_ptr = unsafe { (get_mut_fn)(data_ptr, i, element_shape) };
-                        if let Some(ptr) = element_ptr {
-                            // SAFETY: ptr points to a valid element with the correct shape
-                            let element_poke =
-                                unsafe { facet::Poke::from_raw_parts(ptr, element_shape) };
-                            self.bind_streams_recursive(element_poke, drains);
-                        }
-                    }
-                }
-            }
+            // Spec-driven channel discovery MUST NOT traverse list/map container elements.
+            // r[call.request.channels.schema-driven]
+            Def::List(_) => {}
 
             // Other enum variants
             _ if poke.is_enum() => {
@@ -578,7 +559,7 @@ impl ConnectionHandle {
         }
     }
 
-    /// Bind an Rx<T> stream - caller passes receiver, keeps sender.
+    /// Bind an Rx<T> channel - caller passes receiver, keeps sender.
     /// Collects the receiver for draining (no spawning).
     fn bind_rx_stream(
         &self,
@@ -618,7 +599,7 @@ impl ConnectionHandle {
         }
     }
 
-    /// Bind a Tx<T> stream - caller passes sender, keeps receiver.
+    /// Bind a Tx<T> channel - caller passes sender, keeps receiver.
     /// We take the sender and register for incoming Data routing.
     fn bind_tx_stream(&self, poke: facet::Poke<'_, '_>) {
         let channel_id = self.alloc_channel_id();
@@ -928,7 +909,7 @@ impl ConnectionHandle {
         self.shared.channel_registry.lock().unwrap().driver_tx()
     }
 
-    /// Bind receivers for `Rx<T>` streams in a deserialized response.
+    /// Bind receivers for `Rx<T>` channels in a deserialized response.
     ///
     /// After deserializing a response, any `Rx<T>` values are "hollow" - they have
     /// channel IDs but no actual receiver. This method walks the response using
@@ -942,7 +923,7 @@ impl ConnectionHandle {
     /// 3. Set the receiver slot on the Rx
     /// 4. Register the sender with the channel registry for incoming data routing
     ///
-    /// This mirrors server-side `ChannelRegistry::bind_streams` but for responses.
+    /// This mirrors server-side channel binding but for responses.
     ///
     /// IMPORTANT: The `channels` parameter contains the authoritative channel IDs
     /// from the Response framing. For forwarded connections (via ForwardingDispatcher),
@@ -957,9 +938,9 @@ impl ConnectionHandle {
         self.bind_response_streams_recursive(poke);
     }
 
-    /// Recursively walk a Poke value looking for Rx streams to bind in responses.
+    /// Recursively walk a Poke value looking for Rx channels to bind in responses.
     #[allow(unsafe_code)]
-    fn bind_response_streams_recursive(&self, mut poke: facet::Poke<'_, '_>) {
+    fn bind_response_streams_recursive(&self, poke: facet::Poke<'_, '_>) {
         use facet::Def;
 
         let shape = poke.shape();
@@ -996,28 +977,9 @@ impl ConnectionHandle {
                 }
             }
 
-            // Recurse into list elements (e.g., Vec<Rx<T>>)
-            Def::List(list_def) => {
-                let len = {
-                    let peek = poke.as_peek();
-                    peek.into_list().map(|pl| pl.len()).unwrap_or(0)
-                };
-                // Get mutable access to elements via VTable (no PokeList exists)
-                if let Some(get_mut_fn) = list_def.vtable.get_mut {
-                    let element_shape = list_def.t;
-                    let data_ptr = poke.data_mut();
-                    for i in 0..len {
-                        // SAFETY: We have exclusive mutable access via poke, index < len, shape is correct
-                        let element_ptr = unsafe { (get_mut_fn)(data_ptr, i, element_shape) };
-                        if let Some(ptr) = element_ptr {
-                            // SAFETY: ptr points to a valid element with the correct shape
-                            let element_poke =
-                                unsafe { facet::Poke::from_raw_parts(ptr, element_shape) };
-                            self.bind_response_streams_recursive(element_poke);
-                        }
-                    }
-                }
-            }
+            // Spec-driven channel discovery MUST NOT traverse list/map container elements.
+            // r[call.request.channels.schema-driven]
+            Def::List(_) => {}
 
             // Other enum variants
             _ if poke.is_enum() => {
@@ -1032,7 +994,7 @@ impl ConnectionHandle {
         }
     }
 
-    /// Bind a single Rx<T> stream from a response.
+    /// Bind a single Rx<T> channel from a response.
     ///
     /// Creates a channel, sets the receiver slot, and registers for incoming data.
     fn bind_rx_response_stream(&self, poke: facet::Poke<'_, '_>) {
@@ -1060,7 +1022,7 @@ impl ConnectionHandle {
         }
     }
 
-    /// Bind receivers for `Rx<T>` streams in a deserialized response using reflection (non-generic).
+    /// Bind receivers for `Rx<T>` channels in a deserialized response using reflection (non-generic).
     ///
     /// This is the non-generic version of `bind_response_streams`. It uses Shape reflection
     /// to avoid monomorphization.
