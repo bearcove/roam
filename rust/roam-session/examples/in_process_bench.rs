@@ -1,25 +1,50 @@
 //! In-process, high-volume RPC benchmark for roam-session.
 //!
-//! Usage:
-//! - `cargo run -p roam-session --example in_process_bench --release -- --iterations 200000`
-//! - `ROAM_DISABLE_TYPE_PLAN_CACHE=1 cargo run -p roam-session --example in_process_bench --release -- --iterations 200000`
+//! This models VFS-like traffic:
+//! - frequent `read(item_id, offset, len)` calls returning large `Vec<u8>` blobs
+//! - interleaved `get_attributes(item_id)` calls
 //!
-//! Sampling example (samply):
-//! - `cargo samply record -p roam-session --example in_process_bench --release -- --iterations 200000`
-//! - `ROAM_DISABLE_TYPE_PLAN_CACHE=1 cargo samply record -p roam-session --example in_process_bench --release -- --iterations 200000`
+//! Usage:
+//! - `cargo run -p roam-session --example in_process_bench -- --iterations 200000`
+//! - `ROAM_DISABLE_TYPE_PLAN_CACHE=1 cargo run -p roam-session --example in_process_bench -- --iterations 200000`
+//! - `cargo samply -p roam-session --example in_process_bench -- --iterations 200000`
 
 use std::io;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use roam::service;
 use roam_session::{
     HandshakeConfig, MessageTransport, NoDispatcher, accept_framed, initiate_framed,
 };
 use roam_wire::Message;
-use spec_proto::{
-    Canvas, Color, LookupError, MathError, Message as BenchMessage, Person, Point, Rectangle,
-    Shape, Testbed, TestbedClient, TestbedDispatcher,
-};
 use tokio::sync::mpsc;
+
+#[derive(Debug, Clone, facet::Facet)]
+struct ItemAttributes {
+    size: u64,
+    modified_time: u64,
+    created_time: u64,
+    mode: u32,
+}
+
+#[derive(Debug, Clone, facet::Facet)]
+struct ReadResult {
+    data: Vec<u8>,
+    error: i32,
+}
+
+#[derive(Debug, Clone, facet::Facet)]
+struct GetAttributesResult {
+    attrs: ItemAttributes,
+    error: i32,
+}
+
+#[service]
+trait BenchVfs {
+    async fn get_attributes(&self, item_id: u64) -> GetAttributesResult;
+    async fn read(&self, item_id: u64, offset: u64, len: u64) -> ReadResult;
+}
 
 struct InMemoryTransport {
     tx: mpsc::Sender<Message>,
@@ -70,152 +95,82 @@ impl MessageTransport for InMemoryTransport {
 }
 
 #[derive(Clone)]
-struct BenchService;
+struct BenchService {
+    file_a: Arc<[u8]>,
+    file_b: Arc<[u8]>,
+}
 
-impl Testbed for BenchService {
-    async fn echo(&self, _cx: &roam_session::Context, message: String) -> String {
-        message
-    }
-
-    async fn reverse(&self, _cx: &roam_session::Context, message: String) -> String {
-        message.chars().rev().collect()
-    }
-
-    async fn divide(
-        &self,
-        _cx: &roam_session::Context,
-        dividend: i64,
-        divisor: i64,
-    ) -> Result<i64, MathError> {
-        if divisor == 0 {
-            Err(MathError::DivisionByZero)
-        } else {
-            Ok(dividend / divisor)
+impl BenchService {
+    fn new(file_size: usize) -> Self {
+        let mut file_a = vec![0u8; file_size];
+        let mut file_b = vec![0u8; file_size];
+        for (i, b) in file_a.iter_mut().enumerate() {
+            *b = (i as u8).wrapping_mul(31).wrapping_add(7);
+        }
+        for (i, b) in file_b.iter_mut().enumerate() {
+            *b = (i as u8).wrapping_mul(17).wrapping_add(13);
+        }
+        Self {
+            file_a: Arc::from(file_a),
+            file_b: Arc::from(file_b),
         }
     }
 
-    async fn lookup(&self, _cx: &roam_session::Context, id: u32) -> Result<Person, LookupError> {
-        if id == 1 {
-            Ok(Person {
-                name: "Alice".to_string(),
-                age: 30,
-                email: Some("alice@example.com".to_string()),
-            })
-        } else {
-            Err(LookupError::NotFound)
+    fn file_for(&self, item_id: u64) -> &[u8] {
+        match item_id {
+            396 => &self.file_a,
+            _ => &self.file_b,
+        }
+    }
+}
+
+impl BenchVfs for BenchService {
+    async fn get_attributes(&self, _cx: &roam::Context, item_id: u64) -> GetAttributesResult {
+        let file = self.file_for(item_id);
+        GetAttributesResult {
+            attrs: ItemAttributes {
+                size: file.len() as u64,
+                modified_time: 0,
+                created_time: 0,
+                mode: 0o644,
+            },
+            error: 0,
         }
     }
 
-    async fn sum(&self, _cx: &roam_session::Context, mut numbers: roam_session::Rx<i32>) -> i64 {
-        let mut total = 0i64;
-        while let Ok(Some(n)) = numbers.recv().await {
-            total += n as i64;
+    async fn read(&self, _cx: &roam::Context, item_id: u64, offset: u64, len: u64) -> ReadResult {
+        let file = self.file_for(item_id);
+        let start = offset as usize;
+        let end = (start.saturating_add(len as usize)).min(file.len());
+        if start >= file.len() {
+            return ReadResult {
+                data: Vec::new(),
+                error: 22,
+            };
         }
-        total
-    }
-
-    async fn generate(
-        &self,
-        _cx: &roam_session::Context,
-        count: u32,
-        output: roam_session::Tx<i32>,
-    ) {
-        for i in 0..count as i32 {
-            let _ = output.send(&i).await;
+        ReadResult {
+            data: file[start..end].to_vec(),
+            error: 0,
         }
     }
+}
 
-    async fn transform(
-        &self,
-        _cx: &roam_session::Context,
-        mut input: roam_session::Rx<String>,
-        output: roam_session::Tx<String>,
-    ) {
-        while let Ok(Some(s)) = input.recv().await {
-            let _ = output.send(&s).await;
-        }
-    }
-
-    async fn echo_point(&self, _cx: &roam_session::Context, point: Point) -> Point {
-        point
-    }
-
-    async fn create_person(
-        &self,
-        _cx: &roam_session::Context,
-        name: String,
-        age: u8,
-        email: Option<String>,
-    ) -> Person {
-        Person { name, age, email }
-    }
-
-    async fn rectangle_area(&self, _cx: &roam_session::Context, rect: Rectangle) -> f64 {
-        let width = (rect.bottom_right.x - rect.top_left.x).abs() as f64;
-        let height = (rect.bottom_right.y - rect.top_left.y).abs() as f64;
-        width * height
-    }
-
-    async fn parse_color(&self, _cx: &roam_session::Context, name: String) -> Option<Color> {
-        match name.to_lowercase().as_str() {
-            "red" => Some(Color::Red),
-            "green" => Some(Color::Green),
-            "blue" => Some(Color::Blue),
-            _ => None,
-        }
-    }
-
-    async fn shape_area(&self, _cx: &roam_session::Context, shape: Shape) -> f64 {
-        match shape {
-            Shape::Circle { radius } => std::f64::consts::PI * radius * radius,
-            Shape::Rectangle { width, height } => width * height,
-            Shape::Point => 0.0,
-        }
-    }
-
-    async fn create_canvas(
-        &self,
-        _cx: &roam_session::Context,
-        name: String,
-        shapes: Vec<Shape>,
-        background: Color,
-    ) -> Canvas {
-        Canvas {
-            name,
-            shapes,
-            background,
-        }
-    }
-
-    async fn process_message(
-        &self,
-        _cx: &roam_session::Context,
-        msg: BenchMessage,
-    ) -> BenchMessage {
-        msg
-    }
-
-    async fn get_points(&self, _cx: &roam_session::Context, count: u32) -> Vec<Point> {
-        (0..count as i32)
-            .map(|i| Point { x: i, y: i * 2 })
-            .collect()
-    }
-
-    async fn swap_pair(&self, _cx: &roam_session::Context, pair: (i32, String)) -> (String, i32) {
-        (pair.1, pair.0)
-    }
+#[derive(Clone, Copy)]
+enum Op {
+    GetAttributes { item_id: u64 },
+    Read { item_id: u64, offset: u64, len: u64 },
 }
 
 struct Config {
     iterations: usize,
-    payload_bytes: usize,
     warmup: usize,
+    file_size: usize,
 }
 
 fn parse_args() -> Result<Config, String> {
-    let mut iterations = 200_000usize;
-    let mut payload_bytes = 128usize;
+    let mut iterations = 120_000usize;
     let mut warmup = 2_000usize;
+    let mut file_size = 32 * 1024 * 1024usize;
 
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
@@ -228,14 +183,6 @@ fn parse_args() -> Result<Config, String> {
                     .parse::<usize>()
                     .map_err(|e| format!("invalid --iterations: {e}"))?;
             }
-            "--payload-bytes" => {
-                let raw = args
-                    .next()
-                    .ok_or_else(|| "--payload-bytes needs a value".to_string())?;
-                payload_bytes = raw
-                    .parse::<usize>()
-                    .map_err(|e| format!("invalid --payload-bytes: {e}"))?;
-            }
             "--warmup" => {
                 let raw = args
                     .next()
@@ -244,9 +191,17 @@ fn parse_args() -> Result<Config, String> {
                     .parse::<usize>()
                     .map_err(|e| format!("invalid --warmup: {e}"))?;
             }
+            "--file-size" => {
+                let raw = args
+                    .next()
+                    .ok_or_else(|| "--file-size needs a value".to_string())?;
+                file_size = raw
+                    .parse::<usize>()
+                    .map_err(|e| format!("invalid --file-size: {e}"))?;
+            }
             _ => {
                 return Err(format!(
-                    "unknown arg: {arg}. expected --iterations N --payload-bytes N --warmup N"
+                    "unknown arg: {arg}. expected --iterations N --warmup N --file-size N"
                 ));
             }
         }
@@ -254,14 +209,59 @@ fn parse_args() -> Result<Config, String> {
 
     Ok(Config {
         iterations,
-        payload_bytes,
         warmup,
+        file_size,
     })
 }
 
+fn build_ops(count: usize, file_size: usize) -> Vec<Op> {
+    let lens: [u64; 11] = [
+        16 * 1024,
+        32 * 1024,
+        48 * 1024,
+        64 * 1024,
+        80 * 1024,
+        160 * 1024,
+        240 * 1024,
+        320 * 1024,
+        384 * 1024,
+        512 * 1024,
+        896 * 1024,
+    ];
+    let items = [396u64, 419u64];
+
+    let mut seed = 0x9e37_79b9_7f4a_7c15u64;
+    let mut ops = Vec::with_capacity(count);
+    for i in 0..count {
+        seed ^= seed << 7;
+        seed ^= seed >> 9;
+        seed ^= seed << 8;
+
+        let item_id = items[(seed as usize) & 1];
+        if i % 4 == 0 {
+            ops.push(Op::GetAttributes { item_id });
+            continue;
+        }
+
+        let len = lens[(seed as usize) % lens.len()];
+        let max_offset = file_size.saturating_sub(len as usize).max(1);
+        let offset = (seed as usize % max_offset) as u64;
+        ops.push(Op::Read {
+            item_id,
+            offset,
+            len,
+        });
+    }
+
+    ops
+}
+
 async fn run(config: Config) -> Result<(), String> {
+    let service = BenchService::new(config.file_size);
+    let ops = build_ops(config.warmup + config.iterations, config.file_size);
+
     let (client_transport, server_transport) = in_memory_transport_pair(8192);
-    let dispatcher = TestbedDispatcher::new(BenchService);
+    let dispatcher = BenchVfsDispatcher::new(service);
 
     let client_fut = initiate_framed(client_transport, HandshakeConfig::default(), NoDispatcher);
     let server_fut = accept_framed(server_transport, HandshakeConfig::default(), dispatcher);
@@ -275,44 +275,88 @@ async fn run(config: Config) -> Result<(), String> {
     let client_driver_task = tokio::spawn(async move { client_driver.run().await });
     let server_driver_task = tokio::spawn(async move { server_driver.run().await });
 
-    let client = TestbedClient::new(client_handle);
-    let payload = "x".repeat(config.payload_bytes);
+    let client = BenchVfsClient::new(client_handle);
 
-    for _ in 0..config.warmup {
-        let echoed = client
-            .echo(payload.clone())
-            .await
-            .map_err(|e| format!("warmup call failed: {e}"))?;
-        if echoed.len() != payload.len() {
-            return Err("warmup response had wrong length".to_string());
+    let mut checksum = 0u64;
+
+    for op in &ops[..config.warmup] {
+        match *op {
+            Op::GetAttributes { item_id } => {
+                let result = client
+                    .get_attributes(item_id)
+                    .await
+                    .map_err(|e| format!("warmup get_attributes failed: {e}"))?;
+                checksum ^= result.attrs.size;
+            }
+            Op::Read {
+                item_id,
+                offset,
+                len,
+            } => {
+                let result = client
+                    .read(item_id, offset, len)
+                    .await
+                    .map_err(|e| format!("warmup read failed: {e}"))?;
+                if result.error == 0 {
+                    checksum ^= result.data.len() as u64;
+                    if let Some(first) = result.data.first() {
+                        checksum ^= *first as u64;
+                    }
+                }
+            }
         }
     }
 
     let started = Instant::now();
-    for _ in 0..config.iterations {
-        let echoed = client
-            .echo(payload.clone())
-            .await
-            .map_err(|e| format!("benchmark call failed: {e}"))?;
-        if echoed.len() != payload.len() {
-            return Err("benchmark response had wrong length".to_string());
+    let mut bytes_read = 0u64;
+    for op in &ops[config.warmup..] {
+        match *op {
+            Op::GetAttributes { item_id } => {
+                let result = client
+                    .get_attributes(item_id)
+                    .await
+                    .map_err(|e| format!("benchmark get_attributes failed: {e}"))?;
+                checksum ^= result.attrs.mode as u64;
+            }
+            Op::Read {
+                item_id,
+                offset,
+                len,
+            } => {
+                let result = client
+                    .read(item_id, offset, len)
+                    .await
+                    .map_err(|e| format!("benchmark read failed: {e}"))?;
+                if result.error != 0 {
+                    return Err(format!("read returned error={}", result.error));
+                }
+                bytes_read += result.data.len() as u64;
+                checksum ^= result.data.len() as u64;
+            }
         }
     }
     let elapsed = started.elapsed();
 
     let seconds = elapsed.as_secs_f64();
-    let rps = config.iterations as f64 / seconds;
+    let calls_per_sec = config.iterations as f64 / seconds;
+    let mib_per_sec = (bytes_read as f64 / (1024.0 * 1024.0)) / seconds;
     let us_per_call = elapsed.as_micros() as f64 / config.iterations as f64;
 
     println!(
-        "bench complete: iterations={} payload_bytes={} warmup={} elapsed={:.3}s calls_per_sec={:.0} avg_us_per_call={:.2}",
-        config.iterations, config.payload_bytes, config.warmup, seconds, rps, us_per_call
+        "bench complete: iterations={} warmup={} file_size={} elapsed={:.3}s calls_per_sec={:.0} avg_us_per_call={:.2} read_mib_per_sec={:.1} checksum={}",
+        config.iterations,
+        config.warmup,
+        config.file_size,
+        seconds,
+        calls_per_sec,
+        us_per_call,
+        mib_per_sec,
+        checksum
     );
     println!("tip: set ROAM_DISABLE_TYPE_PLAN_CACHE=1 to profile uncached type-plan preparation");
 
     client_driver_task.abort();
     server_driver_task.abort();
-
     Ok(())
 }
 
