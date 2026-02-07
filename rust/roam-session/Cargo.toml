@@ -38,3 +38,6 @@ async-channel.workspace = true
 futures-channel.workspace = true
 futures-util = { version = "0.3", default-features = false, features = ["std", "async-await-macro"] }
 gloo-timers.workspace = true
+
+[dev-dependencies]
+spec-proto = { path = "../../spec/spec-proto" }

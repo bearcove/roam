@@ -3,6 +3,7 @@ use std::marker::PhantomData;
 use facet::Facet;
 use facet_core::{PtrUninit, Shape};
 
+use crate::type_plan_cache::get_type_plan;
 use crate::{CallError, ConnectionHandle, DecodeError, ResponseData, RoamError, TransportError};
 
 /// A raw pointer wrapper that is `Send` and `Sync`.
@@ -639,12 +640,11 @@ unsafe fn deserialize_into_ptr(
 ) -> Result<(), String> {
     use facet_format::{FormatDeserializer, MetaSource};
     use facet_postcard::PostcardParser;
-    use facet_reflect::{Partial, TypePlanCore};
+    use facet_reflect::Partial;
 
     let ptr_uninit = PtrUninit::new(ptr.cast::<u8>());
 
-    // SAFETY: shape is valid (comes from Facet impl)
-    let plan = unsafe { TypePlanCore::from_shape(shape) }.map_err(|e| e.to_string())?;
+    let plan = get_type_plan(shape)?;
     let root_id = plan.root_id();
 
     // SAFETY: Caller guarantees ptr is valid, aligned, and properly sized

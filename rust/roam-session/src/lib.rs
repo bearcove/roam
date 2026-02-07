@@ -57,6 +57,8 @@ pub use extensions::*;
 mod middleware;
 pub use middleware::*;
 
+mod type_plan_cache;
+
 pub(crate) const CHANNEL_SIZE: usize = 1024;
 pub(crate) const RX_STREAM_BUFFER_SIZE: usize = 1024;
 

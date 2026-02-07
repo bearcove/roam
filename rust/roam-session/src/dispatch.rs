@@ -12,11 +12,11 @@ use facet::Facet;
 use facet_core::{PtrConst, PtrMut, PtrUninit, Shape};
 use facet_format::{FormatDeserializer, MetaSource};
 use facet_postcard::PostcardParser;
-use facet_reflect::{Partial, TypePlanCore};
+use facet_reflect::Partial;
 
 use crate::{
     ChannelId, ChannelIdAllocator, ChannelRegistry, DriverMessage, Extensions, Middleware,
-    Rejection, Rx, SendPeek, Tx, runtime::Sender,
+    Rejection, Rx, SendPeek, Tx, runtime::Sender, type_plan_cache::get_type_plan,
 };
 
 // ============================================================================
@@ -548,9 +548,7 @@ pub unsafe fn deserialize_into(
     // This avoids heap allocation - the value is constructed in-place.
     let ptr_uninit = PtrUninit::new(ptr.cast::<u8>());
 
-    // SAFETY: shape is valid (comes from Facet impl)
-    let plan = unsafe { TypePlanCore::from_shape(shape) }
-        .map_err(|e| PrepareError::Deserialize(e.to_string()))?;
+    let plan = get_type_plan(shape).map_err(PrepareError::Deserialize)?;
     let root_id = plan.root_id();
 
     // SAFETY: Caller guarantees ptr is valid, aligned, and properly sized

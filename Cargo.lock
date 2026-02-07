@@ -2335,6 +2335,7 @@ dependencies = [
  "roam-frame",
  "roam-task-local",
  "roam-wire",
+ "spec-proto",
  "tokio",
  "tracing",
  "wasm-bindgen-futures",
