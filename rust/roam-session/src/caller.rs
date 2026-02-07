@@ -1,10 +1,12 @@
 use std::marker::PhantomData;
+use std::sync::Arc;
 
 use facet::Facet;
-use facet_core::{PtrUninit, Shape};
+use facet_core::PtrUninit;
 
-use crate::type_plan_cache::get_type_plan;
-use crate::{CallError, ConnectionHandle, DecodeError, ResponseData, RoamError, TransportError};
+use crate::{
+    CallError, ConnectionHandle, DecodeError, ResponseData, RoamError, RpcPlan, TransportError,
+};
 
 /// A raw pointer wrapper that is `Send` and `Sync`.
 ///
@@ -132,15 +134,15 @@ pub trait Caller: Clone + Send + Sync + 'static {
     ///
     /// # Safety
     ///
-    /// - `args_ptr` must have been created from a valid, initialized pointer matching `args_shape`
+    /// - `args_ptr` must have been created from a valid, initialized pointer matching the plan's shape
     /// - The underlying args type must be `Send`
     #[doc(hidden)]
     #[cfg(not(target_arch = "wasm32"))]
-    fn call_with_metadata_by_shape(
+    fn call_with_metadata_by_plan(
         &self,
         method_id: u64,
         args_ptr: SendPtr,
-        args_shape: &'static Shape,
+        args_plan: &'static Arc<RpcPlan>,
         metadata: roam_wire::Metadata,
     ) -> impl std::future::Future<Output = Result<ResponseData, TransportError>> + Send;
 
@@ -151,15 +153,15 @@ pub trait Caller: Clone + Send + Sync + 'static {
     ///
     /// # Safety
     ///
-    /// - `args_ptr` must have been created from a valid, initialized pointer matching `args_shape`
+    /// - `args_ptr` must have been created from a valid, initialized pointer matching the plan's shape
     /// - The underlying args type must be `Send`
     #[doc(hidden)]
     #[cfg(target_arch = "wasm32")]
-    fn call_with_metadata_by_shape(
+    fn call_with_metadata_by_plan(
         &self,
         method_id: u64,
         args_ptr: SendPtr,
-        args_shape: &'static Shape,
+        args_plan: &'static Arc<RpcPlan>,
         metadata: roam_wire::Metadata,
     ) -> impl std::future::Future<Output = Result<ResponseData, TransportError>>;
 
@@ -167,12 +169,12 @@ pub trait Caller: Clone + Send + Sync + 'static {
     ///
     /// # Safety
     ///
-    /// - `response_ptr` must point to valid, initialized memory matching `response_shape`
+    /// - `response_ptr` must point to valid, initialized memory matching the plan's shape
     #[doc(hidden)]
-    unsafe fn bind_response_channels_by_shape(
+    unsafe fn bind_response_channels_by_plan(
         &self,
         response_ptr: *mut (),
-        response_shape: &'static Shape,
+        response_plan: &RpcPlan,
         channels: &[u64],
     );
 }
@@ -193,20 +195,20 @@ impl Caller for ConnectionHandle {
 
     #[allow(unsafe_code)]
     #[cfg(not(target_arch = "wasm32"))]
-    fn call_with_metadata_by_shape(
+    fn call_with_metadata_by_plan(
         &self,
         method_id: u64,
         args_ptr: SendPtr,
-        args_shape: &'static Shape,
+        args_plan: &'static Arc<RpcPlan>,
         metadata: roam_wire::Metadata,
     ) -> impl std::future::Future<Output = Result<ResponseData, TransportError>> + Send {
         // SAFETY: Caller guarantees args_ptr is valid, initialized, and Send
         unsafe {
-            ConnectionHandle::call_with_metadata_by_shape(
+            ConnectionHandle::call_with_metadata_by_plan(
                 self,
                 method_id,
                 args_ptr.as_ptr(),
-                args_shape,
+                args_plan,
                 metadata,
             )
         }
@@ -214,38 +216,38 @@ impl Caller for ConnectionHandle {
 
     #[allow(unsafe_code)]
     #[cfg(target_arch = "wasm32")]
-    fn call_with_metadata_by_shape(
+    fn call_with_metadata_by_plan(
         &self,
         method_id: u64,
         args_ptr: SendPtr,
-        args_shape: &'static Shape,
+        args_plan: &'static Arc<RpcPlan>,
         metadata: roam_wire::Metadata,
     ) -> impl std::future::Future<Output = Result<ResponseData, TransportError>> {
         // SAFETY: Caller guarantees args_ptr is valid, initialized, and Send
         unsafe {
-            ConnectionHandle::call_with_metadata_by_shape(
+            ConnectionHandle::call_with_metadata_by_plan(
                 self,
                 method_id,
                 args_ptr.as_ptr(),
-                args_shape,
+                args_plan,
                 metadata,
             )
         }
     }
 
     #[allow(unsafe_code)]
-    unsafe fn bind_response_channels_by_shape(
+    unsafe fn bind_response_channels_by_plan(
         &self,
         response_ptr: *mut (),
-        response_shape: &'static Shape,
+        response_plan: &RpcPlan,
         channels: &[u64],
     ) {
         // SAFETY: Caller guarantees response_ptr is valid and initialized
         unsafe {
-            ConnectionHandle::bind_response_channels_by_shape(
+            ConnectionHandle::bind_response_channels_by_plan(
                 self,
                 response_ptr,
-                response_shape,
+                response_plan,
                 channels,
             )
         }
@@ -284,6 +286,12 @@ where
     method_id: u64,
     args: Args,
     metadata: roam_wire::Metadata,
+    /// Precomputed plan for the Args type.
+    args_plan: &'static Arc<RpcPlan>,
+    /// Precomputed plan for the Ok (response) type.
+    ok_plan: &'static Arc<RpcPlan>,
+    /// Precomputed plan for the Err type.
+    err_plan: &'static Arc<RpcPlan>,
     _phantom: PhantomData<fn() -> (Ok, Err)>,
 }
 
@@ -292,13 +300,26 @@ where
     C: Caller,
     Args: Facet<'static>,
 {
-    /// Create a new CallFuture.
-    pub fn new(caller: C, method_id: u64, args: Args) -> Self {
+    /// Create a new CallFuture with precomputed plans.
+    ///
+    /// Plans should be obtained from `OnceLock` statics at the call site
+    /// (e.g., in macro-generated client methods) to ensure one plan per type.
+    pub fn new(
+        caller: C,
+        method_id: u64,
+        args: Args,
+        args_plan: &'static Arc<RpcPlan>,
+        ok_plan: &'static Arc<RpcPlan>,
+        err_plan: &'static Arc<RpcPlan>,
+    ) -> Self {
         Self {
             caller,
             method_id,
             args,
             metadata: roam_wire::Metadata::default(),
+            args_plan,
+            ok_plan,
+            err_plan,
             _phantom: PhantomData,
         }
     }
@@ -333,12 +354,12 @@ where
             method_id,
             mut args,
             metadata,
+            args_plan,
+            ok_plan,
+            err_plan,
             _phantom,
         } = self;
 
-        // Use non-generic call to reduce monomorphization.
-        // The async block still needs to be boxed, but the inner call uses reflection
-        // instead of monomorphizing for each Args type.
         Box::pin(async move {
             // SAFETY: args is valid, initialized, and Send (enforced by trait bounds).
             // We create the pointer INSIDE the async block after the move to ensure
@@ -346,7 +367,7 @@ where
             let args_ptr = unsafe { SendPtr::new((&raw mut args).cast::<()>()) };
 
             let response = caller
-                .call_with_metadata_by_shape(method_id, args_ptr, Args::SHAPE, metadata)
+                .call_with_metadata_by_plan(method_id, args_ptr, args_plan, metadata)
                 .await
                 .map_err(CallError::from)?;
 
@@ -359,9 +380,9 @@ where
                 decode_response_into(
                     &response.payload,
                     ok_slot.as_mut_ptr().cast::<()>(),
-                    Ok::SHAPE,
+                    ok_plan,
                     err_slot.as_mut_ptr().cast::<()>(),
-                    Err::SHAPE,
+                    err_plan,
                 )
             };
 
@@ -371,9 +392,9 @@ where
                     let mut result = unsafe { ok_slot.assume_init() };
                     // SAFETY: result is valid and initialized
                     unsafe {
-                        caller.bind_response_channels_by_shape(
+                        caller.bind_response_channels_by_plan(
                             (&raw mut result).cast::<()>(),
-                            Ok::SHAPE,
+                            ok_plan,
                             &response.channels,
                         );
                     }
@@ -420,10 +441,12 @@ where
             method_id,
             mut args,
             metadata,
+            args_plan,
+            ok_plan,
+            err_plan,
             _phantom,
         } = self;
 
-        // Use non-generic call to reduce monomorphization.
         Box::pin(async move {
             // SAFETY: args is valid, initialized, and Send (enforced by trait bounds).
             // We create the pointer INSIDE the async block after the move to ensure
@@ -431,7 +454,7 @@ where
             let args_ptr = unsafe { SendPtr::new((&raw mut args).cast::<()>()) };
 
             let response = caller
-                .call_with_metadata_by_shape(method_id, args_ptr, Args::SHAPE, metadata)
+                .call_with_metadata_by_plan(method_id, args_ptr, args_plan, metadata)
                 .await
                 .map_err(CallError::from)?;
 
@@ -444,9 +467,9 @@ where
                 decode_response_into(
                     &response.payload,
                     ok_slot.as_mut_ptr().cast::<()>(),
-                    Ok::SHAPE,
+                    ok_plan,
                     err_slot.as_mut_ptr().cast::<()>(),
-                    Err::SHAPE,
+                    err_plan,
                 )
             };
 
@@ -456,9 +479,9 @@ where
                     let mut result = unsafe { ok_slot.assume_init() };
                     // SAFETY: result is valid and initialized
                     unsafe {
-                        caller.bind_response_channels_by_shape(
+                        caller.bind_response_channels_by_plan(
                             (&raw mut result).cast::<()>(),
-                            Ok::SHAPE,
+                            ok_plan,
                             &response.channels,
                         );
                     }
@@ -558,9 +581,9 @@ pub enum DecodeOutcome {
 ///
 /// * `payload` - The response payload bytes
 /// * `ok_ptr` - Pointer to write the Ok value if successful
-/// * `ok_shape` - Shape of the Ok type
+/// * `ok_plan` - Precomputed RpcPlan for the Ok type
 /// * `err_ptr` - Pointer to write the user error if it's a User error
-/// * `err_shape` - Shape of the user error type
+/// * `err_plan` - Precomputed RpcPlan for the Err type
 ///
 /// # Returns
 ///
@@ -571,8 +594,8 @@ pub enum DecodeOutcome {
 ///
 /// # Safety
 ///
-/// - `ok_ptr` must point to valid, aligned, properly-sized uninitialized memory for `ok_shape`
-/// - `err_ptr` must point to valid, aligned, properly-sized uninitialized memory for `err_shape`
+/// - `ok_ptr` must point to valid, aligned, properly-sized uninitialized memory for the Ok type
+/// - `err_ptr` must point to valid, aligned, properly-sized uninitialized memory for the Err type
 /// - On `DecodeOutcome::Ok`, `ok_ptr` is initialized and MUST be read
 /// - On `DecodeOutcome::UserError`, `err_ptr` is initialized and MUST be read
 /// - On other outcomes, neither pointer is initialized
@@ -581,9 +604,9 @@ pub enum DecodeOutcome {
 pub unsafe fn decode_response_into(
     payload: &[u8],
     ok_ptr: *mut (),
-    ok_shape: &'static Shape,
+    ok_plan: &RpcPlan,
     err_ptr: *mut (),
-    err_shape: &'static Shape,
+    err_plan: &RpcPlan,
 ) -> DecodeOutcome {
     if payload.is_empty() {
         return DecodeOutcome::DeserializeFailed("empty payload".into());
@@ -592,7 +615,7 @@ pub unsafe fn decode_response_into(
     match payload[0] {
         0 => {
             // Ok variant: deserialize the value into ok_ptr
-            if let Err(e) = unsafe { deserialize_into_ptr(ok_ptr, ok_shape, &payload[1..]) } {
+            if let Err(e) = unsafe { deserialize_into_ptr(ok_ptr, ok_plan, &payload[1..]) } {
                 return DecodeOutcome::DeserializeFailed(e);
             }
             DecodeOutcome::Ok
@@ -606,7 +629,7 @@ pub unsafe fn decode_response_into(
                 0 => {
                     // User error: deserialize into err_ptr
                     if let Err(e) =
-                        unsafe { deserialize_into_ptr(err_ptr, err_shape, &payload[2..]) }
+                        unsafe { deserialize_into_ptr(err_ptr, err_plan, &payload[2..]) }
                     {
                         return DecodeOutcome::DeserializeFailed(e);
                     }
@@ -625,31 +648,28 @@ pub unsafe fn decode_response_into(
     }
 }
 
-/// Deserialize payload into a type-erased pointer using Shape.
+/// Deserialize payload into a type-erased pointer using a precomputed RpcPlan.
 ///
 /// # Safety
 ///
-/// - `ptr` must point to valid, properly aligned memory for the type described by `shape`
+/// - `ptr` must point to valid, properly aligned memory for the type described by the plan's shape
 /// - On success, the memory at `ptr` will be initialized
 /// - On error, the memory may be partially initialized and MUST NOT be read
 #[allow(unsafe_code)]
-unsafe fn deserialize_into_ptr(
-    ptr: *mut (),
-    shape: &'static Shape,
-    payload: &[u8],
-) -> Result<(), String> {
+unsafe fn deserialize_into_ptr(ptr: *mut (), plan: &RpcPlan, payload: &[u8]) -> Result<(), String> {
     use facet_format::{FormatDeserializer, MetaSource};
     use facet_postcard::PostcardParser;
     use facet_reflect::Partial;
 
     let ptr_uninit = PtrUninit::new(ptr.cast::<u8>());
 
-    let plan = get_type_plan(shape)?;
-    let root_id = plan.root_id();
+    let type_plan = &plan.type_plan;
+    let root_id = type_plan.root_id();
 
     // SAFETY: Caller guarantees ptr is valid, aligned, and properly sized
     let partial: Partial<'_, false> =
-        unsafe { Partial::from_raw(ptr_uninit, plan, root_id) }.map_err(|e| e.to_string())?;
+        unsafe { Partial::from_raw(ptr_uninit, type_plan.clone(), root_id) }
+            .map_err(|e| e.to_string())?;
 
     let mut parser = PostcardParser::new(payload);
     let mut deserializer: FormatDeserializer<'_, '_, false> =

@@ -6,7 +6,6 @@
 //!
 //! Usage:
 //! - `cargo run -p roam-session --example in_process_bench -- --iterations 200000`
-//! - `ROAM_DISABLE_TYPE_PLAN_CACHE=1 cargo run -p roam-session --example in_process_bench -- --iterations 200000`
 //! - `cargo samply -p roam-session --example in_process_bench -- --iterations 200000`
 
 use std::io;
@@ -353,7 +352,6 @@ async fn run(config: Config) -> Result<(), String> {
         mib_per_sec,
         checksum
     );
-    println!("tip: set ROAM_DISABLE_TYPE_PLAN_CACHE=1 to profile uncached type-plan preparation");
 
     client_driver_task.abort();
     server_driver_task.abort();

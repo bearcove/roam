@@ -429,92 +429,54 @@ impl ChannelRegistry {
     /// // When handler returns and Tx is dropped, Close is sent automatically
     /// ```
     pub fn bind_channels<T: Facet<'static>>(&mut self, args: &mut T) {
-        let poke = facet::Poke::new(args);
-        self.bind_channels_recursive(poke);
+        static PLAN: std::sync::OnceLock<std::sync::Arc<crate::RpcPlan>> =
+            std::sync::OnceLock::new();
+        let plan = PLAN.get_or_init(|| std::sync::Arc::new(crate::RpcPlan::for_type::<T>()));
+        let args_ptr = args as *mut T as *mut ();
+        // SAFETY: args is valid and initialized
+        #[allow(unsafe_code)]
+        unsafe {
+            self.bind_channels_with_plan(args_ptr, plan);
+        }
     }
 
-    /// Bind channels in args using a type-erased pointer and shape (non-generic).
+    /// Bind channels using a precomputed RpcPlan.
     ///
-    /// This is the non-generic version of [`Self::bind_channels`] for use with the
-    /// `prepare()` function.
+    /// Iterates over precomputed channel locations and binds each Rx/Tx channel.
     ///
     /// # Safety
     ///
     /// - `args_ptr` must point to valid, initialized memory matching `args_shape`
     #[allow(unsafe_code)]
-    pub unsafe fn bind_channels_by_shape(
+    pub(crate) unsafe fn bind_channels_with_plan(
         &mut self,
         args_ptr: *mut (),
-        args_shape: &'static facet_core::Shape,
+        plan: &crate::RpcPlan,
     ) {
-        // SAFETY: Caller guarantees args_ptr is valid and initialized
-        let poke = unsafe {
-            facet::Poke::from_raw_parts(facet_core::PtrMut::new(args_ptr.cast::<u8>()), args_shape)
-        };
-        self.bind_channels_recursive(poke);
-    }
-
-    /// Recursively walk a Poke value looking for Rx/Tx channels to bind.
-    #[allow(unsafe_code)]
-    fn bind_channels_recursive(&mut self, poke: facet::Poke<'_, '_>) {
-        use facet::Def;
-
-        let shape = poke.shape();
-
-        // Check if this is an Rx or Tx type
-        if shape.decl_id == crate::Rx::<()>::SHAPE.decl_id {
-            trace!("bind_channels_recursive: found Rx");
-            self.bind_rx_channel(poke);
-            return;
-        } else if shape.decl_id == crate::Tx::<()>::SHAPE.decl_id {
-            trace!("bind_channels_recursive: found Tx");
-            self.bind_tx_channel(poke);
-            return;
-        }
-
-        // Dispatch based on the shape's definition
-        match shape.def {
-            Def::Scalar => {}
-
-            // Recurse into struct/tuple fields
-            _ if poke.is_struct() => {
-                let mut ps = poke.into_struct().expect("is_struct was true");
-                let field_count = ps.field_count();
-                trace!(
-                    field_count,
-                    "bind_channels_recursive: recursing into struct"
-                );
-                for i in 0..field_count {
-                    if let Ok(field_poke) = ps.field(i) {
-                        self.bind_channels_recursive(field_poke);
+        let shape = plan.type_plan.root().shape;
+        for loc in &plan.channel_locations {
+            // SAFETY: args_ptr is valid and initialized
+            let poke = unsafe {
+                facet::Poke::from_raw_parts(facet_core::PtrMut::new(args_ptr.cast::<u8>()), shape)
+            };
+            match poke.at_path_mut(&loc.path) {
+                Ok(channel_poke) => match loc.kind {
+                    crate::ChannelKind::Rx => {
+                        trace!("bind_channels_with_plan: found Rx");
+                        self.bind_rx_channel(channel_poke);
                     }
+                    crate::ChannelKind::Tx => {
+                        trace!("bind_channels_with_plan: found Tx");
+                        self.bind_tx_channel(channel_poke);
+                    }
+                },
+                Err(facet_path::PathAccessError::OptionIsNone { .. }) => {
+                    // Option<Rx/Tx> is None — skip this channel location
+                }
+                Err(_e) => {
+                    warn!("bind_channels_with_plan: unexpected path error: {_e}");
                 }
             }
-
-            // Recurse into Option<T>
-            Def::Option(_) => {
-                // Option is represented as an enum, use into_enum to access its value
-                if let Ok(mut pe) = poke.into_enum()
-                    && let Ok(Some(inner_poke)) = pe.field(0)
-                {
-                    self.bind_channels_recursive(inner_poke);
-                }
-            }
-
-            // Spec-driven channel discovery MUST NOT traverse list/map container elements.
-            // r[call.request.channels.schema-driven]
-            Def::List(_) => {}
-
-            // Other enum variants
-            _ if poke.is_enum() => {
-                if let Ok(mut pe) = poke.into_enum()
-                    && let Ok(Some(variant_poke)) = pe.field(0)
-                {
-                    self.bind_channels_recursive(variant_poke);
-                }
-            }
-
-            _ => {}
         }
     }
 

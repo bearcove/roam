@@ -1,9 +1,10 @@
 use std::sync::Arc;
+use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use facet::Facet;
 
-use facet_core::{PtrMut, Shape};
+use facet_core::PtrMut;
 
 use crate::{
     ChannelError, ChannelId, ChannelIdAllocator, ChannelRegistry, DriverMessage,
@@ -183,11 +184,40 @@ impl ConnectionHandle {
         args: &mut T,
         metadata: roam_wire::Metadata,
     ) -> Result<ResponseData, TransportError> {
+        // Precompute plan via OnceLock (one per monomorphized type, program lifetime).
+        static ARGS_PLAN: OnceLock<Arc<crate::RpcPlan>> = OnceLock::new();
+        let args_plan = ARGS_PLAN.get_or_init(|| Arc::new(crate::RpcPlan::for_type::<T>()));
+
         // Walk args and bind any channels (allocates channel IDs)
         // This collects receivers that need to be drained but does NOT spawn
         let mut drains = Vec::new();
         trace!("ConnectionHandle::call: binding channels");
-        self.bind_channels(args, &mut drains);
+        {
+            let args_ptr = args as *mut T as *mut ();
+            for loc in &args_plan.channel_locations {
+                #[allow(unsafe_code)]
+                let poke = unsafe {
+                    facet::Poke::from_raw_parts(
+                        PtrMut::new(args_ptr.cast::<u8>()),
+                        args_plan.type_plan.root().shape,
+                    )
+                };
+                match poke.at_path_mut(&loc.path) {
+                    Ok(channel_poke) => match loc.kind {
+                        crate::ChannelKind::Rx => {
+                            self.bind_rx_channel(channel_poke, &mut drains);
+                        }
+                        crate::ChannelKind::Tx => {
+                            self.bind_tx_channel(channel_poke);
+                        }
+                    },
+                    Err(facet_path::PathAccessError::OptionIsNone { .. }) => {}
+                    Err(_e) => {
+                        warn!("call_with_metadata: unexpected path error: {_e}");
+                    }
+                }
+            }
+        }
 
         // Collect channel IDs for the Request message
         let channels = collect_channel_ids(args);
@@ -322,40 +352,59 @@ impl ConnectionHandle {
     ///
     /// # Safety
     ///
-    /// - `args_ptr` must point to valid, initialized memory matching `args_shape`
+    /// - `args_ptr` must point to valid, initialized memory matching the plan's shape
     /// - The args type must be `Send`
     #[doc(hidden)]
     #[allow(unsafe_code)]
-    pub unsafe fn call_with_metadata_by_shape(
+    pub unsafe fn call_with_metadata_by_plan(
         &self,
         method_id: u64,
         args_ptr: *mut (),
-        args_shape: &'static Shape,
+        args_plan: &crate::RpcPlan,
         metadata: roam_wire::Metadata,
     ) -> impl std::future::Future<Output = Result<ResponseData, TransportError>> + Send + '_ {
+        let args_shape = args_plan.type_plan.root().shape;
+
         // Do all pointer work synchronously BEFORE creating the async block.
         // This ensures the raw pointer doesn't need to be captured by the future.
 
         // Walk args and bind any channels (allocates channel IDs)
         // This collects receivers that need to be drained but does NOT spawn
         let mut drains = Vec::new();
-        trace!("ConnectionHandle::call_by_shape: binding channels");
+        trace!("ConnectionHandle::call_by_plan: binding channels");
 
         // SAFETY: Caller guarantees args_ptr is valid and initialized
-        let poke =
-            unsafe { facet::Poke::from_raw_parts(PtrMut::new(args_ptr.cast::<u8>()), args_shape) };
-        self.bind_channels_recursive(poke, &mut drains);
+        // Walk args and bind channels using precomputed paths
+        for loc in &args_plan.channel_locations {
+            let poke = unsafe {
+                facet::Poke::from_raw_parts(PtrMut::new(args_ptr.cast::<u8>()), args_shape)
+            };
+            match poke.at_path_mut(&loc.path) {
+                Ok(channel_poke) => match loc.kind {
+                    crate::ChannelKind::Rx => {
+                        self.bind_rx_channel(channel_poke, &mut drains);
+                    }
+                    crate::ChannelKind::Tx => {
+                        self.bind_tx_channel(channel_poke);
+                    }
+                },
+                Err(facet_path::PathAccessError::OptionIsNone { .. }) => {}
+                Err(_e) => {
+                    warn!("call_with_metadata_by_plan: unexpected path error: {_e}");
+                }
+            }
+        }
 
-        // Collect channel IDs for the Request message using non-generic Peek
+        // Collect channel IDs for the Request message using precomputed paths
         // SAFETY: args_ptr is valid and initialized (was just walked by bind_channels)
         let peek = unsafe {
             facet::Peek::unchecked_new(facet_core::PtrConst::new(args_ptr.cast::<u8>()), args_shape)
         };
-        let channels = crate::dispatch::collect_channel_ids_from_peek_pub(peek);
+        let channels = crate::dispatch::collect_channel_ids_with_plan(peek, args_plan);
         trace!(
             channels = ?channels,
             drain_count = drains.len(),
-            "ConnectionHandle::call_by_shape: collected channels after bind_channels"
+            "ConnectionHandle::call_by_plan: collected channels after bind_channels"
         );
 
         // Serialize using non-generic peek_to_vec
@@ -483,79 +532,6 @@ impl ConnectionHandle {
 
                 result
             }
-        }
-    }
-
-    /// Walk args and bind any Rx<T> or Tx<T> channels.
-    /// Collects (channel_id, receiver) pairs for Rx channels that need draining.
-    fn bind_channels<T: Facet<'static>>(
-        &self,
-        args: &mut T,
-        drains: &mut Vec<(ChannelId, Receiver<Vec<u8>>)>,
-    ) {
-        let poke = facet::Poke::new(args);
-        self.bind_channels_recursive(poke, drains);
-    }
-
-    /// Recursively walk a Poke value looking for Rx/Tx channels to bind.
-    #[allow(unsafe_code)]
-    fn bind_channels_recursive(
-        &self,
-        poke: facet::Poke<'_, '_>,
-        drains: &mut Vec<(ChannelId, Receiver<Vec<u8>>)>,
-    ) {
-        use facet::Def;
-
-        let shape = poke.shape();
-
-        // Check if this is an Rx or Tx type
-        if shape.decl_id == crate::Rx::<()>::SHAPE.decl_id {
-            self.bind_rx_channel(poke, drains);
-            return;
-        } else if shape.decl_id == crate::Tx::<()>::SHAPE.decl_id {
-            self.bind_tx_channel(poke);
-            return;
-        }
-
-        // Dispatch based on the shape's definition
-        match shape.def {
-            Def::Scalar => {}
-
-            // Recurse into struct/tuple fields
-            _ if poke.is_struct() => {
-                let mut ps = poke.into_struct().expect("is_struct was true");
-                let field_count = ps.field_count();
-                for i in 0..field_count {
-                    if let Ok(field_poke) = ps.field(i) {
-                        self.bind_channels_recursive(field_poke, drains);
-                    }
-                }
-            }
-
-            // Recurse into Option<T>
-            Def::Option(_) => {
-                // Option is represented as an enum, use into_enum to access its value
-                if let Ok(mut pe) = poke.into_enum()
-                    && let Ok(Some(inner_poke)) = pe.field(0)
-                {
-                    self.bind_channels_recursive(inner_poke, drains);
-                }
-            }
-
-            // Spec-driven channel discovery MUST NOT traverse list/map container elements.
-            // r[call.request.channels.schema-driven]
-            Def::List(_) => {}
-
-            // Other enum variants
-            _ if poke.is_enum() => {
-                if let Ok(mut pe) = poke.into_enum()
-                    && let Ok(Some(variant_poke)) = pe.field(0)
-                {
-                    self.bind_channels_recursive(variant_poke, drains);
-                }
-            }
-
-            _ => {}
         }
     }
 
@@ -928,69 +904,49 @@ impl ConnectionHandle {
     /// IMPORTANT: The `channels` parameter contains the authoritative channel IDs
     /// from the Response framing. For forwarded connections (via ForwardingDispatcher),
     /// these IDs may differ from the IDs serialized in the payload. We patch them first.
+    #[allow(unsafe_code)]
     pub fn bind_response_channels<T: Facet<'static>>(&self, response: &mut T, channels: &[u64]) {
+        static PLAN: OnceLock<Arc<crate::RpcPlan>> = OnceLock::new();
+        let plan = PLAN.get_or_init(|| Arc::new(crate::RpcPlan::for_type::<T>()));
+
         // Patch channel IDs from Response.channels into the deserialized response.
         // This is critical for ForwardingDispatcher where the payload contains upstream
         // channel IDs but channels[] contains the remapped downstream IDs.
         patch_channel_ids(response, channels);
 
-        let poke = facet::Poke::new(response);
-        self.bind_response_channels_recursive(poke);
+        let response_ptr = response as *mut T as *mut ();
+        unsafe { self.bind_response_channels_with_plan(response_ptr, plan) };
     }
 
-    /// Recursively walk a Poke value looking for Rx channels to bind in responses.
+    /// Bind Rx channels in a response using precomputed paths.
+    ///
+    /// # Safety
+    ///
+    /// - `response_ptr` must point to valid, initialized memory matching the plan's shape
     #[allow(unsafe_code)]
-    fn bind_response_channels_recursive(&self, poke: facet::Poke<'_, '_>) {
-        use facet::Def;
-
-        let shape = poke.shape();
-
-        // Check if this is an Rx type - only Rx needs binding in responses
-        // (Tx in responses would be outgoing, but that's uncommon for return types)
-        if shape.decl_id == crate::Rx::<()>::SHAPE.decl_id {
-            self.bind_rx_response_stream(poke);
-            return;
-        }
-
-        // Dispatch based on the shape's definition
-        match shape.def {
-            Def::Scalar => {}
-
-            // Recurse into struct/tuple fields
-            _ if poke.is_struct() => {
-                let mut ps = poke.into_struct().expect("is_struct was true");
-                let field_count = ps.field_count();
-                for i in 0..field_count {
-                    if let Ok(field_poke) = ps.field(i) {
-                        self.bind_response_channels_recursive(field_poke);
-                    }
+    unsafe fn bind_response_channels_with_plan(
+        &self,
+        response_ptr: *mut (),
+        plan: &crate::RpcPlan,
+    ) {
+        let shape = plan.type_plan.root().shape;
+        for loc in &plan.channel_locations {
+            // Only Rx needs binding in responses
+            if loc.kind != crate::ChannelKind::Rx {
+                continue;
+            }
+            let poke = unsafe {
+                facet::Poke::from_raw_parts(PtrMut::new(response_ptr.cast::<u8>()), shape)
+            };
+            match poke.at_path_mut(&loc.path) {
+                Ok(channel_poke) => {
+                    self.bind_rx_response_stream(channel_poke);
+                }
+                Err(facet_path::PathAccessError::OptionIsNone { .. }) => {}
+                Err(_e) => {
+                    warn!("bind_response_channels_with_plan: unexpected path error: {_e}");
                 }
             }
-
-            // Recurse into Option<T>
-            Def::Option(_) => {
-                // Option is represented as an enum, use into_enum to access its value
-                if let Ok(mut pe) = poke.into_enum()
-                    && let Ok(Some(inner_poke)) = pe.field(0)
-                {
-                    self.bind_response_channels_recursive(inner_poke);
-                }
-            }
-
-            // Spec-driven channel discovery MUST NOT traverse list/map container elements.
-            // r[call.request.channels.schema-driven]
-            Def::List(_) => {}
-
-            // Other enum variants
-            _ if poke.is_enum() => {
-                if let Ok(mut pe) = poke.into_enum()
-                    && let Ok(Some(variant_poke)) = pe.field(0)
-                {
-                    self.bind_response_channels_recursive(variant_poke);
-                }
-            }
-
-            _ => {}
         }
     }
 
@@ -1024,30 +980,26 @@ impl ConnectionHandle {
 
     /// Bind receivers for `Rx<T>` channels in a deserialized response using reflection (non-generic).
     ///
-    /// This is the non-generic version of `bind_response_channels`. It uses Shape reflection
-    /// to avoid monomorphization.
+    /// This is the non-generic version of `bind_response_channels`. It uses the precomputed
+    /// RpcPlan from an OnceLock to avoid both monomorphization and redundant plan construction.
     ///
     /// # Safety
     ///
-    /// - `response_ptr` must point to valid, initialized memory matching `response_shape`
+    /// - `response_ptr` must point to valid, initialized memory matching the plan's shape
     #[doc(hidden)]
     #[allow(unsafe_code)]
-    pub unsafe fn bind_response_channels_by_shape(
+    pub unsafe fn bind_response_channels_by_plan(
         &self,
         response_ptr: *mut (),
-        response_shape: &'static Shape,
+        response_plan: &crate::RpcPlan,
         channels: &[u64],
     ) {
         // Patch channel IDs from Response.channels into the deserialized response.
-        // SAFETY: response_ptr is valid and initialized
         unsafe {
-            crate::dispatch::patch_channel_ids_by_shape(response_ptr, response_shape, channels);
+            crate::dispatch::patch_channel_ids_with_plan(response_ptr, response_plan, channels);
         }
 
-        // SAFETY: response_ptr is valid and initialized
-        let poke = unsafe {
-            facet::Poke::from_raw_parts(PtrMut::new(response_ptr.cast::<u8>()), response_shape)
-        };
-        self.bind_response_channels_recursive(poke);
+        // Bind response channels using precomputed paths
+        unsafe { self.bind_response_channels_with_plan(response_ptr, response_plan) };
     }
 }

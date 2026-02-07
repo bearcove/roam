@@ -539,11 +539,11 @@ where
 
     #[allow(unsafe_code)]
     #[cfg(not(target_arch = "wasm32"))]
-    fn call_with_metadata_by_shape(
+    fn call_with_metadata_by_plan(
         &self,
         method_id: u64,
         args_ptr: crate::SendPtr,
-        args_shape: &'static facet_core::Shape,
+        args_plan: &'static std::sync::Arc<crate::RpcPlan>,
         metadata: roam_wire::Metadata,
     ) -> impl std::future::Future<Output = Result<ResponseData, TransportError>> + Send {
         // Capture self for use in async block
@@ -575,10 +575,10 @@ where
 
                 // SAFETY: args_ptr was created from valid, initialized, Send data
                 match unsafe {
-                    handle.call_with_metadata_by_shape(
+                    handle.call_with_metadata_by_plan(
                         method_id,
                         args_ptr.as_ptr(),
-                        args_shape,
+                        args_plan,
                         metadata.clone(),
                     )
                 }
@@ -609,11 +609,11 @@ where
 
     #[allow(unsafe_code)]
     #[cfg(target_arch = "wasm32")]
-    fn call_with_metadata_by_shape(
+    fn call_with_metadata_by_plan(
         &self,
         method_id: u64,
         args_ptr: crate::SendPtr,
-        args_shape: &'static facet_core::Shape,
+        args_plan: &'static std::sync::Arc<crate::RpcPlan>,
         metadata: roam_wire::Metadata,
     ) -> impl std::future::Future<Output = Result<ResponseData, TransportError>> {
         // Capture self for use in async block
@@ -645,10 +645,10 @@ where
 
                 // SAFETY: args_ptr was created from valid, initialized, Send data
                 match unsafe {
-                    handle.call_with_metadata_by_shape(
+                    handle.call_with_metadata_by_plan(
                         method_id,
                         args_ptr.as_ptr(),
-                        args_shape,
+                        args_plan,
                         metadata.clone(),
                     )
                 }
@@ -678,15 +678,15 @@ where
     }
 
     #[allow(unsafe_code)]
-    unsafe fn bind_response_channels_by_shape(
+    unsafe fn bind_response_channels_by_plan(
         &self,
         response_ptr: *mut (),
-        response_shape: &'static facet_core::Shape,
+        response_plan: &crate::RpcPlan,
         channels: &[u64],
     ) {
         // Same as bind_response_channels - this is a no-op for FramedClient.
         // Users should use ConnectionHandle directly if they need response channel binding.
-        let _ = (response_ptr, response_shape, channels);
+        let _ = (response_ptr, response_plan, channels);
     }
 }
 

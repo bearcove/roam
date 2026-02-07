@@ -27,12 +27,6 @@ Cached type-plan path:
 cargo samply -p roam-session --example in_process_bench -- --iterations 200000 --warmup 2000
 ```
 
-Uncached comparison:
-
-```bash
-ROAM_DISABLE_TYPE_PLAN_CACHE=1 cargo samply -p roam-session --example in_process_bench -- --iterations 200000 --warmup 2000
-```
-
 ## Notes
 
 - `cargo samply` in this setup is invoked as `cargo samply ...` (not `cargo samply record`).

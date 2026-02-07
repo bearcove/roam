@@ -18,6 +18,7 @@ tracing = ["dep:tracing"]
 facet.workspace = true
 facet-core.workspace = true
 facet-format.workspace = true
+facet-path.workspace = true
 facet-postcard.workspace = true
 facet-pretty.workspace = true
 facet-reflect.workspace = true
