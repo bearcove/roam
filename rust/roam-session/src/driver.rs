@@ -2221,8 +2221,10 @@ mod tests {
         let transport = TestTransport::scripted(vec![Ok(Some(peer_hello))], vec![]);
         let probe = transport.clone();
 
-        let mut config = HandshakeConfig::default();
-        config.max_concurrent_requests = 1;
+        let config = HandshakeConfig {
+            max_concurrent_requests: 1,
+            ..HandshakeConfig::default()
+        };
 
         let (_handle, _incoming, mut driver) = initiate_framed(transport, config, NoDispatcher)
             .await
