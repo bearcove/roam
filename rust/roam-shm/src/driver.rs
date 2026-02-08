@@ -506,6 +506,10 @@ where
                     metadata,
                 }
             }
+            DriverMessage::SweepPendingResponses => {
+                trace!("handle_driver_message: SweepPendingResponses is a no-op for shm driver");
+                return Ok(());
+            }
         };
         trace!("handle_driver_message: sending wire message");
         MessageTransport::send(&mut self.io, &wire_msg).await?;
@@ -2025,6 +2029,13 @@ impl MultiPeerHostDriver {
                     request_id,
                     metadata,
                 }
+            }
+            DriverMessage::SweepPendingResponses => {
+                trace!(
+                    peer = %peer_id,
+                    "MultiPeerHostDriver: SweepPendingResponses is a no-op for shm driver"
+                );
+                return Ok(());
             }
         };
 
