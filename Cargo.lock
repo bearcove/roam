@@ -2377,6 +2377,7 @@ dependencies = [
  "roam",
  "roam-session",
  "roam-wire",
+ "socket2",
  "spec-proto",
  "tokio",
 ]

@@ -8,6 +8,7 @@
 use std::future::Future;
 use std::io;
 use std::sync::Arc;
+use std::time::Duration;
 
 use facet::Facet;
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -35,6 +36,23 @@ pub trait Connector: Send + Sync + 'static {
     fn connect(&self) -> impl Future<Output = io::Result<Self::Transport>> + Send;
 }
 
+fn configure_tcp_keepalive<S: 'static>(stream: &S) -> io::Result<()> {
+    use std::any::Any;
+
+    let Some(tcp_stream) = (stream as &dyn Any).downcast_ref::<tokio::net::TcpStream>() else {
+        return Ok(());
+    };
+
+    let socket = socket2::SockRef::from(tcp_stream);
+    socket.set_keepalive(true)?;
+    let keepalive = socket2::TcpKeepalive::new()
+        .with_time(Duration::from_secs(10))
+        .with_interval(Duration::from_secs(5))
+        .with_retries(3);
+    socket.set_tcp_keepalive(&keepalive)?;
+    Ok(())
+}
+
 // ============================================================================
 // accept() - For accepted byte-stream connections
 // ============================================================================
@@ -59,9 +77,10 @@ pub async fn accept<S, D>(
     ConnectionError,
 >
 where
-    S: AsyncRead + AsyncWrite + Unpin + Send,
+    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
     D: ServiceDispatcher,
 {
+    configure_tcp_keepalive(&stream)?;
     let framed = LengthPrefixedFramed::new(stream);
     roam_session::accept_framed(framed, config, dispatcher).await
 }
@@ -156,6 +175,7 @@ where
 impl<C, D> Client<C, D>
 where
     C: Connector,
+    C::Transport: 'static,
     D: ServiceDispatcher + Clone + 'static,
 {
     /// Get the underlying handle if connected.
@@ -185,6 +205,7 @@ where
             .connect()
             .await
             .map_err(ConnectError::ConnectFailed)?;
+        configure_tcp_keepalive(&stream).map_err(ConnectError::ConnectFailed)?;
 
         let framed = LengthPrefixedFramed::new(stream);
 
