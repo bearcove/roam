@@ -30,7 +30,9 @@ use std::future::Future;
 use std::io;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+#[cfg(not(target_arch = "wasm32"))]
+use std::time::Instant;
 
 use facet::Facet;
 
@@ -738,7 +740,9 @@ struct ConnectionState {
 }
 
 struct PendingResponse {
+    #[cfg(not(target_arch = "wasm32"))]
     created_at: Instant,
+    #[cfg(not(target_arch = "wasm32"))]
     warned_stale: bool,
     tx: crate::runtime::OneshotSender<Result<ResponseData, TransportError>>,
 }
@@ -900,8 +904,11 @@ pub struct Driver<T, D> {
     diagnostic_state: Option<Arc<crate::diagnostic::DiagnosticState>>,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 const PENDING_RESPONSE_SWEEP_INTERVAL: Duration = Duration::from_secs(5);
+#[cfg(not(target_arch = "wasm32"))]
 const PENDING_RESPONSE_WARN_AFTER: Duration = Duration::from_secs(30);
+#[cfg(not(target_arch = "wasm32"))]
 const PENDING_RESPONSE_KILL_AFTER: Duration = Duration::from_secs(60);
 
 impl<T, D> Driver<T, D>
@@ -1029,7 +1036,9 @@ where
                     conn.pending_responses.insert(
                         request_id,
                         PendingResponse {
+                            #[cfg(not(target_arch = "wasm32"))]
                             created_at: Instant::now(),
+                            #[cfg(not(target_arch = "wasm32"))]
                             warned_stale: false,
                             tx: response_tx,
                         },
@@ -1592,6 +1601,7 @@ where
         }
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     #[cfg_attr(not(feature = "tracing"), allow(unused_variables))]
     fn sweep_pending_response_staleness(&mut self) -> bool {
         let now = Instant::now();
@@ -1638,6 +1648,11 @@ where
             }
         }
         should_teardown_link
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn sweep_pending_response_staleness(&mut self) -> bool {
+        false
     }
 }
 
@@ -1801,19 +1816,22 @@ where
         diagnostic_state: None,
     };
 
-    let watchdog_tx = driver.driver_tx.clone();
-    spawn(async move {
-        loop {
-            sleep(PENDING_RESPONSE_SWEEP_INTERVAL).await;
-            if watchdog_tx
-                .send(DriverMessage::SweepPendingResponses)
-                .await
-                .is_err()
-            {
-                break;
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let watchdog_tx = driver.driver_tx.clone();
+        spawn(async move {
+            loop {
+                sleep(PENDING_RESPONSE_SWEEP_INTERVAL).await;
+                if watchdog_tx
+                    .send(DriverMessage::SweepPendingResponses)
+                    .await
+                    .is_err()
+                {
+                    break;
+                }
             }
-        }
-    });
+        });
+    }
 
     Ok((handle, incoming_connections_rx, driver))
 }
