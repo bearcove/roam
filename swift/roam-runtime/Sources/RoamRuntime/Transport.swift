@@ -19,8 +19,8 @@ func debugLog(_ message: String) {
 
 func warnLog(_ message: String) {
     let pid = ProcessInfo.processInfo.processIdentifier
-    let data = "[\(pid)] WARN: \(message)\n".data(using: .utf8)!
-    FileHandle.standardError.write(data)
+    let line = "[\(pid)] WARN: \(message)"
+    NSLog("%@", line)
 }
 
 // MARK: - Transport Protocol
@@ -229,6 +229,7 @@ public func connect(host: String, port: Int) async throws -> NIOTransport {
     let capturedContinuation = inboundContinuation!
 
     let bootstrap = ClientBootstrap(group: group)
+        .channelOption(ChannelOptions.socketOption(.so_keepalive), value: 1)
         .channelInitializer { channel in
             // Note: ByteToMessageHandler is explicitly non-Sendable in SwiftNIO.
             // This warning is benign - channel initializers run on the event loop.

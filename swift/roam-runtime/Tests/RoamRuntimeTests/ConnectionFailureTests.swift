@@ -41,6 +41,15 @@ private actor ScriptedTransport: MessageTransport {
         sentMessages
     }
 
+    func sentRequestIds() -> [UInt64] {
+        sentMessages.compactMap { message in
+            if case .request(_, let requestId, _, _, _, _) = message {
+                return requestId
+            }
+            return nil
+        }
+    }
+
     func send(_ message: Message) async throws {
         sentMessages.append(message)
 
@@ -136,6 +145,23 @@ private func awaitHasCancel(
     return false
 }
 
+private func awaitRequestId(
+    _ transport: ScriptedTransport,
+    index: Int,
+    timeoutMs: UInt64 = 1_000
+) async -> UInt64? {
+    let start = ContinuousClock.now
+    let timeout = Duration.milliseconds(Int64(timeoutMs))
+    while ContinuousClock.now - start < timeout {
+        let requestIds = await transport.sentRequestIds()
+        if requestIds.count > index {
+            return requestIds[index]
+        }
+        try? await Task.sleep(nanoseconds: 5_000_000)
+    }
+    return nil
+}
+
 private func isConnectionClosed(_ error: Error) -> Bool {
     guard let connError = error as? ConnectionError else {
         return false
@@ -162,6 +188,16 @@ private func isTimeout(_ error: Error) -> Bool {
     }
     if case .timeout = connError {
         return true
+    }
+    return false
+}
+
+private func isProtocolViolation(_ error: Error, rule: String) -> Bool {
+    guard let connError = error as? ConnectionError else {
+        return false
+    }
+    if case .protocolViolation(let actualRule) = connError {
+        return actualRule == rule
     }
     return false
 }
@@ -227,7 +263,8 @@ struct ConnectionFailureTests {
         }
 
         let callTask = Task { try await handle.callRaw(methodId: 1, payload: [], timeout: 2.0) }
-        try? await Task.sleep(nanoseconds: 10_000_000)
+        let requestId = await awaitRequestId(transport, index: 0)
+        #expect(requestId != nil)
         await transport.enqueueMessage(
             .response(connId: 0, requestId: 999, metadata: [], channels: [], payload: [7, 7, 7])
         )
@@ -243,15 +280,55 @@ struct ConnectionFailureTests {
             try await driverTask.value
             Issue.record("expected protocol violation")
         } catch {
-            guard let connError = error as? ConnectionError else {
-                Issue.record("expected ConnectionError, got \(error)")
-                return
-            }
-            if case .protocolViolation(let rule) = connError {
-                #expect(rule == "call.response.unknown-request-id")
-            } else {
-                Issue.record("expected protocol violation, got \(connError)")
-            }
+            #expect(isProtocolViolation(error, rule: "call.lifecycle.unknown-request-id"))
+        }
+    }
+
+    @Test func lateResponseAfterTimeoutTriggersProtocolViolation() async throws {
+        let transport = ScriptedTransport()
+        let (handle, driver) = try await establishInitiator(
+            transport: transport,
+            dispatcher: NoopDispatcher()
+        )
+        let driverTask = Task {
+            try await driver.run()
+        }
+
+        let timedOutCall = Task { try await handle.callRaw(methodId: 42, payload: [4, 2], timeout: 0.05) }
+        guard let timedOutRequestId = await awaitRequestId(transport, index: 0) else {
+            Issue.record("expected first request to be sent")
+            return
+        }
+
+        do {
+            _ = try await timedOutCall.value
+            Issue.record("expected timeout")
+        } catch {
+            #expect(isTimeout(error))
+        }
+
+        await transport.enqueueMessage(
+            .response(
+                connId: 0,
+                requestId: timedOutRequestId,
+                metadata: [],
+                channels: [],
+                payload: [0xAA]
+            )
+        )
+
+        do {
+            try await driverTask.value
+            Issue.record("expected protocol violation")
+        } catch {
+            #expect(isProtocolViolation(error, rule: "call.lifecycle.unknown-request-id"))
+        }
+
+        do {
+            _ = try await handle.callRaw(methodId: 99, payload: [9], timeout: 2.0)
+            Issue.record("expected connection closed")
+        } catch {
+            #expect(isConnectionClosed(error))
         }
     }
 
