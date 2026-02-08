@@ -778,8 +778,16 @@ The complete lifecycle of an RPC call:
 > r[call.lifecycle.unknown-request-id]
 >
 > If a caller receives a Response with a `request_id` that does not match
-> any in-flight request, it MUST ignore the response. Implementations
-> SHOULD log this as a warning.
+> any in-flight request, it MUST treat this as a protocol violation:
+> send `Goodbye` on connection 0 (reason: `call.response.unknown-request-id`)
+> and close the link.
+
+> r[call.response.stale-timeout]
+>
+> Implementations MAY enforce a timeout for pending responses. If the timeout
+> is exceeded, they MUST fail pending calls with a connection error, send
+> `Goodbye` on connection 0 (reason: `call.response.stale-timeout`), and close
+> the link.
 
 ## Cancellation
 

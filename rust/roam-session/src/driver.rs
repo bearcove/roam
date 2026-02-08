@@ -902,6 +902,7 @@ pub struct Driver<T, D> {
 
 const PENDING_RESPONSE_SWEEP_INTERVAL: Duration = Duration::from_secs(5);
 const PENDING_RESPONSE_WARN_AFTER: Duration = Duration::from_secs(30);
+const PENDING_RESPONSE_KILL_AFTER: Duration = Duration::from_secs(60);
 
 impl<T, D> Driver<T, D>
 where
@@ -1138,7 +1139,9 @@ where
                 self.io.send(&wire_msg).await?;
             }
             DriverMessage::SweepPendingResponses => {
-                self.sweep_pending_response_staleness();
+                if self.sweep_pending_response_staleness() {
+                    return Err(self.goodbye("call.response.stale-timeout").await);
+                }
             }
         }
         Ok(())
@@ -1302,9 +1305,13 @@ where
             } => {
                 // Route to the correct connection
                 if let Some(conn) = self.connections.get_mut(&conn_id)
-                    && let Some(tx) = conn.pending_responses.remove(&request_id)
+                    && let Some(pending_response) = conn.pending_responses.remove(&request_id)
                 {
-                    if tx.tx.send(Ok(ResponseData { payload, channels })).is_err() {
+                    if pending_response
+                        .tx
+                        .send(Ok(ResponseData { payload, channels }))
+                        .is_err()
+                    {
                         warn!(
                             conn_id = conn_id.raw(),
                             request_id, "response receiver dropped before delivery"
@@ -1319,8 +1326,9 @@ where
                 } else {
                     warn!(
                         conn_id = conn_id.raw(),
-                        request_id, "received response for unknown request_id"
+                        request_id, "received response for unknown request_id - protocol violation"
                     );
+                    return Err(self.goodbye("call.response.unknown-request-id").await);
                 }
             }
             Message::Cancel {
@@ -1584,24 +1592,52 @@ where
         }
     }
 
-    fn sweep_pending_response_staleness(&mut self) {
+    #[cfg_attr(not(feature = "tracing"), allow(unused_variables))]
+    fn sweep_pending_response_staleness(&mut self) -> bool {
         let now = Instant::now();
+        let mut timed_out_connections = Vec::new();
         for (conn_id, conn) in self.connections.iter_mut() {
+            let conn_id_raw = conn_id.raw();
+            let mut should_kill_connection = false;
             for (request_id, pending) in conn.pending_responses.iter_mut() {
                 let age = now.saturating_duration_since(pending.created_at);
-                if age >= PENDING_RESPONSE_WARN_AFTER && !pending.warned_stale {
-                    pending.warned_stale = true;
-                    let _ = conn_id;
-                    let _ = request_id;
+                if age >= PENDING_RESPONSE_KILL_AFTER {
+                    should_kill_connection = true;
                     warn!(
-                        conn_id = conn_id.raw(),
+                        conn_id = conn_id_raw,
+                        request_id = *request_id,
+                        age_ms = age.as_millis(),
+                        "pending response exceeded hard timeout"
+                    );
+                } else if age >= PENDING_RESPONSE_WARN_AFTER && !pending.warned_stale {
+                    pending.warned_stale = true;
+                    warn!(
+                        conn_id = conn_id_raw,
                         request_id = *request_id,
                         age_ms = age.as_millis(),
                         "pending response has gone stale"
                     );
                 }
             }
+            if should_kill_connection {
+                timed_out_connections.push(*conn_id);
+            }
         }
+        let should_teardown_link = !timed_out_connections.is_empty();
+        for conn_id in timed_out_connections {
+            if let Some(conn) = self.connections.get_mut(&conn_id) {
+                for (request_id, pending) in conn.pending_responses.drain() {
+                    warn!(
+                        conn_id = conn_id.raw(),
+                        request_id,
+                        "failing pending response due to stale-timeout connection teardown"
+                    );
+                    let _ = pending.tx.send(Err(TransportError::ConnectionClosed));
+                }
+                conn.abort_in_flight_requests();
+            }
+        }
+        should_teardown_link
     }
 }
 
@@ -1963,7 +1999,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn response_with_unknown_request_id_is_ignored() {
+    async fn response_with_unknown_request_id_is_protocol_violation() {
         let peer_hello = Message::Hello(Hello::V4 {
             max_payload_size: 1024 * 1024,
             initial_channel_credit: 64 * 1024,
@@ -1986,17 +2022,80 @@ mod tests {
                 .await
                 .expect("handshake should succeed");
 
-        driver
-            .run()
-            .await
-            .expect("unknown request_id response should not tear down the link");
+        let err = driver.run().await.expect_err("driver should fail loudly");
+        assert!(matches!(
+            err,
+            ConnectionError::ProtocolViolation { rule_id, .. }
+            if rule_id == "call.response.unknown-request-id"
+        ));
 
         let sent = probe.sent_messages();
         assert!(
-            !sent
-                .iter()
-                .any(|msg| matches!(msg, Message::Goodbye { .. })),
-            "unknown request_id response must be ignored, not escalated"
+            sent.iter().any(|msg| matches!(
+                msg,
+                Message::Goodbye { conn_id, reason }
+                    if conn_id.is_root() && reason == "call.response.unknown-request-id"
+            )),
+            "driver should send Goodbye(call.response.unknown-request-id) before closing"
+        );
+    }
+
+    #[tokio::test]
+    async fn stale_pending_response_triggers_teardown_and_fails_pending() {
+        let peer_hello = Message::Hello(Hello::V4 {
+            max_payload_size: 1024 * 1024,
+            initial_channel_credit: 64 * 1024,
+        });
+        let transport = TestTransport::scripted(vec![Ok(Some(peer_hello))], vec![]);
+        let probe = transport.clone();
+
+        let (_handle, _incoming, mut driver) =
+            initiate_framed(transport, HandshakeConfig::default(), NoDispatcher)
+                .await
+                .expect("handshake should succeed");
+
+        let (response_tx, response_rx) = crate::runtime::oneshot();
+        driver
+            .connections
+            .get_mut(&ConnectionId::ROOT)
+            .expect("root connection exists")
+            .pending_responses
+            .insert(
+                1337,
+                PendingResponse {
+                    created_at: Instant::now()
+                        - (PENDING_RESPONSE_KILL_AFTER + Duration::from_secs(1)),
+                    warned_stale: true,
+                    tx: response_tx,
+                },
+            );
+
+        let err = driver
+            .handle_driver_message(DriverMessage::SweepPendingResponses)
+            .await
+            .expect_err("sweep should escalate stale pending responses");
+        assert!(matches!(
+            err,
+            ConnectionError::ProtocolViolation { rule_id, .. }
+            if rule_id == "call.response.stale-timeout"
+        ));
+
+        let pending_result = response_rx
+            .await
+            .expect("pending response should be failed");
+        assert!(matches!(
+            pending_result,
+            Err(TransportError::ConnectionClosed)
+        ));
+
+        let sent = probe.sent_messages();
+        assert!(
+            sent.iter().any(|msg| matches!(
+                msg,
+                Message::Goodbye { conn_id, reason }
+                    if conn_id.is_root() && reason == "call.response.stale-timeout"
+            )),
+            "driver should send Goodbye(call.response.stale-timeout) before closing"
         );
     }
 }
