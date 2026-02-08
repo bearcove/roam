@@ -1063,11 +1063,12 @@ mod tests {
         drop(driver_rx);
 
         stream_tx.send(&b"payload".to_vec()).await.unwrap();
-        tokio::time::sleep(Duration::from_millis(20)).await;
-
         drop(call_msg);
 
-        let result = call_task.await.unwrap();
+        let result = tokio::time::timeout(Duration::from_secs(1), call_task)
+            .await
+            .expect("call should terminate once driver side is closed")
+            .expect("call task should not panic");
         assert!(
             matches!(result, Err(TransportError::DriverGone)),
             "call should fail once driver side is gone"

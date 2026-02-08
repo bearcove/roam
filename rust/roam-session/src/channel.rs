@@ -602,7 +602,6 @@ impl std::error::Error for RxError {}
 mod tests {
     use super::*;
     use roam_wire::ConnectionId;
-    use std::time::Duration;
 
     #[tokio::test]
     async fn tx_drop_fallback_handles_closed_driver_channel() {
@@ -626,6 +625,8 @@ mod tests {
         drop(driver_rx);
 
         drop(tx);
-        tokio::time::sleep(Duration::from_millis(20)).await;
+        for _ in 0..8 {
+            tokio::task::yield_now().await;
+        }
     }
 }
