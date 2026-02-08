@@ -163,27 +163,36 @@ impl ShmGuest {
         Ok(header)
     }
 
-    /// Reconstruct SegmentConfig from a v2 header.
+    /// Reconstruct SegmentConfig from a v2 header by reading size class
+    /// headers from shared memory.
     ///
     /// In v2:
     /// - `header.ring_size` -> `bipbuf_capacity`
     /// - `header.slots_per_guest` -> `inline_threshold` (0 = default 256)
-    fn config_from_header(header: &SegmentHeader) -> SegmentConfig {
-        // We cannot fully reconstruct var_slot_classes from the header alone;
-        // the class headers live in the pool region. For layout computation we
-        // need at least one class. We read the actual class headers later, but
-        // for now we use a placeholder that will produce the correct offsets
-        // because layout computation only needs the class count and sizes for
-        // the var_slot_pool_size calculation. We will validate against the
-        // header's var_slot_pool_offset after layout computation.
-        //
-        // Actually, SegmentConfig::validate() will reject empty var_slot_classes
-        // and max_payload_size > largest class, so we need to reconstruct
-        // the classes from the pool headers in shared memory.
-        //
-        // For now, since we know the pool offset from the header, and the layout
-        // is fully determined by the header fields, we can construct the config
-        // with placeholder classes and verify the layout matches.
+    fn config_from_header(region: &Region, header: &SegmentHeader) -> SegmentConfig {
+        // Read size class headers from the VarSlotPool region to reconstruct
+        // the actual var_slot_classes. This is needed so the SegmentLayout
+        // computes the correct guest_areas_offset.
+        let num_classes = header.num_var_slot_classes as usize;
+        let pool_offset = header.var_slot_pool_offset as usize;
+
+        let mut var_slot_classes = Vec::with_capacity(num_classes);
+        for i in 0..num_classes {
+            let class_header_offset = pool_offset + i * 64;
+            let class_header = unsafe {
+                &*(region.offset(class_header_offset)
+                    as *const crate::var_slot_pool::SizeClassHeader)
+            };
+            var_slot_classes.push(crate::layout::SizeClass {
+                slot_size: class_header.slot_size,
+                count: class_header.slots_per_extent,
+            });
+        }
+
+        // Fallback to defaults if header predates the num_var_slot_classes field
+        if var_slot_classes.is_empty() {
+            var_slot_classes = SegmentConfig::default_size_classes();
+        }
 
         SegmentConfig {
             max_payload_size: header.max_payload_size,
@@ -193,11 +202,7 @@ impl ShmGuest {
             inline_threshold: header.slots_per_guest,
             max_channels: header.max_channels,
             heartbeat_interval: header.heartbeat_interval,
-            // We'll read actual classes from the pool region.
-            // Use default classes as placeholder - the important thing is that
-            // layout offsets for peer entries, bipbufs, and channel tables are
-            // independent of var_slot_classes (they only affect var_slot_pool_size).
-            var_slot_classes: SegmentConfig::default_size_classes(),
+            var_slot_classes,
             file_cleanup: shm_primitives::FileCleanup::Auto,
         }
     }
@@ -277,7 +282,7 @@ impl ShmGuest {
 
         let header = Self::validate_header(&region)?;
 
-        let config = Self::config_from_header(header);
+        let config = Self::config_from_header(&region, header);
         let layout = config.layout().map_err(AttachError::InvalidHeader)?;
 
         // Validate peer ID is within range
@@ -329,7 +334,7 @@ impl ShmGuest {
     fn attach_region(region: Region) -> Result<Self, AttachError> {
         let header = Self::validate_header(&region)?;
 
-        let config = Self::config_from_header(header);
+        let config = Self::config_from_header(&region, header);
         let layout = config.layout().map_err(AttachError::InvalidHeader)?;
 
         // Find and claim an empty peer slot
@@ -574,6 +579,15 @@ impl ShmGuest {
                 return Err(RecvError::PayloadTooLarge);
             }
 
+            // Validate payload_len fits within the slot's size class
+            if let Some(slot_size) = self.var_pool.slot_size(slot_ref.class_idx) {
+                if payload_len > slot_size as usize {
+                    return Err(RecvError::PayloadTooLarge);
+                }
+            } else {
+                return Err(RecvError::InvalidSlotPtr);
+            }
+
             let slot_ptr = self
                 .var_pool
                 .payload_ptr(handle)
@@ -719,6 +733,5 @@ impl std::fmt::Display for SendError {
 
 impl std::error::Error for SendError {}
 
-// Tests are disabled until host.rs is also ported to v2.
-// The guest cannot be tested in isolation because it needs a v2 host
-// to create and initialize the segment.
+// Guest unit tests live in tests/roundtrip.rs — they need a cooperating
+// v2 host (ShmHost) to create and initialize the segment.

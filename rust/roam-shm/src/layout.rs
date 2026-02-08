@@ -184,8 +184,15 @@ pub struct SegmentHeader {
     ///
     /// shm[impl shm.varslot.extents]
     pub current_size: AtomicU64,
+    /// Offset to guest areas (BipBuffers + channel tables).
+    ///
+    /// Guests read this directly rather than computing it from var_slot_pool
+    /// size (which requires knowing the size classes).
+    pub guest_areas_offset: u64,
+    /// Number of variable-size slot classes.
+    pub num_var_slot_classes: u32,
     /// Reserved for future use (zero)
-    pub reserved: [u8; 32],
+    pub reserved: [u8; 20],
 }
 
 const _: () = assert!(size_of::<SegmentHeader>() == HEADER_SIZE);

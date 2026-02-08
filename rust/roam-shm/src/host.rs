@@ -281,6 +281,8 @@ impl ShmHost {
         header
             .current_size
             .store(layout.total_size, core::sync::atomic::Ordering::Release);
+        header.guest_areas_offset = layout.guest_areas_offset;
+        header.num_var_slot_classes = layout.config.var_slot_classes.len() as u32;
         // host_goodbye and reserved are already zeroed
     }
 
@@ -476,7 +478,12 @@ impl ShmHost {
                 }
 
                 // Extract payload
-                match self.extract_payload(&frame_header, readable, peer_id, inline_threshold) {
+                match self.extract_payload(
+                    &frame_header,
+                    &readable[..total_len],
+                    peer_id,
+                    inline_threshold,
+                ) {
                     Ok(payload) => {
                         // Track if we freed a slot (non-inline payload)
                         if frame_header.has_slot_ref() && !result.slots_freed_for.contains(&peer_id)
@@ -490,7 +497,10 @@ impl ShmHost {
                             frame_header.id,
                             frame_header.method_id,
                         );
-                        let frame = Frame { desc, payload };
+                        let frame = match payload {
+                            Payload::Owned(data) => Frame::with_owned_payload(desc, data),
+                            _ => Frame::new(desc),
+                        };
                         result.messages.push((peer_id, frame));
                     }
                     Err(_e) => {
@@ -518,6 +528,14 @@ impl ShmHost {
                     stats: crate::diagnostic::PeerCallStats::new(),
                 })
                 .last_epoch = current_epoch;
+        }
+
+        // Prune pending_slots that guests have already freed
+        {
+            let var_pool = self.var_slot_pool();
+            for state in self.guests.values_mut() {
+                state.pending_slots.retain(|h| !var_pool.is_slot_free(h));
+            }
         }
 
         // Handle crashed and goodbye guests after the loop
@@ -562,6 +580,15 @@ impl ShmHost {
                 slot_idx: slot_ref.slot_idx,
                 generation: slot_ref.slot_generation,
             };
+
+            // Validate payload_len fits within the slot's size class
+            if let Some(slot_size) = var_pool.slot_size(slot_ref.class_idx) {
+                if payload_len > slot_size as usize {
+                    return Err(RecvError::PayloadTooLarge);
+                }
+            } else {
+                return Err(RecvError::SlotPtrInvalid);
+            }
 
             let payload_ptr = var_pool
                 .payload_ptr(handle)

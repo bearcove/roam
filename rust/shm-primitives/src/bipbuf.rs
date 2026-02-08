@@ -246,6 +246,15 @@ impl BipBufRaw {
     /// Returns a mutable slice on success. The caller must write data
     /// into this slice and then call `commit(len)`.
     ///
+    /// # Safety contract
+    ///
+    /// This method returns `&mut [u8]` from `&self` because `BipBufRaw`
+    /// operates on shared memory — the header and data live in an external
+    /// memory region, not in `self`. The caller must ensure:
+    /// - Only one producer calls `try_grant`/`commit` at a time (SPSC invariant)
+    /// - The returned slice is not used after `commit` is called
+    /// - `BipBufRaw` is only constructed via `unsafe fn from_raw`
+    ///
     /// shm[impl shm.bipbuf.grant]
     #[allow(clippy::mut_from_ref)]
     pub fn try_grant(&self, len: u32) -> Option<&mut [u8]> {
@@ -306,11 +315,21 @@ impl BipBufRaw {
     ///
     /// Makes the data visible to the consumer.
     ///
+    /// # Panics
+    ///
+    /// Panics if `write + len` would exceed the buffer capacity.
+    ///
     /// shm[impl shm.bipbuf.commit]
     pub fn commit(&self, len: u32) {
         let header = self.header();
         let write = header.write.load(Ordering::Relaxed);
-        header.write.store(write + len, Ordering::Release);
+        let new_write = write.checked_add(len).expect("commit: write overflow");
+        assert!(
+            new_write <= header.capacity,
+            "commit: write ({new_write}) exceeds capacity ({})",
+            header.capacity,
+        );
+        header.write.store(new_write, Ordering::Release);
     }
 
     /// Try to read contiguous bytes from the buffer.
@@ -363,11 +382,20 @@ impl BipBufRaw {
     ///
     /// Advances the read cursor, freeing space for the producer.
     ///
+    /// # Panics
+    ///
+    /// Panics if `read + len` would overflow or exceed the buffer capacity.
+    ///
     /// shm[impl shm.bipbuf.release]
     pub fn release(&self, len: u32) {
         let header = self.header();
         let read = header.read.load(Ordering::Relaxed);
-        let new_read = read + len;
+        let new_read = read.checked_add(len).expect("release: read overflow");
+        assert!(
+            new_read <= header.capacity,
+            "release: read ({new_read}) exceeds capacity ({})",
+            header.capacity,
+        );
 
         let watermark = header.watermark.load(Ordering::Acquire);
         if watermark != 0 && new_read >= watermark {
@@ -390,7 +418,7 @@ impl BipBufRaw {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(loom)))]
 mod tests {
     use super::*;
     use crate::region::HeapRegion;
