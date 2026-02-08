@@ -970,14 +970,14 @@ async fn slot_exhaustion_should_not_corrupt_channel_state() {
 /// 3. Concurrent calls on same connection cause channel confusion
 /// 4. Protocol violation occurs due to orphaned/misrouted channels
 #[test(tokio::test)]
-#[ignore = "times out with BipBuffer v2 transport — needs investigation"]
 async fn streaming_errors_should_not_corrupt_channel_state() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("streaming_errors.shm");
 
-    // Configure with very few slots to increase contention
+    // BipBuffer needs enough capacity for 20 concurrent streaming calls
+    // with multiple in-flight messages each (v2 frames are larger than v1 MsgDesc)
     let config = SegmentConfig {
-        bipbuf_capacity: 4096,
+        bipbuf_capacity: 65536,
         max_guests: 4,
         ..SegmentConfig::default()
     };
