@@ -1036,3 +1036,41 @@ impl ConnectionHandle {
         unsafe { self.bind_response_channels_with_plan(response_ptr, response_plan) };
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[tokio::test]
+    async fn drain_task_exits_when_driver_data_send_fails() {
+        let (driver_tx, mut driver_rx) = crate::runtime::channel(8);
+        let handle = ConnectionHandle::new(driver_tx, Role::Initiator, u32::MAX);
+
+        let (stream_tx, stream_rx) = crate::channel::<Vec<u8>>();
+        let mut args = (stream_rx,);
+        let call_task = tokio::spawn(async move { handle.call(42, &mut args).await });
+
+        let call_msg = driver_rx
+            .recv()
+            .await
+            .expect("expected DriverMessage::Call");
+        assert!(
+            matches!(call_msg, DriverMessage::Call { .. }),
+            "first message must be DriverMessage::Call"
+        );
+
+        drop(driver_rx);
+
+        stream_tx.send(&b"payload".to_vec()).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(20)).await;
+
+        drop(call_msg);
+
+        let result = call_task.await.unwrap();
+        assert!(
+            matches!(result, Err(TransportError::DriverGone)),
+            "call should fail once driver side is gone"
+        );
+    }
+}
