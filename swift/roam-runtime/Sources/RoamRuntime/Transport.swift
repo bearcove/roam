@@ -111,8 +111,9 @@ public final class NIOTransport: MessageTransport, @unchecked Sendable {
     }
 
     // Internal testing hook to verify socket options configured by connect().
-    func socketKeepaliveEnabled() async throws -> Int32 {
-        try await channel.getOption(ChannelOptions.socketOption(.so_keepalive))
+    func socketKeepaliveEnabled() async throws -> Bool {
+        let value = try await channel.getOption(ChannelOptions.socketOption(.so_keepalive)).get()
+        return value != 0
     }
 }
 

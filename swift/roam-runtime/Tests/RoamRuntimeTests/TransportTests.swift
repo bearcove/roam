@@ -46,7 +46,7 @@ struct TransportTests {
         do {
             let transport = try await connect(host: "127.0.0.1", port: server.port)
             let keepalive = try await transport.socketKeepaliveEnabled()
-            #expect(keepalive != 0)
+            #expect(keepalive)
             try? await transport.close()
         } catch {
             await stopLocalServer(server)
