@@ -346,10 +346,13 @@ public final class Driver: @unchecked Sendable {
                 }
             }
         } catch {
+            eventContinuation.finish()
             await failAllPending()
+            try? await transport.close()
             throw error
         }
         await failAllPending()
+        try? await transport.close()
     }
 
     /// Handle a task message from a handler.

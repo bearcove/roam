@@ -508,7 +508,7 @@ where
                 }
             }
             _ => {
-                trace!("handle_driver_message: SweepPendingResponses is a no-op for shm driver");
+                trace!("handle_driver_message: ignoring unsupported driver message variant");
                 return Ok(());
             }
         };
@@ -2035,7 +2035,7 @@ impl MultiPeerHostDriver {
             _ => {
                 trace!(
                     peer = ?peer_id,
-                    "MultiPeerHostDriver: SweepPendingResponses is a no-op for shm driver"
+                    "MultiPeerHostDriver: ignoring unsupported driver message variant"
                 );
                 return Ok(());
             }
