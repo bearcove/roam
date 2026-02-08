@@ -1823,9 +1823,9 @@ where
             loop {
                 sleep(PENDING_RESPONSE_SWEEP_INTERVAL).await;
                 if watchdog_tx
-                    .send(DriverMessage::SweepPendingResponses)
-                    .await
+                    .try_send(DriverMessage::SweepPendingResponses)
                     .is_err()
+                    && watchdog_tx.is_closed()
                 {
                     break;
                 }
