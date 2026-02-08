@@ -506,6 +506,11 @@ where
                     metadata,
                 }
             }
+            DriverMessage::SweepPendingResponses => {
+                // Session driver's stale-response watchdog is link-local and does not
+                // map to any wire message on SHM transports.
+                return Ok(());
+            }
         };
         trace!("handle_driver_message: sending wire message");
         MessageTransport::send(&mut self.io, &wire_msg).await?;
@@ -2025,6 +2030,11 @@ impl MultiPeerHostDriver {
                     request_id,
                     metadata,
                 }
+            }
+            DriverMessage::SweepPendingResponses => {
+                // Session driver's stale-response watchdog is link-local and does not
+                // map to any wire message on SHM transports.
+                return Ok(());
             }
         };
 
