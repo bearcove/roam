@@ -597,3 +597,35 @@ impl std::fmt::Display for RxError {
 }
 
 impl std::error::Error for RxError {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use roam_wire::ConnectionId;
+    use std::time::Duration;
+
+    #[tokio::test]
+    async fn tx_drop_fallback_handles_closed_driver_channel() {
+        let (driver_tx, mut driver_rx) = crate::runtime::channel::<DriverMessage>(1);
+
+        driver_tx
+            .try_send(DriverMessage::Data {
+                conn_id: ConnectionId::ROOT,
+                channel_id: 777,
+                payload: vec![1],
+            })
+            .expect("seed message should fill single-slot channel");
+
+        let (inner_tx, _inner_rx) = crate::runtime::channel::<Vec<u8>>(1);
+        let mut tx: Tx<Vec<u8>> = Tx::new(4242, inner_tx);
+        tx.conn_id = ConnectionId::ROOT;
+        tx.sender = SenderSlot::empty();
+        tx.driver_tx = DriverTxSlot::new(driver_tx.clone());
+
+        drop(driver_rx.recv().await);
+        drop(driver_rx);
+
+        drop(tx);
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}

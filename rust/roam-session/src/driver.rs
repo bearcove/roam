@@ -2098,4 +2098,64 @@ mod tests {
             "driver should send Goodbye(call.response.stale-timeout) before closing"
         );
     }
+
+    #[tokio::test]
+    async fn response_delivery_to_dropped_receiver_is_non_fatal() {
+        let peer_hello = Message::Hello(Hello::V4 {
+            max_payload_size: 1024 * 1024,
+            initial_channel_credit: 64 * 1024,
+        });
+        let transport = TestTransport::scripted(vec![Ok(Some(peer_hello))], vec![]);
+        let probe = transport.clone();
+
+        let (_handle, _incoming, mut driver) =
+            initiate_framed(transport, HandshakeConfig::default(), NoDispatcher)
+                .await
+                .expect("handshake should succeed");
+
+        let (response_tx, response_rx) = crate::runtime::oneshot();
+        drop(response_rx);
+        driver
+            .connections
+            .get_mut(&ConnectionId::ROOT)
+            .expect("root connection exists")
+            .pending_responses
+            .insert(
+                9001,
+                PendingResponse {
+                    created_at: Instant::now(),
+                    warned_stale: false,
+                    tx: response_tx,
+                },
+            );
+
+        driver
+            .handle_message(Message::Response {
+                conn_id: ConnectionId::ROOT,
+                request_id: 9001,
+                metadata: vec![],
+                channels: vec![],
+                payload: vec![7, 7, 7],
+            })
+            .await
+            .expect("dropped response receiver should not be fatal");
+
+        assert!(
+            !driver
+                .connections
+                .get(&ConnectionId::ROOT)
+                .expect("root connection exists")
+                .pending_responses
+                .contains_key(&9001),
+            "pending response should be removed even when receiver was dropped"
+        );
+
+        let sent = probe.sent_messages();
+        assert!(
+            !sent
+                .iter()
+                .any(|msg| matches!(msg, Message::Goodbye { .. })),
+            "dropped receiver path should not send Goodbye"
+        );
+    }
 }
