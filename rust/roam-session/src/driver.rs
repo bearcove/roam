@@ -30,7 +30,7 @@ use std::future::Future;
 use std::io;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use facet::Facet;
 
@@ -731,11 +731,16 @@ struct ConnectionState {
     /// If None, inherits from the parent link's dispatcher.
     dispatcher: Option<Box<dyn ServiceDispatcher>>,
     /// Pending responses (request_id -> response sender).
-    pending_responses:
-        HashMap<u64, crate::runtime::OneshotSender<Result<ResponseData, TransportError>>>,
+    pending_responses: HashMap<u64, PendingResponse>,
     /// In-flight server requests with their abort handles.
     /// r[impl call.cancel.best-effort] - We track abort handles to allow best-effort cancellation.
     in_flight_server_requests: HashMap<u64, crate::runtime::AbortHandle>,
+}
+
+struct PendingResponse {
+    created_at: Instant,
+    warned_stale: bool,
+    tx: crate::runtime::OneshotSender<Result<ResponseData, TransportError>>,
 }
 
 impl ConnectionState {
@@ -769,8 +774,8 @@ impl ConnectionState {
 
     /// Fail all pending responses (connection closing).
     fn fail_pending_responses(&mut self) {
-        for (_, tx) in self.pending_responses.drain() {
-            let _ = tx.send(Err(TransportError::ConnectionClosed));
+        for (_, pending) in self.pending_responses.drain() {
+            let _ = pending.tx.send(Err(TransportError::ConnectionClosed));
         }
     }
 
@@ -895,6 +900,9 @@ pub struct Driver<T, D> {
     diagnostic_state: Option<Arc<crate::diagnostic::DiagnosticState>>,
 }
 
+const PENDING_RESPONSE_SWEEP_INTERVAL: Duration = Duration::from_secs(5);
+const PENDING_RESPONSE_WARN_AFTER: Duration = Duration::from_secs(30);
+
 impl<T, D> Driver<T, D>
 where
     T: MessageTransport,
@@ -1017,7 +1025,14 @@ where
             } => {
                 // Store pending response in the connection's state
                 if let Some(conn) = self.connections.get_mut(&conn_id) {
-                    conn.pending_responses.insert(request_id, response_tx);
+                    conn.pending_responses.insert(
+                        request_id,
+                        PendingResponse {
+                            created_at: Instant::now(),
+                            warned_stale: false,
+                            tx: response_tx,
+                        },
+                    );
                 } else {
                     // Unknown connection - fail the call
                     let _ = response_tx.send(Err(TransportError::ConnectionClosed));
@@ -1121,6 +1136,9 @@ where
                     metadata,
                 };
                 self.io.send(&wire_msg).await?;
+            }
+            DriverMessage::SweepPendingResponses => {
+                self.sweep_pending_response_staleness();
             }
         }
         Ok(())
@@ -1286,9 +1304,24 @@ where
                 if let Some(conn) = self.connections.get_mut(&conn_id)
                     && let Some(tx) = conn.pending_responses.remove(&request_id)
                 {
-                    let _ = tx.send(Ok(ResponseData { payload, channels }));
+                    if tx.tx.send(Ok(ResponseData { payload, channels })).is_err() {
+                        warn!(
+                            conn_id = conn_id.raw(),
+                            request_id, "response receiver dropped before delivery"
+                        );
+                    }
+                } else if !self.connections.contains_key(&conn_id) {
+                    warn!(
+                        conn_id = conn_id.raw(),
+                        request_id, "received response for unknown conn_id"
+                    );
+                    return Err(self.goodbye("message.conn-id").await);
+                } else {
+                    warn!(
+                        conn_id = conn_id.raw(),
+                        request_id, "received response for unknown request_id"
+                    );
                 }
-                // Unknown conn_id or request_id - ignore
             }
             Message::Cancel {
                 conn_id,
@@ -1550,6 +1583,26 @@ where
             context: String::new(),
         }
     }
+
+    fn sweep_pending_response_staleness(&mut self) {
+        let now = Instant::now();
+        for (conn_id, conn) in self.connections.iter_mut() {
+            for (request_id, pending) in conn.pending_responses.iter_mut() {
+                let age = now.saturating_duration_since(pending.created_at);
+                if age >= PENDING_RESPONSE_WARN_AFTER && !pending.warned_stale {
+                    pending.warned_stale = true;
+                    let _ = conn_id;
+                    let _ = request_id;
+                    warn!(
+                        conn_id = conn_id.raw(),
+                        request_id = *request_id,
+                        age_ms = age.as_millis(),
+                        "pending response has gone stale"
+                    );
+                }
+            }
+        }
+    }
 }
 
 // ============================================================================
@@ -1712,6 +1765,20 @@ where
         diagnostic_state: None,
     };
 
+    let watchdog_tx = driver.driver_tx.clone();
+    spawn(async move {
+        loop {
+            sleep(PENDING_RESPONSE_SWEEP_INTERVAL).await;
+            if watchdog_tx
+                .send(DriverMessage::SweepPendingResponses)
+                .await
+                .is_err()
+            {
+                break;
+            }
+        }
+    });
+
     Ok((handle, incoming_connections_rx, driver))
 }
 
@@ -1762,6 +1829,9 @@ impl Clone for NoDispatcher {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::VecDeque;
+    use std::sync::{Arc, Mutex as StdMutex};
+    use std::time::Duration;
 
     #[test]
     fn test_backoff_calculation() {
@@ -1770,5 +1840,163 @@ mod tests {
         assert_eq!(policy.backoff_for_attempt(2), Duration::from_millis(200));
         assert_eq!(policy.backoff_for_attempt(3), Duration::from_millis(400));
         assert_eq!(policy.backoff_for_attempt(10), Duration::from_secs(5));
+    }
+
+    #[derive(Clone)]
+    struct TestTransport {
+        state: Arc<StdMutex<TestTransportState>>,
+        last_decoded: Vec<u8>,
+    }
+
+    struct TestTransportState {
+        sent: Vec<Message>,
+        recv_timeout_queue: VecDeque<std::io::Result<Option<Message>>>,
+        recv_queue: VecDeque<std::io::Result<Option<Message>>>,
+    }
+
+    impl TestTransport {
+        fn scripted(
+            recv_timeout_queue: Vec<std::io::Result<Option<Message>>>,
+            recv_queue: Vec<std::io::Result<Option<Message>>>,
+        ) -> Self {
+            Self {
+                state: Arc::new(StdMutex::new(TestTransportState {
+                    sent: Vec::new(),
+                    recv_timeout_queue: recv_timeout_queue.into(),
+                    recv_queue: recv_queue.into(),
+                })),
+                last_decoded: Vec::new(),
+            }
+        }
+
+        fn sent_messages(&self) -> Vec<Message> {
+            self.state.lock().unwrap().sent.clone()
+        }
+    }
+
+    impl MessageTransport for TestTransport {
+        fn send(
+            &mut self,
+            msg: &Message,
+        ) -> impl std::future::Future<Output = std::io::Result<()>> + Send {
+            let state = self.state.clone();
+            let msg = msg.clone();
+            async move {
+                state.lock().unwrap().sent.push(msg);
+                Ok(())
+            }
+        }
+
+        fn recv_timeout(
+            &mut self,
+            _timeout: Duration,
+        ) -> impl std::future::Future<Output = std::io::Result<Option<Message>>> + Send {
+            let state = self.state.clone();
+            async move {
+                state
+                    .lock()
+                    .unwrap()
+                    .recv_timeout_queue
+                    .pop_front()
+                    .unwrap_or(Ok(None))
+            }
+        }
+
+        fn recv(
+            &mut self,
+        ) -> impl std::future::Future<Output = std::io::Result<Option<Message>>> + Send {
+            let state = self.state.clone();
+            async move {
+                state
+                    .lock()
+                    .unwrap()
+                    .recv_queue
+                    .pop_front()
+                    .unwrap_or(Ok(None))
+            }
+        }
+
+        fn last_decoded(&self) -> &[u8] {
+            &self.last_decoded
+        }
+    }
+
+    #[tokio::test]
+    async fn response_with_unknown_conn_id_is_protocol_violation() {
+        let peer_hello = Message::Hello(Hello::V4 {
+            max_payload_size: 1024 * 1024,
+            initial_channel_credit: 64 * 1024,
+        });
+        let unknown_conn_response = Message::Response {
+            conn_id: ConnectionId::new(999),
+            request_id: 7,
+            metadata: vec![],
+            channels: vec![],
+            payload: vec![1, 2, 3],
+        };
+        let transport = TestTransport::scripted(
+            vec![Ok(Some(peer_hello))],
+            vec![Ok(Some(unknown_conn_response))],
+        );
+        let probe = transport.clone();
+
+        let (_handle, _incoming, driver) =
+            initiate_framed(transport, HandshakeConfig::default(), NoDispatcher)
+                .await
+                .expect("handshake should succeed");
+
+        let err = driver.run().await.expect_err("driver should fail loudly");
+        assert!(matches!(
+            err,
+            ConnectionError::ProtocolViolation { rule_id, .. } if rule_id == "message.conn-id"
+        ));
+
+        let sent = probe.sent_messages();
+        assert!(
+            sent.iter().any(|msg| matches!(
+                msg,
+                Message::Goodbye { conn_id, reason }
+                    if conn_id.is_root() && reason == "message.conn-id"
+            )),
+            "driver should send Goodbye(message.conn-id) before closing"
+        );
+    }
+
+    #[tokio::test]
+    async fn response_with_unknown_request_id_is_ignored() {
+        let peer_hello = Message::Hello(Hello::V4 {
+            max_payload_size: 1024 * 1024,
+            initial_channel_credit: 64 * 1024,
+        });
+        let unknown_request_response = Message::Response {
+            conn_id: ConnectionId::ROOT,
+            request_id: 4242,
+            metadata: vec![],
+            channels: vec![],
+            payload: vec![9, 9, 9],
+        };
+        let transport = TestTransport::scripted(
+            vec![Ok(Some(peer_hello))],
+            vec![Ok(Some(unknown_request_response)), Ok(None)],
+        );
+        let probe = transport.clone();
+
+        let (_handle, _incoming, driver) =
+            initiate_framed(transport, HandshakeConfig::default(), NoDispatcher)
+                .await
+                .expect("handshake should succeed");
+
+        driver
+            .run()
+            .await
+            .expect("unknown request_id response should not tear down the link");
+
+        let sent = probe.sent_messages();
+        assert!(
+            !sent
+                .iter()
+                .any(|msg| matches!(msg, Message::Goodbye { .. })),
+            "unknown request_id response must be ignored, not escalated"
+        );
     }
 }
