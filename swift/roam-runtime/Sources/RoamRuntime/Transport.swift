@@ -12,8 +12,8 @@ private let debugEnabled = ProcessInfo.processInfo.environment["ROAM_DEBUG"] != 
 func debugLog(_ message: String) {
     if debugEnabled {
         let pid = ProcessInfo.processInfo.processIdentifier
-        let data = "[\(pid)] DEBUG: \(message)\n".data(using: .utf8)!
-        FileHandle.standardError.write(data)
+        let line = "[\(pid)] DEBUG: \(message)"
+        NSLog("%@", line)
     }
 }
 
