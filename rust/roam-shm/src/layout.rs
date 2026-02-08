@@ -515,6 +515,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::field_reassign_with_default)]
     fn invalid_configs_are_rejected() {
         let mut config = SegmentConfig::default();
 

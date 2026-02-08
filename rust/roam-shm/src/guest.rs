@@ -430,6 +430,11 @@ impl ShmGuest {
         // Get the payload bytes
         let payload_data: &[u8] = frame.payload.as_slice(&frame.desc);
         let payload_len = payload_data.len() as u32;
+
+        if payload_len > self.layout.config.max_payload_size {
+            return Err(SendError::PayloadTooLarge);
+        }
+
         let threshold = self.layout.config.effective_inline_threshold();
 
         if should_inline(payload_len, threshold) {
@@ -443,10 +448,6 @@ impl ShmGuest {
             self.g2h_buf.commit(total_len);
         } else {
             // Slot-ref path: allocate from VarSlotPool, copy payload, write ref frame
-            if payload_len > self.layout.config.max_payload_size {
-                return Err(SendError::PayloadTooLarge);
-            }
-
             // shm[impl shm.payload.slot]
             let Some(handle) = self.var_pool.alloc(payload_len, self.peer_id.get()) else {
                 // shm[impl shm.slot.exhaustion]
