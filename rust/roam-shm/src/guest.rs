@@ -333,7 +333,7 @@ impl ShmGuest {
         let layout = config.layout().map_err(AttachError::InvalidHeader)?;
 
         // Find and claim an empty peer slot
-        // shm[impl shm.guest.attach.cas]
+        // shm[impl shm.guest.attach]
         let mut peer_id = None;
         for i in 1..=header.max_guests as u8 {
             let Some(id) = PeerId::from_index(i - 1) else {
@@ -611,7 +611,7 @@ impl ShmGuest {
 
     /// Update heartbeat.
     ///
-    /// shm[impl shm.heartbeat]
+    /// shm[impl shm.crash.heartbeat]
     pub fn heartbeat(&self) {
         let entry = self.peer_entry();
         let now = std::time::SystemTime::now()
@@ -697,6 +697,8 @@ pub enum SendError {
     /// Host has signaled goodbye
     HostGoodbye,
     /// BipBuffer is full (backpressure)
+    ///
+    /// shm[impl shm.bipbuf.full]
     RingFull,
     /// Payload is too large for configured limits
     PayloadTooLarge,

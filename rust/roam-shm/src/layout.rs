@@ -390,6 +390,8 @@ pub struct SegmentLayout {
 }
 
 /// BipBuffer header size in bytes (2 cache lines).
+///
+/// shm[impl shm.bipbuf.layout]
 pub const BIPBUF_HEADER_SIZE: usize = shm_primitives::BIPBUF_HEADER_SIZE;
 
 impl SegmentLayout {

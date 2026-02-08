@@ -242,7 +242,7 @@ fn many_messages_in_sequence() {
     }
 }
 
-/// shm[verify shm.ring.full]
+/// shm[verify shm.bipbuf.full]
 #[test]
 fn ring_backpressure() {
     // Use a small ring to test backpressure

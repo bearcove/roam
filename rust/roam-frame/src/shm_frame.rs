@@ -29,6 +29,8 @@ pub const FLAG_SLOT_REF: u8 = 0x01;
 /// [12..20) method_id:   u64 LE  — method hash (0 for non-Request)
 /// [20..24) payload_len: u32 LE  — actual payload byte count
 /// ```
+///
+/// shm[impl shm.frame.header]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ShmFrameHeader {
     pub total_len: u32,
@@ -88,6 +90,8 @@ impl ShmFrameHeader {
 /// [4..8)   slot_idx:        u32 LE
 /// [8..12)  slot_generation: u32 LE
 /// ```
+///
+/// shm[impl shm.frame.slot-ref]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SlotRef {
     pub class_idx: u8,
@@ -133,6 +137,9 @@ fn align4(n: u32) -> u32 {
 /// Returns the total number of bytes written (the frame's `total_len`).
 ///
 /// The buffer must be large enough: `align4(24 + payload.len())`.
+///
+/// shm[impl shm.frame.inline]
+/// shm[impl shm.frame.alignment]
 pub fn encode_inline_frame(
     msg_type: u8,
     id: u32,
@@ -199,6 +206,8 @@ pub fn inline_frame_size(payload_len: u32) -> u32 {
 }
 
 /// Returns true if a payload should go inline given the threshold.
+///
+/// shm[impl shm.frame.threshold]
 #[inline]
 pub fn should_inline(payload_len: u32, inline_threshold: u32) -> bool {
     SHM_FRAME_HEADER_SIZE as u32 + payload_len <= inline_threshold

@@ -8,6 +8,8 @@ use crate::sync::{AtomicU32, Ordering};
 ///
 /// The data region of `capacity` bytes immediately follows this header,
 /// 64-byte aligned.
+///
+/// shm[impl shm.bipbuf.header]
 #[repr(C, align(64))]
 pub struct BipBufHeader {
     // --- Cache line 0: producer-owned ---
@@ -33,6 +35,8 @@ pub const BIPBUF_HEADER_SIZE: usize = 128;
 
 impl BipBufHeader {
     /// Initialize a new BipBuffer header.
+    ///
+    /// shm[impl shm.bipbuf.initialization]
     pub fn init(&mut self, capacity: u32) {
         assert!(capacity > 0, "capacity must be > 0");
         self.write = AtomicU32::new(0);
@@ -241,6 +245,8 @@ impl BipBufRaw {
     ///
     /// Returns a mutable slice on success. The caller must write data
     /// into this slice and then call `commit(len)`.
+    ///
+    /// shm[impl shm.bipbuf.grant]
     #[allow(clippy::mut_from_ref)]
     pub fn try_grant(&self, len: u32) -> Option<&mut [u8]> {
         if len == 0 {
@@ -299,6 +305,8 @@ impl BipBufRaw {
     /// Commit `len` bytes that were previously granted.
     ///
     /// Makes the data visible to the consumer.
+    ///
+    /// shm[impl shm.bipbuf.commit]
     pub fn commit(&self, len: u32) {
         let header = self.header();
         let write = header.write.load(Ordering::Relaxed);
@@ -308,6 +316,8 @@ impl BipBufRaw {
     /// Try to read contiguous bytes from the buffer.
     ///
     /// Returns a slice of readable bytes, or `None` if the buffer is empty.
+    ///
+    /// shm[impl shm.bipbuf.read]
     pub fn try_read(&self) -> Option<&[u8]> {
         let header = self.header();
         let read = header.read.load(Ordering::Relaxed);
@@ -352,6 +362,8 @@ impl BipBufRaw {
     /// Release `len` bytes from the consumer side.
     ///
     /// Advances the read cursor, freeing space for the producer.
+    ///
+    /// shm[impl shm.bipbuf.release]
     pub fn release(&self, len: u32) {
         let header = self.header();
         let read = header.read.load(Ordering::Relaxed);
