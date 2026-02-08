@@ -397,6 +397,7 @@ where
         &mut self,
         msg: DriverMessage,
     ) -> Result<(), ShmConnectionError> {
+        #[allow(unreachable_patterns)]
         let wire_msg = match msg {
             DriverMessage::Call {
                 conn_id,
@@ -506,7 +507,7 @@ where
                     metadata,
                 }
             }
-            DriverMessage::SweepPendingResponses => {
+            _ => {
                 trace!("handle_driver_message: SweepPendingResponses is a no-op for shm driver");
                 return Ok(());
             }
@@ -1913,6 +1914,7 @@ impl MultiPeerHostDriver {
         peer_id: PeerId,
         msg: DriverMessage,
     ) -> Result<(), ShmConnectionError> {
+        #[allow(unreachable_patterns)]
         let wire_msg = match msg {
             DriverMessage::Call {
                 conn_id,
@@ -2030,9 +2032,9 @@ impl MultiPeerHostDriver {
                     metadata,
                 }
             }
-            DriverMessage::SweepPendingResponses => {
+            _ => {
                 trace!(
-                    peer = %peer_id,
+                    peer = ?peer_id,
                     "MultiPeerHostDriver: SweepPendingResponses is a no-op for shm driver"
                 );
                 return Ok(());
