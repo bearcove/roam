@@ -315,27 +315,31 @@ public final class Driver: @unchecked Sendable {
             readerTask.cancel()
             eventContinuation.finish()
         }
+        do {
+            // Process events
+            eventLoop: for await event in eventStream {
+                switch event {
+                case .incomingMessage(let msg):
+                    try await handleMessage(msg)
 
-        // Process events
-        for await event in eventStream {
-            switch event {
-            case .incomingMessage(let msg):
-                try await handleMessage(msg)
+                case .taskMessage(let msg):
+                    try await handleTaskMessage(msg)
 
-            case .taskMessage(let msg):
-                try await handleTaskMessage(msg)
+                case .command(let cmd):
+                    await handleCommand(cmd)
 
-            case .command(let cmd):
-                await handleCommand(cmd)
+                case .callTimeout(let requestId):
+                    await handleCallTimeout(requestId: requestId)
 
-            case .callTimeout(let requestId):
-                await handleCallTimeout(requestId: requestId)
-
-            case .transportClosed:
-                await failAllPending()
-                return
+                case .transportClosed:
+                    break eventLoop
+                }
             }
+        } catch {
+            await failAllPending()
+            throw error
         }
+        await failAllPending()
     }
 
     /// Handle a task message from a handler.
@@ -375,6 +379,24 @@ public final class Driver: @unchecked Sendable {
     private func handleCommand(_ cmd: HandleCommand) async {
         switch cmd {
         case .call(let requestId, let methodId, let payload, let timeout, let responseTx):
+            let msg = Message.request(
+                connId: 0,
+                requestId: requestId,
+                methodId: methodId,
+                metadata: [],
+                channels: [],  // TODO: Collect channel IDs for streaming methods
+                payload: payload
+            )
+            do {
+                try await transport.send(msg)
+            } catch {
+                warnLog("transport send failed for request_id \(requestId): \(String(describing: error))")
+                responseTx(.failure(.transportError(String(describing: error))))
+                await failAllPending()
+                eventContinuation.finish()
+                return
+            }
+
             let timeoutTask: Task<Void, Never>?
             if let timeout {
                 let timeoutNs = Self.timeoutToNanoseconds(timeout)
@@ -400,24 +422,6 @@ public final class Driver: @unchecked Sendable {
                 timeoutTask?.cancel()
                 responseTx(.failure(.connectionClosed))
                 return
-            }
-
-            let msg = Message.request(
-                connId: 0,
-                requestId: requestId,
-                methodId: methodId,
-                metadata: [],
-                channels: [],  // TODO: Collect channel IDs for streaming methods
-                payload: payload
-            )
-            do {
-                try await transport.send(msg)
-            } catch {
-                let pending = await state.removePendingResponse(requestId)
-                pending?.timeoutTask?.cancel()
-                pending?.responseTx(.failure(.connectionClosed))
-                await failAllPending()
-                eventContinuation.finish()
             }
         }
     }
@@ -480,9 +484,16 @@ public final class Driver: @unchecked Sendable {
             // r[impl call.lifecycle.single-response] - One response per request.
             // r[impl call.complete] - Response completes the call.
             // r[impl call.response.encoding] - Response payload is Postcard-encoded.
-            let pending = await state.removePendingResponse(requestId)
-            pending?.timeoutTask?.cancel()
-            pending?.responseTx(.success(payload))
+            guard let pending = await state.removePendingResponse(requestId) else {
+                warnLog(
+                    "received response for unknown request_id \(requestId) "
+                        + "(payload_size=\(payload.count)); closing connection"
+                )
+                try await sendGoodbye("call.response.unknown-request-id")
+                throw ConnectionError.protocolViolation(rule: "call.response.unknown-request-id")
+            }
+            pending.timeoutTask?.cancel()
+            pending.responseTx(.success(payload))
 
         case .cancel(_, let requestId):
             // r[impl call.cancel.message] - Cancel requests termination.
@@ -638,6 +649,7 @@ public final class Driver: @unchecked Sendable {
 public enum ConnectionError: Error {
     case connectionClosed
     case timeout
+    case transportError(String)
     case goodbye(reason: String)
     case protocolViolation(rule: String)
     case handshakeFailed(String)

@@ -33,6 +33,10 @@ private actor ScriptedTransport: MessageTransport {
         failNextRequestSend = true
     }
 
+    func enqueueMessage(_ message: Message) {
+        enqueueInbound(.message(message))
+    }
+
     func sent() -> [Message] {
         sentMessages
     }
@@ -142,6 +146,16 @@ private func isConnectionClosed(_ error: Error) -> Bool {
     return false
 }
 
+private func isTransportError(_ error: Error) -> Bool {
+    guard let connError = error as? ConnectionError else {
+        return false
+    }
+    if case .transportError = connError {
+        return true
+    }
+    return false
+}
+
 private func isTimeout(_ error: Error) -> Bool {
     guard let connError = error as? ConnectionError else {
         return false
@@ -193,13 +207,52 @@ struct ConnectionFailureTests {
 
         do {
             _ = try await handle.callRaw(methodId: 1, payload: [], timeout: 2.0)
+            Issue.record("expected transport error")
+        } catch {
+            #expect(isTransportError(error))
+        }
+
+        try? await transport.close()
+        _ = try? await driverTask.value
+    }
+
+    @Test func unknownResponseRequestIdClosesConnectionAndFailsPendingCalls() async throws {
+        let transport = ScriptedTransport()
+        let (handle, driver) = try await establishInitiator(
+            transport: transport,
+            dispatcher: NoopDispatcher()
+        )
+        let driverTask = Task {
+            try await driver.run()
+        }
+
+        let callTask = Task { try await handle.callRaw(methodId: 1, payload: [], timeout: 2.0) }
+        try? await Task.sleep(nanoseconds: 10_000_000)
+        await transport.enqueueMessage(
+            .response(connId: 0, requestId: 999, metadata: [], channels: [], payload: [7, 7, 7])
+        )
+
+        do {
+            _ = try await callTask.value
             Issue.record("expected connection closed")
         } catch {
             #expect(isConnectionClosed(error))
         }
 
-        try? await transport.close()
-        _ = try? await driverTask.value
+        do {
+            try await driverTask.value
+            Issue.record("expected protocol violation")
+        } catch {
+            guard let connError = error as? ConnectionError else {
+                Issue.record("expected ConnectionError, got \(error)")
+                return
+            }
+            if case .protocolViolation(let rule) = connError {
+                #expect(rule == "call.response.unknown-request-id")
+            } else {
+                Issue.record("expected protocol violation, got \(connError)")
+            }
+        }
     }
 
     @Test func manyCallsFailFastWhenConnectionDrops() async throws {

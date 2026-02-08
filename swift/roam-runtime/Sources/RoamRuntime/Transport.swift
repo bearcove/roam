@@ -17,6 +17,12 @@ func debugLog(_ message: String) {
     }
 }
 
+func warnLog(_ message: String) {
+    let pid = ProcessInfo.processInfo.processIdentifier
+    let data = "[\(pid)] WARN: \(message)\n".data(using: .utf8)!
+    FileHandle.standardError.write(data)
+}
+
 // MARK: - Transport Protocol
 
 /// Protocol for message transport.
