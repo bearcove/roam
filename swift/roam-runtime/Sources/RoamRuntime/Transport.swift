@@ -109,6 +109,11 @@ public final class NIOTransport: MessageTransport, @unchecked Sendable {
     public func close() async throws {
         try await channel.close()
     }
+
+    // Internal testing hook to verify socket options configured by connect().
+    func socketKeepaliveEnabled() async throws -> Int32 {
+        try await channel.getOption(ChannelOptions.socketOption(.so_keepalive))
+    }
 }
 
 // MARK: - Length Prefix Decoder
