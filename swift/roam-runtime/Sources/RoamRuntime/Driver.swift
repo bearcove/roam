@@ -395,6 +395,16 @@ public final class Driver: @unchecked Sendable {
                 return
             }
 
+            let inserted = await state.addPendingResponse(
+                requestId,
+                responseTx,
+                timeoutTask: nil
+            )
+            guard inserted else {
+                responseTx(.failure(.connectionClosed))
+                return
+            }
+
             let msg = Message.request(
                 connId: 0,
                 requestId: requestId,
@@ -406,20 +416,12 @@ public final class Driver: @unchecked Sendable {
             do {
                 try await transport.send(msg)
             } catch {
+                let pending = await state.removePendingResponse(requestId)
+                pending?.timeoutTask?.cancel()
                 warnLog("transport send failed for request_id \(requestId): \(String(describing: error))")
                 responseTx(.failure(.transportError(String(describing: error))))
                 await failAllPending()
                 eventContinuation.finish()
-                return
-            }
-
-            let inserted = await state.addPendingResponse(
-                requestId,
-                responseTx,
-                timeoutTask: nil
-            )
-            guard inserted else {
-                responseTx(.failure(.connectionClosed))
                 return
             }
 

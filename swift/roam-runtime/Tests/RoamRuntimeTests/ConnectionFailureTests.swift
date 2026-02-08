@@ -221,6 +221,26 @@ private func isProtocolViolation(_ error: Error, rule: String) -> Bool {
 }
 
 struct ConnectionFailureTests {
+    @Test func immediateResponseAfterSendStillCompletesCall() async throws {
+        let transport = ScriptedTransport(autoRespondRequestCount: 1)
+        let (handle, driver) = try await establishInitiator(
+            transport: transport,
+            dispatcher: NoopDispatcher()
+        )
+        let driverTask = Task {
+            try await driver.run()
+        }
+        defer {
+            Task {
+                try? await transport.close()
+            }
+            driverTask.cancel()
+        }
+
+        let payload = try await handle.callRaw(methodId: 1, payload: [1, 2, 3], timeout: 2.0)
+        #expect(payload == [0])
+    }
+
     @Test func callFailsFastAfterDriverExit() async throws {
         let transport = ScriptedTransport()
         let (handle, driver) = try await establishInitiator(
