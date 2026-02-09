@@ -66,6 +66,7 @@ public func requestShmBootstrapTicket(controlSocketPath: String, sid: String) th
             }
 
             let doorbellFd = try recvPassedFd(fd: fd)
+            try writeFdAck(fd: fd)
             let shmFd: Int32
             do {
                 shmFd = try recvPassedFd(fd: fd)
@@ -269,6 +270,11 @@ private func recvPassedFd(fd: Int32) throws -> Int32 {
     }
 
     return receivedFd
+}
+
+private func writeFdAck(fd: Int32) throws {
+    let ack: [UInt8] = [0xA5]
+    try writeAll(fd: fd, bytes: ack)
 }
 
 private func cmsgAlign(_ n: Int) -> Int {

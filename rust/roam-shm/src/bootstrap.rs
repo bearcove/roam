@@ -250,6 +250,7 @@ pub mod unix {
         let shm_file = OpenOptions::new().read(true).write(true).open(hub_path)?;
         let shm_fd = shm_file.as_raw_fd();
         send_fd(&stream, doorbell_fd).await?;
+        read_fd_ack(&mut stream).await?;
         send_fd(&stream, shm_fd).await?;
 
         Ok(())
@@ -265,6 +266,7 @@ pub mod unix {
 
         let (peer_id, hub_path) = read_response(&mut stream).await?;
         let doorbell_fd = recv_fd(&stream).await?;
+        write_fd_ack(&mut stream).await?;
         let shm_fd = recv_fd(&stream).await?;
 
         Ok(BootstrapTicket {
@@ -285,6 +287,21 @@ pub mod unix {
         stream.write_all(sid_bytes).await?;
         stream.flush().await?;
 
+        Ok(())
+    }
+
+    async fn write_fd_ack(stream: &mut UnixStream) -> Result<(), BootstrapError> {
+        stream.write_all(&[0xA5]).await?;
+        stream.flush().await?;
+        Ok(())
+    }
+
+    async fn read_fd_ack(stream: &mut UnixStream) -> Result<(), BootstrapError> {
+        let mut ack = [0u8; 1];
+        stream.read_exact(&mut ack).await?;
+        if ack[0] != 0xA5 {
+            return Err(BootstrapError::Protocol("bad fd ack".to_string()));
+        }
         Ok(())
     }
 
