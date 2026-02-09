@@ -247,7 +247,7 @@ async fn run_swift_generated_client_over_bootstrap_shm(scenario: &str) {
     let paths = SessionPaths::new(&container_root, sid.clone()).unwrap();
     let listener = unix::bind_control_socket(&paths).unwrap();
 
-    let mut host = ShmHost::create(&paths.shm_path(), SegmentConfig::default()).unwrap();
+    let mut host = ShmHost::create(paths.shm_path(), SegmentConfig::default()).unwrap();
     let ticket = host.add_peer(AddPeerOptions::default()).unwrap();
     let peer_id = ticket.peer_id;
     let doorbell_fd = ticket.doorbell_handle().as_raw_fd();
