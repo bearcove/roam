@@ -14,6 +14,23 @@ fn swift_package_path() -> PathBuf {
         .expect("swift package path")
 }
 
+fn swift_bootstrap_client_path() -> PathBuf {
+    let pkg = swift_package_path();
+    let candidates = [
+        pkg.join(".build/debug/shm-bootstrap-client"),
+        pkg.join(".build/arm64-apple-macosx/debug/shm-bootstrap-client"),
+        pkg.join(".build/x86_64-apple-macosx/debug/shm-bootstrap-client"),
+    ];
+
+    for candidate in candidates {
+        if candidate.exists() {
+            return candidate;
+        }
+    }
+
+    panic!("shm-bootstrap-client binary not found; ensure nextest setup built swift target");
+}
+
 #[tokio::test]
 async fn rust_host_bootstrap_to_swift_client() {
     let tmp = tempfile::Builder::new()
@@ -43,20 +60,13 @@ async fn rust_host_bootstrap_to_swift_client() {
         .await
     });
 
-    let pkg = swift_package_path();
+    let client_bin = swift_bootstrap_client_path();
     let control_sock = paths.control_sock_path();
     let sid_arg = "123e4567-e89b-12d3-a456-426614174000";
 
     let output = tokio::task::spawn_blocking(move || {
-        Command::new("swift")
-            .args([
-                "run",
-                "--package-path",
-                pkg.to_str().unwrap(),
-                "shm-bootstrap-client",
-                control_sock.to_str().unwrap(),
-                sid_arg,
-            ])
+        Command::new(client_bin)
+            .args([control_sock.to_str().unwrap(), sid_arg])
             .output()
             .expect("run swift bootstrap client")
     })
