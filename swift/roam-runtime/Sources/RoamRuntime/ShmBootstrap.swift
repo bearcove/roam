@@ -7,11 +7,13 @@ public struct ShmBootstrapTicket: Sendable {
     public let peerId: UInt8
     public let hubPath: String
     public let doorbellFd: Int32
+    public let shmFd: Int32
 
-    public init(peerId: UInt8, hubPath: String, doorbellFd: Int32) {
+    public init(peerId: UInt8, hubPath: String, doorbellFd: Int32, shmFd: Int32 = -1) {
         self.peerId = peerId
         self.hubPath = hubPath
         self.doorbellFd = doorbellFd
+        self.shmFd = shmFd
     }
 }
 
@@ -63,9 +65,21 @@ public func requestShmBootstrapTicket(controlSocketPath: String, sid: String) th
                 throw ShmBootstrapError.protocolError("hub path not utf-8")
             }
 
-            let passedFd = try recvPassedFd(fd: fd)
+            let doorbellFd = try recvPassedFd(fd: fd)
+            let shmFd: Int32
+            do {
+                shmFd = try recvPassedFd(fd: fd)
+            } catch {
+                close(doorbellFd)
+                throw error
+            }
             close(fd)
-            return ShmBootstrapTicket(peerId: response.peerId, hubPath: hubPath, doorbellFd: passedFd)
+            return ShmBootstrapTicket(
+                peerId: response.peerId,
+                hubPath: hubPath,
+                doorbellFd: doorbellFd,
+                shmFd: shmFd
+            )
 
         case shmBootstrapStatusError:
             let msg = String(bytes: response.payload, encoding: .utf8) ?? "bootstrap error"

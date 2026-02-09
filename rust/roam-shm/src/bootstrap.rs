@@ -196,11 +196,14 @@ pub struct BootstrapTicket {
     pub peer_id: PeerId,
     pub hub_path: PathBuf,
     pub doorbell_fd: std::os::fd::RawFd,
+    pub shm_fd: std::os::fd::RawFd,
 }
 
 #[cfg(unix)]
 pub mod unix {
     use super::*;
+    use std::fs::OpenOptions;
+    use std::os::fd::AsRawFd;
     use std::os::fd::RawFd;
 
     use roam_fdpass::{recv_fd, send_fd};
@@ -220,7 +223,7 @@ pub mod unix {
         UnixListener::bind(control_sock)
     }
 
-    /// Host side: accept one bootstrap connection and transfer doorbell fd.
+    /// Host side: accept one bootstrap connection and transfer doorbell fd + shm backing fd.
     pub async fn accept_and_send_ticket(
         listener: &UnixListener,
         expected_sid: &SessionId,
@@ -244,12 +247,15 @@ pub mod unix {
         }
 
         write_ok(&mut stream, peer_id, hub_path).await?;
+        let shm_file = OpenOptions::new().read(true).write(true).open(hub_path)?;
+        let shm_fd = shm_file.as_raw_fd();
         send_fd(&stream, doorbell_fd).await?;
+        send_fd(&stream, shm_fd).await?;
 
         Ok(())
     }
 
-    /// Guest side: connect to control socket, request ticket, and receive doorbell fd.
+    /// Guest side: connect to control socket, request ticket, and receive doorbell + shm fds.
     pub async fn request_ticket(
         control_sock: &Path,
         sid: &SessionId,
@@ -259,11 +265,13 @@ pub mod unix {
 
         let (peer_id, hub_path) = read_response(&mut stream).await?;
         let doorbell_fd = recv_fd(&stream).await?;
+        let shm_fd = recv_fd(&stream).await?;
 
         Ok(BootstrapTicket {
             peer_id,
             hub_path,
             doorbell_fd,
+            shm_fd,
         })
     }
 

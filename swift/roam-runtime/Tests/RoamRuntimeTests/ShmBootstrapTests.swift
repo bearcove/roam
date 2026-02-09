@@ -158,7 +158,8 @@ private func startBootstrapServer(
     responseStatus: UInt8,
     responsePeerId: UInt8,
     responsePayload: String,
-    sendFd: Int32?
+    sendDoorbellFd: Int32?,
+    sendShmFd: Int32?
 ) throws -> BootstrapServerHandle {
     let tmp = try XCTUnwrap(tempfile())
     let socketPath = tmp + "/control.sock"
@@ -202,7 +203,10 @@ private func startBootstrapServer(
             return
         }
 
-        if let fd = sendFd {
+        if let fd = sendDoorbellFd {
+            _ = sendPassedFd(sock: client, fd: fd)
+        }
+        if let fd = sendShmFd {
             _ = sendPassedFd(sock: client, fd: fd)
         }
     }
@@ -241,13 +245,17 @@ struct ShmBootstrapTests {
         let file = open("/dev/null", O_RDONLY)
         #expect(file >= 0)
         defer { close(file) }
+        let shmFile = open("/dev/null", O_RDONLY)
+        #expect(shmFile >= 0)
+        defer { close(shmFile) }
 
         let server = try startBootstrapServer(
             expectedSid: sid,
             responseStatus: 0,
             responsePeerId: 1,
             responsePayload: "/tmp/test.shm",
-            sendFd: file
+            sendDoorbellFd: file,
+            sendShmFd: shmFile
         )
         defer { server.thread.cancel() }
 
@@ -258,7 +266,10 @@ struct ShmBootstrapTests {
 
         let flags = fcntl(ticket.doorbellFd, F_GETFD)
         #expect(flags != -1)
+        let shmFlags = fcntl(ticket.shmFd, F_GETFD)
+        #expect(shmFlags != -1)
         close(ticket.doorbellFd)
+        close(ticket.shmFd)
     }
 
     @Test func failsWhenNoFdIsPassed() throws {
@@ -269,7 +280,8 @@ struct ShmBootstrapTests {
             responseStatus: 0,
             responsePeerId: 1,
             responsePayload: "/tmp/test.shm",
-            sendFd: nil
+            sendDoorbellFd: nil,
+            sendShmFd: nil
         )
         defer { server.thread.cancel() }
 
@@ -294,7 +306,8 @@ struct ShmBootstrapTests {
             responseStatus: 1,
             responsePeerId: 0,
             responsePayload: "sid mismatch",
-            sendFd: nil
+            sendDoorbellFd: nil,
+            sendShmFd: nil
         )
         defer { server.thread.cancel() }
 
