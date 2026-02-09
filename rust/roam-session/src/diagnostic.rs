@@ -79,8 +79,8 @@ pub fn dump_all_diagnostics() -> String {
     }
 
     // Dump registered method names for reference
-    if let Ok(names) = METHOD_NAMES.try_read() {
-        if !names.is_empty() {
+    if let Ok(names) = METHOD_NAMES.try_read()
+        && !names.is_empty() {
             let _ = writeln!(output, "Registered methods:");
             let mut sorted: Vec<_> = names.iter().collect();
             sorted.sort_by_key(|(id, _)| *id);
@@ -88,7 +88,6 @@ pub fn dump_all_diagnostics() -> String {
                 let _ = writeln!(output, "  0x{id:x} = {name}");
             }
         }
-    }
 
     output
 }
@@ -354,8 +353,7 @@ impl DiagnosticState {
                     elapsed.as_secs_f64()
                 );
                 if let Some(args) = &req.args {
-                    let args_str: Vec<_> =
-                        args.iter().map(|(k, v)| format!("{k}={v}")).collect();
+                    let args_str: Vec<_> = args.iter().map(|(k, v)| format!("{k}={v}")).collect();
                     if !args_str.is_empty() {
                         let _ = write!(output, " ({})", args_str.join(", "));
                     }
@@ -374,8 +372,7 @@ impl DiagnosticState {
                     elapsed.as_secs_f64()
                 );
                 if let Some(args) = &req.args {
-                    let args_str: Vec<_> =
-                        args.iter().map(|(k, v)| format!("{k}={v}")).collect();
+                    let args_str: Vec<_> = args.iter().map(|(k, v)| format!("{k}={v}")).collect();
                     if !args_str.is_empty() {
                         let _ = write!(output, " ({})", args_str.join(", "));
                     }
