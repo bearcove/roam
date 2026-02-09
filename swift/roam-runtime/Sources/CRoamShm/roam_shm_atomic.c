@@ -174,8 +174,22 @@ int roam_atomic_compare_exchange_u64(uint64_t *ptr, uint64_t *expected, uint64_t
 }
 
 int roam_recv_one_fd(int sockfd, int *out_fd) {
-  if (out_fd == NULL) {
+  int fds[1];
+  int rc = roam_recv_fds(sockfd, fds, 1);
+  if (rc <= 0) {
+    return rc;
+  }
+  *out_fd = fds[0];
+  return 1;
+}
+
+int roam_recv_fds(int sockfd, int *out_fds, int max_fds) {
+  if (out_fds == NULL || max_fds <= 0) {
     errno = EINVAL;
+    return -1;
+  }
+  if (max_fds > 8) {
+    errno = EOVERFLOW;
     return -1;
   }
 
@@ -185,7 +199,7 @@ int roam_recv_one_fd(int sockfd, int *out_fd) {
       .iov_len = 1,
   };
 
-  unsigned char cmsgbuf[CMSG_SPACE(sizeof(int) * 4)];
+  unsigned char cmsgbuf[CMSG_SPACE(sizeof(int) * 8)];
   memset(cmsgbuf, 0, sizeof(cmsgbuf));
 
   struct msghdr msg;
@@ -220,8 +234,13 @@ int roam_recv_one_fd(int sockfd, int *out_fd) {
     }
 
     int *fds = (int *)CMSG_DATA(cmsg);
-    *out_fd = fds[0];
-    return 1;
+    int count = (int)(data_len / sizeof(int));
+    if (count > max_fds) {
+      errno = EOVERFLOW;
+      return -1;
+    }
+    memcpy(out_fds, fds, (size_t)count * sizeof(int));
+    return count;
   }
 
   errno = ENOMSG;

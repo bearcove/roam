@@ -67,15 +67,9 @@ public func requestShmBootstrapTicket(controlSocketPath: String, sid: String) th
             }
 
             try writeFdAck(fd: fd)
-            let doorbellFd = try recvPassedFd(fd: fd)
-            try writeFdAck(fd: fd)
-            let shmFd: Int32
-            do {
-                shmFd = try recvPassedFd(fd: fd)
-            } catch {
-                close(doorbellFd)
-                throw error
-            }
+            let fds = try recvPassedFds(fd: fd, expected: 2)
+            let doorbellFd = fds[0]
+            let shmFd = fds[1]
             close(fd)
             return ShmBootstrapTicket(
                 peerId: response.peerId,
@@ -207,12 +201,15 @@ private func readExactly(fd: Int32, count: Int) throws -> [UInt8] {
     return out
 }
 
-private func recvPassedFd(fd: Int32) throws -> Int32 {
-    var receivedFd: Int32 = -1
+private func recvPassedFds(fd: Int32, expected: Int) throws -> [Int32] {
+    var out = [Int32](repeating: -1, count: max(expected, 1))
     while true {
-        let rc = roam_recv_one_fd(fd, &receivedFd)
-        if rc == 1 {
-            return receivedFd
+        let rc = roam_recv_fds(fd, &out, Int32(out.count))
+        if rc > 0 {
+            if rc < expected {
+                throw ShmBootstrapError.missingFileDescriptor
+            }
+            return Array(out.prefix(Int(rc)))
         }
         if rc == 0 {
             throw ShmBootstrapError.eof

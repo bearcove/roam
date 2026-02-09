@@ -42,4 +42,8 @@ int roam_atomic_compare_exchange_u64(uint64_t *ptr, uint64_t *expected, uint64_t
 // Returns -1 on error (errno is set).
 int roam_recv_one_fd(int sockfd, int *out_fd);
 
+// Receive up to `max_fds` fds from one SCM_RIGHTS message.
+// Returns number of fds received (>=1), 0 on EOF, -1 on error.
+int roam_recv_fds(int sockfd, int *out_fds, int max_fds);
+
 #endif

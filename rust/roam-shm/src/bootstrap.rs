@@ -206,7 +206,7 @@ pub mod unix {
     use std::os::fd::AsRawFd;
     use std::os::fd::RawFd;
 
-    use roam_fdpass::{recv_fd, send_fd};
+    use roam_fdpass::{recv_fds, send_fds};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::{UnixListener, UnixStream};
 
@@ -256,15 +256,9 @@ pub mod unix {
             .map_err(|e| BootstrapError::Protocol(format!("read ack0 failed: {e}")))?;
         let shm_file = OpenOptions::new().read(true).write(true).open(hub_path)?;
         let shm_fd = shm_file.as_raw_fd();
-        send_fd(&stream, doorbell_fd)
+        send_fds(&stream, &[doorbell_fd, shm_fd])
             .await
-            .map_err(|e| BootstrapError::Protocol(format!("send fd1 failed: {e}")))?;
-        read_fd_ack(&mut stream)
-            .await
-            .map_err(|e| BootstrapError::Protocol(format!("read ack1 failed: {e}")))?;
-        send_fd(&stream, shm_fd)
-            .await
-            .map_err(|e| BootstrapError::Protocol(format!("send fd2 failed: {e}")))?;
+            .map_err(|e| BootstrapError::Protocol(format!("send fds failed: {e}")))?;
 
         Ok(())
     }
@@ -287,15 +281,11 @@ pub mod unix {
         write_fd_ack(&mut stream)
             .await
             .map_err(|e| BootstrapError::Protocol(format!("write ack0 failed: {e}")))?;
-        let doorbell_fd = recv_fd(&stream)
+        let mut fds = recv_fds(&stream, 2)
             .await
-            .map_err(|e| BootstrapError::Protocol(format!("recv fd1 failed: {e}")))?;
-        write_fd_ack(&mut stream)
-            .await
-            .map_err(|e| BootstrapError::Protocol(format!("write ack1 failed: {e}")))?;
-        let shm_fd = recv_fd(&stream)
-            .await
-            .map_err(|e| BootstrapError::Protocol(format!("recv fd2 failed: {e}")))?;
+            .map_err(|e| BootstrapError::Protocol(format!("recv fds failed: {e}")))?;
+        let doorbell_fd = fds.remove(0);
+        let shm_fd = fds.remove(0);
 
         Ok(BootstrapTicket {
             peer_id,
