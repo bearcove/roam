@@ -238,12 +238,13 @@ private func readU32LE(from bytes: [UInt8], at index: Int) -> UInt32 {
 
 @inline(__always)
 private func readU64LE(from bytes: [UInt8], at index: Int) -> UInt64 {
-    UInt64(bytes[index])
-        | (UInt64(bytes[index + 1]) << 8)
-        | (UInt64(bytes[index + 2]) << 16)
-        | (UInt64(bytes[index + 3]) << 24)
-        | (UInt64(bytes[index + 4]) << 32)
-        | (UInt64(bytes[index + 5]) << 40)
-        | (UInt64(bytes[index + 6]) << 48)
-        | (UInt64(bytes[index + 7]) << 56)
+    let b0 = UInt64(bytes[index])
+    let b1 = UInt64(bytes[index + 1]) << 8
+    let b2 = UInt64(bytes[index + 2]) << 16
+    let b3 = UInt64(bytes[index + 3]) << 24
+    let b4 = UInt64(bytes[index + 4]) << 32
+    let b5 = UInt64(bytes[index + 5]) << 40
+    let b6 = UInt64(bytes[index + 6]) << 48
+    let b7 = UInt64(bytes[index + 7]) << 56
+    return b0 | b1 | b2 | b3 | b4 | b5 | b6 | b7
 }

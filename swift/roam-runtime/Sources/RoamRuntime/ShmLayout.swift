@@ -217,14 +217,15 @@ private func readU32LE(_ bytes: [UInt8], _ at: Int) -> UInt32 {
 
 @inline(__always)
 private func readU64LE(_ bytes: [UInt8], _ at: Int) -> UInt64 {
-    UInt64(bytes[at])
-        | (UInt64(bytes[at + 1]) << 8)
-        | (UInt64(bytes[at + 2]) << 16)
-        | (UInt64(bytes[at + 3]) << 24)
-        | (UInt64(bytes[at + 4]) << 32)
-        | (UInt64(bytes[at + 5]) << 40)
-        | (UInt64(bytes[at + 6]) << 48)
-        | (UInt64(bytes[at + 7]) << 56)
+    let b0 = UInt64(bytes[at])
+    let b1 = UInt64(bytes[at + 1]) << 8
+    let b2 = UInt64(bytes[at + 2]) << 16
+    let b3 = UInt64(bytes[at + 3]) << 24
+    let b4 = UInt64(bytes[at + 4]) << 32
+    let b5 = UInt64(bytes[at + 5]) << 40
+    let b6 = UInt64(bytes[at + 6]) << 48
+    let b7 = UInt64(bytes[at + 7]) << 56
+    return b0 | b1 | b2 | b3 | b4 | b5 | b6 | b7
 }
 
 private func ensureBounds(field: String, offset: UInt64, size: UInt64, regionSize: UInt64) throws {
