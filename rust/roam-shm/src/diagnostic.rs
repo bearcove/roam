@@ -1,4 +1,4 @@
-//! SHM diagnostic utilities for SIGUSR1 dumps.
+//! SHM diagnostic utilities for application-triggered diagnostics dumps.
 //!
 //! Provides functions to dump the state of shared memory segments,
 //! slot pools, BipBuffers, and peer connections.

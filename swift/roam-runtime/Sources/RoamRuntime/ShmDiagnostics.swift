@@ -13,8 +13,8 @@ public struct ShmTransportDiagnosticsSnapshot: Sendable {
 
 public enum ShmDiagnosticsRegistry {
     private static let lock = NSLock()
-    private static var enabled = false
-    private static var providers: [UUID: () -> ShmTransportDiagnosticsSnapshot] = [:]
+    nonisolated(unsafe) private static var enabled = false
+    nonisolated(unsafe) private static var providers: [UUID: () -> ShmTransportDiagnosticsSnapshot] = [:]
 
     public static func setEnabled(_ value: Bool) {
         lock.lock()

@@ -286,7 +286,7 @@ pub struct ShmDriver<T, D> {
     incoming_response_rx: mpsc::Receiver<IncomingConnectionResponse>,
     incoming_response_tx: mpsc::Sender<IncomingConnectionResponse>,
 
-    /// Diagnostic state for tracking in-flight requests (for SIGUSR1 dumps).
+    /// Diagnostic state for tracking in-flight requests (for diagnostics dumps).
     diagnostic_state: Option<Arc<DiagnosticState>>,
 }
 
@@ -1147,7 +1147,7 @@ where
     establish_guest_with_diagnostics(transport, dispatcher, None)
 }
 
-/// Create a guest connection with optional diagnostic state for SIGUSR1 dumps.
+/// Create a guest connection with optional diagnostic state for diagnostics dumps.
 ///
 /// Same as [`establish_guest`] but allows passing a [`roam_session::diagnostic::DiagnosticState`]
 /// for tracking in-flight requests and channels.
@@ -1256,7 +1256,7 @@ struct PeerConnectionState {
     /// Channel for incoming connection responses (Accept/Reject from app code).
     incoming_response_tx: mpsc::Sender<IncomingConnectionResponse>,
 
-    /// Diagnostic state for tracking in-flight requests (for SIGUSR1 dumps).
+    /// Diagnostic state for tracking in-flight requests (for diagnostics dumps).
     diagnostic_state: Option<Arc<DiagnosticState>>,
 }
 
@@ -1367,7 +1367,7 @@ pub struct MultiPeerHostDriver {
 
     /// Registered SHM segment view for global diagnostics dumps.
     #[cfg(feature = "diagnostics")]
-    shm_diagnostic_view: Option<Arc<crate::diagnostic::ShmDiagnosticView>>,
+    _shm_diagnostic_view: Option<Arc<crate::diagnostic::ShmDiagnosticView>>,
 }
 
 /// Handle for controlling a running MultiPeerHostDriver.
@@ -1589,7 +1589,7 @@ impl MultiPeerHostDriverBuilder {
             incoming_response_tx,
             pending_sends: AuditableDequeMap::new("pending_sends[", 1024),
             #[cfg(feature = "diagnostics")]
-            shm_diagnostic_view,
+            _shm_diagnostic_view: shm_diagnostic_view,
         };
 
         let driver_handle = MultiPeerHostDriverHandle { control_tx };
@@ -2973,7 +2973,7 @@ impl MultiPeerHostDriverHandle {
             .await
     }
 
-    /// Register a peer after it's ready, with optional diagnostic state for SIGUSR1 dumps.
+    /// Register a peer after it's ready, with optional diagnostic state for diagnostics dumps.
     ///
     /// Same as [`Self::add_peer`] but allows passing a [`DiagnosticState`] to track
     /// in-flight requests for debugging.

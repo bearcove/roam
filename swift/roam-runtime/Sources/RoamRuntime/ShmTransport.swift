@@ -198,11 +198,13 @@ public final class ShmGuestTransport: MessageTransport, @unchecked Sendable {
     public let negotiated: Negotiated
 
     private let lock = NSLock()
+    private let diagnosticsId = UUID()
     private var runtime: ShmGuestRuntime
     private var maxFrameSize: Int
     private var closed = false
 
     public init(runtime: ShmGuestRuntime) {
+        let id = diagnosticsId
         self.runtime = runtime
         self.maxFrameSize = Int(runtime.header.maxPayloadSize) + 64
         self.negotiated = Negotiated(
@@ -210,6 +212,19 @@ public final class ShmGuestTransport: MessageTransport, @unchecked Sendable {
             initialCredit: runtime.header.initialCredit,
             maxConcurrentRequests: UInt32.max
         )
+        ShmDiagnosticsRegistry.register(id: diagnosticsId) { [weak self] in
+            self?.diagnosticsSnapshot()
+                ?? ShmTransportDiagnosticsSnapshot(
+                    id: id,
+                    peerId: 0,
+                    maxPayloadSize: 0,
+                    initialCredit: 0,
+                    maxFrameSize: 0,
+                    closed: true,
+                    hostGoodbye: true,
+                    timestamp: Date()
+                )
+        }
     }
 
     public static func attach(ticket: ShmBootstrapTicket) throws -> ShmGuestTransport {
@@ -314,6 +329,26 @@ public final class ShmGuestTransport: MessageTransport, @unchecked Sendable {
             }
             closed = true
             runtime.detach()
+        }
+        ShmDiagnosticsRegistry.unregister(id: diagnosticsId)
+    }
+
+    deinit {
+        ShmDiagnosticsRegistry.unregister(id: diagnosticsId)
+    }
+
+    public func diagnosticsSnapshot() -> ShmTransportDiagnosticsSnapshot {
+        lock.withLock {
+            ShmTransportDiagnosticsSnapshot(
+                id: diagnosticsId,
+                peerId: runtime.peerId,
+                maxPayloadSize: runtime.header.maxPayloadSize,
+                initialCredit: runtime.header.initialCredit,
+                maxFrameSize: maxFrameSize,
+                closed: closed,
+                hostGoodbye: runtime.isHostGoodbye(),
+                timestamp: Date()
+            )
         }
     }
 }
