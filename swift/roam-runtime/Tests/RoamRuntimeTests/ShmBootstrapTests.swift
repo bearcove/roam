@@ -93,7 +93,8 @@ private func sendPassedFd(sock: Int32, fd: Int32) -> Bool {
 }
 
 private func cmsgAlign(_ n: Int) -> Int {
-    (n + 3) & ~3
+    let align = MemoryLayout<Int>.size
+    return (n + align - 1) & ~(align - 1)
 }
 
 private func cmsgLen(_ dataLen: Int) -> Int {

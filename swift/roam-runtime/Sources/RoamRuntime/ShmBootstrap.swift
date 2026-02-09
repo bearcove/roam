@@ -236,32 +236,43 @@ private func recvPassedFd(fd: Int32) throws -> Int32 {
                     break
                 }
 
-                guard msg.msg_controllen >= MemoryLayout<cmsghdr>.size else {
+                let controlLen = Int(msg.msg_controllen)
+                guard controlLen >= MemoryLayout<cmsghdr>.size else {
                     return nil
                 }
                 guard let base = controlBuf.baseAddress else {
                     return nil
                 }
 
-                let cmsg = base.assumingMemoryBound(to: cmsghdr.self)
-                if cmsg.pointee.cmsg_level != SOL_SOCKET || cmsg.pointee.cmsg_type != SCM_RIGHTS {
-                    return nil
+                let headerAligned = cmsgAlign(MemoryLayout<cmsghdr>.size)
+                let minRightsLen = cmsgLen(MemoryLayout<Int32>.size)
+                var offset = 0
+                while offset + MemoryLayout<cmsghdr>.size <= controlLen {
+                    let hdrPtr = base.advanced(by: offset).assumingMemoryBound(to: cmsghdr.self)
+                    let hdr = hdrPtr.pointee
+                    let hdrLen = Int(hdr.cmsg_len)
+                    if hdrLen < headerAligned || offset + hdrLen > controlLen {
+                        break
+                    }
+
+                    if hdr.cmsg_level == SOL_SOCKET
+                        && hdr.cmsg_type == SCM_RIGHTS
+                        && hdrLen >= minRightsLen
+                    {
+                        let dataOffset = offset + cmsgDataOffset()
+                        guard dataOffset + MemoryLayout<Int32>.size <= controlLen else {
+                            return nil
+                        }
+                        return base
+                            .advanced(by: dataOffset)
+                            .assumingMemoryBound(to: Int32.self)
+                            .pointee
+                    }
+
+                    offset += cmsgAlign(hdrLen)
                 }
 
-                let minLen = cmsgLen(MemoryLayout<Int32>.size)
-                if Int(cmsg.pointee.cmsg_len) < minLen {
-                    return nil
-                }
-
-                let dataOffset = cmsgDataOffset()
-                guard dataOffset + MemoryLayout<Int32>.size <= controlBuf.count else {
-                    return nil
-                }
-
-                return base
-                    .advanced(by: dataOffset)
-                    .assumingMemoryBound(to: Int32.self)
-                    .pointee
+                return nil
             }
         }
     }
@@ -279,7 +290,8 @@ private func writeFdAck(fd: Int32) throws {
 }
 
 private func cmsgAlign(_ n: Int) -> Int {
-    (n + 3) & ~3
+    let align = MemoryLayout<Int>.size
+    return (n + align - 1) & ~(align - 1)
 }
 
 private func cmsgLen(_ dataLen: Int) -> Int {

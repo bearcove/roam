@@ -1274,6 +1274,11 @@ enum ControlCommand {
         diagnostic_state: Option<Arc<DiagnosticState>>,
         response: oneshot::Sender<(ConnectionHandle, IncomingConnections)>,
     },
+    /// Release a previously reserved peer slot.
+    ReleasePeer {
+        peer_id: PeerId,
+        response: oneshot::Sender<()>,
+    },
 }
 
 /// Multi-peer host driver for hub topology.
@@ -1950,6 +1955,13 @@ impl MultiPeerHostDriver {
                         peer_id
                     );
                 }
+            }
+            ControlCommand::ReleasePeer { peer_id, response } => {
+                self.peers.remove(&peer_id);
+                self.doorbells.remove(&peer_id);
+                self.pending_sends.remove(&peer_id);
+                self.host.release_peer(peer_id);
+                let _ = response.send(());
             }
         }
     }
@@ -3006,6 +3018,26 @@ impl MultiPeerHostDriverHandle {
         response_rx
             .await
             .map_err(|_| ShmConnectionError::Io(std::io::Error::other("driver failed to add peer")))
+    }
+
+    /// Release a reserved peer slot.
+    ///
+    /// Call this when a bootstrap/spawn attempt fails after `create_peer`.
+    pub async fn release_peer(&self, peer_id: PeerId) -> Result<(), ShmConnectionError> {
+        let (response_tx, response_rx) = oneshot::channel();
+        let cmd = ControlCommand::ReleasePeer {
+            peer_id,
+            response: response_tx,
+        };
+
+        self.control_tx
+            .send(cmd)
+            .await
+            .map_err(|_| ShmConnectionError::Io(std::io::Error::other("driver has shut down")))?;
+
+        response_rx.await.map_err(|_| {
+            ShmConnectionError::Io(std::io::Error::other("driver failed to release peer"))
+        })
     }
 }
 
