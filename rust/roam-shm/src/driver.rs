@@ -1263,19 +1263,19 @@ struct PeerConnectionState {
 /// Command to control the multi-peer host driver.
 enum ControlCommand {
     /// Create a new peer slot and return a spawn ticket (calls host.add_peer()).
-    CreatePeer {
+    Create {
         options: crate::spawn::AddPeerOptions,
         response: oneshot::Sender<Result<crate::spawn::SpawnTicket, std::io::Error>>,
     },
     /// Register a peer dynamically with a dispatcher.
-    AddPeer {
+    Add {
         peer_id: PeerId,
         dispatcher: Box<dyn ServiceDispatcher>,
         diagnostic_state: Option<Arc<DiagnosticState>>,
         response: oneshot::Sender<(ConnectionHandle, IncomingConnections)>,
     },
     /// Release a previously reserved peer slot.
-    ReleasePeer {
+    Release {
         peer_id: PeerId,
         response: oneshot::Sender<()>,
     },
@@ -1796,12 +1796,12 @@ impl MultiPeerHostDriver {
     /// Handle a control command.
     async fn handle_control_command(&mut self, cmd: ControlCommand) {
         match cmd {
-            ControlCommand::CreatePeer { options, response } => {
+            ControlCommand::Create { options, response } => {
                 // Call host.add_peer() to create a spawn ticket
                 let result = self.host.add_peer(options);
                 let _ = response.send(result);
             }
-            ControlCommand::AddPeer {
+            ControlCommand::Add {
                 peer_id,
                 dispatcher,
                 diagnostic_state,
@@ -1956,7 +1956,7 @@ impl MultiPeerHostDriver {
                     );
                 }
             }
-            ControlCommand::ReleasePeer { peer_id, response } => {
+            ControlCommand::Release { peer_id, response } => {
                 self.peers.remove(&peer_id);
                 self.doorbells.remove(&peer_id);
                 self.pending_sends.remove(&peer_id);
@@ -2934,7 +2934,7 @@ impl MultiPeerHostDriverHandle {
     ) -> Result<crate::spawn::SpawnTicket, ShmConnectionError> {
         let (response_tx, response_rx) = oneshot::channel();
 
-        let cmd = ControlCommand::CreatePeer {
+        let cmd = ControlCommand::Create {
             options,
             response: response_tx,
         };
@@ -3003,7 +3003,7 @@ impl MultiPeerHostDriverHandle {
     {
         let (response_tx, response_rx) = oneshot::channel();
 
-        let cmd = ControlCommand::AddPeer {
+        let cmd = ControlCommand::Add {
             peer_id,
             dispatcher: Box::new(dispatcher),
             diagnostic_state,
@@ -3025,7 +3025,7 @@ impl MultiPeerHostDriverHandle {
     /// Call this when a bootstrap/spawn attempt fails after `create_peer`.
     pub async fn release_peer(&self, peer_id: PeerId) -> Result<(), ShmConnectionError> {
         let (response_tx, response_rx) = oneshot::channel();
-        let cmd = ControlCommand::ReleasePeer {
+        let cmd = ControlCommand::Release {
             peer_id,
             response: response_tx,
         };
