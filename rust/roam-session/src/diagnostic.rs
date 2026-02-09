@@ -80,14 +80,15 @@ pub fn dump_all_diagnostics() -> String {
 
     // Dump registered method names for reference
     if let Ok(names) = METHOD_NAMES.try_read()
-        && !names.is_empty() {
-            let _ = writeln!(output, "Registered methods:");
-            let mut sorted: Vec<_> = names.iter().collect();
-            sorted.sort_by_key(|(id, _)| *id);
-            for (id, name) in sorted {
-                let _ = writeln!(output, "  0x{id:x} = {name}");
-            }
+        && !names.is_empty()
+    {
+        let _ = writeln!(output, "Registered methods:");
+        let mut sorted: Vec<_> = names.iter().collect();
+        sorted.sort_by_key(|(id, _)| *id);
+        for (id, name) in sorted {
+            let _ = writeln!(output, "  0x{id:x} = {name}");
         }
+    }
 
     output
 }
