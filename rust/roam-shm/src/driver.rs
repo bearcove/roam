@@ -1163,6 +1163,13 @@ pub fn establish_guest_with_diagnostics<D>(
 where
     D: ServiceDispatcher,
 {
+    #[cfg(feature = "diagnostics")]
+    let diagnostic_state = diagnostic_state.or_else(|| {
+        let state = Arc::new(DiagnosticState::new("shm-guest"));
+        roam_session::diagnostic::register_diagnostic_state(&state);
+        Some(state)
+    });
+
     // Get config from segment header (already read during attach)
     let config = transport.config();
     let negotiated = ShmNegotiated {
@@ -1357,6 +1364,10 @@ pub struct MultiPeerHostDriver {
     /// When host slots are exhausted, messages are queued here and retried
     /// when the guest rings the doorbell (indicating it has consumed messages).
     pending_sends: AuditableDequeMap<PeerId, Message>,
+
+    /// Registered SHM segment view for global diagnostics dumps.
+    #[cfg(feature = "diagnostics")]
+    shm_diagnostic_view: Option<Arc<crate::diagnostic::ShmDiagnosticView>>,
 }
 
 /// Handle for controlling a running MultiPeerHostDriver.
@@ -1402,6 +1413,13 @@ impl MultiPeerHostDriverBuilder {
         HashMap<PeerId, IncomingConnections>,
         MultiPeerHostDriverHandle,
     ) {
+        #[cfg(feature = "diagnostics")]
+        let shm_diagnostic_view = {
+            let view = Arc::new(crate::diagnostic::ShmDiagnosticView::from_host(&self.host));
+            crate::diagnostic::register_shm_diagnostic_view(&view);
+            Some(view)
+        };
+
         let config = self.host.config();
         let negotiated = ShmNegotiated {
             max_payload_size: config.max_payload_size,
@@ -1449,6 +1467,18 @@ impl MultiPeerHostDriverBuilder {
             // Create channel for incoming connection requests from this peer
             let (incoming_connections_tx, incoming_connections_rx) = mpsc::channel(64);
 
+            #[cfg(feature = "diagnostics")]
+            let peer_diagnostic_state = {
+                let state = Arc::new(DiagnosticState::new(format!(
+                    "shm-host-peer-{}",
+                    peer_id.get()
+                )));
+                roam_session::diagnostic::register_diagnostic_state(&state);
+                Some(state)
+            };
+            #[cfg(not(feature = "diagnostics"))]
+            let peer_diagnostic_state: Option<Arc<DiagnosticState>> = None;
+
             // Create per-peer incoming response forwarder
             let peer_incoming_response_tx = incoming_response_tx.clone();
             let (peer_response_tx, mut peer_response_rx) =
@@ -1477,7 +1507,7 @@ impl MultiPeerHostDriverBuilder {
                     pending_connects: HashMap::new(),
                     incoming_connections_tx: Some(incoming_connections_tx),
                     incoming_response_tx: peer_response_tx,
-                    diagnostic_state: None,
+                    diagnostic_state: peer_diagnostic_state,
                 },
             );
 
@@ -1558,6 +1588,8 @@ impl MultiPeerHostDriverBuilder {
             incoming_response_rx,
             incoming_response_tx,
             pending_sends: AuditableDequeMap::new("pending_sends[", 1024),
+            #[cfg(feature = "diagnostics")]
+            shm_diagnostic_view,
         };
 
         let driver_handle = MultiPeerHostDriverHandle { control_tx };
@@ -1771,6 +1803,15 @@ impl MultiPeerHostDriver {
                 response,
             } => {
                 trace!("MultiPeerHostDriver: adding peer {:?} dynamically", peer_id);
+                #[cfg(feature = "diagnostics")]
+                let diagnostic_state = diagnostic_state.or_else(|| {
+                    let state = Arc::new(DiagnosticState::new(format!(
+                        "shm-host-peer-{}",
+                        peer_id.get()
+                    )));
+                    roam_session::diagnostic::register_diagnostic_state(&state);
+                    Some(state)
+                });
                 // Create single unified channel for all messages (Call/Data/Close/Response).
                 let (driver_tx, mut driver_rx) = mpsc::channel(256);
 

@@ -1,6 +1,64 @@
 import Foundation
 import RoamRuntime
 
+final class InteropCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+
+    func increment() -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        count += 1
+        return count
+    }
+}
+
+struct InteropDispatcher: ServiceDispatcher {
+    let counter: InteropCounter
+    let done: DispatchSemaphore
+
+    func preregister(methodId: UInt64, payload: [UInt8], registry: ChannelRegistry) async {
+        _ = methodId
+        _ = payload
+        _ = registry
+    }
+
+    func dispatch(
+        methodId: UInt64,
+        payload: [UInt8],
+        requestId: UInt64,
+        registry: ChannelRegistry,
+        taskTx: @escaping @Sendable (TaskMessage) -> Void
+    ) async {
+        _ = registry
+        switch methodId {
+        case 1:
+            let input = String(decoding: payload, as: UTF8.self)
+            let response = Array("swift-driver:\(input)".utf8)
+            taskTx(.response(requestId: requestId, payload: response))
+
+        case 2:
+            if payload.count >= 8 {
+                let channelId = payload.prefix(8).enumerated().reduce(UInt64(0)) { acc, elem in
+                    acc | (UInt64(elem.element) << (elem.offset * 8))
+                }
+                taskTx(.data(channelId: channelId, payload: Array("swift-channel".utf8)))
+                taskTx(.close(channelId: channelId))
+                taskTx(.response(requestId: requestId, payload: Array("channel-ok".utf8)))
+            } else {
+                taskTx(.response(requestId: requestId, payload: Array("bad-channel-id".utf8)))
+            }
+
+        default:
+            taskTx(.response(requestId: requestId, payload: Array("unknown-method".utf8)))
+        }
+
+        if counter.increment() >= 2 {
+            done.signal()
+        }
+    }
+}
+
 struct SpawnArgs {
     let hubPath: String
     let peerId: UInt8
@@ -199,6 +257,42 @@ case "remap-send":
     }
 
     guest.detach()
+    print("ok")
+    exit(0)
+
+case "driver-interop":
+    let done = DispatchSemaphore(value: 0)
+    let dispatcher = InteropDispatcher(counter: InteropCounter(), done: done)
+    let transport = ShmGuestTransport(runtime: guest)
+    let (_, driver) = establishShmGuest(
+        transport: transport,
+        dispatcher: dispatcher,
+        role: .acceptor,
+        acceptConnections: true
+    )
+
+    let runTask = Task {
+        do {
+            try await driver.run()
+        } catch {
+            // Transport closure is expected during teardown.
+        }
+    }
+
+    let result = done.wait(timeout: .now() + 5)
+    if result != .success {
+        runTask.cancel()
+        fail("timed out waiting for driver interop requests")
+    }
+
+    let closed = DispatchSemaphore(value: 0)
+    Task {
+        try? await transport.close()
+        closed.signal()
+    }
+    _ = closed.wait(timeout: .now() + 1)
+
+    runTask.cancel()
     print("ok")
     exit(0)
 
