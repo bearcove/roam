@@ -144,6 +144,75 @@ struct ShmVarSlotPoolTests {
         #expect(reused.classIdx == 0)
         #expect(reused.generation > first.generation)
     }
+
+    @Test func stressChurnEndsWithNoLeakedSlots() async throws {
+        let path = tmpPath("varslot-stress.bin")
+        defer { try? FileManager.default.removeItem(atPath: path) }
+
+        let classes = [
+            ShmVarSlotClass(slotSize: 64, count: 64),
+            ShmVarSlotClass(slotSize: 256, count: 32),
+        ]
+        let fixture = try makeSegmentFixture(path: path, classes: classes)
+        let header = try ShmSegmentView(region: fixture.region).header
+        let pool = ShmVarSlotPool(
+            region: fixture.region,
+            baseOffset: Int(header.varSlotPoolOffset),
+            classes: classes
+        )
+
+        let workers = 8
+        let iterations = 400
+
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            for worker in 0..<workers {
+                group.addTask {
+                    var rng = UInt64(0x9E3779B97F4A7C15 ^ UInt64(worker))
+                    var owned: [ShmVarSlotHandle] = []
+
+                    func next() -> UInt64 {
+                        rng = rng &* 6364136223846793005 &+ 1
+                        return rng
+                    }
+
+                    for _ in 0..<iterations {
+                        if owned.isEmpty || (next() % 3 != 0) {
+                            let size: UInt32 = (next() & 1) == 0 ? 48 : 180
+                            if let handle = try pool.alloc(size: size, owner: UInt8((worker % 3) + 1)) {
+                                if (next() & 1) == 0 {
+                                    try pool.markInFlight(handle)
+                                    try pool.free(handle)
+                                } else {
+                                    owned.append(handle)
+                                }
+                            }
+                        } else {
+                            let idx = Int(next() % UInt64(owned.count))
+                            let handle = owned.remove(at: idx)
+                            if try pool.slotState(handle) == .allocated {
+                                try pool.markInFlight(handle)
+                            }
+                            try pool.free(handle)
+                        }
+                    }
+
+                    for handle in owned {
+                        switch try pool.slotState(handle) {
+                        case .allocated:
+                            try pool.freeAllocated(handle)
+                        case .inFlight:
+                            try pool.free(handle)
+                        case .free:
+                            break
+                        }
+                    }
+                }
+            }
+            try await group.waitForAll()
+        }
+
+        #expect(try countNonFreeSlots(region: fixture.region, header: header, classes: classes) == 0)
+    }
 }
 
 struct ShmGuestLifecycleTests {
@@ -189,6 +258,35 @@ struct ShmGuestLifecycleTests {
         #expect(guest.peerId == 1)
         #expect(try guest.peerState() == .attached)
         _ = fixture
+    }
+
+    @Test func invalidTicketPeerIsRejected() throws {
+        let path = tmpPath("guest-invalid-peer.bin")
+        defer { try? FileManager.default.removeItem(atPath: path) }
+
+        let fixture = try makeSegmentFixture(path: path, maxGuests: 1, classes: [ShmVarSlotClass(slotSize: 256, count: 4)])
+
+        let ticket = ShmBootstrapTicket(peerId: 2, hubPath: path, doorbellFd: -1)
+        #expect(throws: ShmGuestAttachError.invalidTicketPeer(2)) {
+            _ = try ShmGuestRuntime.attach(ticket: ticket)
+        }
+        _ = fixture
+    }
+
+    @Test func hostGoodbyeRejectsAttach() throws {
+        let path = tmpPath("guest-host-goodbye.bin")
+        defer { try? FileManager.default.removeItem(atPath: path) }
+
+        let fixture = try makeSegmentFixture(path: path, classes: [ShmVarSlotClass(slotSize: 256, count: 4)])
+
+        var headerBytes = Array(try fixture.region.mutableBytes(at: 0, count: shmSegmentHeaderSize))
+        writeU32LE(1, to: &headerBytes, at: 68)
+        let headerView = try fixture.region.mutableBytes(at: 0, count: shmSegmentHeaderSize)
+        headerView.copyBytes(from: headerBytes)
+
+        #expect(throws: ShmGuestAttachError.hostGoodbye) {
+            _ = try ShmGuestRuntime.attach(path: path)
+        }
     }
 }
 
@@ -278,6 +376,34 @@ struct ShmDoorbellAndPayloadTests {
         #expect(try host.wait(timeoutMs: 1000) == .signaled)
         #expect(try host.wait(timeoutMs: 10) == .timeout)
     }
+
+    @Test func doorbellBurstSignalsCoalesce() throws {
+        let pair = try makeDoorbellPair()
+        defer {
+            close(pair.host)
+            close(pair.guest)
+        }
+
+        let host = ShmDoorbell(fd: pair.host)
+        let guest = ShmDoorbell(fd: pair.guest)
+
+        for _ in 0..<32 {
+            try guest.signal()
+        }
+
+        #expect(try host.wait(timeoutMs: 1000) == .signaled)
+        #expect(try host.wait(timeoutMs: 10) == .timeout)
+    }
+
+    @Test func doorbellPeerDeathIsReported() throws {
+        let pair = try makeDoorbellPair()
+        defer { close(pair.host) }
+
+        let host = ShmDoorbell(fd: pair.host)
+        close(pair.guest)
+
+        #expect(try host.wait(timeoutMs: 1000) == .peerDead)
+    }
 }
 
 struct ShmGuestRemapTests {
@@ -308,6 +434,36 @@ private func alignUp(_ value: Int, to alignment: Int) -> Int {
     return (value + mask) & ~mask
 }
 
+private func countNonFreeSlots(
+    region: ShmRegion,
+    header: ShmSegmentHeader,
+    classes: [ShmVarSlotClass]
+) throws -> Int {
+    let baseOffset = Int(header.varSlotPoolOffset)
+    let headerSize = classes.count * 64
+    var offset = baseOffset + headerSize
+    var nonFree = 0
+
+    for cls in classes {
+        offset = alignUp(offset, to: 16)
+        let metaBase = offset
+        offset += Int(cls.count) * 16
+        offset = alignUp(offset, to: 64)
+        offset += Int(cls.count) * Int(cls.slotSize)
+
+        for slot in 0..<Int(cls.count) {
+            let metaOffset = metaBase + slot * 16
+            let bytes = Array(try region.mutableBytes(at: metaOffset + 4, count: 4))
+            let state = readU32LE(bytes, at: 0)
+            if state != ShmSlotState.free.rawValue {
+                nonFree += 1
+            }
+        }
+    }
+
+    return nonFree
+}
+
 @inline(__always)
 private func writeU32LE(_ value: UInt32, to bytes: inout [UInt8], at index: Int) {
     let le = value.littleEndian
@@ -315,6 +471,14 @@ private func writeU32LE(_ value: UInt32, to bytes: inout [UInt8], at index: Int)
     bytes[index + 1] = UInt8(truncatingIfNeeded: le >> 8)
     bytes[index + 2] = UInt8(truncatingIfNeeded: le >> 16)
     bytes[index + 3] = UInt8(truncatingIfNeeded: le >> 24)
+}
+
+@inline(__always)
+private func readU32LE(_ bytes: [UInt8], at index: Int) -> UInt32 {
+    UInt32(bytes[index])
+        | (UInt32(bytes[index + 1]) << 8)
+        | (UInt32(bytes[index + 2]) << 16)
+        | (UInt32(bytes[index + 3]) << 24)
 }
 
 @inline(__always)

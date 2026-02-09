@@ -138,6 +138,70 @@ case "remap-recv":
 
     fail("timed out waiting for remap receive scenario")
 
+case "remap-send":
+    let firstPayload = [UInt8](repeating: 0xCD, count: 3000)
+    let first = ShmGuestFrame(msgType: 4, id: 301, methodId: 0, payload: firstPayload)
+    do {
+        try guest.send(frame: first)
+    } catch {
+        fail("failed to send first remap-send payload: \(error)")
+    }
+
+    var gotStart = false
+    let deadline = Date().addingTimeInterval(2.5)
+    while Date() < deadline {
+        do {
+            _ = try? guest.checkRemap()
+            if let frame = try guest.receive(),
+                frame.id == 401,
+                frame.payload == Array("start-second-send".utf8)
+            {
+                gotStart = true
+                break
+            }
+        } catch {
+            fail("failed while waiting for remap-send trigger: \(error)")
+        }
+        usleep(10_000)
+    }
+
+    if !gotStart {
+        fail("timed out waiting for remap-send trigger")
+    }
+
+    let secondPayload = [UInt8](repeating: 0xEF, count: 3000)
+    let second = ShmGuestFrame(msgType: 4, id: 302, methodId: 0, payload: secondPayload)
+    do {
+        try guest.send(frame: second)
+    } catch {
+        fail("failed to send second remap-send payload: \(error)")
+    }
+
+    var gotAck = false
+    let ackDeadline = Date().addingTimeInterval(2.0)
+    while Date() < ackDeadline {
+        do {
+            if let frame = try guest.receive(),
+                frame.id == 402,
+                frame.payload == Array("send-remap-ack".utf8)
+            {
+                gotAck = true
+                break
+            }
+        } catch {
+            fail("failed waiting for remap-send ack: \(error)")
+        }
+        usleep(10_000)
+    }
+
+    if !gotAck {
+        fail("timed out waiting for remap-send ack")
+    }
+
+    guest.detach()
+    print("ok")
+    exit(0)
+
 default:
     fail("unknown scenario: \(args.scenario)")
 }
