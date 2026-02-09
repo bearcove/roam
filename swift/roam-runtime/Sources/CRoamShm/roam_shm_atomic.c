@@ -81,28 +81,27 @@ int roam_bipbuf_commit(roam_bipbuf_header_t *header, uint32_t len) {
 
 int roam_bipbuf_try_read(roam_bipbuf_header_t *header, uint32_t *offset, uint32_t *len) {
   uint32_t read = atomic_load_explicit(&header->read, memory_order_relaxed);
-  uint32_t write = atomic_load_explicit(&header->write, memory_order_acquire);
+  uint32_t watermark = atomic_load_explicit(&header->watermark, memory_order_acquire);
 
+  // If wrap is active, consume tail [read..watermark) first.
+  if (watermark != 0) {
+    if (read < watermark) {
+      *offset = read;
+      *len = watermark - read;
+      return 1;
+    }
+
+    // Consumed the tail; wrap consumer to front and clear watermark.
+    atomic_store_explicit(&header->read, 0, memory_order_release);
+    atomic_store_explicit(&header->watermark, 0, memory_order_release);
+    read = 0;
+  }
+
+  uint32_t write = atomic_load_explicit(&header->write, memory_order_acquire);
   if (read < write) {
     *offset = read;
     *len = write - read;
     return 1;
-  } else if (read > write || (read == write && read > 0)) {
-    uint32_t watermark = atomic_load_explicit(&header->watermark, memory_order_acquire);
-    if (watermark != 0 && read < watermark) {
-      *offset = read;
-      *len = watermark - read;
-      return 1;
-    } else if (watermark != 0 && read >= watermark) {
-      atomic_store_explicit(&header->read, 0, memory_order_release);
-      atomic_store_explicit(&header->watermark, 0, memory_order_release);
-      uint32_t write2 = atomic_load_explicit(&header->write, memory_order_acquire);
-      if (write2 > 0) {
-        *offset = 0;
-        *len = write2;
-        return 1;
-      }
-    }
   }
 
   return 0;
