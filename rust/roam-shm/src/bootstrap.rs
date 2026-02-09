@@ -233,7 +233,9 @@ pub mod unix {
     ) -> Result<(), BootstrapError> {
         let (mut stream, _) = listener.accept().await?;
 
-        let sid = read_request_sid(&mut stream).await?;
+        let sid = read_request_sid(&mut stream)
+            .await
+            .map_err(|e| BootstrapError::Protocol(format!("read request sid failed: {e}")))?;
         if sid != expected_sid.as_str() {
             let msg = format!(
                 "sid mismatch: expected {}, got {sid}",
@@ -246,13 +248,23 @@ pub mod unix {
             });
         }
 
-        write_ok(&mut stream, peer_id, hub_path).await?;
-        read_fd_ack(&mut stream).await?;
+        write_ok(&mut stream, peer_id, hub_path)
+            .await
+            .map_err(|e| BootstrapError::Protocol(format!("write response failed: {e}")))?;
+        read_fd_ack(&mut stream)
+            .await
+            .map_err(|e| BootstrapError::Protocol(format!("read ack0 failed: {e}")))?;
         let shm_file = OpenOptions::new().read(true).write(true).open(hub_path)?;
         let shm_fd = shm_file.as_raw_fd();
-        send_fd(&stream, doorbell_fd).await?;
-        read_fd_ack(&mut stream).await?;
-        send_fd(&stream, shm_fd).await?;
+        send_fd(&stream, doorbell_fd)
+            .await
+            .map_err(|e| BootstrapError::Protocol(format!("send fd1 failed: {e}")))?;
+        read_fd_ack(&mut stream)
+            .await
+            .map_err(|e| BootstrapError::Protocol(format!("read ack1 failed: {e}")))?;
+        send_fd(&stream, shm_fd)
+            .await
+            .map_err(|e| BootstrapError::Protocol(format!("send fd2 failed: {e}")))?;
 
         Ok(())
     }
@@ -262,14 +274,28 @@ pub mod unix {
         control_sock: &Path,
         sid: &SessionId,
     ) -> Result<BootstrapTicket, BootstrapError> {
-        let mut stream = UnixStream::connect(control_sock).await?;
-        write_request_sid(&mut stream, sid.as_str()).await?;
+        let mut stream = UnixStream::connect(control_sock)
+            .await
+            .map_err(|e| BootstrapError::Protocol(format!("connect failed: {e}")))?;
+        write_request_sid(&mut stream, sid.as_str())
+            .await
+            .map_err(|e| BootstrapError::Protocol(format!("write request sid failed: {e}")))?;
 
-        let (peer_id, hub_path) = read_response(&mut stream).await?;
-        write_fd_ack(&mut stream).await?;
-        let doorbell_fd = recv_fd(&stream).await?;
-        write_fd_ack(&mut stream).await?;
-        let shm_fd = recv_fd(&stream).await?;
+        let (peer_id, hub_path) = read_response(&mut stream)
+            .await
+            .map_err(|e| BootstrapError::Protocol(format!("read response failed: {e}")))?;
+        write_fd_ack(&mut stream)
+            .await
+            .map_err(|e| BootstrapError::Protocol(format!("write ack0 failed: {e}")))?;
+        let doorbell_fd = recv_fd(&stream)
+            .await
+            .map_err(|e| BootstrapError::Protocol(format!("recv fd1 failed: {e}")))?;
+        write_fd_ack(&mut stream)
+            .await
+            .map_err(|e| BootstrapError::Protocol(format!("write ack1 failed: {e}")))?;
+        let shm_fd = recv_fd(&stream)
+            .await
+            .map_err(|e| BootstrapError::Protocol(format!("recv fd2 failed: {e}")))?;
 
         Ok(BootstrapTicket {
             peer_id,
