@@ -1,6 +1,10 @@
-import Darwin
 import Foundation
 import RoamRuntime
+#if os(macOS)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
 
 func main() -> Int32 {
     let args = CommandLine.arguments

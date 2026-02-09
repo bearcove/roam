@@ -1,3 +1,4 @@
+#if os(macOS)
 import Darwin
 import Foundation
 import Testing
@@ -310,3 +311,4 @@ struct ShmBootstrapTests {
         }
     }
 }
+#endif

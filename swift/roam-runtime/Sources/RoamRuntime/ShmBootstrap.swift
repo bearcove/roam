@@ -1,5 +1,7 @@
-import Darwin
 import Foundation
+#if os(macOS)
+import Darwin
+#endif
 
 public struct ShmBootstrapTicket: Sendable {
     public let peerId: UInt8
@@ -15,6 +17,7 @@ public struct ShmBootstrapTicket: Sendable {
 
 public enum ShmBootstrapError: Error {
     case invalidSid
+    case unsupportedPlatform
     case invalidSocketPath
     case socketCreateFailed(errno: Int32)
     case connectFailed(errno: Int32)
@@ -27,6 +30,7 @@ public enum ShmBootstrapError: Error {
     case missingFileDescriptor
 }
 
+#if os(macOS)
 private let shmBootstrapRequestMagic = [UInt8]("RSH0".utf8)
 private let shmBootstrapResponseMagic = [UInt8]("RSP0".utf8)
 
@@ -293,3 +297,10 @@ private func isValidSid(_ sid: String) -> Bool {
 
     return false
 }
+#else
+public func requestShmBootstrapTicket(controlSocketPath: String, sid: String) throws -> ShmBootstrapTicket {
+    _ = controlSocketPath
+    _ = sid
+    throw ShmBootstrapError.unsupportedPlatform
+}
+#endif
