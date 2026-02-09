@@ -3,6 +3,7 @@
 
 #include <stdatomic.h>
 #include <stdint.h>
+#include <sys/types.h>
 
 typedef struct roam_bipbuf_header_t {
   _Atomic(uint32_t) write;
@@ -34,5 +35,11 @@ uint64_t roam_atomic_load_u64_relaxed(const uint64_t *ptr);
 uint64_t roam_atomic_load_u64_acquire(const uint64_t *ptr);
 void roam_atomic_store_u64_release(uint64_t *ptr, uint64_t value);
 int roam_atomic_compare_exchange_u64(uint64_t *ptr, uint64_t *expected, uint64_t desired);
+
+// Receive one fd over a Unix domain socket using SCM_RIGHTS.
+// Returns 1 on success and stores fd in out_fd.
+// Returns 0 on EOF.
+// Returns -1 on error (errno is set).
+int roam_recv_one_fd(int sockfd, int *out_fd);
 
 #endif

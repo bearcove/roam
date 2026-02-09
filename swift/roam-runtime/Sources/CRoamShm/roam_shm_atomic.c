@@ -1,6 +1,9 @@
 #include "roam_shm_atomic.h"
 
+#include <errno.h>
 #include <stdatomic.h>
+#include <string.h>
+#include <sys/socket.h>
 
 uint32_t roam_bipbuf_header_size(void) { return (uint32_t)sizeof(roam_bipbuf_header_t); }
 
@@ -168,4 +171,59 @@ void roam_atomic_store_u64_release(uint64_t *ptr, uint64_t value) {
 int roam_atomic_compare_exchange_u64(uint64_t *ptr, uint64_t *expected, uint64_t desired) {
   _Atomic(uint64_t) *a = (_Atomic(uint64_t) *)ptr;
   return atomic_compare_exchange_weak_explicit(a, expected, desired, memory_order_acq_rel, memory_order_acquire);
+}
+
+int roam_recv_one_fd(int sockfd, int *out_fd) {
+  if (out_fd == NULL) {
+    errno = EINVAL;
+    return -1;
+  }
+
+  unsigned char byte = 0;
+  struct iovec iov = {
+      .iov_base = &byte,
+      .iov_len = 1,
+  };
+
+  unsigned char cmsgbuf[CMSG_SPACE(sizeof(int) * 4)];
+  memset(cmsgbuf, 0, sizeof(cmsgbuf));
+
+  struct msghdr msg;
+  memset(&msg, 0, sizeof(msg));
+  msg.msg_iov = &iov;
+  msg.msg_iovlen = 1;
+  msg.msg_control = cmsgbuf;
+  msg.msg_controllen = sizeof(cmsgbuf);
+
+  ssize_t n = recvmsg(sockfd, &msg, 0);
+  if (n == 0) {
+    return 0;
+  }
+  if (n < 0) {
+    return -1;
+  }
+
+  if ((msg.msg_flags & MSG_CTRUNC) != 0) {
+    errno = EMSGSIZE;
+    return -1;
+  }
+
+  for (struct cmsghdr *cmsg = CMSG_FIRSTHDR(&msg); cmsg != NULL;
+       cmsg = CMSG_NXTHDR(&msg, cmsg)) {
+    if (cmsg->cmsg_level != SOL_SOCKET || cmsg->cmsg_type != SCM_RIGHTS) {
+      continue;
+    }
+
+    size_t data_len = cmsg->cmsg_len - CMSG_LEN(0);
+    if (data_len < sizeof(int)) {
+      continue;
+    }
+
+    int *fds = (int *)CMSG_DATA(cmsg);
+    *out_fd = fds[0];
+    return 1;
+  }
+
+  errno = ENOMSG;
+  return -1;
 }

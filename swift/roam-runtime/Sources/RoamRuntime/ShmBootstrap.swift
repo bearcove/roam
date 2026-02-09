@@ -1,5 +1,6 @@
 import Foundation
 #if os(macOS)
+import CRoamShm
 import Darwin
 #endif
 
@@ -207,103 +208,25 @@ private func readExactly(fd: Int32, count: Int) throws -> [UInt8] {
 }
 
 private func recvPassedFd(fd: Int32) throws -> Int32 {
-    var byte = [UInt8](repeating: 0, count: 1)
-    var iov = iovec(iov_base: nil, iov_len: 1)
-
-    let controlLen = cmsgSpace(MemoryLayout<Int32>.size)
-    var control = [UInt8](repeating: 0, count: controlLen)
-    let receivedFd: Int32? = byte.withUnsafeMutableBytes { byteBuf in
-        iov.iov_base = byteBuf.baseAddress
-        return withUnsafeMutablePointer(to: &iov) { iovPtr in
-            control.withUnsafeMutableBytes { controlBuf in
-                var msg = msghdr()
-                msg.msg_iov = iovPtr
-                msg.msg_iovlen = 1
-                msg.msg_control = controlBuf.baseAddress
-                msg.msg_controllen = socklen_t(controlBuf.count)
-
-                while true {
-                    let n = recvmsg(fd, &msg, 0)
-                    if n < 0 {
-                        if errno == EINTR {
-                            continue
-                        }
-                        return nil
-                    }
-                    if n == 0 {
-                        return nil
-                    }
-                    break
-                }
-
-                let controlLen = Int(msg.msg_controllen)
-                guard controlLen >= MemoryLayout<cmsghdr>.size else {
-                    return nil
-                }
-                guard let base = controlBuf.baseAddress else {
-                    return nil
-                }
-
-                let headerAligned = cmsgAlign(MemoryLayout<cmsghdr>.size)
-                let minRightsLen = cmsgLen(MemoryLayout<Int32>.size)
-                var offset = 0
-                while offset + MemoryLayout<cmsghdr>.size <= controlLen {
-                    let hdrPtr = base.advanced(by: offset).assumingMemoryBound(to: cmsghdr.self)
-                    let hdr = hdrPtr.pointee
-                    let hdrLen = Int(hdr.cmsg_len)
-                    if hdrLen < headerAligned || offset + hdrLen > controlLen {
-                        break
-                    }
-
-                    if hdr.cmsg_level == SOL_SOCKET
-                        && hdr.cmsg_type == SCM_RIGHTS
-                        && hdrLen >= minRightsLen
-                    {
-                        let dataOffset = offset + cmsgDataOffset()
-                        guard dataOffset + MemoryLayout<Int32>.size <= controlLen else {
-                            return nil
-                        }
-                        return base
-                            .advanced(by: dataOffset)
-                            .assumingMemoryBound(to: Int32.self)
-                            .pointee
-                    }
-
-                    offset += cmsgAlign(hdrLen)
-                }
-
-                return nil
-            }
+    var receivedFd: Int32 = -1
+    while true {
+        let rc = roam_recv_one_fd(fd, &receivedFd)
+        if rc == 1 {
+            return receivedFd
         }
-    }
-
-    guard let receivedFd else {
+        if rc == 0 {
+            throw ShmBootstrapError.eof
+        }
+        if errno == EINTR {
+            continue
+        }
         throw ShmBootstrapError.missingFileDescriptor
     }
-
-    return receivedFd
 }
 
 private func writeFdAck(fd: Int32) throws {
     let ack: [UInt8] = [0xA5]
     try writeAll(fd: fd, bytes: ack)
-}
-
-private func cmsgAlign(_ n: Int) -> Int {
-    let align = MemoryLayout<Int>.size
-    return (n + align - 1) & ~(align - 1)
-}
-
-private func cmsgLen(_ dataLen: Int) -> Int {
-    cmsgAlign(MemoryLayout<cmsghdr>.size) + dataLen
-}
-
-private func cmsgSpace(_ dataLen: Int) -> Int {
-    cmsgAlign(MemoryLayout<cmsghdr>.size) + cmsgAlign(dataLen)
-}
-
-private func cmsgDataOffset() -> Int {
-    cmsgAlign(MemoryLayout<cmsghdr>.size)
 }
 
 private func isValidSid(_ sid: String) -> Bool {
