@@ -46,4 +46,9 @@ int roam_recv_one_fd(int sockfd, int *out_fd);
 // Returns number of fds received (>=1), 0 on EOF, -1 on error.
 int roam_recv_fds(int sockfd, int *out_fds, int max_fds);
 
+// Send `num_fds` file descriptors over a Unix domain socket using one
+// SCM_RIGHTS message.
+// Returns number of payload bytes sent (>0) on success, -1 on error.
+int roam_send_fds(int sockfd, const int *fds, int num_fds);
+
 #endif

@@ -66,7 +66,7 @@ public func requestShmBootstrapTicket(controlSocketPath: String, sid: String) th
                 throw ShmBootstrapError.protocolError("hub path not utf-8")
             }
 
-            try writeFdAck(fd: fd)
+            _ = try? writeFdAck(fd: fd)
             let fds = try recvPassedFds(fd: fd, expected: 2)
             let doorbellFd = fds[0]
             let shmFd = fds[1]
@@ -129,6 +129,11 @@ private func readBootstrapResponse(fd: Int32) throws -> BootstrapResponse {
 }
 
 private func connectUnixSocket(fd: Int32, path: String) throws {
+    let one: Int32 = 1
+    _ = withUnsafePointer(to: one) { ptr in
+        setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, ptr, socklen_t(MemoryLayout<Int32>.size))
+    }
+
     var addr = sockaddr_un()
     addr.sun_family = sa_family_t(AF_UNIX)
 
@@ -159,7 +164,7 @@ private func writeAll(fd: Int32, bytes: [UInt8]) throws {
     var offset = 0
     while offset < bytes.count {
         let written = bytes.withUnsafeBytes { rawBuf in
-            write(fd, rawBuf.baseAddress!.advanced(by: offset), bytes.count - offset)
+            send(fd, rawBuf.baseAddress!.advanced(by: offset), bytes.count - offset, 0)
         }
         if written < 0 {
             if errno == EINTR {
@@ -212,7 +217,7 @@ private func recvPassedFds(fd: Int32, expected: Int) throws -> [Int32] {
             return Array(out.prefix(Int(rc)))
         }
         if rc == 0 {
-            throw ShmBootstrapError.eof
+            throw ShmBootstrapError.missingFileDescriptor
         }
         if errno == EINTR {
             continue

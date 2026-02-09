@@ -2,6 +2,7 @@
 import Darwin
 import Foundation
 import Testing
+import CRoamShm
 
 @testable import RoamRuntime
 
@@ -54,41 +55,14 @@ private func makeUnixListener(path: String) throws -> Int32 {
     return fd
 }
 
-private func sendPassedFd(sock: Int32, fd: Int32) -> Bool {
-    var payload = [UInt8](repeating: 1, count: 1)
-    var iov = iovec(iov_base: nil, iov_len: 1)
-
-    let controlLen = cmsgSpace(MemoryLayout<Int32>.size)
-    var control = [UInt8](repeating: 0, count: controlLen)
-
-    return payload.withUnsafeMutableBytes { payloadBuf in
-        iov.iov_base = payloadBuf.baseAddress
-        return withUnsafeMutablePointer(to: &iov) { iovPtr in
-            control.withUnsafeMutableBytes { raw in
-                guard let base = raw.baseAddress else {
-                    return false
-                }
-
-                let cmsg = base.assumingMemoryBound(to: cmsghdr.self)
-                cmsg.pointee.cmsg_level = SOL_SOCKET
-                cmsg.pointee.cmsg_type = SCM_RIGHTS
-                cmsg.pointee.cmsg_len = socklen_t(cmsgLen(MemoryLayout<Int32>.size))
-
-                base
-                    .advanced(by: cmsgDataOffset())
-                    .assumingMemoryBound(to: Int32.self)
-                    .pointee = fd
-
-                var msg = msghdr()
-                msg.msg_iov = iovPtr
-                msg.msg_iovlen = 1
-                msg.msg_control = base
-                msg.msg_controllen = socklen_t(raw.count)
-
-                let sent = sendmsg(sock, &msg, 0)
-                return sent == 1
-            }
+private func sendPassedFds(sock: Int32, fds: [Int32]) -> Bool {
+    guard !fds.isEmpty else { return true }
+    return fds.withUnsafeBufferPointer { fdsBuf in
+        guard let base = fdsBuf.baseAddress else {
+            return false
         }
+        let rc = roam_send_fds(sock, base, Int32(fdsBuf.count))
+        return rc > 0
     }
 }
 
@@ -204,11 +178,15 @@ private func startBootstrapServer(
             return
         }
 
+        var fdsToSend: [Int32] = []
         if let fd = sendDoorbellFd {
-            _ = sendPassedFd(sock: client, fd: fd)
+            fdsToSend.append(fd)
         }
         if let fd = sendShmFd {
-            _ = sendPassedFd(sock: client, fd: fd)
+            fdsToSend.append(fd)
+        }
+        if !fdsToSend.isEmpty {
+            _ = sendPassedFds(sock: client, fds: fdsToSend)
         }
     }
     thread.start()
