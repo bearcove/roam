@@ -5,7 +5,7 @@ use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use roam_shm::bootstrap::{SessionId, SessionPaths, unix};
-use roam_shm::layout::SegmentConfig;
+use roam_shm::layout::{SegmentConfig, SizeClass};
 use roam_shm::msg::ShmMsg;
 use roam_shm::peer::PeerId;
 use roam_shm::{AddPeerOptions, ShmHost, msg_type};
@@ -179,6 +179,83 @@ async fn rust_host_shm_to_swift_guest_data_path() {
     if !output.status.success() {
         panic!(
             "swift shm guest client failed:\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
+
+#[tokio::test]
+async fn rust_host_shm_growth_remap_to_swift_guest() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("xlang-shm-remap.shm");
+
+    let config = SegmentConfig {
+        max_guests: 1,
+        max_payload_size: 4096,
+        var_slot_classes: vec![SizeClass::new(4096, 1)],
+        ..SegmentConfig::default()
+    };
+    let mut host = ShmHost::create(&path, config).unwrap();
+
+    let ticket = host.add_peer(AddPeerOptions::default()).unwrap();
+    let peer_id = ticket.peer_id;
+    let mut args = ticket.to_args();
+    args.push("--scenario=remap-recv".to_string());
+
+    let client_bin = swift_shm_guest_client_path();
+    let child = Command::new(client_bin)
+        .args(&args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn swift remap guest client");
+    drop(ticket);
+
+    let payload = vec![0xAB; 3000];
+    let mut first_sent = false;
+    for _ in 0..100 {
+        match host.send(
+            peer_id,
+            &ShmMsg::new(msg_type::DATA, 201, 0, payload.clone()),
+        ) {
+            Ok(()) => {
+                first_sent = true;
+                break;
+            }
+            Err(roam_shm::host::SendError::PeerNotAttached) => {
+                tokio::time::sleep(Duration::from_millis(25)).await;
+            }
+            Err(other) => panic!("unexpected error sending first message: {other:?}"),
+        }
+    }
+    assert!(first_sent, "swift guest did not attach in time");
+
+    let second_before_growth = host.send(
+        peer_id,
+        &ShmMsg::new(msg_type::DATA, 202, 0, payload.clone()),
+    );
+    assert!(
+        matches!(
+            second_before_growth,
+            Err(roam_shm::host::SendError::SlotExhausted)
+        ),
+        "expected SlotExhausted before growth, got {second_before_growth:?}"
+    );
+
+    let extent_idx = host.grow_size_class(0).expect("grow size class 0");
+    assert_eq!(extent_idx, 1);
+
+    host.send(peer_id, &ShmMsg::new(msg_type::DATA, 202, 0, payload))
+        .expect("send should succeed after growth");
+
+    let output = tokio::task::spawn_blocking(move || child.wait_with_output())
+        .await
+        .expect("join wait_with_output task")
+        .expect("wait for swift remap guest client");
+    if !output.status.success() {
+        panic!(
+            "swift remap guest client failed:\nstdout:\n{}\nstderr:\n{}",
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         );

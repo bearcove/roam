@@ -5,6 +5,7 @@ struct SpawnArgs {
     let hubPath: String
     let peerId: UInt8
     let doorbellFd: Int32
+    let scenario: String
 }
 
 private func fail(_ message: String) -> Never {
@@ -16,6 +17,7 @@ private func parseArgs(_ args: [String]) -> SpawnArgs {
     var hubPath: String?
     var peerId: UInt8?
     var doorbellFd: Int32?
+    var scenario = "data-path"
 
     for arg in args {
         if let value = arg.split(separator: "=", maxSplits: 1).last, arg.hasPrefix("--hub-path=") {
@@ -27,6 +29,8 @@ private func parseArgs(_ args: [String]) -> SpawnArgs {
                 fail("invalid --doorbell-fd value")
             }
             doorbellFd = fd
+        } else if let value = arg.split(separator: "=", maxSplits: 1).last, arg.hasPrefix("--scenario=") {
+            scenario = String(value)
         }
     }
 
@@ -40,7 +44,7 @@ private func parseArgs(_ args: [String]) -> SpawnArgs {
         fail("missing --doorbell-fd")
     }
 
-    return SpawnArgs(hubPath: hubPath, peerId: peerId, doorbellFd: doorbellFd)
+    return SpawnArgs(hubPath: hubPath, peerId: peerId, doorbellFd: doorbellFd, scenario: scenario)
 }
 
 let args = parseArgs(Array(CommandLine.arguments.dropFirst()))
@@ -54,43 +58,86 @@ do {
     fail("attach failed: \(error)")
 }
 
-let inlinePayload = Array("swift-inline".utf8)
-let slotPayload = (0..<2048).map { UInt8(truncatingIfNeeded: $0) }
+switch args.scenario {
+case "data-path":
+    let inlinePayload = Array("swift-inline".utf8)
+    let slotPayload = (0..<2048).map { UInt8(truncatingIfNeeded: $0) }
 
-let inlineFrame = ShmGuestFrame(msgType: 4, id: 1, methodId: 0, payload: inlinePayload)
-let slotFrame = ShmGuestFrame(msgType: 4, id: 2, methodId: 0, payload: slotPayload)
+    let inlineFrame = ShmGuestFrame(msgType: 4, id: 1, methodId: 0, payload: inlinePayload)
+    let slotFrame = ShmGuestFrame(msgType: 4, id: 2, methodId: 0, payload: slotPayload)
 
-do {
-    try guest.send(frame: inlineFrame)
-    try guest.send(frame: slotFrame)
-} catch {
-    fail("send failed: \(error)")
-}
-
-var gotInlineAck = false
-var gotSlotAck = false
-let deadline = Date().addingTimeInterval(5)
-
-while Date() < deadline {
     do {
-        if let frame = try guest.receive() {
-            if frame.id == 101, frame.payload == Array("ack-inline".utf8) {
-                gotInlineAck = true
-            } else if frame.id == 102, frame.payload == Array("ack-slot".utf8) {
-                gotSlotAck = true
-            }
-
-            if gotInlineAck && gotSlotAck {
-                guest.detach()
-                print("ok")
-                exit(0)
-            }
-        }
+        try guest.send(frame: inlineFrame)
+        try guest.send(frame: slotFrame)
     } catch {
-        fail("receive failed: \(error)")
+        fail("send failed: \(error)")
     }
 
-    usleep(10_000)
-}
+    var gotInlineAck = false
+    var gotSlotAck = false
+    let deadline = Date().addingTimeInterval(5)
 
-fail("timed out waiting for host responses")
+    while Date() < deadline {
+        do {
+            if let frame = try guest.receive() {
+                if frame.id == 101, frame.payload == Array("ack-inline".utf8) {
+                    gotInlineAck = true
+                } else if frame.id == 102, frame.payload == Array("ack-slot".utf8) {
+                    gotSlotAck = true
+                }
+
+                if gotInlineAck && gotSlotAck {
+                    guest.detach()
+                    print("ok")
+                    exit(0)
+                }
+            }
+        } catch {
+            fail("receive failed: \(error)")
+        }
+
+        usleep(10_000)
+    }
+
+    fail("timed out waiting for host responses")
+
+case "remap-recv":
+    var got201 = false
+    var got202 = false
+    let deadline = Date().addingTimeInterval(2.5)
+
+    while Date() < deadline {
+        do {
+            _ = try? guest.checkRemap()
+            if let frame = try guest.receive() {
+                if frame.id == 201, frame.payload.count == 3000 {
+                    got201 = true
+                } else if frame.id == 202, frame.payload.count == 3000 {
+                    got202 = true
+                }
+
+                if got201 && got202 {
+                    let ack = ShmGuestFrame(
+                        msgType: 4,
+                        id: 777,
+                        methodId: 0,
+                        payload: Array("remap-recv-ok".utf8)
+                    )
+                    try guest.send(frame: ack)
+                    guest.detach()
+                    print("ok")
+                    exit(0)
+                }
+            }
+        } catch {
+            fail("remap scenario failed: \(error)")
+        }
+
+        usleep(10_000)
+    }
+
+    fail("timed out waiting for remap receive scenario")
+
+default:
+    fail("unknown scenario: \(args.scenario)")
+}
