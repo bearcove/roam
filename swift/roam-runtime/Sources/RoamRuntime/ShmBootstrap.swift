@@ -65,6 +65,7 @@ public func requestShmBootstrapTicket(controlSocketPath: String, sid: String) th
                 throw ShmBootstrapError.protocolError("hub path not utf-8")
             }
 
+            try writeFdAck(fd: fd)
             let doorbellFd = try recvPassedFd(fd: fd)
             try writeFdAck(fd: fd)
             let shmFd: Int32

@@ -247,6 +247,7 @@ pub mod unix {
         }
 
         write_ok(&mut stream, peer_id, hub_path).await?;
+        read_fd_ack(&mut stream).await?;
         let shm_file = OpenOptions::new().read(true).write(true).open(hub_path)?;
         let shm_fd = shm_file.as_raw_fd();
         send_fd(&stream, doorbell_fd).await?;
@@ -265,6 +266,7 @@ pub mod unix {
         write_request_sid(&mut stream, sid.as_str()).await?;
 
         let (peer_id, hub_path) = read_response(&mut stream).await?;
+        write_fd_ack(&mut stream).await?;
         let doorbell_fd = recv_fd(&stream).await?;
         write_fd_ack(&mut stream).await?;
         let shm_fd = recv_fd(&stream).await?;
