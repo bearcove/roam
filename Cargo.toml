@@ -58,15 +58,7 @@ roam-websocket = { path = "rust/roam-websocket", version = "3.0.0" }
 shm-primitives = { path = "rust/shm-primitives", version = "3.0.0", default-features = false }
 ur-taking-me-with-you = { path = "rust/ur-taking-me-with-you", version = "3.0.0" }
 roam-task-local = { path = "rust/roam-task-local", version = "3.0.0" }
-
-# External dependencies
-
-# peeps instrumentation
-peeps = { version = "0.1.0", git = "https://github.com/bearcove/peeps", branch = "main" }
 peeps-tasks = { version = "0.1.0", git = "https://github.com/bearcove/peeps", branch = "main" }
-peeps-threads = { version = "0.1.0", git = "https://github.com/bearcove/peeps", branch = "main" }
-peeps-locks = { version = "0.1.0", git = "https://github.com/bearcove/peeps", branch = "main" }
-peeps-roam = { version = "0.1.0", git = "https://github.com/bearcove/peeps", branch = "main" }
 peeps-types = { version = "0.1.0", git = "https://github.com/bearcove/peeps", branch = "main" }
 
 # # Uncomment to develop peeps
