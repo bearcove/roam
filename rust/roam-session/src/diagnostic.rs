@@ -176,31 +176,64 @@ pub struct DiagnosticState {
     pub name: String,
 
     /// Peer's self-reported name (from Hello V6 metadata).
-    peer_name: RwLock<Option<String>>,
+    pub(crate) peer_name: RwLock<Option<String>>,
 
     /// Negotiated max concurrent requests.
-    max_concurrent_requests: AtomicU32,
+    pub(crate) max_concurrent_requests: AtomicU32,
 
     /// Negotiated initial channel credit.
-    initial_credit: AtomicU32,
+    pub(crate) initial_credit: AtomicU32,
 
     /// When this connection was established
-    created_at: Instant,
+    pub(crate) created_at: Instant,
 
     /// Total requests completed over the lifetime of this connection
-    total_completed: AtomicU64,
+    pub(crate) total_completed: AtomicU64,
 
     /// In-flight requests
-    requests: RwLock<HashMap<u64, InFlightRequest>>,
+    pub(crate) requests: RwLock<HashMap<u64, InFlightRequest>>,
 
     /// Recently completed requests (ring buffer, newest last)
-    recent_completions: RwLock<VecDeque<CompletedRequest>>,
+    pub(crate) recent_completions: RwLock<VecDeque<CompletedRequest>>,
 
     /// Open channels
-    channels: RwLock<HashMap<u64, OpenChannel>>,
+    pub(crate) channels: RwLock<HashMap<u64, OpenChannel>>,
 
     /// Custom diagnostic callbacks
-    custom_diagnostics: RwLock<Vec<DiagnosticCallback>>,
+    pub(crate) custom_diagnostics: RwLock<Vec<DiagnosticCallback>>,
+
+    // ── Transport-level stats ────────────────────────────────
+    /// Total frames sent on this connection.
+    pub(crate) frames_sent: AtomicU64,
+
+    /// Total frames received on this connection.
+    pub(crate) frames_received: AtomicU64,
+
+    /// Total bytes sent (frame payloads, not including length prefixes).
+    pub(crate) bytes_sent: AtomicU64,
+
+    /// Total bytes received (frame payloads, not including length prefixes).
+    pub(crate) bytes_received: AtomicU64,
+
+    /// Timestamp of last frame sent (ms since created_at, 0 = never).
+    pub(crate) last_frame_sent_ms: AtomicU64,
+
+    /// Timestamp of last frame received (ms since created_at, 0 = never).
+    pub(crate) last_frame_received_ms: AtomicU64,
+
+    /// Per-channel flow control credit snapshot (updated by the driver).
+    /// Vec of (channel_id, incoming_credit, outgoing_credit).
+    pub(crate) channel_credits: RwLock<Vec<ChannelCreditInfo>>,
+}
+
+/// Per-channel flow control credit info for diagnostics.
+#[derive(Debug, Clone)]
+pub struct ChannelCreditInfo {
+    pub channel_id: u64,
+    /// Credit we granted to peer (bytes they can still send us).
+    pub incoming_credit: u32,
+    /// Credit peer granted us (bytes we can still send them).
+    pub outgoing_credit: u32,
 }
 
 impl DiagnosticState {
@@ -217,6 +250,13 @@ impl DiagnosticState {
             recent_completions: RwLock::new(VecDeque::with_capacity(MAX_RECENT_COMPLETIONS)),
             channels: RwLock::new(HashMap::new()),
             custom_diagnostics: RwLock::new(Vec::new()),
+            frames_sent: AtomicU64::new(0),
+            frames_received: AtomicU64::new(0),
+            bytes_sent: AtomicU64::new(0),
+            bytes_received: AtomicU64::new(0),
+            last_frame_sent_ms: AtomicU64::new(0),
+            last_frame_received_ms: AtomicU64::new(0),
+            channel_credits: RwLock::new(Vec::new()),
         }
     }
 
@@ -352,6 +392,51 @@ impl DiagnosticState {
         }
     }
 
+    /// Record a frame being sent (call after successful transport send).
+    pub fn record_frame_sent(&self, payload_bytes: usize) {
+        self.frames_sent.fetch_add(1, Ordering::Relaxed);
+        self.bytes_sent
+            .fetch_add(payload_bytes as u64, Ordering::Relaxed);
+        let ms = self.created_at.elapsed().as_millis() as u64;
+        self.last_frame_sent_ms.store(ms, Ordering::Relaxed);
+    }
+
+    /// Record a frame being received (call after successful transport recv).
+    pub fn record_frame_received(&self, payload_bytes: usize) {
+        self.frames_received.fetch_add(1, Ordering::Relaxed);
+        self.bytes_received
+            .fetch_add(payload_bytes as u64, Ordering::Relaxed);
+        let ms = self.created_at.elapsed().as_millis() as u64;
+        self.last_frame_received_ms.store(ms, Ordering::Relaxed);
+    }
+
+    /// Update the per-channel credit snapshot.
+    pub fn update_channel_credits(&self, credits: Vec<ChannelCreditInfo>) {
+        if let Ok(mut cc) = self.channel_credits.write() {
+            *cc = credits;
+        }
+    }
+
+    /// Get the time since last frame sent (None if never sent).
+    pub fn last_frame_sent_ago(&self) -> Option<std::time::Duration> {
+        let ms = self.last_frame_sent_ms.load(Ordering::Relaxed);
+        if ms == 0 {
+            return None;
+        }
+        let sent_at = self.created_at + std::time::Duration::from_millis(ms);
+        Some(Instant::now().duration_since(sent_at))
+    }
+
+    /// Get the time since last frame received (None if never received).
+    pub fn last_frame_received_ago(&self) -> Option<std::time::Duration> {
+        let ms = self.last_frame_received_ms.load(Ordering::Relaxed);
+        if ms == 0 {
+            return None;
+        }
+        let received_at = self.created_at + std::time::Duration::from_millis(ms);
+        Some(Instant::now().duration_since(received_at))
+    }
+
     /// Dump this connection's full diagnostic state.
     ///
     /// Always produces output — shows connection age, in-flight count (even if 0),
@@ -386,6 +471,41 @@ impl DiagnosticState {
                 "  Flow: max_concurrent={}, initial_credit={}",
                 max_concurrent, credit,
             );
+        }
+
+        // ── Transport stats ───────────────────────────────────────
+        {
+            let sent = self.frames_sent.load(Ordering::Relaxed);
+            let recv = self.frames_received.load(Ordering::Relaxed);
+            let bytes_s = self.bytes_sent.load(Ordering::Relaxed);
+            let bytes_r = self.bytes_received.load(Ordering::Relaxed);
+            let last_sent = self
+                .last_frame_sent_ago()
+                .map(|d| format!("{:.1}s ago", d.as_secs_f64()))
+                .unwrap_or_else(|| "never".to_string());
+            let last_recv = self
+                .last_frame_received_ago()
+                .map(|d| format!("{:.1}s ago", d.as_secs_f64()))
+                .unwrap_or_else(|| "never".to_string());
+            let _ = writeln!(
+                output,
+                "  Transport: sent={sent} frames ({bytes_s} B), recv={recv} frames ({bytes_r} B)",
+            );
+            let _ = writeln!(output, "  Last: sent={last_sent}, recv={last_recv}",);
+        }
+
+        // ── Channel credits ──────────────────────────────────────
+        if let Ok(credits) = self.channel_credits.try_read() {
+            if !credits.is_empty() {
+                let _ = writeln!(output, "  Channel credits ({}):", credits.len());
+                for cc in credits.iter() {
+                    let _ = writeln!(
+                        output,
+                        "    ch#{}: in={}, out={}",
+                        cc.channel_id, cc.incoming_credit, cc.outgoing_credit,
+                    );
+                }
+            }
         }
 
         // ── In-flight requests ───────────────────────────────────
@@ -524,6 +644,26 @@ impl DiagnosticState {
 }
 
 /// Capture a short backtrace, filtering to only relevant frames.
+
+/// Collect all live diagnostic states (for snapshot use).
+/// Uses try_read to avoid deadlocking from signal handlers.
+pub fn collect_live_states() -> Vec<Arc<DiagnosticState>> {
+    let Ok(registry) = DIAGNOSTIC_REGISTRY.try_read() else {
+        return Vec::new();
+    };
+    registry.iter().filter_map(|weak| weak.upgrade()).collect()
+}
+
+/// Snapshot method name registry as a HashMap.
+pub fn snapshot_method_names() -> std::collections::HashMap<u64, String> {
+    let Ok(names) = METHOD_NAMES.try_read() else {
+        return std::collections::HashMap::new();
+    };
+    names
+        .iter()
+        .map(|(&id, &name)| (id, name.to_string()))
+        .collect()
+}
 fn format_short_backtrace() -> String {
     let bt = std::backtrace::Backtrace::force_capture();
     let full = bt.to_string();
