@@ -67,6 +67,8 @@ peeps-tasks = { path = "../peeps/crates/peeps-tasks" }
 peeps-threads = { path = "../peeps/crates/peeps-threads" }
 peeps-locks = { path = "../peeps/crates/peeps-locks" }
 peeps-roam = { path = "../peeps/crates/peeps-roam" }
+peeps-types = { path = "../peeps/crates/peeps-types" }
+inventory = "0.3"
 
 bytes = "1"
 blake3 = "1.8"

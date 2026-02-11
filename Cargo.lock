@@ -1531,6 +1531,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "inventory"
+version = "0.3.21"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bc61209c082fbeb19919bee74b176221b27223e27b65d781eb91af24eb1fb46e"
+dependencies = [
+ "rustversion",
+]
+
+[[package]]
 name = "ipnet"
 version = "2.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1920,7 +1929,16 @@ version = "0.1.0"
 dependencies = [
  "backtrace",
  "facet",
+ "peeps-types",
  "tokio",
+]
+
+[[package]]
+name = "peeps-types"
+version = "0.1.0"
+dependencies = [
+ "facet",
+ "inventory",
 ]
 
 [[package]]
@@ -2343,7 +2361,9 @@ dependencies = [
  "futures-channel",
  "futures-util",
  "gloo-timers",
+ "inventory",
  "peeps-tasks",
+ "peeps-types",
  "roam",
  "roam-frame",
  "roam-task-local",
@@ -2362,9 +2382,11 @@ dependencies = [
  "facet-testhelpers",
  "futures",
  "futures-util",
+ "inventory",
  "libc",
  "libproc",
  "peeps-tasks",
+ "peeps-types",
  "roam",
  "roam-fdpass",
  "roam-frame",
