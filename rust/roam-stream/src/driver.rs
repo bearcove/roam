@@ -16,7 +16,7 @@ use tokio::task::JoinHandle;
 
 use crate::framing::LengthPrefixedFramed;
 use roam_session::{
-    Caller, ConnectError, ConnectionError, ConnectionHandle, Driver, HandshakeConfig, ResponseData,
+    Caller, ConnectError, ConnectionError, ConnectionHandle, HandshakeConfig, ResponseData,
     RetryPolicy, SendPtr, ServiceDispatcher, TransportError,
 };
 

@@ -302,7 +302,14 @@ pub async fn accept_framed<T, D>(
     transport: T,
     config: HandshakeConfig,
     dispatcher: D,
-) -> Result<(ConnectionHandle, IncomingConnections, Driver<DiagnosticTransport<T>, D>), ConnectionError>
+) -> Result<
+    (
+        ConnectionHandle,
+        IncomingConnections,
+        Driver<DiagnosticTransport<T>, D>,
+    ),
+    ConnectionError,
+>
 where
     T: MessageTransport,
     D: ServiceDispatcher,
@@ -1748,7 +1755,14 @@ pub async fn initiate_framed<T, D>(
     transport: T,
     config: HandshakeConfig,
     dispatcher: D,
-) -> Result<(ConnectionHandle, IncomingConnections, Driver<DiagnosticTransport<T>, D>), ConnectionError>
+) -> Result<
+    (
+        ConnectionHandle,
+        IncomingConnections,
+        Driver<DiagnosticTransport<T>, D>,
+    ),
+    ConnectionError,
+>
 where
     T: MessageTransport,
     D: ServiceDispatcher,
@@ -1774,7 +1788,14 @@ async fn establish<T, D>(
     our_hello: Hello,
     dispatcher: D,
     role: Role,
-) -> Result<(ConnectionHandle, IncomingConnections, Driver<DiagnosticTransport<T>, D>), ConnectionError>
+) -> Result<
+    (
+        ConnectionHandle,
+        IncomingConnections,
+        Driver<DiagnosticTransport<T>, D>,
+    ),
+    ConnectionError,
+>
 where
     T: MessageTransport,
     D: ServiceDispatcher,
@@ -1891,7 +1912,7 @@ where
     let diagnostic_state: Option<Arc<crate::diagnostic::DiagnosticState>> = None;
 
     // Wrap transport with diagnostic recording
-    let mut io = DiagnosticTransport::new(io, diagnostic_state.clone());
+    let io = DiagnosticTransport::new(io, diagnostic_state.clone());
 
     // Create root connection (connection 0)
     // r[impl core.link.connection-zero]

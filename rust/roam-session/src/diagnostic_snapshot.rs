@@ -66,6 +66,8 @@ pub struct ConnectionSnapshot {
     pub in_flight: Vec<RequestSnapshot>,
     pub recent_completions: Vec<CompletionSnapshot>,
     pub channels: Vec<ChannelSnapshot>,
+    pub transport: TransportStats,
+    pub channel_credits: Vec<ChannelCreditSnapshot>,
 }
 
 /// Snapshot of an in-flight RPC request.
@@ -97,6 +99,33 @@ pub struct ChannelSnapshot {
     pub direction: ChannelDir,
     pub age_secs: f64,
     pub request_id: Option<u64>,
+}
+
+/// Transport-level statistics for a connection.
+#[derive(Debug, Clone, Facet)]
+pub struct TransportStats {
+    /// Total frames sent.
+    pub frames_sent: u64,
+    /// Total frames received.
+    pub frames_received: u64,
+    /// Total payload bytes sent.
+    pub bytes_sent: u64,
+    /// Total payload bytes received.
+    pub bytes_received: u64,
+    /// Seconds since last frame was sent (None if never sent).
+    pub last_sent_ago_secs: Option<f64>,
+    /// Seconds since last frame was received (None if never received).
+    pub last_recv_ago_secs: Option<f64>,
+}
+
+/// Per-channel flow control credit snapshot.
+#[derive(Debug, Clone, Facet)]
+pub struct ChannelCreditSnapshot {
+    pub channel_id: u64,
+    /// Credit we granted to peer (bytes they can still send us).
+    pub incoming_credit: u32,
+    /// Credit peer granted us (bytes we can still send them).
+    pub outgoing_credit: u32,
 }
 
 /// Take a structured snapshot of all registered diagnostic states.
@@ -175,6 +204,29 @@ pub fn snapshot_all_diagnostics() -> DiagnosticSnapshot {
                 })
                 .unwrap_or_default();
 
+            let transport = TransportStats {
+                frames_sent: state.frames_sent.load(Ordering::Relaxed),
+                frames_received: state.frames_received.load(Ordering::Relaxed),
+                bytes_sent: state.bytes_sent.load(Ordering::Relaxed),
+                bytes_received: state.bytes_received.load(Ordering::Relaxed),
+                last_sent_ago_secs: state.last_frame_sent_ago().map(|d| d.as_secs_f64()),
+                last_recv_ago_secs: state.last_frame_received_ago().map(|d| d.as_secs_f64()),
+            };
+
+            let channel_credits = state
+                .channel_credits
+                .try_read()
+                .map(|cc| {
+                    cc.iter()
+                        .map(|c| ChannelCreditSnapshot {
+                            channel_id: c.channel_id,
+                            incoming_credit: c.incoming_credit,
+                            outgoing_credit: c.outgoing_credit,
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+
             ConnectionSnapshot {
                 name: state.name.clone(),
                 peer_name,
@@ -185,6 +237,8 @@ pub fn snapshot_all_diagnostics() -> DiagnosticSnapshot {
                 in_flight,
                 recent_completions,
                 channels,
+                transport,
+                channel_credits,
             }
         })
         .collect();
