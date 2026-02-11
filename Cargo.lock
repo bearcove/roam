@@ -1926,6 +1926,7 @@ dependencies = [
 [[package]]
 name = "peeps-tasks"
 version = "0.1.0"
+source = "git+https://github.com/bearcove/peeps?branch=main#2e00454e83aacd0a4d7e96a9f623131dc63e7985"
 dependencies = [
  "backtrace",
  "facet",
@@ -1936,6 +1937,7 @@ dependencies = [
 [[package]]
 name = "peeps-types"
 version = "0.1.0"
+source = "git+https://github.com/bearcove/peeps?branch=main#2e00454e83aacd0a4d7e96a9f623131dc63e7985"
 dependencies = [
  "facet",
  "inventory",

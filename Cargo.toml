@@ -62,12 +62,21 @@ roam-task-local = { path = "rust/roam-task-local", version = "3.0.0" }
 # External dependencies
 
 # peeps instrumentation
-peeps = { path = "../peeps/crates/peeps" }
-peeps-tasks = { path = "../peeps/crates/peeps-tasks" }
-peeps-threads = { path = "../peeps/crates/peeps-threads" }
-peeps-locks = { path = "../peeps/crates/peeps-locks" }
-peeps-roam = { path = "../peeps/crates/peeps-roam" }
-peeps-types = { path = "../peeps/crates/peeps-types" }
+peeps = { version = "0.1.0", git = "https://github.com/bearcove/peeps", branch = "main" }
+peeps-tasks = { version = "0.1.0", git = "https://github.com/bearcove/peeps", branch = "main" }
+peeps-threads = { version = "0.1.0", git = "https://github.com/bearcove/peeps", branch = "main" }
+peeps-locks = { version = "0.1.0", git = "https://github.com/bearcove/peeps", branch = "main" }
+peeps-roam = { version = "0.1.0", git = "https://github.com/bearcove/peeps", branch = "main" }
+peeps-types = { version = "0.1.0", git = "https://github.com/bearcove/peeps", branch = "main" }
+
+# # Uncomment to develop peeps
+# peeps = { path = "../peeps/crates/peeps" }
+# peeps-tasks = { path = "../peeps/crates/peeps-tasks" }
+# peeps-threads = { path = "../peeps/crates/peeps-threads" }
+# peeps-locks = { path = "../peeps/crates/peeps-locks" }
+# peeps-roam = { path = "../peeps/crates/peeps-roam" }
+# peeps-types = { path = "../peeps/crates/peeps-types" }
+
 inventory = "0.3"
 
 bytes = "1"
