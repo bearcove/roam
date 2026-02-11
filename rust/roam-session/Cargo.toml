@@ -31,6 +31,7 @@ tracing = { workspace = true, optional = true }
 # Native runtime
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 tokio.workspace = true
+peeps-tasks.workspace = true
 futures-util = { version = "0.3", default-features = false, features = [
   "std",
   "async-await-macro",

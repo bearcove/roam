@@ -1915,6 +1915,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "peeps-tasks"
+version = "0.1.0"
+dependencies = [
+ "backtrace",
+ "facet",
+ "tokio",
+]
+
+[[package]]
 name = "peer-server"
 version = "3.0.0"
 dependencies = [
@@ -2334,6 +2343,7 @@ dependencies = [
  "futures-channel",
  "futures-util",
  "gloo-timers",
+ "peeps-tasks",
  "roam",
  "roam-frame",
  "roam-task-local",
@@ -2354,6 +2364,7 @@ dependencies = [
  "futures-util",
  "libc",
  "libproc",
+ "peeps-tasks",
  "roam",
  "roam-fdpass",
  "roam-frame",
@@ -2925,6 +2936,7 @@ dependencies = [
  "bytes",
  "libc",
  "mio",
+ "parking_lot",
  "pin-project-lite",
  "signal-hook-registry",
  "socket2",
