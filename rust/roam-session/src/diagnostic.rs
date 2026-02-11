@@ -5,7 +5,7 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::fmt::Write as _;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock, RwLock, Weak};
 use std::time::Instant;
 
@@ -74,8 +74,26 @@ pub fn dump_all_diagnostics() -> String {
         return output;
     }
 
+    // Count occurrences of each role name for numbering
+    let mut role_counts: HashMap<String, usize> = HashMap::new();
     for state in &states {
-        let _ = writeln!(output, "{}", state.dump());
+        *role_counts.entry(state.name.clone()).or_insert(0) += 1;
+    }
+
+    // Number connections that share a role name
+    let mut role_indices: HashMap<String, usize> = HashMap::new();
+    for state in &states {
+        let count = role_counts.get(&state.name).copied().unwrap_or(1);
+        if count > 1 {
+            let idx = role_indices.entry(state.name.clone()).or_insert(0);
+            *idx += 1;
+            // Temporarily modify the name for this dump
+            let numbered_name = format!("{} {}", state.name, *idx);
+            let dump = state.dump_with_name(&numbered_name);
+            let _ = write!(output, "{}", dump);
+        } else {
+            let _ = write!(output, "{}", state.dump());
+        }
     }
 
     // Dump registered method names for reference
@@ -118,8 +136,10 @@ pub struct InFlightRequest {
     pub method_id: u64,
     pub started: Instant,
     pub direction: RequestDirection,
-    /// Optional structured arguments (only recorded when ROAM_DEBUG is set).
+    /// Structured arguments (captured when diagnostics feature is enabled).
     pub args: Option<HashMap<String, String>>,
+    /// Backtrace at call site (captured when diagnostics feature is enabled).
+    pub backtrace: Option<String>,
 }
 
 /// A recently completed RPC request.
@@ -155,6 +175,15 @@ pub struct DiagnosticState {
     /// Human-readable name for this connection (e.g., "client", "server")
     pub name: String,
 
+    /// Peer's self-reported name (from Hello V6 metadata).
+    peer_name: RwLock<Option<String>>,
+
+    /// Negotiated max concurrent requests.
+    max_concurrent_requests: AtomicU32,
+
+    /// Negotiated initial channel credit.
+    initial_credit: AtomicU32,
+
     /// When this connection was established
     created_at: Instant,
 
@@ -179,6 +208,9 @@ impl DiagnosticState {
     pub fn new(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
+            peer_name: RwLock::new(None),
+            max_concurrent_requests: AtomicU32::new(0),
+            initial_credit: AtomicU32::new(0),
             created_at: Instant::now(),
             total_completed: AtomicU64::new(0),
             requests: RwLock::new(HashMap::new()),
@@ -188,6 +220,20 @@ impl DiagnosticState {
         }
     }
 
+    /// Set the peer's name (from Hello V6 metadata).
+    pub fn set_peer_name(&self, name: String) {
+        if let Ok(mut peer_name) = self.peer_name.write() {
+            *peer_name = Some(name);
+        }
+    }
+
+    /// Set negotiated flow control parameters.
+    pub fn set_negotiated_params(&self, max_concurrent_requests: u32, initial_credit: u32) {
+        self.max_concurrent_requests
+            .store(max_concurrent_requests, Ordering::Relaxed);
+        self.initial_credit.store(initial_credit, Ordering::Relaxed);
+    }
+
     /// Record an outgoing request (we're calling remote).
     pub fn record_outgoing_request(
         &self,
@@ -195,6 +241,7 @@ impl DiagnosticState {
         method_id: u64,
         args: Option<HashMap<String, String>>,
     ) {
+        let backtrace = Some(format_short_backtrace());
         if let Ok(mut requests) = self.requests.write() {
             requests.insert(
                 request_id,
@@ -204,6 +251,7 @@ impl DiagnosticState {
                     started: Instant::now(),
                     direction: RequestDirection::Outgoing,
                     args,
+                    backtrace,
                 },
             );
         }
@@ -225,6 +273,7 @@ impl DiagnosticState {
                     started: Instant::now(),
                     direction: RequestDirection::Incoming,
                     args,
+                    backtrace: None, // no backtrace for incoming — the remote captured it
                 },
             );
         }
@@ -313,13 +362,31 @@ impl DiagnosticState {
         let total = self.total_completed.load(Ordering::Relaxed);
         let mut output = String::new();
 
+        // Format header with optional peer name
+        let peer_label = self
+            .peer_name
+            .try_read()
+            .ok()
+            .and_then(|g| g.as_ref().map(|n| format!(" {:?}", n)));
         let _ = writeln!(
             output,
-            "[{}] age={:.1}s total_completed={}",
+            "[{}{}] age={:.1}s total_completed={}",
             self.name,
+            peer_label.as_deref().unwrap_or(""),
             age.as_secs_f64(),
             total,
         );
+
+        // Flow control state
+        let max_concurrent = self.max_concurrent_requests.load(Ordering::Relaxed);
+        let credit = self.initial_credit.load(Ordering::Relaxed);
+        if max_concurrent > 0 || credit > 0 {
+            let _ = writeln!(
+                output,
+                "  Flow: max_concurrent={}, initial_credit={}",
+                max_concurrent, credit,
+            );
+        }
 
         // ── In-flight requests ───────────────────────────────────
         if let Ok(requests) = self.requests.try_read() {
@@ -360,6 +427,13 @@ impl DiagnosticState {
                     }
                 }
                 output.push('\n');
+                if let Some(bt) = &req.backtrace
+                    && !bt.is_empty()
+                {
+                    for line in bt.lines() {
+                        let _ = writeln!(output, "      {}", line);
+                    }
+                }
             }
 
             for req in &incoming {
@@ -433,10 +507,45 @@ impl DiagnosticState {
         output
     }
 
+    /// Dump with an overridden name (used for numbered connections).
+    pub fn dump_with_name(&self, name: &str) -> String {
+        // Clone self's dump but replace the header line's name
+        let full = self.dump();
+        // Replace first occurrence of [self.name] with [name]
+        let old_prefix = format!("[{}", self.name);
+        let new_prefix = format!("[{}", name);
+        full.replacen(&old_prefix, &new_prefix, 1)
+    }
+
     /// Legacy compat — same as `dump()` but returns `Option`.
     pub fn dump_if_nonempty(&self) -> Option<String> {
         Some(self.dump())
     }
+}
+
+/// Capture a short backtrace, filtering to only relevant frames.
+fn format_short_backtrace() -> String {
+    let bt = std::backtrace::Backtrace::force_capture();
+    let full = bt.to_string();
+    let mut lines = Vec::new();
+    for line in full.lines() {
+        // Skip backtrace infrastructure, std, tokio internals
+        if line.contains("std::backtrace")
+            || line.contains("roam_session::diagnostic")
+            || line.contains("__rust_begin_short_backtrace")
+            || line.contains("__rust_end_short_backtrace")
+        {
+            continue;
+        }
+        // Keep lines that look like user code
+        if line.contains("roam") || line.contains("vx_") || line.contains("vxd") {
+            lines.push(line.trim().to_string());
+            if lines.len() >= 5 {
+                break;
+            }
+        }
+    }
+    lines.join("\n")
 }
 
 impl std::fmt::Debug for DiagnosticState {
