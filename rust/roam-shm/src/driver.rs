@@ -1462,7 +1462,7 @@ impl MultiPeerHostDriverBuilder {
         let (incoming_response_tx, incoming_response_rx) =
             auditable::channel("incoming_responses", 256);
 
-        for (peer_id, dispatcher, peer_name) in self.peers {
+        for (peer_id, dispatcher, _peer_name) in self.peers {
             // Create single unified channel for all messages (Call/Data/Close/Response).
             // Single channel ensures FIFO ordering.
             let (driver_tx, mut driver_rx) = mpsc::channel(256);
@@ -1490,7 +1490,7 @@ impl MultiPeerHostDriverBuilder {
 
             #[cfg(feature = "diagnostics")]
             let peer_diagnostic_state = {
-                let diag_name = if let Some(ref name) = peer_name {
+                let diag_name = if let Some(ref name) = _peer_name {
                     format!("shm-host {}", name)
                 } else {
                     format!("shm-host-peer-{}", peer_id.get())

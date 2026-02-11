@@ -495,16 +495,16 @@ impl DiagnosticState {
         }
 
         // ── Channel credits ──────────────────────────────────────
-        if let Ok(credits) = self.channel_credits.try_read() {
-            if !credits.is_empty() {
-                let _ = writeln!(output, "  Channel credits ({}):", credits.len());
-                for cc in credits.iter() {
-                    let _ = writeln!(
-                        output,
-                        "    ch#{}: in={}, out={}",
-                        cc.channel_id, cc.incoming_credit, cc.outgoing_credit,
-                    );
-                }
+        if let Ok(credits) = self.channel_credits.try_read()
+            && !credits.is_empty()
+        {
+            let _ = writeln!(output, "  Channel credits ({}):", credits.len());
+            for cc in credits.iter() {
+                let _ = writeln!(
+                    output,
+                    "    ch#{}: in={}, out={}",
+                    cc.channel_id, cc.incoming_credit, cc.outgoing_credit,
+                );
             }
         }
 
@@ -642,8 +642,6 @@ impl DiagnosticState {
         Some(self.dump())
     }
 }
-
-/// Capture a short backtrace, filtering to only relevant frames.
 
 /// Collect all live diagnostic states (for snapshot use).
 /// Uses try_read to avoid deadlocking from signal handlers.

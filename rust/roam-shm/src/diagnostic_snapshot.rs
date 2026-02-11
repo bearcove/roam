@@ -57,7 +57,6 @@ impl From<crate::peer::PeerState> for ShmPeerState {
             crate::peer::PeerState::Reserved => ShmPeerState::Reserved,
             crate::peer::PeerState::Attached => ShmPeerState::Attached,
             crate::peer::PeerState::Goodbye => ShmPeerState::Goodbye,
-            _ => ShmPeerState::Unknown,
         }
     }
 }
