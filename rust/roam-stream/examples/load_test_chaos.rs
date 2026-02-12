@@ -549,7 +549,7 @@ async fn chaos_mixed(
                             let mut data = vec![(i % 256) as u8; size];
                             let _ = timeout(
                                 Duration::from_millis(200),
-                                handle.call(METHOD_BIG_DATA, &mut data),
+                                handle.call(METHOD_BIG_DATA, &mut data, &VEC_U8_ARGS_PLAN),
                             )
                             .await;
                         });
@@ -585,7 +585,7 @@ async fn chaos_mixed(
                             };
                             let _ = timeout(
                                 Duration::from_millis(200),
-                                handle.call(METHOD_COMPLEX_STRUCT, &mut req),
+                                handle.call(METHOD_COMPLEX_STRUCT, &mut req, &COMPLEX_REQUEST_ARGS_PLAN),
                             )
                             .await;
                         });
@@ -610,7 +610,7 @@ async fn chaos_mixed(
                             let mut args = i;
                             let _ = timeout(
                                 Duration::from_millis(100),
-                                handle.call(METHOD_INSTANT, &mut args),
+                                handle.call(METHOD_INSTANT, &mut args, &U64_ARGS_PLAN),
                             )
                             .await;
                         });

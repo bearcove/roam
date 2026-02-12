@@ -18,3 +18,4 @@ tokio = { workspace = true, features = ["rt", "rt-multi-thread", "sync", "time",
 [dev-dependencies]
 facet-testhelpers = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread"] }
+once_cell = "1"

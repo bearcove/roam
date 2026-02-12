@@ -1108,6 +1108,7 @@ impl ConnectionHandle {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::RpcPlan;
     use std::time::Duration;
 
     #[tokio::test]
@@ -1117,7 +1118,8 @@ mod tests {
 
         let (stream_tx, stream_rx) = crate::channel::<Vec<u8>>();
         let mut args = (stream_rx,);
-        let call_task = tokio::spawn(async move { handle.call(42, &mut args).await });
+        let args_plan = RpcPlan::for_type::<(crate::Rx<Vec<u8>>,)>();
+        let call_task = tokio::spawn(async move { handle.call(42, &mut args, &args_plan).await });
 
         let call_msg = driver_rx
             .recv()
