@@ -2338,6 +2338,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "roam-miri-test"
+version = "3.0.0"
+dependencies = [
+ "facet",
+ "facet-postcard",
+ "roam-session",
+ "roam-stream",
+ "roam-wire",
+ "tokio",
+]
+
+[[package]]
 name = "roam-schema"
 version = "3.0.0"
 dependencies = [

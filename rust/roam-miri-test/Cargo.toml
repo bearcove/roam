@@ -1,0 +1,18 @@
+[package]
+name = "roam-miri-test"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+roam-session = { path = "../roam-session" }
+roam-stream = { path = "../roam-stream" }
+roam-wire = { path = "../roam-wire" }
+facet = { workspace = true }
+facet-postcard = { workspace = true }
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "sync", "time", "macros", "net"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread"] }
