@@ -14,10 +14,27 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
 use roam_session::{
-    ChannelRegistry, Context, RoamError, ServiceDispatcher, dispatch_call, dispatch_unknown_method,
+    ChannelRegistry, Context, RoamError, RpcPlan, ServiceDispatcher, dispatch_call,
+    dispatch_unknown_method,
 };
+use facet::Facet;
+use once_cell::sync::Lazy;
 use roam_stream::{ConnectionError, Connector, HandshakeConfig, accept, connect};
 use tokio::net::{UnixListener, UnixStream};
+
+// ============================================================================
+// RPC Plans
+// ============================================================================
+
+static UNIT_ARGS_PLAN: Lazy<RpcPlan> = Lazy::new(|| RpcPlan::for_type::<()>());
+static U32_RESPONSE_PLAN: Lazy<Arc<RpcPlan>> =
+    Lazy::new(|| Arc::new(RpcPlan::for_type::<u32>()));
+
+static U32_ARGS_PLAN: Lazy<RpcPlan> = Lazy::new(|| RpcPlan::for_type::<u32>());
+
+static STRING_ARGS_PLAN: Lazy<RpcPlan> = Lazy::new(|| RpcPlan::for_type::<String>());
+static STRING_RESPONSE_PLAN: Lazy<Arc<RpcPlan>> =
+    Lazy::new(|| Arc::new(RpcPlan::for_type::<String>()));
 
 // ============================================================================
 // Test Service with Fast and Slow Methods
@@ -74,6 +91,8 @@ impl ServiceDispatcher for TestService {
                 &cx,
                 payload,
                 registry,
+                &UNIT_ARGS_PLAN,
+                U32_RESPONSE_PLAN.clone(),
                 |_: ()| async move { Ok(42) },
             ),
 
@@ -82,6 +101,8 @@ impl ServiceDispatcher for TestService {
                 &cx,
                 payload,
                 registry,
+                &U32_ARGS_PLAN,
+                U32_RESPONSE_PLAN.clone(),
                 |n: u32| async move {
                     tokio::time::sleep(Duration::from_millis(1 + (n % 5) as u64)).await;
                     Ok(n * 2)
@@ -93,6 +114,8 @@ impl ServiceDispatcher for TestService {
                 &cx,
                 payload,
                 registry,
+                &U32_ARGS_PLAN,
+                U32_RESPONSE_PLAN.clone(),
                 |n: u32| async move {
                     tokio::time::sleep(Duration::from_millis(10 + (n % 20) as u64)).await;
                     Ok(n * 3)
@@ -104,6 +127,8 @@ impl ServiceDispatcher for TestService {
                 &cx,
                 payload,
                 registry,
+                &U32_ARGS_PLAN,
+                U32_RESPONSE_PLAN.clone(),
                 |n: u32| async move {
                     tokio::time::sleep(Duration::from_millis(50 + (n % 50) as u64)).await;
                     Ok(n * 4)
@@ -115,6 +140,8 @@ impl ServiceDispatcher for TestService {
                 &cx,
                 payload,
                 registry,
+                &U32_ARGS_PLAN,
+                U32_RESPONSE_PLAN.clone(),
                 |n: u32| async move {
                     tokio::time::sleep(Duration::from_millis(100 + (n % 100) as u64)).await;
                     Ok(n * 5)
@@ -126,6 +153,8 @@ impl ServiceDispatcher for TestService {
                 &cx,
                 payload,
                 registry,
+                &STRING_ARGS_PLAN,
+                STRING_RESPONSE_PLAN.clone(),
                 |s: String| async move { Ok(s) },
             ),
 
@@ -235,7 +264,7 @@ async fn load_test_single_connection_varied_calls() {
                     // ECHO method
                     let msg = format!("message-{}", i);
                     let mut args = msg.clone();
-                    let response = handle.call(METHOD_ECHO, &mut args).await.unwrap();
+                    let response = handle.call(METHOD_ECHO, &mut args, &STRING_ARGS_PLAN).await.unwrap();
                     let result: Result<String, RoamError<()>> = decode_result(response.payload);
                     assert_eq!(result.unwrap(), msg);
                     return;
@@ -244,7 +273,7 @@ async fn load_test_single_connection_varied_calls() {
             };
 
             let mut args = arg;
-            let response = handle.call(method, &mut args).await.unwrap();
+            let response = handle.call(method, &mut args, &U32_ARGS_PLAN).await.unwrap();
             let result: Result<u32, RoamError<()>> = decode_result(response.payload);
 
             if method == METHOD_INSTANT {
@@ -307,7 +336,7 @@ async fn load_test_multiple_connections() {
 
                     let arg = i as u32;
                     let mut args = arg;
-                    let response = handle.call(method, &mut args).await.unwrap();
+                    let response = handle.call(method, &mut args, &U32_ARGS_PLAN).await.unwrap();
                     let result: Result<u32, RoamError<()>> = decode_result(response.payload);
 
                     // Verify we got a response
@@ -380,7 +409,7 @@ async fn load_test_mixed_burst() {
 
                     let arg = i as u32;
                     let mut args = arg;
-                    let response = client.call(method, &mut args).await.unwrap();
+                    let response = client.call(method, &mut args, &U32_ARGS_PLAN).await.unwrap();
                     let result: Result<u32, RoamError<()>> = decode_result(response.payload);
                     assert!(result.is_ok());
                 });
@@ -457,12 +486,12 @@ async fn load_test_chaos() {
                     if method == METHOD_ECHO {
                         let msg = format!("chaos-{}", seed);
                         let mut args = msg.clone();
-                        let response = handle.call(method, &mut args).await.unwrap();
+                        let response = handle.call(method, &mut args, &STRING_ARGS_PLAN).await.unwrap();
                         let result: Result<String, RoamError<()>> = decode_result(response.payload);
                         assert_eq!(result.unwrap(), msg);
                     } else {
                         let mut args = seed;
-                        let response = handle.call(method, &mut args).await.unwrap();
+                        let response = handle.call(method, &mut args, &U32_ARGS_PLAN).await.unwrap();
                         let result: Result<u32, RoamError<()>> = decode_result(response.payload);
                         assert!(result.is_ok());
                     }

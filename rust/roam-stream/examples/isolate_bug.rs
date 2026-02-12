@@ -9,10 +9,20 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
 use roam_session::{
-    ChannelRegistry, Context, ServiceDispatcher, dispatch_call, dispatch_unknown_method,
+    ChannelRegistry, Context, RpcPlan, ServiceDispatcher, dispatch_call, dispatch_unknown_method,
 };
+use facet::Facet;
+use once_cell::sync::Lazy;
 use roam_stream::{Connector, HandshakeConfig, accept, connect};
 use tokio::net::{UnixListener, UnixStream};
+
+// ============================================================================
+// RPC Plans
+// ============================================================================
+
+static VEC_U8_ARGS_PLAN: Lazy<RpcPlan> = Lazy::new(|| RpcPlan::for_type::<Vec<u8>>());
+static VEC_U8_RESPONSE_PLAN: Lazy<Arc<RpcPlan>> =
+    Lazy::new(|| Arc::new(RpcPlan::for_type::<Vec<u8>>()));
 
 #[derive(Clone)]
 struct TestService {
@@ -38,6 +48,8 @@ impl ServiceDispatcher for TestService {
             &cx,
             payload,
             registry,
+            &VEC_U8_ARGS_PLAN,
+            VEC_U8_RESPONSE_PLAN.clone(),
             |data: Vec<u8>| async move {
                 let mut result = data;
                 result.reverse();
@@ -121,7 +133,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             let handle = handle.clone();
             let task = tokio::spawn(async move {
                 let mut data = vec![(i % 256) as u8; size];
-                match handle.call(METHOD_BIG_VEC, &mut data).await {
+                match handle.call(METHOD_BIG_VEC, &mut data, &VEC_U8_ARGS_PLAN).await {
                     Ok(_) => true,
                     Err(e) => {
                         eprintln!("Call failed: {:?}", e);

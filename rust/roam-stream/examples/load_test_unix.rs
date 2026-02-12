@@ -12,10 +12,21 @@ use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use roam_session::{
-    ChannelRegistry, Context, RoamError, ServiceDispatcher, dispatch_call, dispatch_unknown_method,
+    ChannelRegistry, Context, RoamError, RpcPlan, ServiceDispatcher, dispatch_call,
+    dispatch_unknown_method,
 };
+use facet::Facet;
+use once_cell::sync::Lazy;
 use roam_stream::{Connector, HandshakeConfig, accept, connect};
 use tokio::net::{UnixListener, UnixStream};
+
+// ============================================================================
+// RPC Plans
+// ============================================================================
+
+static U64_ARGS_PLAN: Lazy<RpcPlan> = Lazy::new(|| RpcPlan::for_type::<u64>());
+static U64_RESPONSE_PLAN: Lazy<Arc<RpcPlan>> =
+    Lazy::new(|| Arc::new(RpcPlan::for_type::<u64>()));
 
 // ============================================================================
 // Test Service with Fast and Slow Methods
@@ -83,6 +94,8 @@ impl ServiceDispatcher for LoadTestService {
                     &cx,
                     payload,
                     registry,
+                    &U64_ARGS_PLAN,
+                    U64_RESPONSE_PLAN.clone(),
                     |n: u64| async move { Ok(n.wrapping_mul(2)) },
                 )
             }
@@ -90,28 +103,49 @@ impl ServiceDispatcher for LoadTestService {
             // fast(n: u64) -> u64 - sleeps 1-5ms
             METHOD_FAST => {
                 self.calls_fast.fetch_add(1, Ordering::Relaxed);
-                dispatch_call::<u64, u64, (), _, _>(&cx, payload, registry, |n: u64| async move {
-                    tokio::time::sleep(Duration::from_millis(1 + (n % 5))).await;
-                    Ok(n.wrapping_mul(3))
-                })
+                dispatch_call::<u64, u64, (), _, _>(
+                    &cx,
+                    payload,
+                    registry,
+                    &U64_ARGS_PLAN,
+                    U64_RESPONSE_PLAN.clone(),
+                    |n: u64| async move {
+                        tokio::time::sleep(Duration::from_millis(1 + (n % 5))).await;
+                        Ok(n.wrapping_mul(3))
+                    },
+                )
             }
 
             // medium(n: u64) -> u64 - sleeps 10-30ms
             METHOD_MEDIUM => {
                 self.calls_medium.fetch_add(1, Ordering::Relaxed);
-                dispatch_call::<u64, u64, (), _, _>(&cx, payload, registry, |n: u64| async move {
-                    tokio::time::sleep(Duration::from_millis(10 + (n % 20))).await;
-                    Ok(n.wrapping_mul(4))
-                })
+                dispatch_call::<u64, u64, (), _, _>(
+                    &cx,
+                    payload,
+                    registry,
+                    &U64_ARGS_PLAN,
+                    U64_RESPONSE_PLAN.clone(),
+                    |n: u64| async move {
+                        tokio::time::sleep(Duration::from_millis(10 + (n % 20))).await;
+                        Ok(n.wrapping_mul(4))
+                    },
+                )
             }
 
             // slow(n: u64) -> u64 - sleeps 50-100ms
             METHOD_SLOW => {
                 self.calls_slow.fetch_add(1, Ordering::Relaxed);
-                dispatch_call::<u64, u64, (), _, _>(&cx, payload, registry, |n: u64| async move {
-                    tokio::time::sleep(Duration::from_millis(50 + (n % 50))).await;
-                    Ok(n.wrapping_mul(5))
-                })
+                dispatch_call::<u64, u64, (), _, _>(
+                    &cx,
+                    payload,
+                    registry,
+                    &U64_ARGS_PLAN,
+                    U64_RESPONSE_PLAN.clone(),
+                    |n: u64| async move {
+                        tokio::time::sleep(Duration::from_millis(50 + (n % 50))).await;
+                        Ok(n.wrapping_mul(5))
+                    },
+                )
             }
 
             _ => dispatch_unknown_method(&cx, registry),
@@ -222,7 +256,7 @@ async fn run_client_worker(
             // Make the call
             let mut args = seed;
             let response = handle
-                .call(method, &mut args)
+                .call(method, &mut args, &U64_ARGS_PLAN)
                 .await
                 .expect("Call failed");
             let result: u64 = decode_result(response.payload);

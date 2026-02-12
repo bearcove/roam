@@ -9,11 +9,21 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
 use roam_session::{
-    ChannelRegistry, Context, ServiceDispatcher, MessageTransport, HandshakeConfig,
+    ChannelRegistry, Context, RpcPlan, ServiceDispatcher, MessageTransport, HandshakeConfig,
     dispatch_call, dispatch_unknown_method, accept_framed, initiate_framed, NoDispatcher,
 };
+use facet::Facet;
+use once_cell::sync::Lazy;
 use roam_wire::Message;
 use tokio::sync::mpsc;
+
+// ============================================================================
+// RPC Plans
+// ============================================================================
+
+static VEC_U8_ARGS_PLAN: Lazy<RpcPlan> = Lazy::new(|| RpcPlan::for_type::<Vec<u8>>());
+static VEC_U8_RESPONSE_PLAN: Lazy<Arc<RpcPlan>> =
+    Lazy::new(|| Arc::new(RpcPlan::for_type::<Vec<u8>>()));
 
 const METHOD_BIG_DATA: u64 = 1;
 
@@ -49,6 +59,8 @@ impl ServiceDispatcher for TestService {
                     &cx,
                     payload,
                     registry,
+                    &VEC_U8_ARGS_PLAN,
+                    VEC_U8_RESPONSE_PLAN.clone(),
                     move |data: Vec<u8>| async move {
                         let mut result = data.clone();
                         result.reverse();
@@ -158,7 +170,7 @@ fn test_concurrent_vec_calls() {
                     *byte = (idx % 256) as u8;
                 }
 
-                let _ = handle.call(METHOD_BIG_DATA, &mut data).await;
+                let _ = handle.call(METHOD_BIG_DATA, &mut data, &VEC_U8_ARGS_PLAN).await;
             });
             tasks.push(task);
         }

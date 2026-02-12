@@ -16,11 +16,31 @@ use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use roam_session::{
-    ChannelRegistry, Context, RoamError, ServiceDispatcher, dispatch_call, dispatch_unknown_method,
+    ChannelRegistry, Context, RoamError, RpcPlan, ServiceDispatcher, dispatch_call,
+    dispatch_unknown_method,
 };
+use facet::Facet;
+use once_cell::sync::Lazy;
 use roam_stream::{Connector, HandshakeConfig, accept, connect};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::time::timeout;
+
+// ============================================================================
+// RPC Plans
+// ============================================================================
+
+static U64_ARGS_PLAN: Lazy<RpcPlan> = Lazy::new(|| RpcPlan::for_type::<u64>());
+static U64_RESPONSE_PLAN: Lazy<Arc<RpcPlan>> =
+    Lazy::new(|| Arc::new(RpcPlan::for_type::<u64>()));
+
+static VEC_U8_ARGS_PLAN: Lazy<RpcPlan> = Lazy::new(|| RpcPlan::for_type::<Vec<u8>>());
+static VEC_U8_RESPONSE_PLAN: Lazy<Arc<RpcPlan>> =
+    Lazy::new(|| Arc::new(RpcPlan::for_type::<Vec<u8>>()));
+
+static COMPLEX_REQUEST_ARGS_PLAN: Lazy<RpcPlan> =
+    Lazy::new(|| RpcPlan::for_type::<ComplexRequest>());
+static COMPLEX_RESPONSE_PLAN: Lazy<Arc<RpcPlan>> =
+    Lazy::new(|| Arc::new(RpcPlan::for_type::<ComplexResponse>()));
 
 // ============================================================================
 // Test Service
@@ -111,6 +131,8 @@ impl ServiceDispatcher for ChaosService {
                 &cx,
                 payload,
                 registry,
+                &U64_ARGS_PLAN,
+                U64_RESPONSE_PLAN.clone(),
                 move |n: u64| async move {
                     completed.fetch_add(1, Ordering::Relaxed);
                     Ok(n)
@@ -123,6 +145,8 @@ impl ServiceDispatcher for ChaosService {
                     &cx,
                     payload,
                     registry,
+                    &U64_ARGS_PLAN,
+                    U64_RESPONSE_PLAN.clone(),
                     move |n: u64| async move {
                         tokio::time::sleep(Duration::from_millis(100)).await;
                         completed.fetch_add(1, Ordering::Relaxed);
@@ -137,6 +161,8 @@ impl ServiceDispatcher for ChaosService {
                     &cx,
                     payload,
                     registry,
+                    &U64_ARGS_PLAN,
+                    U64_RESPONSE_PLAN.clone(),
                     move |n: u64| async move {
                         tokio::time::sleep(Duration::from_millis(500)).await;
                         completed.fetch_add(1, Ordering::Relaxed);
@@ -151,6 +177,8 @@ impl ServiceDispatcher for ChaosService {
                     &cx,
                     payload,
                     registry,
+                    &VEC_U8_ARGS_PLAN,
+                    VEC_U8_RESPONSE_PLAN.clone(),
                     move |data: Vec<u8>| async move {
                         // Process the big data (simulate work)
                         tokio::time::sleep(Duration::from_millis(10)).await;
@@ -171,6 +199,8 @@ impl ServiceDispatcher for ChaosService {
                     &cx,
                     payload,
                     registry,
+                    &COMPLEX_REQUEST_ARGS_PLAN,
+                    COMPLEX_RESPONSE_PLAN.clone(),
                     move |req: ComplexRequest| async move {
                         tokio::time::sleep(Duration::from_millis(20)).await;
 
@@ -269,7 +299,7 @@ async fn chaos_disconnecting_clients(
         let handle = client.handle().await?;
         let task = tokio::spawn(async move {
             let mut args = i as u64;
-            let _ = handle.call(METHOD_VERY_SLOW, &mut args).await;
+            let _ = handle.call(METHOD_VERY_SLOW, &mut args, &U64_ARGS_PLAN).await;
         });
 
         // Disconnect before it completes
@@ -299,7 +329,7 @@ async fn chaos_cancelled_calls(
         let handle = handle.clone();
         let task = tokio::spawn(async move {
             let mut args = i as u64;
-            let _ = handle.call(METHOD_VERY_SLOW, &mut args).await;
+            let _ = handle.call(METHOD_VERY_SLOW, &mut args, &U64_ARGS_PLAN).await;
         });
 
         // Cancel by dropping after a short delay
@@ -327,7 +357,7 @@ async fn chaos_connection_churn(
         if i % 3 == 0 {
             if let Ok(handle) = client.handle().await {
                 let mut args = i as u64;
-                let _ = handle.call(METHOD_INSTANT, &mut args).await;
+                let _ = handle.call(METHOD_INSTANT, &mut args, &U64_ARGS_PLAN).await;
             }
         }
 
@@ -370,7 +400,7 @@ async fn chaos_overwhelm(
                         *byte = (idx % 256) as u8;
                     }
 
-                    match timeout(Duration::from_secs(2), handle.call(METHOD_BIG_DATA, &mut data)).await {
+                    match timeout(Duration::from_secs(2), handle.call(METHOD_BIG_DATA, &mut data, &VEC_U8_ARGS_PLAN)).await {
                         Ok(Ok(response)) => {
                             let result: Vec<u8> = decode_result(response.payload);
                             // Verify it was reversed
@@ -403,7 +433,7 @@ async fn chaos_overwhelm(
                         ].into_iter().collect(),
                     };
 
-                    match timeout(Duration::from_secs(2), handle.call(METHOD_COMPLEX_STRUCT, &mut req)).await {
+                    match timeout(Duration::from_secs(2), handle.call(METHOD_COMPLEX_STRUCT, &mut req, &COMPLEX_REQUEST_ARGS_PLAN)).await {
                         Ok(Ok(response)) => {
                             let result: ComplexResponse = decode_result(response.payload);
                             if result.request_id == i as u64 {
@@ -416,7 +446,7 @@ async fn chaos_overwhelm(
                 _ => {
                     // Simple call
                     let mut args = i as u64;
-                    match timeout(Duration::from_secs(2), handle.call(METHOD_SLOW, &mut args)).await {
+                    match timeout(Duration::from_secs(2), handle.call(METHOD_SLOW, &mut args, &U64_ARGS_PLAN)).await {
                         Ok(Ok(response)) => {
                             let _: u64 = decode_result(response.payload);
                             stats.fetch_add(1, Ordering::Relaxed);
@@ -458,7 +488,7 @@ async fn chaos_mixed(
                 if let Ok(handle) = client.handle().await {
                     let task = tokio::spawn(async move {
                         let mut data = vec![0xAA; 50 * 1024]; // 50KB
-                        let _ = handle.call(METHOD_BIG_DATA, &mut data).await;
+                        let _ = handle.call(METHOD_BIG_DATA, &mut data, &VEC_U8_ARGS_PLAN).await;
                     });
                     tokio::time::sleep(Duration::from_millis(5)).await;
                     drop(client);
@@ -485,7 +515,7 @@ async fn chaos_mixed(
                             tags: vec!["test".to_string(); 10],
                             metadata: Default::default(),
                         };
-                        let _ = handle.call(METHOD_COMPLEX_STRUCT, &mut req).await;
+                        let _ = handle.call(METHOD_COMPLEX_STRUCT, &mut req, &COMPLEX_REQUEST_ARGS_PLAN).await;
                     });
                     tokio::time::sleep(Duration::from_millis(10)).await;
                     task.abort();

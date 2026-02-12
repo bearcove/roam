@@ -1,5 +1,4 @@
 use std::sync::Arc;
-use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use facet::Facet;

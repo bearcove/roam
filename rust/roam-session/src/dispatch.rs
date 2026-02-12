@@ -6,7 +6,7 @@
 //! - [`ServiceDispatcher`] trait - implemented by generated service dispatchers
 //! - [`RoutedDispatcher`] - routes to different dispatchers by method ID
 
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use facet::Facet;
 use facet_core::{PtrConst, PtrMut, PtrUninit};
