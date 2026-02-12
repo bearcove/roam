@@ -238,11 +238,16 @@ impl Clone for Context {
 ///
 /// The `channels` parameter contains channel IDs from the Request message framing.
 /// These are patched into the deserialized args before binding channels.
+///
+/// **IMPORTANT**: Create `ARGS_PLAN` and `RESPONSE_PLAN` statics in your generated
+/// dispatch code (one per endpoint), NOT inside a generic function, then pass them here.
 #[allow(unsafe_code)]
 pub fn dispatch_call<A, R, E, F, Fut>(
     cx: &Context,
     payload: Vec<u8>,
     registry: &mut ChannelRegistry,
+    args_plan: &RpcPlan,
+    response_plan: Arc<RpcPlan>,
     handler: F,
 ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'static>>
 where
@@ -252,13 +257,6 @@ where
     F: FnOnce(A) -> Fut + Send + 'static,
     Fut: std::future::Future<Output = Result<R, E>> + Send + 'static,
 {
-    // OnceLock is monomorphized per type — one per arg/response type for the program lifetime.
-    static ARGS_PLAN: OnceLock<Arc<RpcPlan>> = OnceLock::new();
-    let args_plan = ARGS_PLAN.get_or_init(|| Arc::new(RpcPlan::for_type::<A>()));
-
-    static RESPONSE_PLAN: OnceLock<Arc<RpcPlan>> = OnceLock::new();
-    let response_plan = RESPONSE_PLAN.get_or_init(|| Arc::new(RpcPlan::for_type::<R>()));
-    let response_plan = Arc::clone(response_plan);
 
     let conn_id = cx.conn_id;
     let request_id = cx.request_id.raw();
@@ -269,14 +267,24 @@ where
 
     // SAFETY: args_slot is properly aligned and sized for A.
     // prepare_sync will initialize it on success.
-    let prepare_result = unsafe {
-        prepare_sync(
-            args_slot.as_mut_ptr().cast(),
-            args_plan,
-            &payload,
-            &cx.channels,
-            registry,
-        )
+    //
+    // TEMPORARY: mutex to test if facet has concurrency bug
+    use std::sync::Mutex;
+    static FACET_BUG_LOCK: Mutex<()> = Mutex::new(());
+    let prepare_result = {
+        let _guard = FACET_BUG_LOCK.lock().unwrap();
+        eprintln!("[prepare_sync] START conn={} req={} type={}", conn_id, request_id, std::any::type_name::<A>());
+        let result = unsafe {
+            prepare_sync(
+                args_slot.as_mut_ptr().cast(),
+                args_plan,
+                &payload,
+                &cx.channels,
+                registry,
+            )
+        };
+        eprintln!("[prepare_sync] END conn={} req={} result={:?}", conn_id, request_id, result.is_ok());
+        result
     };
 
     let task_tx = registry.driver_tx();
@@ -355,14 +363,24 @@ where
 
     // SAFETY: args_slot is properly aligned and sized for A.
     // prepare_sync will initialize it on success.
-    let prepare_result = unsafe {
-        prepare_sync(
-            args_slot.as_mut_ptr().cast(),
-            args_plan,
-            &payload,
-            &cx.channels,
-            registry,
-        )
+    //
+    // TEMPORARY: mutex to test if facet has concurrency bug
+    use std::sync::Mutex;
+    static FACET_BUG_LOCK: Mutex<()> = Mutex::new(());
+    let prepare_result = {
+        let _guard = FACET_BUG_LOCK.lock().unwrap();
+        eprintln!("[prepare_sync] START conn={} req={} type={}", conn_id, request_id, std::any::type_name::<A>());
+        let result = unsafe {
+            prepare_sync(
+                args_slot.as_mut_ptr().cast(),
+                args_plan,
+                &payload,
+                &cx.channels,
+                registry,
+            )
+        };
+        eprintln!("[prepare_sync] END conn={} req={} result={:?}", conn_id, request_id, result.is_ok());
+        result
     };
 
     let task_tx = registry.driver_tx();
@@ -508,6 +526,7 @@ pub unsafe fn prepare_sync(
     registry: &mut ChannelRegistry,
 ) -> Result<(), PrepareError> {
     let shape = plan.type_plan.root().shape;
+    eprintln!("[prepare_sync deserialize] plan.type_plan.root().shape={} plan_addr={:p}", shape, plan as *const _);
 
     // 1. Deserialize into args_ptr using the precomputed type plan
     // SAFETY: caller guarantees args_ptr is valid and properly sized
@@ -563,6 +582,9 @@ pub unsafe fn deserialize_into(
     type_plan: &Arc<facet_reflect::TypePlanCore>,
     payload: &[u8],
 ) -> Result<(), PrepareError> {
+    let root_shape = type_plan.root().shape;
+    eprintln!("[deserialize_into] root_shape={} payload_len={}", root_shape, payload.len());
+
     // Create a Partial that writes directly into caller-provided memory.
     // This avoids heap allocation - the value is constructed in-place.
     let ptr_uninit = PtrUninit::new(ptr.cast::<u8>());
@@ -573,6 +595,8 @@ pub unsafe fn deserialize_into(
     let partial: Partial<'_, false> =
         unsafe { Partial::from_raw(ptr_uninit, type_plan.clone(), root_id) }
             .map_err(|e| PrepareError::Deserialize(e.to_string()))?;
+
+    eprintln!("[deserialize_into] partial.shape()={}", partial.shape());
 
     // Use facet-format's FormatDeserializer with PostcardParser to deserialize.
     // This is non-generic - it uses the Shape for all type information.

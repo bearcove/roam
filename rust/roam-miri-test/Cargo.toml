@@ -7,6 +7,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+roam = { path = "../roam" }
 roam-session = { path = "../roam-session" }
 roam-stream = { path = "../roam-stream" }
 roam-wire = { path = "../roam-wire" }
@@ -15,4 +16,5 @@ facet-postcard = { workspace = true }
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "sync", "time", "macros", "net"] }
 
 [dev-dependencies]
+facet-testhelpers = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread"] }

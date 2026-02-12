@@ -753,7 +753,6 @@ dependencies = [
 [[package]]
 name = "facet"
 version = "0.43.2"
-source = "git+https://github.com/facet-rs/facet?branch=main#910995c970b160809f678f87c5608082ec61a84d"
 dependencies = [
  "autocfg",
  "facet-core",
@@ -772,13 +771,12 @@ dependencies = [
  "facet-format",
  "facet-reflect",
  "facet-toml",
- "facet-value",
+ "facet-value 0.43.2 (git+https://github.com/facet-rs/facet?branch=main)",
 ]
 
 [[package]]
 name = "facet-core"
 version = "0.43.2"
-source = "git+https://github.com/facet-rs/facet?branch=main#910995c970b160809f678f87c5608082ec61a84d"
 dependencies = [
  "autocfg",
  "camino",
@@ -791,7 +789,6 @@ dependencies = [
 [[package]]
 name = "facet-dessert"
 version = "0.43.2"
-source = "git+https://github.com/facet-rs/facet?branch=main#e38260e30e02ffd3d5e67821bedfcd0750b06788"
 dependencies = [
  "facet-core",
  "facet-reflect",
@@ -808,7 +805,6 @@ dependencies = [
 [[package]]
 name = "facet-format"
 version = "0.43.2"
-source = "git+https://github.com/facet-rs/facet?branch=main#e38260e30e02ffd3d5e67821bedfcd0750b06788"
 dependencies = [
  "cranelift",
  "cranelift-jit",
@@ -839,7 +835,6 @@ dependencies = [
 [[package]]
 name = "facet-macro-parse"
 version = "0.43.2"
-source = "git+https://github.com/facet-rs/facet?branch=main#910995c970b160809f678f87c5608082ec61a84d"
 dependencies = [
  "facet-macro-types",
  "proc-macro2",
@@ -849,7 +844,6 @@ dependencies = [
 [[package]]
 name = "facet-macro-types"
 version = "0.43.2"
-source = "git+https://github.com/facet-rs/facet?branch=main#910995c970b160809f678f87c5608082ec61a84d"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -859,7 +853,6 @@ dependencies = [
 [[package]]
 name = "facet-macros"
 version = "0.43.2"
-source = "git+https://github.com/facet-rs/facet?branch=main#910995c970b160809f678f87c5608082ec61a84d"
 dependencies = [
  "facet-macros-impl",
 ]
@@ -867,7 +860,6 @@ dependencies = [
 [[package]]
 name = "facet-macros-impl"
 version = "0.43.2"
-source = "git+https://github.com/facet-rs/facet?branch=main#910995c970b160809f678f87c5608082ec61a84d"
 dependencies = [
  "facet-macro-parse",
  "facet-macro-types",
@@ -880,7 +872,6 @@ dependencies = [
 [[package]]
 name = "facet-path"
 version = "0.43.2"
-source = "git+https://github.com/facet-rs/facet?branch=main#910995c970b160809f678f87c5608082ec61a84d"
 dependencies = [
  "facet-core",
 ]
@@ -888,14 +879,13 @@ dependencies = [
 [[package]]
 name = "facet-postcard"
 version = "0.43.2"
-source = "git+https://github.com/facet-rs/facet?branch=main#e38260e30e02ffd3d5e67821bedfcd0750b06788"
 dependencies = [
  "camino",
  "facet-core",
  "facet-format",
  "facet-path",
  "facet-reflect",
- "facet-value",
+ "facet-value 0.43.2",
  "tracing",
 ]
 
@@ -912,7 +902,6 @@ dependencies = [
 [[package]]
 name = "facet-reflect"
 version = "0.43.2"
-source = "git+https://github.com/facet-rs/facet?branch=main#910995c970b160809f678f87c5608082ec61a84d"
 dependencies = [
  "facet-core",
  "facet-path",
@@ -924,7 +913,6 @@ dependencies = [
 [[package]]
 name = "facet-solver"
 version = "0.43.2"
-source = "git+https://github.com/facet-rs/facet?branch=main#e38260e30e02ffd3d5e67821bedfcd0750b06788"
 dependencies = [
  "facet-core",
  "facet-reflect",
@@ -960,6 +948,16 @@ dependencies = [
  "facet-format",
  "facet-reflect",
  "toml_parser",
+]
+
+[[package]]
+name = "facet-value"
+version = "0.43.2"
+dependencies = [
+ "facet-core",
+ "facet-format",
+ "facet-reflect",
+ "indexmap",
 ]
 
 [[package]]
@@ -2302,7 +2300,7 @@ dependencies = [
  "facet-core",
  "facet-json",
  "facet-postcard",
- "facet-value",
+ "facet-value 0.43.2 (git+https://github.com/facet-rs/facet?branch=main)",
  "futures-util",
  "http",
  "peeps-sync",
@@ -2343,6 +2341,8 @@ version = "3.0.0"
 dependencies = [
  "facet",
  "facet-postcard",
+ "facet-testhelpers",
+ "roam",
  "roam-session",
  "roam-stream",
  "roam-wire",

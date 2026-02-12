@@ -109,23 +109,44 @@ impl ServiceDispatcher for ChaosService {
         self.calls_total.fetch_add(1, Ordering::Relaxed);
         let completed = self.calls_completed.clone();
 
-        match cx.method_id().raw() {
-            METHOD_INSTANT => dispatch_call::<u64, u64, (), _, _>(
-                &cx,
-                payload,
-                registry,
-                move |n: u64| async move {
-                    completed.fetch_add(1, Ordering::Relaxed);
-                    Ok(n)
-                },
-            ),
+        let method = cx.method_id().raw();
+        eprintln!("[dispatch] method={} payload_len={}", method, payload.len());
+
+        match method {
+            METHOD_INSTANT => {
+                use std::sync::{Arc, OnceLock};
+                static ARGS_PLAN: OnceLock<Arc<RpcPlan>> = OnceLock::new();
+                static RESPONSE_PLAN: OnceLock<Arc<RpcPlan>> = OnceLock::new();
+                let args_plan = ARGS_PLAN.get_or_init(|| Arc::new(RpcPlan::for_type::<u64>()));
+                let response_plan = RESPONSE_PLAN.get_or_init(|| Arc::new(RpcPlan::for_type::<u64>()));
+
+                dispatch_call::<u64, u64, (), _, _>(
+                    &cx,
+                    payload,
+                    registry,
+                    args_plan,
+                    Arc::clone(response_plan),
+                    move |n: u64| async move {
+                        completed.fetch_add(1, Ordering::Relaxed);
+                        Ok(n)
+                    },
+                )
+            }
 
             METHOD_SLOW => {
+                use std::sync::{Arc, OnceLock};
+                static ARGS_PLAN: OnceLock<Arc<RpcPlan>> = OnceLock::new();
+                static RESPONSE_PLAN: OnceLock<Arc<RpcPlan>> = OnceLock::new();
+                let args_plan = ARGS_PLAN.get_or_init(|| Arc::new(RpcPlan::for_type::<u64>()));
+                let response_plan = RESPONSE_PLAN.get_or_init(|| Arc::new(RpcPlan::for_type::<u64>()));
+
                 let completed = completed.clone();
                 dispatch_call::<u64, u64, (), _, _>(
                     &cx,
                     payload,
                     registry,
+                    args_plan,
+                    Arc::clone(response_plan),
                     move |n: u64| async move {
                         tokio::time::sleep(Duration::from_millis(100)).await;
                         completed.fetch_add(1, Ordering::Relaxed);
@@ -135,11 +156,19 @@ impl ServiceDispatcher for ChaosService {
             }
 
             METHOD_VERY_SLOW => {
+                use std::sync::{Arc, OnceLock};
+                static ARGS_PLAN: OnceLock<Arc<RpcPlan>> = OnceLock::new();
+                static RESPONSE_PLAN: OnceLock<Arc<RpcPlan>> = OnceLock::new();
+                let args_plan = ARGS_PLAN.get_or_init(|| Arc::new(RpcPlan::for_type::<u64>()));
+                let response_plan = RESPONSE_PLAN.get_or_init(|| Arc::new(RpcPlan::for_type::<u64>()));
+
                 let completed = completed.clone();
                 dispatch_call::<u64, u64, (), _, _>(
                     &cx,
                     payload,
                     registry,
+                    args_plan,
+                    Arc::clone(response_plan),
                     move |n: u64| async move {
                         tokio::time::sleep(Duration::from_millis(500)).await;
                         completed.fetch_add(1, Ordering::Relaxed);
@@ -149,11 +178,19 @@ impl ServiceDispatcher for ChaosService {
             }
 
             METHOD_BIG_DATA => {
+                use std::sync::{Arc, OnceLock};
+                static ARGS_PLAN: OnceLock<Arc<RpcPlan>> = OnceLock::new();
+                static RESPONSE_PLAN: OnceLock<Arc<RpcPlan>> = OnceLock::new();
+                let args_plan = ARGS_PLAN.get_or_init(|| Arc::new(RpcPlan::for_type::<Vec<u8>>()));
+                let response_plan = RESPONSE_PLAN.get_or_init(|| Arc::new(RpcPlan::for_type::<Vec<u8>>()));
+
                 let completed = completed.clone();
                 dispatch_call::<Vec<u8>, Vec<u8>, (), _, _>(
                     &cx,
                     payload,
                     registry,
+                    args_plan,
+                    Arc::clone(response_plan),
                     move |data: Vec<u8>| async move {
                         // Process the big data (simulate work)
                         tokio::time::sleep(Duration::from_millis(10)).await;
@@ -169,11 +206,19 @@ impl ServiceDispatcher for ChaosService {
             }
 
             METHOD_COMPLEX_STRUCT => {
+                use std::sync::{Arc, OnceLock};
+                static ARGS_PLAN: OnceLock<Arc<RpcPlan>> = OnceLock::new();
+                static RESPONSE_PLAN: OnceLock<Arc<RpcPlan>> = OnceLock::new();
+                let args_plan = ARGS_PLAN.get_or_init(|| Arc::new(RpcPlan::for_type::<ComplexRequest>()));
+                let response_plan = RESPONSE_PLAN.get_or_init(|| Arc::new(RpcPlan::for_type::<ComplexResponse>()));
+
                 let completed = completed.clone();
                 dispatch_call::<ComplexRequest, ComplexResponse, (), _, _>(
                     &cx,
                     payload,
                     registry,
+                    args_plan,
+                    Arc::clone(response_plan),
                     move |req: ComplexRequest| async move {
                         tokio::time::sleep(Duration::from_millis(20)).await;
 
@@ -692,8 +737,30 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         );
     }
 
-    // Scenario 4: Overwhelming the server
+    // Minimal reproducer for miri bug
     {
+        println!("Minimal reproducer: 50 concurrent mixed calls (triggers miri UB)...");
+        let stats = Arc::new(AtomicU64::new(0));
+        let stats_clone = stats.clone();
+
+        let start = Instant::now();
+        let service = chaos_overwhelm(50, stats_clone).await?;
+        let elapsed = start.elapsed();
+
+        let (total, completed, _cancelled, _dropped) = service.stats();
+        println!(
+            "   ✓ Completed {}/50 calls in {:.2}s",
+            stats.load(Ordering::Relaxed),
+            elapsed.as_secs_f64()
+        );
+        println!(
+            "     Service stats: {} total calls, {} completed",
+            total, completed
+        );
+    }
+
+    // Scenario 4: Overwhelming the server (full stress test)
+    if false {
         println!("4. Overwhelming the server...");
         let stats = Arc::new(AtomicU64::new(0));
         let stats_clone = stats.clone();
