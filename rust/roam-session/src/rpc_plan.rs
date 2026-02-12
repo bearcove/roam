@@ -62,10 +62,7 @@ impl RpcPlan {
     #[allow(unsafe_code)]
     pub fn for_type<T: Facet<'static>>() -> Self {
         // SAFETY: T::SHAPE comes from a Facet implementation
-        let plan = unsafe { Self::from_shape(T::SHAPE) };
-        eprintln!("[RpcPlan::for_type] type={} shape_addr={:p} plan_addr={:p}",
-            std::any::type_name::<T>(), T::SHAPE, &plan);
-        plan
+        unsafe { Self::from_shape(T::SHAPE) }
     }
 }
 

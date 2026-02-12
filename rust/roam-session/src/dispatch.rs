@@ -273,8 +273,7 @@ where
     static FACET_BUG_LOCK: Mutex<()> = Mutex::new(());
     let prepare_result = {
         let _guard = FACET_BUG_LOCK.lock().unwrap();
-        eprintln!("[prepare_sync] START conn={} req={} type={}", conn_id, request_id, std::any::type_name::<A>());
-        let result = unsafe {
+        unsafe {
             prepare_sync(
                 args_slot.as_mut_ptr().cast(),
                 args_plan,
@@ -282,9 +281,7 @@ where
                 &cx.channels,
                 registry,
             )
-        };
-        eprintln!("[prepare_sync] END conn={} req={} result={:?}", conn_id, request_id, result.is_ok());
-        result
+        }
     };
 
     let task_tx = registry.driver_tx();
@@ -365,8 +362,7 @@ where
     static FACET_BUG_LOCK: Mutex<()> = Mutex::new(());
     let prepare_result = {
         let _guard = FACET_BUG_LOCK.lock().unwrap();
-        eprintln!("[prepare_sync] START conn={} req={} type={}", conn_id, request_id, std::any::type_name::<A>());
-        let result = unsafe {
+        unsafe {
             prepare_sync(
                 args_slot.as_mut_ptr().cast(),
                 args_plan,
@@ -374,9 +370,7 @@ where
                 &cx.channels,
                 registry,
             )
-        };
-        eprintln!("[prepare_sync] END conn={} req={} result={:?}", conn_id, request_id, result.is_ok());
-        result
+        }
     };
 
     let task_tx = registry.driver_tx();
@@ -521,9 +515,6 @@ pub unsafe fn prepare_sync(
     channels: &[u64],
     registry: &mut ChannelRegistry,
 ) -> Result<(), PrepareError> {
-    let shape = plan.type_plan.root().shape;
-    eprintln!("[prepare_sync deserialize] plan.type_plan.root().shape={} plan_addr={:p}", shape, plan as *const _);
-
     // 1. Deserialize into args_ptr using the precomputed type plan
     // SAFETY: caller guarantees args_ptr is valid and properly sized
     unsafe { deserialize_into(args_ptr, &plan.type_plan, payload) }?;
@@ -578,9 +569,6 @@ pub unsafe fn deserialize_into(
     type_plan: &Arc<facet_reflect::TypePlanCore>,
     payload: &[u8],
 ) -> Result<(), PrepareError> {
-    let root_shape = type_plan.root().shape;
-    eprintln!("[deserialize_into] root_shape={} payload_len={}", root_shape, payload.len());
-
     // Create a Partial that writes directly into caller-provided memory.
     // This avoids heap allocation - the value is constructed in-place.
     let ptr_uninit = PtrUninit::new(ptr.cast::<u8>());
@@ -591,8 +579,6 @@ pub unsafe fn deserialize_into(
     let partial: Partial<'_, false> =
         unsafe { Partial::from_raw(ptr_uninit, type_plan.clone(), root_id) }
             .map_err(|e| PrepareError::Deserialize(e.to_string()))?;
-
-    eprintln!("[deserialize_into] partial.shape()={}", partial.shape());
 
     // Use facet-format's FormatDeserializer with PostcardParser to deserialize.
     // This is non-generic - it uses the Shape for all type information.
