@@ -521,6 +521,7 @@ pub unsafe fn prepare_sync(
 
     // 2. Validate channel count against precomputed plan.
     // The number of channel locations that are reachable (not behind None) must match.
+    let shape = plan.type_plan.root().shape;
     let expected_channels = {
         let peek =
             unsafe { facet::Peek::unchecked_new(PtrConst::new(args_ptr.cast::<u8>()), shape) };
