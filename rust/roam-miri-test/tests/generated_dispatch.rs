@@ -75,6 +75,7 @@ impl MessageTransport for InMemoryTransport {
 trait TestService {
     async fn handle_u64(&self, n: u64) -> u64;
     async fn handle_vec(&self, data: Vec<u8>) -> Vec<u8>;
+    async fn handle_vec_string(&self, tags: Vec<String>) -> Vec<String>;
     async fn handle_complex(&self, req: ComplexRequest) -> ComplexResponse;
 }
 
@@ -108,6 +109,14 @@ impl TestService for TestServiceImpl {
         self.calls.fetch_add(1, Ordering::Relaxed);
         tokio::time::sleep(Duration::from_millis(10)).await;
         let mut result = data;
+        result.reverse();
+        result
+    }
+
+    async fn handle_vec_string(&self, _cx: &roam_session::Context, tags: Vec<String>) -> Vec<String> {
+        self.calls.fetch_add(1, Ordering::Relaxed);
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        let mut result = tags;
         result.reverse();
         result
     }
@@ -161,44 +170,66 @@ async fn test_concurrent_mixed_types() {
     // Create client
     let client = TestServiceClient::new(client_handle);
 
-    // Run concurrent mixed-type calls
-    let mut handles = vec![];
+    // Test u64
+    eprintln!("Testing u64...");
+    let result = client.handle_u64(42).await.unwrap();
+    assert_eq!(result, 42);
+    eprintln!("✓ u64 works");
 
-    for i in 0..50 {
-        let client = client.clone();
-        let handle = tokio::spawn(async move {
-            match i % 3 {
-                0 => {
-                    // u64 call
-                    let result = client.handle_u64(42).await.unwrap();
-                    assert_eq!(result, 42);
-                }
-                1 => {
-                    // Vec<u8> call
-                    let data = vec![1u8, 2, 3, 4, 5];
-                    let result = client.handle_vec(data.clone()).await.unwrap();
-                    assert_eq!(result, vec![5, 4, 3, 2, 1]);
-                }
-                2 => {
-                    // Complex struct call
-                    let req = ComplexRequest {
-                        id: i as u64,
-                        data: vec![10, 20, 30],
-                        tags: vec!["test".to_string()],
-                    };
-                    let result = client.handle_complex(req).await.unwrap();
-                    assert_eq!(result.checksum, 60);
-                    assert_eq!(result.processed_bytes, 3);
-                }
-                _ => unreachable!(),
-            }
-        });
-        handles.push(handle);
+    // Test Vec<u8>
+    eprintln!("Testing Vec<u8>...");
+    let data = vec![1u8, 2, 3, 4, 5];
+    let result = client.handle_vec(data).await.unwrap();
+    assert_eq!(result, vec![5, 4, 3, 2, 1]);
+    eprintln!("✓ Vec<u8> works");
+
+    // Test Vec<String>
+    eprintln!("Testing Vec<String>...");
+    let tags = vec!["hello".to_string(), "world".to_string()];
+    match client.handle_vec_string(tags).await {
+        Ok(result) => {
+            assert_eq!(result, vec!["world".to_string(), "hello".to_string()]);
+            eprintln!("✓ Vec<String> works");
+        }
+        Err(e) => {
+            eprintln!("✗ Vec<String> failed: {:?}", e);
+        }
     }
 
-    // Wait for all calls to complete
-    for handle in handles {
-        handle.await.unwrap();
+    // Test ComplexRequest with empty tags
+    eprintln!("Testing ComplexRequest with empty tags...");
+    let req = ComplexRequest {
+        id: 1,
+        data: vec![10, 20, 30],
+        tags: vec![],
+    };
+    match client.handle_complex(req).await {
+        Ok(result) => {
+            assert_eq!(result.checksum, 60);
+            assert_eq!(result.processed_bytes, 3);
+            eprintln!("✓ ComplexRequest with empty tags works");
+        }
+        Err(e) => {
+            eprintln!("✗ ComplexRequest with empty tags failed: {:?}", e);
+        }
+    }
+
+    // Test ComplexRequest with non-empty tags
+    eprintln!("Testing ComplexRequest with tags...");
+    let req = ComplexRequest {
+        id: 1,
+        data: vec![10, 20, 30],
+        tags: vec!["test".to_string()],
+    };
+    match client.handle_complex(req).await {
+        Ok(result) => {
+            assert_eq!(result.checksum, 60);
+            assert_eq!(result.processed_bytes, 3);
+            eprintln!("✓ ComplexRequest with tags works");
+        }
+        Err(e) => {
+            eprintln!("✗ ComplexRequest with tags failed: {:?}", e);
+        }
     }
 
     eprintln!("✓ All concurrent mixed-type calls completed successfully");

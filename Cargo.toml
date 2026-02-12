@@ -118,10 +118,10 @@ facet-postcard = { path = "../facet/facet-postcard" }
 facet-path = { path = "../facet/facet-path" }
 facet-reflect = { path = "../facet/facet-reflect" }
 facet-format = { path = "../facet/facet-format" }
-# facet-pretty = { path = "../facet/facet-pretty" }
-# facet-json = { path = "../facet/facet-json" }
-# facet-value = { path = "../facet/facet-value" }
-# facet-testhelpers = { path = "../facet/facet-testhelpers" }
+facet-pretty = { path = "../facet/facet-pretty" }
+facet-json = { path = "../facet/facet-json" }
+facet-value = { path = "../facet/facet-value" }
+facet-testhelpers = { path = "../facet/facet-testhelpers" }
 
 [profile.release]
 debug = 1

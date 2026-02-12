@@ -771,7 +771,7 @@ dependencies = [
  "facet-format",
  "facet-reflect",
  "facet-toml",
- "facet-value 0.43.2 (git+https://github.com/facet-rs/facet?branch=main)",
+ "facet-value",
 ]
 
 [[package]]
@@ -823,7 +823,6 @@ dependencies = [
 [[package]]
 name = "facet-json"
 version = "0.43.2"
-source = "git+https://github.com/facet-rs/facet?branch=main#e38260e30e02ffd3d5e67821bedfcd0750b06788"
 dependencies = [
  "facet",
  "facet-core",
@@ -885,14 +884,13 @@ dependencies = [
  "facet-format",
  "facet-path",
  "facet-reflect",
- "facet-value 0.43.2",
+ "facet-value",
  "tracing",
 ]
 
 [[package]]
 name = "facet-pretty"
 version = "0.43.2"
-source = "git+https://github.com/facet-rs/facet?branch=main#e38260e30e02ffd3d5e67821bedfcd0750b06788"
 dependencies = [
  "facet-core",
  "facet-reflect",
@@ -921,7 +919,6 @@ dependencies = [
 [[package]]
 name = "facet-testhelpers"
 version = "0.43.2"
-source = "git+https://github.com/facet-rs/facet?branch=main#e38260e30e02ffd3d5e67821bedfcd0750b06788"
 dependencies = [
  "color-backtrace",
  "facet-testhelpers-macros",
@@ -933,7 +930,6 @@ dependencies = [
 [[package]]
 name = "facet-testhelpers-macros"
 version = "0.43.2"
-source = "git+https://github.com/facet-rs/facet?branch=main#e38260e30e02ffd3d5e67821bedfcd0750b06788"
 dependencies = [
  "quote",
  "unsynn",
@@ -953,17 +949,6 @@ dependencies = [
 [[package]]
 name = "facet-value"
 version = "0.43.2"
-dependencies = [
- "facet-core",
- "facet-format",
- "facet-reflect",
- "indexmap",
-]
-
-[[package]]
-name = "facet-value"
-version = "0.43.2"
-source = "git+https://github.com/facet-rs/facet?branch=main#e38260e30e02ffd3d5e67821bedfcd0750b06788"
 dependencies = [
  "facet-core",
  "facet-format",
@@ -2300,7 +2285,7 @@ dependencies = [
  "facet-core",
  "facet-json",
  "facet-postcard",
- "facet-value 0.43.2 (git+https://github.com/facet-rs/facet?branch=main)",
+ "facet-value",
  "futures-util",
  "http",
  "peeps-sync",
