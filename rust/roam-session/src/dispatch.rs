@@ -257,7 +257,6 @@ where
     F: FnOnce(A) -> Fut + Send + 'static,
     Fut: std::future::Future<Output = Result<R, E>> + Send + 'static,
 {
-
     let conn_id = cx.conn_id;
     let request_id = cx.request_id.raw();
 
@@ -346,7 +345,6 @@ where
     F: FnOnce(A) -> Fut + Send + 'static,
     Fut: std::future::Future<Output = R> + Send + 'static,
 {
-
     let conn_id = cx.conn_id;
     let request_id = cx.request_id.raw();
 

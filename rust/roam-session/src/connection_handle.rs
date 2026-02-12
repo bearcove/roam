@@ -242,7 +242,6 @@ impl ConnectionHandle {
         args_plan: &crate::RpcPlan,
         metadata: roam_wire::Metadata,
     ) -> Result<ResponseData, TransportError> {
-
         // Walk args and bind any channels (allocates channel IDs)
         // This collects receivers that need to be drained but does NOT spawn
         let mut drains = Vec::new();
@@ -1009,7 +1008,12 @@ impl ConnectionHandle {
     ///
     /// The `plan` should be created once per type as a static in non-generic code.
     #[allow(unsafe_code)]
-    pub fn bind_response_channels<T: Facet<'static>>(&self, response: &mut T, plan: &crate::RpcPlan, channels: &[u64]) {
+    pub fn bind_response_channels<T: Facet<'static>>(
+        &self,
+        response: &mut T,
+        plan: &crate::RpcPlan,
+        channels: &[u64],
+    ) {
         // Patch channel IDs from Response.channels into the deserialized response.
         // This is critical for ForwardingDispatcher where the payload contains upstream
         // channel IDs but channels[] contains the remapped downstream IDs.

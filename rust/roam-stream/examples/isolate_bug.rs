@@ -8,11 +8,11 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
+use facet::Facet;
+use once_cell::sync::Lazy;
 use roam_session::{
     ChannelRegistry, Context, RpcPlan, ServiceDispatcher, dispatch_call, dispatch_unknown_method,
 };
-use facet::Facet;
-use once_cell::sync::Lazy;
 use roam_stream::{Connector, HandshakeConfig, accept, connect};
 use tokio::net::{UnixListener, UnixStream};
 
@@ -83,7 +83,8 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     println!("Testing big Vec<u8> payloads...");
 
-    let socket_path = std::env::temp_dir().join(format!("roam-isolate-{}.sock", std::process::id()));
+    let socket_path =
+        std::env::temp_dir().join(format!("roam-isolate-{}.sock", std::process::id()));
     let _ = std::fs::remove_file(&socket_path);
 
     let service = TestService {
@@ -125,7 +126,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let handle = client.handle().await?;
 
     // Test different sizes
-    for size in [100, 1024, 10*1024, 50*1024, 100*1024] {
+    for size in [100, 1024, 10 * 1024, 50 * 1024, 100 * 1024] {
         println!("Testing size: {} bytes", size);
 
         let mut tasks = Vec::new();
@@ -133,7 +134,10 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             let handle = handle.clone();
             let task = tokio::spawn(async move {
                 let mut data = vec![(i % 256) as u8; size];
-                match handle.call(METHOD_BIG_VEC, &mut data, &VEC_U8_ARGS_PLAN).await {
+                match handle
+                    .call(METHOD_BIG_VEC, &mut data, &VEC_U8_ARGS_PLAN)
+                    .await
+                {
                     Ok(_) => true,
                     Err(e) => {
                         eprintln!("Call failed: {:?}", e);

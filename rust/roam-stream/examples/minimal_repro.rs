@@ -24,7 +24,7 @@ struct NestedData {
 fn main() {
     println!("Testing facet serialization of complex types...");
 
-    for size in [100, 1024, 10*1024, 50*1024, 100*1024] {
+    for size in [100, 1024, 10 * 1024, 50 * 1024, 100 * 1024] {
         println!("Testing size: {} bytes", size);
 
         for i in 0..100 {
@@ -41,14 +41,17 @@ fn main() {
                 metadata: [
                     ("key1".to_string(), "value1".to_string()),
                     ("key2".to_string(), format!("value-{}", i)),
-                ].into_iter().collect(),
+                ]
+                .into_iter()
+                .collect(),
             };
 
             // Serialize
             let bytes = facet_postcard::to_vec(&data).expect("serialize failed");
 
             // Deserialize
-            let _decoded: ComplexData = facet_postcard::from_slice(&bytes).expect("deserialize failed");
+            let _decoded: ComplexData =
+                facet_postcard::from_slice(&bytes).expect("deserialize failed");
         }
 
         println!("  ✓ {} iterations completed", 100);

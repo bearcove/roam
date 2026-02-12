@@ -571,7 +571,12 @@ where
         }
     }
 
-    fn bind_response_channels<R: Facet<'static>>(&self, response: &mut R, plan: &RpcPlan, channels: &[u64]) {
+    fn bind_response_channels<R: Facet<'static>>(
+        &self,
+        response: &mut R,
+        plan: &RpcPlan,
+        channels: &[u64],
+    ) {
         // FramedClient wraps a ConnectionHandle, but we don't have direct access to it
         // during bind_response_channels. For reconnecting clients, response channel binding
         // would need to be handled at a higher level or the client would need to store

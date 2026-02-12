@@ -16,12 +16,12 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
-use roam_session::{
-    ChannelRegistry, Context, RoamError, RpcPlan, ServiceDispatcher, channel,
-    dispatch_call, dispatch_unknown_method,
-};
 use facet::Facet;
 use once_cell::sync::Lazy;
+use roam_session::{
+    ChannelRegistry, Context, RoamError, RpcPlan, ServiceDispatcher, channel, dispatch_call,
+    dispatch_unknown_method,
+};
 use roam_stream::{Connector, HandshakeConfig, accept, connect};
 use tokio::net::{UnixListener, UnixStream};
 
@@ -44,13 +44,20 @@ pub enum Command {
 #[repr(C)]
 pub enum Response {
     Ok,
-    Data { value: Vec<u8> },
-    Error { code: u32, message: String },
+    Data {
+        value: Vec<u8>,
+    },
+    Error {
+        code: u32,
+        message: String,
+    },
     Stats {
         counts: HashMap<String, u64>,
-        timing: (f64, f64, f64),  // (min, avg, max)
+        timing: (f64, f64, f64), // (min, avg, max)
     },
-    Stream { items: Vec<(String, u64)> },
+    Stream {
+        items: Vec<(String, u64)>,
+    },
 }
 
 #[derive(Facet, Clone, Debug)]
@@ -67,15 +74,12 @@ pub struct ComplexData {
 // ============================================================================
 
 static U64_ARGS_PLAN: Lazy<RpcPlan> = Lazy::new(|| RpcPlan::for_type::<u64>());
-static U64_RESPONSE_PLAN: Lazy<Arc<RpcPlan>> =
-    Lazy::new(|| Arc::new(RpcPlan::for_type::<u64>()));
+static U64_RESPONSE_PLAN: Lazy<Arc<RpcPlan>> = Lazy::new(|| Arc::new(RpcPlan::for_type::<u64>()));
 
 static COMMAND_ARGS_PLAN: Lazy<RpcPlan> = Lazy::new(|| RpcPlan::for_type::<Command>());
-static RESPONSE_PLAN: Lazy<Arc<RpcPlan>> =
-    Lazy::new(|| Arc::new(RpcPlan::for_type::<Response>()));
+static RESPONSE_PLAN: Lazy<Arc<RpcPlan>> = Lazy::new(|| Arc::new(RpcPlan::for_type::<Response>()));
 
-static COMPLEX_DATA_ARGS_PLAN: Lazy<RpcPlan> =
-    Lazy::new(|| RpcPlan::for_type::<ComplexData>());
+static COMPLEX_DATA_ARGS_PLAN: Lazy<RpcPlan> = Lazy::new(|| RpcPlan::for_type::<ComplexData>());
 static TUPLE_RESPONSE_PLAN: Lazy<Arc<RpcPlan>> =
     Lazy::new(|| Arc::new(RpcPlan::for_type::<(u64, String, HashMap<String, u64>)>()));
 
@@ -85,16 +89,15 @@ type StreamRx = roam_session::Rx<Vec<u8>>;
 pub struct StreamRequest {
     count: u32,
     size: usize,
-    rx: StreamRx,  // Client sends TO server, so passes Rx
+    rx: StreamRx, // Client sends TO server, so passes Rx
 }
 
-static STREAM_REQUEST_ARGS_PLAN: Lazy<RpcPlan> =
-    Lazy::new(|| RpcPlan::for_type::<StreamRequest>());
+static STREAM_REQUEST_ARGS_PLAN: Lazy<RpcPlan> = Lazy::new(|| RpcPlan::for_type::<StreamRequest>());
 
 #[derive(Facet)]
 pub struct StreamResponse {
     total_sent: u64,
-    rx: StreamRx,  // Server sends TO client, so returns Rx
+    rx: StreamRx, // Server sends TO client, so returns Rx
 }
 
 static STREAM_RESPONSE_PLAN: Lazy<Arc<RpcPlan>> =
@@ -172,9 +175,9 @@ impl ServiceDispatcher for ComprehensiveService {
                         tokio::time::sleep(Duration::from_millis(5)).await;
 
                         let response = match cmd {
-                            Command::Start { id, .. } => {
-                                Response::Data { value: id.to_le_bytes().to_vec() }
-                            }
+                            Command::Start { id, .. } => Response::Data {
+                                value: id.to_le_bytes().to_vec(),
+                            },
                             Command::Stop => Response::Ok,
                             Command::Pause { .. } => Response::Ok,
                             Command::Resume { .. } => Response::Ok,
@@ -216,13 +219,15 @@ impl ServiceDispatcher for ComprehensiveService {
                         tokio::time::sleep(Duration::from_millis(10)).await;
 
                         let tag_count = data.tags.len() as u64;
-                        let summary = format!("{} tags, {} metadata, {} measurements",
+                        let summary = format!(
+                            "{} tags, {} metadata, {} measurements",
                             data.tags.len(),
                             data.metadata.len(),
                             data.measurements.len()
                         );
 
-                        let stats: HashMap<String, u64> = data.metadata
+                        let stats: HashMap<String, u64> = data
+                            .metadata
                             .into_iter()
                             .map(|(k, v)| (k, v.len() as u64))
                             .collect();
@@ -354,7 +359,11 @@ async fn test_complex_enums(
     stats: Arc<AtomicU64>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let connector = UnixConnector { path: socket_path };
-    let client = connect(connector, HandshakeConfig::default(), ComprehensiveService::new());
+    let client = connect(
+        connector,
+        HandshakeConfig::default(),
+        ComprehensiveService::new(),
+    );
     let handle = client.handle().await?;
 
     for i in 0..iterations {
@@ -371,19 +380,26 @@ async fn test_complex_enums(
                     filter: [
                         ("type".to_string(), "test".to_string()),
                         ("id".to_string(), i.to_string()),
-                    ].into_iter().collect(),
+                    ]
+                    .into_iter()
+                    .collect(),
                 },
                 Command::Batch {
                     commands: vec![
                         Command::Pause { duration_ms: 100 },
-                        Command::Resume { from_state: "paused".to_string() },
+                        Command::Resume {
+                            from_state: "paused".to_string(),
+                        },
                         Command::Stop,
                     ],
                 },
             ];
 
             for mut cmd in commands {
-                if let Ok(response) = handle.call(METHOD_EXECUTE_COMMAND, &mut cmd, &COMMAND_ARGS_PLAN).await {
+                if let Ok(response) = handle
+                    .call(METHOD_EXECUTE_COMMAND, &mut cmd, &COMMAND_ARGS_PLAN)
+                    .await
+                {
                     let _: Response = decode_result(response.payload);
                     stats.fetch_add(1, Ordering::Relaxed);
                 }
@@ -401,7 +417,11 @@ async fn test_complex_tuples(
     stats: Arc<AtomicU64>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let connector = UnixConnector { path: socket_path };
-    let client = connect(connector, HandshakeConfig::default(), ComprehensiveService::new());
+    let client = connect(
+        connector,
+        HandshakeConfig::default(),
+        ComprehensiveService::new(),
+    );
     let handle = client.handle().await?;
 
     for i in 0..iterations {
@@ -415,7 +435,9 @@ async fn test_complex_tuples(
                 metadata: [
                     ("key1".to_string(), "value1".to_string()),
                     ("key2".to_string(), format!("value_{}", i)),
-                ].into_iter().collect(),
+                ]
+                .into_iter()
+                .collect(),
                 measurements: vec![
                     ("cpu".to_string(), 0.5, true),
                     ("mem".to_string(), 0.8, false),
@@ -434,7 +456,10 @@ async fn test_complex_tuples(
                 },
             };
 
-            if let Ok(response) = handle.call(METHOD_PROCESS_COMPLEX, &mut data, &COMPLEX_DATA_ARGS_PLAN).await {
+            if let Ok(response) = handle
+                .call(METHOD_PROCESS_COMPLEX, &mut data, &COMPLEX_DATA_ARGS_PLAN)
+                .await
+            {
                 let _: (u64, String, HashMap<String, u64>) = decode_result(response.payload);
                 stats.fetch_add(1, Ordering::Relaxed);
             }
@@ -451,7 +476,11 @@ async fn test_channels_tx_in_response(
     stats: Arc<AtomicU64>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let connector = UnixConnector { path: socket_path };
-    let client = connect(connector, HandshakeConfig::default(), ComprehensiveService::new());
+    let client = connect(
+        connector,
+        HandshakeConfig::default(),
+        ComprehensiveService::new(),
+    );
     let handle = client.handle().await?;
 
     for i in 0..iterations {
@@ -461,7 +490,10 @@ async fn test_channels_tx_in_response(
         tokio::spawn(async move {
             let mut count = (i % 10) as u64 + 1;
 
-            if let Ok(response) = handle.call(METHOD_STREAM_TO_CALLER, &mut count, &U64_ARGS_PLAN).await {
+            if let Ok(response) = handle
+                .call(METHOD_STREAM_TO_CALLER, &mut count, &U64_ARGS_PLAN)
+                .await
+            {
                 let mut stream_resp: StreamResponse = decode_result(response.payload);
                 let mut received = 0;
 
@@ -486,7 +518,11 @@ async fn test_channels_rx_in_request(
     stats: Arc<AtomicU64>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let connector = UnixConnector { path: socket_path };
-    let client = connect(connector, HandshakeConfig::default(), ComprehensiveService::new());
+    let client = connect(
+        connector,
+        HandshakeConfig::default(),
+        ComprehensiveService::new(),
+    );
     let handle = client.handle().await?;
 
     for i in 0..iterations {
@@ -501,7 +537,7 @@ async fn test_channels_rx_in_request(
             let mut req = StreamRequest {
                 count,
                 size,
-                rx,  // Pass rx in request (server receives from it)
+                rx, // Pass rx in request (server receives from it)
             };
 
             // Spawn task to send data
@@ -514,7 +550,14 @@ async fn test_channels_rx_in_request(
                 }
             });
 
-            if let Ok(response) = handle.call(METHOD_STREAM_FROM_CALLER, &mut req, &STREAM_REQUEST_ARGS_PLAN).await {
+            if let Ok(response) = handle
+                .call(
+                    METHOD_STREAM_FROM_CALLER,
+                    &mut req,
+                    &STREAM_REQUEST_ARGS_PLAN,
+                )
+                .await
+            {
                 let total_bytes: u64 = decode_result(response.payload);
                 let expected = (count as u64) * (size as u64);
 
@@ -544,14 +587,25 @@ async fn chaos_mixed_complex(
         match scenario {
             0 => {
                 // Quick enum test with disconnect
-                let connector = UnixConnector { path: socket_path.clone() };
-                let client = connect(connector, HandshakeConfig::default(), ComprehensiveService::new());
+                let connector = UnixConnector {
+                    path: socket_path.clone(),
+                };
+                let client = connect(
+                    connector,
+                    HandshakeConfig::default(),
+                    ComprehensiveService::new(),
+                );
                 if let Ok(handle) = client.handle().await {
                     let task = tokio::spawn(async move {
                         let mut cmd = Command::Batch {
-                            commands: vec![Command::Start { id: 999, config: "test".to_string() }],
+                            commands: vec![Command::Start {
+                                id: 999,
+                                config: "test".to_string(),
+                            }],
                         };
-                        let _ = handle.call(METHOD_EXECUTE_COMMAND, &mut cmd, &COMMAND_ARGS_PLAN).await;
+                        let _ = handle
+                            .call(METHOD_EXECUTE_COMMAND, &mut cmd, &COMMAND_ARGS_PLAN)
+                            .await;
                     });
                     tokio::time::sleep(Duration::from_millis(5)).await;
                     drop(client);
@@ -560,27 +614,45 @@ async fn chaos_mixed_complex(
             }
             1 => {
                 // Complex tuple processing
-                let connector = UnixConnector { path: socket_path.clone() };
-                let client = connect(connector, HandshakeConfig::default(), ComprehensiveService::new());
+                let connector = UnixConnector {
+                    path: socket_path.clone(),
+                };
+                let client = connect(
+                    connector,
+                    HandshakeConfig::default(),
+                    ComprehensiveService::new(),
+                );
                 if let Ok(handle) = client.handle().await {
                     let mut data = ComplexData {
                         id: 123,
                         tags: vec!["chaos".to_string()],
-                        metadata: [("test".to_string(), "value".to_string())].into_iter().collect(),
+                        metadata: [("test".to_string(), "value".to_string())]
+                            .into_iter()
+                            .collect(),
                         measurements: vec![("metric".to_string(), 1.0, true)],
                         nested: None,
                     };
-                    let _ = handle.call(METHOD_PROCESS_COMPLEX, &mut data, &COMPLEX_DATA_ARGS_PLAN).await;
+                    let _ = handle
+                        .call(METHOD_PROCESS_COMPLEX, &mut data, &COMPLEX_DATA_ARGS_PLAN)
+                        .await;
                 }
             }
             2 => {
                 // Channel streaming with cancellation
-                let connector = UnixConnector { path: socket_path.clone() };
-                let client = connect(connector, HandshakeConfig::default(), ComprehensiveService::new());
+                let connector = UnixConnector {
+                    path: socket_path.clone(),
+                };
+                let client = connect(
+                    connector,
+                    HandshakeConfig::default(),
+                    ComprehensiveService::new(),
+                );
                 if let Ok(handle) = client.handle().await {
                     let task = tokio::spawn(async move {
                         let mut count = 5u64;
-                        let _ = handle.call(METHOD_STREAM_TO_CALLER, &mut count, &U64_ARGS_PLAN).await;
+                        let _ = handle
+                            .call(METHOD_STREAM_TO_CALLER, &mut count, &U64_ARGS_PLAN)
+                            .await;
                     });
                     tokio::time::sleep(Duration::from_millis(10)).await;
                     task.abort();
@@ -590,8 +662,14 @@ async fn chaos_mixed_complex(
             _ => {
                 // Rapid connect/disconnect
                 for _ in 0..3 {
-                    let connector = UnixConnector { path: socket_path.clone() };
-                    let client = connect(connector, HandshakeConfig::default(), ComprehensiveService::new());
+                    let connector = UnixConnector {
+                        path: socket_path.clone(),
+                    };
+                    let client = connect(
+                        connector,
+                        HandshakeConfig::default(),
+                        ComprehensiveService::new(),
+                    );
                     let _ = client.handle().await;
                     drop(client);
                 }
@@ -646,8 +724,11 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let stats = Arc::new(AtomicU64::new(0));
         let start = Instant::now();
         test_complex_enums(socket_path.clone(), 20, stats.clone()).await?;
-        println!("   ✓ Completed {} enum calls in {:.2}s",
-            stats.load(Ordering::Relaxed), start.elapsed().as_secs_f64());
+        println!(
+            "   ✓ Completed {} enum calls in {:.2}s",
+            stats.load(Ordering::Relaxed),
+            start.elapsed().as_secs_f64()
+        );
     }
 
     // Test 2: Complex tuples with nested data
@@ -656,8 +737,11 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let stats = Arc::new(AtomicU64::new(0));
         let start = Instant::now();
         test_complex_tuples(socket_path.clone(), 20, stats.clone()).await?;
-        println!("   ✓ Completed {} tuple calls in {:.2}s",
-            stats.load(Ordering::Relaxed), start.elapsed().as_secs_f64());
+        println!(
+            "   ✓ Completed {} tuple calls in {:.2}s",
+            stats.load(Ordering::Relaxed),
+            start.elapsed().as_secs_f64()
+        );
     }
 
     // Test 3: Channels in response (Rx)
@@ -666,8 +750,11 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let stats = Arc::new(AtomicU64::new(0));
         let start = Instant::now();
         test_channels_tx_in_response(socket_path.clone(), 20, stats.clone()).await?;
-        println!("   ✓ Completed {} streaming responses in {:.2}s",
-            stats.load(Ordering::Relaxed), start.elapsed().as_secs_f64());
+        println!(
+            "   ✓ Completed {} streaming responses in {:.2}s",
+            stats.load(Ordering::Relaxed),
+            start.elapsed().as_secs_f64()
+        );
     }
 
     // Test 4: Channels in request (Tx)
@@ -676,8 +763,11 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let stats = Arc::new(AtomicU64::new(0));
         let start = Instant::now();
         test_channels_rx_in_request(socket_path.clone(), 20, stats.clone()).await?;
-        println!("   ✓ Completed {} streaming requests in {:.2}s",
-            stats.load(Ordering::Relaxed), start.elapsed().as_secs_f64());
+        println!(
+            "   ✓ Completed {} streaming requests in {:.2}s",
+            stats.load(Ordering::Relaxed),
+            start.elapsed().as_secs_f64()
+        );
     }
 
     // Test 5: Chaos with all complex types
@@ -686,8 +776,11 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let stats = Arc::new(AtomicU64::new(0));
         let start = Instant::now();
         chaos_mixed_complex(socket_path.clone(), 10, stats.clone()).await?;
-        println!("   ✓ Completed {} chaos operations in {:.2}s",
-            stats.load(Ordering::Relaxed), start.elapsed().as_secs_f64());
+        println!(
+            "   ✓ Completed {} chaos operations in {:.2}s",
+            stats.load(Ordering::Relaxed),
+            start.elapsed().as_secs_f64()
+        );
     }
 
     println!();

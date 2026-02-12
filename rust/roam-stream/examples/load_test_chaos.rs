@@ -15,12 +15,12 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
+use facet::Facet;
+use once_cell::sync::Lazy;
 use roam_session::{
     ChannelRegistry, Context, RoamError, RpcPlan, ServiceDispatcher, dispatch_call,
     dispatch_unknown_method,
 };
-use facet::Facet;
-use once_cell::sync::Lazy;
 use roam_stream::{Connector, HandshakeConfig, accept, connect};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::time::timeout;
@@ -30,8 +30,7 @@ use tokio::time::timeout;
 // ============================================================================
 
 static U64_ARGS_PLAN: Lazy<RpcPlan> = Lazy::new(|| RpcPlan::for_type::<u64>());
-static U64_RESPONSE_PLAN: Lazy<Arc<RpcPlan>> =
-    Lazy::new(|| Arc::new(RpcPlan::for_type::<u64>()));
+static U64_RESPONSE_PLAN: Lazy<Arc<RpcPlan>> = Lazy::new(|| Arc::new(RpcPlan::for_type::<u64>()));
 
 static VEC_U8_ARGS_PLAN: Lazy<RpcPlan> = Lazy::new(|| RpcPlan::for_type::<Vec<u8>>());
 static VEC_U8_RESPONSE_PLAN: Lazy<Arc<RpcPlan>> =
@@ -210,7 +209,11 @@ impl ServiceDispatcher for ChaosService {
                             request_id: req.id,
                             processed_bytes: req.data.len(),
                             checksum,
-                            results: req.tags.iter().map(|t| format!("processed:{}", t)).collect(),
+                            results: req
+                                .tags
+                                .iter()
+                                .map(|t| format!("processed:{}", t))
+                                .collect(),
                             nested_result: req.nested.clone(),
                         };
 
@@ -299,7 +302,9 @@ async fn chaos_disconnecting_clients(
         let handle = client.handle().await?;
         let task = tokio::spawn(async move {
             let mut args = i as u64;
-            let _ = handle.call(METHOD_VERY_SLOW, &mut args, &U64_ARGS_PLAN).await;
+            let _ = handle
+                .call(METHOD_VERY_SLOW, &mut args, &U64_ARGS_PLAN)
+                .await;
         });
 
         // Disconnect before it completes
@@ -319,9 +324,7 @@ async fn chaos_cancelled_calls(
     iterations: usize,
     stats: Arc<AtomicU64>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let connector = UnixConnector {
-        path: socket_path,
-    };
+    let connector = UnixConnector { path: socket_path };
     let client = connect(connector, HandshakeConfig::default(), ChaosService::new());
     let handle = client.handle().await?;
 
@@ -329,7 +332,9 @@ async fn chaos_cancelled_calls(
         let handle = handle.clone();
         let task = tokio::spawn(async move {
             let mut args = i as u64;
-            let _ = handle.call(METHOD_VERY_SLOW, &mut args, &U64_ARGS_PLAN).await;
+            let _ = handle
+                .call(METHOD_VERY_SLOW, &mut args, &U64_ARGS_PLAN)
+                .await;
         });
 
         // Cancel by dropping after a short delay
@@ -379,9 +384,7 @@ async fn chaos_overwhelm(
     concurrent_calls: usize,
     stats: Arc<AtomicU64>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let connector = UnixConnector {
-        path: socket_path,
-    };
+    let connector = UnixConnector { path: socket_path };
     let client = connect(connector, HandshakeConfig::default(), ChaosService::new());
     let handle = client.handle().await?;
 
@@ -400,7 +403,12 @@ async fn chaos_overwhelm(
                         *byte = (idx % 256) as u8;
                     }
 
-                    match timeout(Duration::from_secs(2), handle.call(METHOD_BIG_DATA, &mut data, &VEC_U8_ARGS_PLAN)).await {
+                    match timeout(
+                        Duration::from_secs(2),
+                        handle.call(METHOD_BIG_DATA, &mut data, &VEC_U8_ARGS_PLAN),
+                    )
+                    .await
+                    {
                         Ok(Ok(response)) => {
                             let result: Vec<u8> = decode_result(response.payload);
                             // Verify it was reversed
@@ -430,10 +438,17 @@ async fn chaos_overwhelm(
                         metadata: [
                             ("source".to_string(), "chaos-test".to_string()),
                             ("index".to_string(), i.to_string()),
-                        ].into_iter().collect(),
+                        ]
+                        .into_iter()
+                        .collect(),
                     };
 
-                    match timeout(Duration::from_secs(2), handle.call(METHOD_COMPLEX_STRUCT, &mut req, &COMPLEX_REQUEST_ARGS_PLAN)).await {
+                    match timeout(
+                        Duration::from_secs(2),
+                        handle.call(METHOD_COMPLEX_STRUCT, &mut req, &COMPLEX_REQUEST_ARGS_PLAN),
+                    )
+                    .await
+                    {
                         Ok(Ok(response)) => {
                             let result: ComplexResponse = decode_result(response.payload);
                             if result.request_id == i as u64 {
@@ -446,7 +461,12 @@ async fn chaos_overwhelm(
                 _ => {
                     // Simple call
                     let mut args = i as u64;
-                    match timeout(Duration::from_secs(2), handle.call(METHOD_SLOW, &mut args, &U64_ARGS_PLAN)).await {
+                    match timeout(
+                        Duration::from_secs(2),
+                        handle.call(METHOD_SLOW, &mut args, &U64_ARGS_PLAN),
+                    )
+                    .await
+                    {
                         Ok(Ok(response)) => {
                             let _: u64 = decode_result(response.payload);
                             stats.fetch_add(1, Ordering::Relaxed);
@@ -488,7 +508,9 @@ async fn chaos_mixed(
                 if let Ok(handle) = client.handle().await {
                     let task = tokio::spawn(async move {
                         let mut data = vec![0xAA; 50 * 1024]; // 50KB
-                        let _ = handle.call(METHOD_BIG_DATA, &mut data, &VEC_U8_ARGS_PLAN).await;
+                        let _ = handle
+                            .call(METHOD_BIG_DATA, &mut data, &VEC_U8_ARGS_PLAN)
+                            .await;
                     });
                     tokio::time::sleep(Duration::from_millis(5)).await;
                     drop(client);
@@ -515,7 +537,9 @@ async fn chaos_mixed(
                             tags: vec!["test".to_string(); 10],
                             metadata: Default::default(),
                         };
-                        let _ = handle.call(METHOD_COMPLEX_STRUCT, &mut req, &COMPLEX_REQUEST_ARGS_PLAN).await;
+                        let _ = handle
+                            .call(METHOD_COMPLEX_STRUCT, &mut req, &COMPLEX_REQUEST_ARGS_PLAN)
+                            .await;
                     });
                     tokio::time::sleep(Duration::from_millis(10)).await;
                     task.abort();
@@ -585,7 +609,11 @@ async fn chaos_mixed(
                             };
                             let _ = timeout(
                                 Duration::from_millis(200),
-                                handle.call(METHOD_COMPLEX_STRUCT, &mut req, &COMPLEX_REQUEST_ARGS_PLAN),
+                                handle.call(
+                                    METHOD_COMPLEX_STRUCT,
+                                    &mut req,
+                                    &COMPLEX_REQUEST_ARGS_PLAN,
+                                ),
                             )
                             .await;
                         });
@@ -653,10 +681,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     println!("Attempting to break the stream transport...");
     println!();
 
-    let socket_path = std::env::temp_dir().join(format!(
-        "roam-chaos-test-{}.sock",
-        std::process::id()
-    ));
+    let socket_path =
+        std::env::temp_dir().join(format!("roam-chaos-test-{}.sock", std::process::id()));
 
     let service = ChaosService::new();
     let service_stats = service.clone();

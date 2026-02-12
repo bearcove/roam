@@ -14,12 +14,12 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{Duration, Instant};
 
+use facet::Facet;
+use once_cell::sync::Lazy;
 use roam_session::{
     Caller, ChannelRegistry, Context, RpcPlan, Rx, ServiceDispatcher, dispatch_call,
     dispatch_unknown_method,
 };
-use facet::Facet;
-use once_cell::sync::Lazy;
 use roam_stream::{
     ConnectError, Connector, HandshakeConfig, RetryPolicy, accept, connect, connect_with_policy,
 };

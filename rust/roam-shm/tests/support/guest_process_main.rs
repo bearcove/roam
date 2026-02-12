@@ -9,9 +9,8 @@
 //!
 //! Usage: spawned via SpawnTicket::spawn(), receives args automatically
 
-use roam_session::{ChannelRegistry, Context, RpcPlan, Rx, ServiceDispatcher, Tx, dispatch_call};
-use facet::Facet;
 use once_cell::sync::Lazy;
+use roam_session::{ChannelRegistry, Context, RpcPlan, Rx, ServiceDispatcher, Tx, dispatch_call};
 use roam_shm::driver::establish_guest;
 use roam_shm::spawn::{SpawnArgs, die_with_parent};
 use roam_shm::transport::ShmGuestTransport;
@@ -22,21 +21,18 @@ use std::sync::Arc;
 // RPC Plans
 // ============================================================================
 
-static STRING_ARGS_PLAN: Lazy<RpcPlan> = Lazy::new(|| RpcPlan::for_type::<String>());
+static STRING_ARGS_PLAN: Lazy<RpcPlan> = Lazy::new(RpcPlan::for_type::<String>);
 static STRING_RESPONSE_PLAN: Lazy<Arc<RpcPlan>> =
     Lazy::new(|| Arc::new(RpcPlan::for_type::<String>()));
 
-static I32_I32_ARGS_PLAN: Lazy<RpcPlan> = Lazy::new(|| RpcPlan::for_type::<(i32, i32)>());
-static I32_RESPONSE_PLAN: Lazy<Arc<RpcPlan>> =
-    Lazy::new(|| Arc::new(RpcPlan::for_type::<i32>()));
+static I32_I32_ARGS_PLAN: Lazy<RpcPlan> = Lazy::new(RpcPlan::for_type::<(i32, i32)>);
+static I32_RESPONSE_PLAN: Lazy<Arc<RpcPlan>> = Lazy::new(|| Arc::new(RpcPlan::for_type::<i32>()));
 
-static RX_I32_ARGS_PLAN: Lazy<RpcPlan> = Lazy::new(|| RpcPlan::for_type::<Rx<i32>>());
-static I64_RESPONSE_PLAN: Lazy<Arc<RpcPlan>> =
-    Lazy::new(|| Arc::new(RpcPlan::for_type::<i64>()));
+static RX_I32_ARGS_PLAN: Lazy<RpcPlan> = Lazy::new(RpcPlan::for_type::<Rx<i32>>);
+static I64_RESPONSE_PLAN: Lazy<Arc<RpcPlan>> = Lazy::new(|| Arc::new(RpcPlan::for_type::<i64>()));
 
-static U32_TX_I32_ARGS_PLAN: Lazy<RpcPlan> = Lazy::new(|| RpcPlan::for_type::<(u32, Tx<i32>)>());
-static UNIT_RESPONSE_PLAN: Lazy<Arc<RpcPlan>> =
-    Lazy::new(|| Arc::new(RpcPlan::for_type::<()>()));
+static U32_TX_I32_ARGS_PLAN: Lazy<RpcPlan> = Lazy::new(RpcPlan::for_type::<(u32, Tx<i32>)>);
+static UNIT_RESPONSE_PLAN: Lazy<Arc<RpcPlan>> = Lazy::new(|| Arc::new(RpcPlan::for_type::<()>()));
 
 /// Test service matching the one in driver.rs tests
 #[derive(Clone)]

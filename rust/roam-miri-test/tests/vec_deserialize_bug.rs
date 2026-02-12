@@ -8,12 +8,11 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
-use roam_session::{
-    ChannelRegistry, Context, RpcPlan, ServiceDispatcher, MessageTransport, HandshakeConfig,
-    dispatch_call, dispatch_unknown_method, accept_framed, initiate_framed, NoDispatcher,
-};
-use facet::Facet;
 use once_cell::sync::Lazy;
+use roam_session::{
+    ChannelRegistry, Context, HandshakeConfig, MessageTransport, NoDispatcher, RpcPlan,
+    ServiceDispatcher, accept_framed, dispatch_call, dispatch_unknown_method, initiate_framed,
+};
 use roam_wire::Message;
 use tokio::sync::mpsc;
 
@@ -21,7 +20,7 @@ use tokio::sync::mpsc;
 // RPC Plans
 // ============================================================================
 
-static VEC_U8_ARGS_PLAN: Lazy<RpcPlan> = Lazy::new(|| RpcPlan::for_type::<Vec<u8>>());
+static VEC_U8_ARGS_PLAN: Lazy<RpcPlan> = Lazy::new(RpcPlan::for_type::<Vec<u8>>);
 static VEC_U8_RESPONSE_PLAN: Lazy<Arc<RpcPlan>> =
     Lazy::new(|| Arc::new(RpcPlan::for_type::<Vec<u8>>()));
 
@@ -54,20 +53,18 @@ impl ServiceDispatcher for TestService {
         self.calls_total.fetch_add(1, Ordering::Relaxed);
 
         match cx.method_id().raw() {
-            METHOD_BIG_DATA => {
-                dispatch_call::<Vec<u8>, Vec<u8>, (), _, _>(
-                    &cx,
-                    payload,
-                    registry,
-                    &VEC_U8_ARGS_PLAN,
-                    VEC_U8_RESPONSE_PLAN.clone(),
-                    move |data: Vec<u8>| async move {
-                        let mut result = data.clone();
-                        result.reverse();
-                        Ok(result)
-                    },
-                )
-            }
+            METHOD_BIG_DATA => dispatch_call::<Vec<u8>, Vec<u8>, (), _, _>(
+                &cx,
+                payload,
+                registry,
+                &VEC_U8_ARGS_PLAN,
+                VEC_U8_RESPONSE_PLAN.clone(),
+                move |data: Vec<u8>| async move {
+                    let mut result = data.clone();
+                    result.reverse();
+                    Ok(result)
+                },
+            ),
             _ => dispatch_unknown_method(&cx, registry),
         }
     }
@@ -161,8 +158,8 @@ fn test_concurrent_vec_calls() {
                 // Mix of different sizes to trigger the bug
                 let size = match i % 5 {
                     0 | 1 => 1024 + (i % 100) * 1024, // 1KB to 100KB
-                    2 | 3 => 512,                      // Small
-                    _ => 2048,                         // Medium
+                    2 | 3 => 512,                     // Small
+                    _ => 2048,                        // Medium
                 };
 
                 let mut data = vec![0u8; size];
@@ -170,7 +167,9 @@ fn test_concurrent_vec_calls() {
                     *byte = (idx % 256) as u8;
                 }
 
-                let _ = handle.call(METHOD_BIG_DATA, &mut data, &VEC_U8_ARGS_PLAN).await;
+                let _ = handle
+                    .call(METHOD_BIG_DATA, &mut data, &VEC_U8_ARGS_PLAN)
+                    .await;
             });
             tasks.push(task);
         }

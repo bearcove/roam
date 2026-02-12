@@ -113,7 +113,11 @@ impl TestService for TestServiceImpl {
         result
     }
 
-    async fn handle_vec_string(&self, _cx: &roam_session::Context, tags: Vec<String>) -> Vec<String> {
+    async fn handle_vec_string(
+        &self,
+        _cx: &roam_session::Context,
+        tags: Vec<String>,
+    ) -> Vec<String> {
         self.calls.fetch_add(1, Ordering::Relaxed);
         tokio::time::sleep(Duration::from_millis(10)).await;
         let mut result = tags;

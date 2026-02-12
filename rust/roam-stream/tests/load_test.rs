@@ -13,12 +13,12 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
+use facet::Facet;
+use once_cell::sync::Lazy;
 use roam_session::{
     ChannelRegistry, Context, RoamError, RpcPlan, ServiceDispatcher, dispatch_call,
     dispatch_unknown_method,
 };
-use facet::Facet;
-use once_cell::sync::Lazy;
 use roam_stream::{ConnectionError, Connector, HandshakeConfig, accept, connect};
 use tokio::net::{UnixListener, UnixStream};
 
@@ -27,8 +27,7 @@ use tokio::net::{UnixListener, UnixStream};
 // ============================================================================
 
 static UNIT_ARGS_PLAN: Lazy<RpcPlan> = Lazy::new(|| RpcPlan::for_type::<()>());
-static U32_RESPONSE_PLAN: Lazy<Arc<RpcPlan>> =
-    Lazy::new(|| Arc::new(RpcPlan::for_type::<u32>()));
+static U32_RESPONSE_PLAN: Lazy<Arc<RpcPlan>> = Lazy::new(|| Arc::new(RpcPlan::for_type::<u32>()));
 
 static U32_ARGS_PLAN: Lazy<RpcPlan> = Lazy::new(|| RpcPlan::for_type::<u32>());
 
@@ -183,10 +182,8 @@ async fn start_server(
     service: TestService,
 ) -> Result<(PathBuf, tokio::task::JoinHandle<()>), Box<dyn std::error::Error + Send + Sync>> {
     // Create temp socket path
-    let socket_path = std::env::temp_dir().join(format!(
-        "roam-load-test-{}.sock",
-        std::process::id()
-    ));
+    let socket_path =
+        std::env::temp_dir().join(format!("roam-load-test-{}.sock", std::process::id()));
 
     // Clean up any leftover socket
     let _ = std::fs::remove_file(&socket_path);
@@ -264,7 +261,10 @@ async fn load_test_single_connection_varied_calls() {
                     // ECHO method
                     let msg = format!("message-{}", i);
                     let mut args = msg.clone();
-                    let response = handle.call(METHOD_ECHO, &mut args, &STRING_ARGS_PLAN).await.unwrap();
+                    let response = handle
+                        .call(METHOD_ECHO, &mut args, &STRING_ARGS_PLAN)
+                        .await
+                        .unwrap();
                     let result: Result<String, RoamError<()>> = decode_result(response.payload);
                     assert_eq!(result.unwrap(), msg);
                     return;
@@ -273,7 +273,10 @@ async fn load_test_single_connection_varied_calls() {
             };
 
             let mut args = arg;
-            let response = handle.call(method, &mut args, &U32_ARGS_PLAN).await.unwrap();
+            let response = handle
+                .call(method, &mut args, &U32_ARGS_PLAN)
+                .await
+                .unwrap();
             let result: Result<u32, RoamError<()>> = decode_result(response.payload);
 
             if method == METHOD_INSTANT {
@@ -312,9 +315,7 @@ async fn load_test_multiple_connections() {
     for conn_id in 0..NUM_CONNECTIONS {
         let socket_path = socket_path.clone();
         let task = tokio::spawn(async move {
-            let connector = UnixConnector {
-                path: socket_path,
-            };
+            let connector = UnixConnector { path: socket_path };
             let client = connect(connector, HandshakeConfig::default(), TestService::new());
             let handle = client.handle().await.unwrap();
 
@@ -336,7 +337,10 @@ async fn load_test_multiple_connections() {
 
                     let arg = i as u32;
                     let mut args = arg;
-                    let response = handle.call(method, &mut args, &U32_ARGS_PLAN).await.unwrap();
+                    let response = handle
+                        .call(method, &mut args, &U32_ARGS_PLAN)
+                        .await
+                        .unwrap();
                     let result: Result<u32, RoamError<()>> = decode_result(response.payload);
 
                     // Verify we got a response
@@ -409,7 +413,10 @@ async fn load_test_mixed_burst() {
 
                     let arg = i as u32;
                     let mut args = arg;
-                    let response = client.call(method, &mut args, &U32_ARGS_PLAN).await.unwrap();
+                    let response = client
+                        .call(method, &mut args, &U32_ARGS_PLAN)
+                        .await
+                        .unwrap();
                     let result: Result<u32, RoamError<()>> = decode_result(response.payload);
                     assert!(result.is_ok());
                 });
@@ -453,9 +460,7 @@ async fn load_test_chaos() {
         let completed = completed.clone();
 
         let task = tokio::spawn(async move {
-            let connector = UnixConnector {
-                path: socket_path,
-            };
+            let connector = UnixConnector { path: socket_path };
             let client = connect(connector, HandshakeConfig::default(), TestService::new());
             let handle = client.handle().await.unwrap();
 
@@ -486,12 +491,18 @@ async fn load_test_chaos() {
                     if method == METHOD_ECHO {
                         let msg = format!("chaos-{}", seed);
                         let mut args = msg.clone();
-                        let response = handle.call(method, &mut args, &STRING_ARGS_PLAN).await.unwrap();
+                        let response = handle
+                            .call(method, &mut args, &STRING_ARGS_PLAN)
+                            .await
+                            .unwrap();
                         let result: Result<String, RoamError<()>> = decode_result(response.payload);
                         assert_eq!(result.unwrap(), msg);
                     } else {
                         let mut args = seed;
-                        let response = handle.call(method, &mut args, &U32_ARGS_PLAN).await.unwrap();
+                        let response = handle
+                            .call(method, &mut args, &U32_ARGS_PLAN)
+                            .await
+                            .unwrap();
                         let result: Result<u32, RoamError<()>> = decode_result(response.payload);
                         assert!(result.is_ok());
                     }

@@ -11,12 +11,12 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
+use facet::Facet;
+use once_cell::sync::Lazy;
 use roam_session::{
     ChannelRegistry, Context, RoamError, RpcPlan, ServiceDispatcher, dispatch_call,
     dispatch_unknown_method,
 };
-use facet::Facet;
-use once_cell::sync::Lazy;
 use roam_stream::{Connector, HandshakeConfig, accept, connect};
 use tokio::net::{UnixListener, UnixStream};
 
@@ -25,8 +25,7 @@ use tokio::net::{UnixListener, UnixStream};
 // ============================================================================
 
 static U64_ARGS_PLAN: Lazy<RpcPlan> = Lazy::new(|| RpcPlan::for_type::<u64>());
-static U64_RESPONSE_PLAN: Lazy<Arc<RpcPlan>> =
-    Lazy::new(|| Arc::new(RpcPlan::for_type::<u64>()));
+static U64_RESPONSE_PLAN: Lazy<Arc<RpcPlan>> = Lazy::new(|| Arc::new(RpcPlan::for_type::<u64>()));
 
 // ============================================================================
 // Test Service with Fast and Slow Methods
@@ -224,10 +223,12 @@ async fn run_client_worker(
     completed: Arc<AtomicU64>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Connect to server
-    let connector = UnixConnector {
-        path: socket_path,
-    };
-    let client = connect(connector, HandshakeConfig::default(), LoadTestService::new());
+    let connector = UnixConnector { path: socket_path };
+    let client = connect(
+        connector,
+        HandshakeConfig::default(),
+        LoadTestService::new(),
+    );
     let handle = client.handle().await?;
 
     // Launch concurrent calls
@@ -247,9 +248,9 @@ async fn run_client_worker(
             // Pick method based on seed
             let (method, multiplier) = match seed % 10 {
                 0..=4 => (METHOD_INSTANT, 2), // 50% instant
-                5..=7 => (METHOD_FAST, 3),     // 30% fast
-                8 => (METHOD_MEDIUM, 4),       // 10% medium
-                9 => (METHOD_SLOW, 5),         // 10% slow
+                5..=7 => (METHOD_FAST, 3),    // 30% fast
+                8 => (METHOD_MEDIUM, 4),      // 10% medium
+                9 => (METHOD_SLOW, 5),        // 10% slow
                 _ => unreachable!(),
             };
 
@@ -310,10 +311,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     println!();
 
     // Create temp socket path
-    let socket_path = std::env::temp_dir().join(format!(
-        "roam-load-test-{}.sock",
-        std::process::id()
-    ));
+    let socket_path =
+        std::env::temp_dir().join(format!("roam-load-test-{}.sock", std::process::id()));
 
     // Start server
     let service = LoadTestService::new();
@@ -338,8 +337,10 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             let elapsed = now.duration_since(last_instant).as_secs_f64();
             let rate = (current_count - last_count) as f64 / elapsed;
 
-            print!("\rProgress: {}/{} calls | Rate: {:.0} calls/sec | ",
-                   current_count, total_calls, rate);
+            print!(
+                "\rProgress: {}/{} calls | Rate: {:.0} calls/sec | ",
+                current_count, total_calls, rate
+            );
             service_stats.print_stats();
             std::io::Write::flush(&mut std::io::stdout()).ok();
 

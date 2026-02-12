@@ -135,7 +135,12 @@ pub trait Caller: Clone + Send + Sync + 'static {
     /// the Response message.
     ///
     /// The `plan` should be created once per type as a static in non-generic code.
-    fn bind_response_channels<T: Facet<'static>>(&self, response: &mut T, plan: &RpcPlan, channels: &[u64]);
+    fn bind_response_channels<T: Facet<'static>>(
+        &self,
+        response: &mut T,
+        plan: &RpcPlan,
+        channels: &[u64],
+    );
 
     // ========================================================================
     // Non-generic methods (reduce monomorphization)
@@ -204,7 +209,12 @@ impl Caller for ConnectionHandle {
         ConnectionHandle::call_with_metadata(self, method_id, args, args_plan, metadata).await
     }
 
-    fn bind_response_channels<T: Facet<'static>>(&self, response: &mut T, plan: &RpcPlan, channels: &[u64]) {
+    fn bind_response_channels<T: Facet<'static>>(
+        &self,
+        response: &mut T,
+        plan: &RpcPlan,
+        channels: &[u64],
+    ) {
         ConnectionHandle::bind_response_channels(self, response, plan, channels)
     }
 
