@@ -2246,7 +2246,7 @@ dependencies = [
 
 [[package]]
 name = "roam"
-version = "3.0.0"
+version = "4.0.0"
 dependencies = [
  "facet",
  "facet-core",
@@ -2262,7 +2262,7 @@ dependencies = [
 
 [[package]]
 name = "roam-codegen"
-version = "3.0.0"
+version = "4.0.0"
 dependencies = [
  "facet",
  "facet-core",
@@ -2274,7 +2274,7 @@ dependencies = [
 
 [[package]]
 name = "roam-fdpass"
-version = "3.0.0"
+version = "4.0.0"
 dependencies = [
  "libc",
  "passfd",
@@ -2284,7 +2284,7 @@ dependencies = [
 
 [[package]]
 name = "roam-frame"
-version = "3.0.0"
+version = "4.0.0"
 dependencies = [
  "bytes",
  "facet",
@@ -2294,7 +2294,7 @@ dependencies = [
 
 [[package]]
 name = "roam-hash"
-version = "3.0.0"
+version = "4.0.0"
 dependencies = [
  "blake3",
  "facet",
@@ -2305,7 +2305,7 @@ dependencies = [
 
 [[package]]
 name = "roam-http-bridge"
-version = "3.0.0"
+version = "4.0.0"
 dependencies = [
  "axum",
  "base64",
@@ -2334,14 +2334,14 @@ dependencies = [
 
 [[package]]
 name = "roam-local"
-version = "3.0.0"
+version = "4.0.0"
 dependencies = [
  "tokio",
 ]
 
 [[package]]
 name = "roam-macros-parse"
-version = "3.0.0"
+version = "4.0.0"
 dependencies = [
  "datatest-stable",
  "insta",
@@ -2351,7 +2351,7 @@ dependencies = [
 
 [[package]]
 name = "roam-miri-test"
-version = "3.0.0"
+version = "4.0.0"
 dependencies = [
  "facet",
  "once_cell",
@@ -2363,7 +2363,7 @@ dependencies = [
 
 [[package]]
 name = "roam-schema"
-version = "3.0.0"
+version = "4.0.0"
 dependencies = [
  "facet",
  "facet-core",
@@ -2372,7 +2372,7 @@ dependencies = [
 
 [[package]]
 name = "roam-service-macros"
-version = "3.0.0"
+version = "4.0.0"
 dependencies = [
  "facet-cargo-toml",
  "heck",
@@ -2384,7 +2384,7 @@ dependencies = [
 
 [[package]]
 name = "roam-session"
-version = "3.0.0"
+version = "4.0.0"
 dependencies = [
  "async-channel",
  "facet",
@@ -2413,7 +2413,7 @@ dependencies = [
 
 [[package]]
 name = "roam-shm"
-version = "3.0.0"
+version = "4.0.0"
 dependencies = [
  "facet",
  "facet-postcard",
@@ -2444,7 +2444,7 @@ dependencies = [
 
 [[package]]
 name = "roam-stream"
-version = "3.0.0"
+version = "4.0.0"
 dependencies = [
  "facet",
  "facet-postcard",
@@ -2468,7 +2468,7 @@ dependencies = [
 
 [[package]]
 name = "roam-telemetry"
-version = "3.0.0"
+version = "4.0.0"
 dependencies = [
  "facet",
  "facet-json",
@@ -2488,7 +2488,7 @@ dependencies = [
 
 [[package]]
 name = "roam-tracing"
-version = "3.0.0"
+version = "4.0.0"
 dependencies = [
  "facet",
  "peeps-locks",
@@ -2503,7 +2503,7 @@ dependencies = [
 
 [[package]]
 name = "roam-websocket"
-version = "3.0.0"
+version = "4.0.0"
 dependencies = [
  "facet-postcard",
  "futures-channel",
@@ -2521,7 +2521,7 @@ dependencies = [
 
 [[package]]
 name = "roam-wire"
-version = "3.0.0"
+version = "4.0.0"
 dependencies = [
  "facet",
  "facet-postcard",
@@ -2746,7 +2746,7 @@ checksum = "0fda2ff0d084019ba4d7c6f371c95d8fd75ce3524c3cb8fb653a3023f6323e64"
 
 [[package]]
 name = "shm-primitives"
-version = "3.0.0"
+version = "4.0.0"
 dependencies = [
  "libc",
  "loom",
@@ -3268,7 +3268,7 @@ checksum = "8ecb6da28b8a351d773b68d5825ac39017e680750f980f3a1a85cd8dd28a47c1"
 
 [[package]]
 name = "ur-taking-me-with-you"
-version = "3.0.0"
+version = "4.0.0"
 dependencies = [
  "libc",
  "tokio",
