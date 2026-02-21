@@ -2637,6 +2637,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "roam-types"
+version = "3.0.0"
+dependencies = [
+ "facet",
+ "facet-path",
+ "facet-reflect",
+]
+
+[[package]]
 name = "roam-websocket"
 version = "3.0.0"
 dependencies = [

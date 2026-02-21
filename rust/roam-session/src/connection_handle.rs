@@ -89,30 +89,6 @@ pub struct ConnectionHandle {
 }
 
 impl ConnectionHandle {
-    fn merged_outgoing_metadata(
-        &self,
-        mut metadata: roam_wire::Metadata,
-        _request_id: u64,
-        _method_name: &str,
-    ) -> roam_wire::Metadata {
-        if let Some(current_call_metadata) = crate::dispatch::get_current_call_metadata() {
-            for (key, value, flags) in current_call_metadata {
-                if flags & roam_wire::metadata_flags::NO_PROPAGATE != 0 {
-                    continue;
-                }
-                if metadata
-                    .iter()
-                    .any(|(existing_key, _, _)| existing_key == &key)
-                {
-                    continue;
-                }
-                metadata.push((key, value, flags));
-            }
-        }
-
-        metadata
-    }
-
     /// Create a new handle for the root connection (conn_id = 0).
     ///
     /// All messages (Call/Data/Close/Response) go through a single unified channel
@@ -454,7 +430,7 @@ impl ConnectionHandle {
     #[allow(clippy::too_many_arguments)]
     async fn call_raw_full_with_drains(
         &self,
-        descriptor: &'static crate::MethodDescriptor,
+        method_id: &'static crate::MethodId,
         metadata: roam_wire::Metadata,
         channels: Vec<u64>,
         payload: Vec<u8>,
@@ -462,11 +438,7 @@ impl ConnectionHandle {
         drains: Vec<(ChannelId, Receiver<IncomingChannelMessage>)>,
     ) -> Result<ResponseData, TransportError> {
         let _request_permit = self.acquire_request_slot().await?;
-
-        let method_id = descriptor.id;
         let request_id = self.shared.request_ids.next();
-        let method_name_full = format!("{}.{}", descriptor.service_name, descriptor.method_name);
-        let metadata = self.merged_outgoing_metadata(metadata, request_id, &method_name_full);
 
         let (response_tx, response_rx) = oneshot("call");
         let msg = DriverMessage::Call {

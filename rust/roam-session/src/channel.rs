@@ -184,15 +184,19 @@ impl DriverTxSlot {
 pub struct Tx<T: 'static> {
     /// The connection ID this channel belongs to.
     pub conn_id: roam_wire::ConnectionId,
+
     /// The unique channel ID for this channel.
     /// Public so Connection can poke it when binding channels.
     pub channel_id: ChannelId,
+
     /// Channel sender for outgoing data (client-side mode).
     /// Used when Tx is created via `roam::channel()`.
     pub sender: SenderSlot,
+
     /// Direct driver message sender (server-side mode).
     /// Used when Tx is hydrated by `ChannelRegistry::bind_channels`.
     pub driver_tx: DriverTxSlot,
+
     /// Phantom data for the element type.
     #[facet(opaque)]
     _marker: PhantomData<T>,

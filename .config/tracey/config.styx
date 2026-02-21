@@ -3,7 +3,6 @@
 specs (
     {
         name roam
-        prefix r
         include (docs/content/spec/**/*.md)
         impls (
             {
@@ -46,7 +45,6 @@ specs (
 
     {
         name shm
-        prefix shm
         include (docs/content/shm-spec/**/*.md)
         impls (
             {
@@ -62,7 +60,6 @@ specs (
 
     {
         name rust
-        prefix rs
         include (docs/content/rust-spec/**/*.md)
         impls (
             {
@@ -78,7 +75,6 @@ specs (
 
     {
         name multistream
-        prefix r
         include (docs/content/multistream-spec/**/*.md)
         impls (
             {
@@ -91,7 +87,6 @@ specs (
 
     {
         name reconnect
-        prefix r
         include (docs/content/reconnecting-client-spec/**/*.md)
         impls (
             {
@@ -107,7 +102,6 @@ specs (
 
     {
         name http
-        prefix r
         include (docs/content/http-spec/**/*.md)
         impls (
             {

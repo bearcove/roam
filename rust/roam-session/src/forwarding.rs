@@ -18,7 +18,7 @@ use crate::{
 /// Forwarding is schema-agnostic: it doesn't know the service at compile time.
 /// We cache leaked descriptors per method_id (bounded by the finite method set
 /// of the upstream service).
-fn forwarding_descriptor(method_id: u64, full_method_name: &str) -> &'static MethodDescriptor {
+fn forwarding_descriptor(method_id: u64) -> &'static MethodDescriptor {
     static DUMMY_PLAN: LazyLock<&'static RpcPlan> =
         LazyLock::new(|| Box::leak(Box::new(RpcPlan::for_type::<()>())));
     static CACHE: LazyLock<std::sync::Mutex<HashMap<u64, &'static MethodDescriptor>>> =
@@ -29,13 +29,11 @@ fn forwarding_descriptor(method_id: u64, full_method_name: &str) -> &'static Met
         return desc;
     }
 
-    let (service_name, method_name) = full_method_name
-        .rsplit_once('.')
-        .unwrap_or(("", full_method_name));
+    let method_name = format!("{method_id}");
 
     let desc: &'static MethodDescriptor = Box::leak(Box::new(MethodDescriptor {
         id: method_id,
-        service_name: Box::leak(service_name.to_string().into_boxed_str()),
+        service_name: Box::leak("forwarded".to_string().into_boxed_str()),
         method_name: Box::leak(method_name.to_string().into_boxed_str()),
         arg_names: &[],
         arg_shapes: &[],
@@ -108,21 +106,7 @@ impl ServiceDispatcher for ForwardingDispatcher {
         let method_id = cx.method_id.raw();
         let request_id = cx.request_id.raw();
         let channels = cx.channels.clone();
-        let Some(method_name) = cx.method_name() else {
-            return Box::pin(async move {
-                let _ = task_tx
-                    .send(DriverMessage::Response {
-                        conn_id,
-                        request_id,
-                        channels: vec![],
-                        payload: vec![1, 2], // Err(InvalidPayload)
-                    })
-                    .await;
-            });
-        };
-        let method_name = method_name.to_string();
-
-        let descriptor = forwarding_descriptor(method_id, &method_name);
+        let descriptor = forwarding_descriptor(method_id);
 
         if channels.is_empty() {
             // Unary call - but response may contain Rx<T> channels

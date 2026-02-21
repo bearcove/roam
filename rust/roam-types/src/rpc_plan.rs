@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
-use facet::Facet;
-use facet_core::Shape;
+use facet::{Facet, Shape};
 use facet_path::{Path, walk_shape};
 use facet_reflect::TypePlanCore;
 
@@ -22,6 +21,7 @@ pub struct RpcPlan {
 pub struct ChannelLocation {
     /// Path from the root to this channel.
     pub path: Path,
+
     /// Whether this is an Rx or Tx channel.
     pub kind: ChannelKind,
 }

@@ -96,9 +96,6 @@ pub struct Context {
     /// Unique within the connection; used for response routing and cancellation.
     pub request_id: roam_wire::RequestId,
 
-    /// The method ID being called.
-    pub method_id: roam_wire::MethodId,
-
     /// Method descriptor from the active service definition.
     ///
     /// Populated by the connection driver when the selected dispatcher can
@@ -120,12 +117,6 @@ pub struct Context {
     /// Middleware can insert values here (e.g., authenticated user info)
     /// that handlers can later retrieve.
     pub extensions: Extensions,
-
-    /// Argument names for the method being called.
-    ///
-    /// Set by the generated dispatcher. Middleware can use this to create
-    /// per-argument span attributes (e.g., `rpc.args.user_id`).
-    pub arg_names: &'static [&'static str],
 }
 
 impl Context {
@@ -948,65 +939,6 @@ pub trait ServiceDispatcher: Send + Sync {
         registry: &mut ChannelRegistry,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'static>>;
 }
-
-/// Static descriptor for a single RPC method.
-///
-/// Contains all metadata and precomputed plans needed for dispatching
-/// and calling this method, eliminating the need for per-method OnceLock statics.
-pub struct MethodDescriptor {
-    /// Method ID (hash of service name, method name, arg shapes, return shape).
-    pub id: u64,
-    /// Service name (e.g., "Calculator").
-    pub service_name: &'static str,
-    /// Method name (e.g., "add").
-    pub method_name: &'static str,
-    /// Argument names in declaration order.
-    pub arg_names: &'static [&'static str],
-    /// Argument shapes in declaration order.
-    pub arg_shapes: &'static [&'static Shape],
-    /// Return type shape.
-    pub return_shape: &'static Shape,
-    /// Precomputed plan for the args tuple type.
-    pub args_plan: &'static RpcPlan,
-    /// Precomputed plan for the Ok/return type.
-    pub ok_plan: &'static RpcPlan,
-    /// Precomputed plan for the Err type (Infallible if infallible).
-    pub err_plan: &'static RpcPlan,
-}
-
-impl std::fmt::Debug for MethodDescriptor {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("MethodDescriptor")
-            .field("id", &self.id)
-            .field("service_name", &self.service_name)
-            .field("method_name", &self.method_name)
-            .finish()
-    }
-}
-
-/// Static descriptor for a roam RPC service.
-///
-/// Contains the service name and all method descriptors. Built once per service
-/// via OnceLock in macro-generated code.
-pub struct ServiceDescriptor {
-    /// Service name (e.g., "Calculator").
-    pub service_name: &'static str,
-    /// All methods in this service.
-    pub methods: &'static [&'static MethodDescriptor],
-}
-
-impl ServiceDescriptor {
-    /// Look up a method descriptor by method ID.
-    pub fn by_id(&self, method_id: u64) -> Option<&'static MethodDescriptor> {
-        self.methods.iter().find(|m| m.id == method_id).copied()
-    }
-}
-
-/// An empty service descriptor for dispatchers that don't serve any methods.
-pub static EMPTY_DESCRIPTOR: ServiceDescriptor = ServiceDescriptor {
-    service_name: "",
-    methods: &[],
-};
 
 // ============================================================================
 // Routed Dispatcher
