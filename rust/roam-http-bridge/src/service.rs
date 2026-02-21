@@ -49,7 +49,7 @@ impl GenericBridgeService {
         let mut methods = HashMap::new();
 
         for &desc in descriptor.methods {
-            let has_channels = desc.arg_shapes.iter().any(|s| contains_channels(s))
+            let has_channels = desc.args.iter().any(|a| contains_channels(a.shape))
                 || contains_channels(desc.return_shape);
 
             let (return_shape, error_shape) = extract_result_types(desc.return_shape);
@@ -127,8 +127,13 @@ impl BridgeService for GenericBridgeService {
 
             // r[bridge.json.facet]
             // Transcode JSON array → postcard tuple using arg shapes
-            let postcard_payload =
-                json_args_to_postcard(json_body, method_info.descriptor.arg_shapes)?;
+            let arg_shapes: Vec<&'static Shape> = method_info
+                .descriptor
+                .args
+                .iter()
+                .map(|a| a.shape)
+                .collect();
+            let postcard_payload = json_args_to_postcard(json_body, &arg_shapes)?;
 
             // Convert metadata to wire format
             let wire_metadata = metadata.to_wire_metadata();
@@ -143,6 +148,7 @@ impl BridgeService for GenericBridgeService {
             // Parse the response envelope
             // The response is wrapped: 0x00 + value_bytes for Ok, 0x01 + error_bytes for Err
             // Error variants: User(0) + E, UnknownMethod(1), InvalidPayload(2), Cancelled(3)
+            let response_bytes = response_bytes.0;
             if response_bytes.is_empty() {
                 return Err(BridgeError::internal("Empty response from backend"));
             }

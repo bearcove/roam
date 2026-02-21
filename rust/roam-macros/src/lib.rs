@@ -179,9 +179,9 @@ fn generate_service_descriptor_fn(parsed: &ServiceTrait, roam: &TokenStream2) ->
                     arg_names: #args_names_expr,
                     arg_shapes: #args_shapes_expr,
                     return_shape: <#return_ty_tokens as #roam::facet::Facet>::SHAPE,
-                    args_plan: Box::leak(Box::new(#roam::session::RpcPlan::for_type::<#tuple_type>())),
-                    ok_plan: Box::leak(Box::new(#roam::session::RpcPlan::for_type::<#ok_ty>())),
-                    err_plan: Box::leak(Box::new(#roam::session::RpcPlan::for_type::<#err_ty>())),
+                    args_plan: Box::leak(Box::new(#roam::session::RpcPlan::for_type::<#tuple_type, ::roam::session::Tx, ::roam::session::Rx>())),
+                    ok_plan: Box::leak(Box::new(#roam::session::RpcPlan::for_type::<#ok_ty, ::roam::session::Tx, ::roam::session::Rx>())),
+                    err_plan: Box::leak(Box::new(#roam::session::RpcPlan::for_type::<#err_ty, ::roam::session::Tx, ::roam::session::Rx>())),
                 }))
             }
         })
@@ -220,7 +220,7 @@ fn generate_method_id_module(parsed: &ServiceTrait, _roam: &TokenStream2) -> Tok
             let fn_name = format_ident!("{}", m.name().to_snake_case());
             let idx = i;
             quote! {
-                pub fn #fn_name() -> u64 {
+                pub fn #fn_name() -> MethodId {
                     super::#descriptor_fn_name().methods[#idx].id
                 }
             }
@@ -488,10 +488,6 @@ fn generate_dispatch_method(
                         conn_id,
                         request_id,
                     ).await;
-
-                    if #method_name_str != "emit_tracing" {
-                        #roam::tracing::debug!(target: "roam::rpc", request_id, method = #method_name_str, elapsed = ?_handler_elapsed, "ok");
-                    }
                 }
                 Err(error) => {
                     // Create SendPeek before calling async function
@@ -516,10 +512,6 @@ fn generate_dispatch_method(
                         conn_id,
                         request_id,
                     ).await;
-
-                    if #method_name_str != "emit_tracing" {
-                        #roam::tracing::debug!(target: "roam::rpc", request_id, method = #method_name_str, elapsed = ?_handler_elapsed, "err");
-                    }
                 }
             }
         }
@@ -548,10 +540,6 @@ fn generate_dispatch_method(
                 conn_id,
                 request_id,
             ).await;
-
-            if #method_name_str != "emit_tracing" {
-                #roam::tracing::debug!(target: "roam::rpc", request_id, method = #method_name_str, elapsed = ?_handler_elapsed, "ok");
-            }
         }
     };
 
@@ -592,9 +580,6 @@ fn generate_dispatch_method(
                 )
             } {
                 return Box::pin(async move {
-                    if #method_name_str != "emit_tracing" {
-                        #roam::tracing::debug!(target: "roam::rpc", request_id, method = #method_name_str, error = %e, "prepare failed");
-                    }
                     #roam::session::send_prepare_error(e, &driver_tx, conn_id, request_id).await;
                 });
             }
@@ -644,9 +629,6 @@ fn generate_dispatch_method(
                 // Scope CURRENT_EXTENSIONS so code inside the handler (like TracingCaller)
                 // can access extensions set by middleware.
                 use #roam::facet_pretty::FacetPretty;
-                if #method_name_str != "emit_tracing" {
-                    #roam::tracing::debug!(target: "roam::rpc", request_id, method = #method_name_str, args = %#args_log, "handling");
-                }
                 #args_binding
                 // Instant::now() panics on wasm32-unknown-unknown
                 #[cfg(not(target_arch = "wasm32"))]

@@ -173,7 +173,7 @@ impl<C: Caller> Caller for TracingCaller<C> {
         &self,
         descriptor: &'static roam_session::MethodDescriptor,
         args_ptr: SendPtr,
-        metadata: roam_types::Metadata,
+        metadata: Metadata,
     ) -> impl std::future::Future<Output = Result<ResponseData, TransportError>> {
         self.inner
             .call_with_metadata_by_plan(descriptor, args_ptr, metadata)
@@ -184,7 +184,7 @@ impl<C: Caller> Caller for TracingCaller<C> {
         &self,
         response_ptr: *mut (),
         response_plan: &roam_session::RpcPlan,
-        channels: &[u64],
+        channels: &[ChannelId],
     ) {
         unsafe {
             self.inner

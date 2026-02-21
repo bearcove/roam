@@ -11,6 +11,7 @@ use facet_core::{Def, Shape};
 use futures_util::{SinkExt, StreamExt};
 use roam_schema::{contains_channels, is_rx, is_tx};
 use roam_session::{IncomingChannelMessage, MethodDescriptor, ResponseData, TransportError};
+use roam_types::{ChannelId, Payload};
 
 use crate::{BridgeError, BridgeService, ProtocolErrorKind};
 
@@ -175,7 +176,7 @@ async fn handle_request(
                 let sd = service.service_descriptor();
                 match sd.methods.iter().find(|m| m.method_name == method_name) {
                     Some(desc) => {
-                        let has_channels = desc.arg_shapes.iter().any(|s| contains_channels(s))
+                        let has_channels = desc.args.iter().any(|a| contains_channels(a.shape))
                             || contains_channels(desc.return_shape);
                         Ok((service, *desc, has_channels))
                     }
@@ -291,9 +292,12 @@ struct StreamingCallState {
     #[allow(dead_code)]
     session: Arc<std::sync::Mutex<WsSession>>,
     request_id: u64,
-    ws_to_roam_rx_map: HashMap<u64, (u64, &'static Shape)>,
-    roam_to_ws_tx_map: HashMap<u64, (u64, &'static Shape)>,
-    roam_receivers: Vec<(u64, roam_session::runtime::Receiver<IncomingChannelMessage>)>,
+    ws_to_roam_rx_map: HashMap<u64, (ChannelId, &'static Shape)>,
+    roam_to_ws_tx_map: HashMap<ChannelId, (u64, &'static Shape)>,
+    roam_receivers: Vec<(
+        ChannelId,
+        roam_session::runtime::Receiver<IncomingChannelMessage>,
+    )>,
     /// Response receiver - the call has already been sent when this is set
     response_rx: roam_session::runtime::OneshotReceiver<Result<ResponseData, TransportError>>,
     return_shape: &'static Shape,
@@ -320,7 +324,8 @@ async fn setup_streaming_call(
     let mut rx_channels: Vec<(usize, &'static Shape)> = Vec::new();
     let mut tx_channels: Vec<(usize, &'static Shape)> = Vec::new();
 
-    for (i, &arg_shape) in desc.arg_shapes.iter().enumerate() {
+    for (i, arg) in desc.args.iter().enumerate() {
+        let arg_shape = arg.shape;
         if is_rx(arg_shape) {
             if let Some(elem_shape) = get_channel_element_type(arg_shape) {
                 rx_channels.push((i, elem_shape));
@@ -338,9 +343,9 @@ async fn setup_streaming_call(
         .ok_or_else(|| BridgeError::bad_request("Args must be a JSON array"))?;
 
     // Build channel mappings
-    let mut roam_channel_ids: Vec<u64> = Vec::new();
-    let mut ws_to_roam_rx_map: HashMap<u64, (u64, &'static Shape)> = HashMap::new();
-    let mut roam_to_ws_tx_map: HashMap<u64, (u64, &'static Shape)> = HashMap::new();
+    let mut roam_channel_ids: Vec<ChannelId> = Vec::new();
+    let mut ws_to_roam_rx_map: HashMap<u64, (ChannelId, &'static Shape)> = HashMap::new();
+    let mut roam_to_ws_tx_map: HashMap<ChannelId, (u64, &'static Shape)> = HashMap::new();
 
     // Process Rx channels (client sends to server)
     for (arg_idx, elem_shape) in &rx_channels {
@@ -363,10 +368,11 @@ async fn setup_streaming_call(
     // Build args with roam channel IDs substituted
     let mut modified_args = args_array.clone();
     let mut roam_channel_idx = 0;
-    for (i, &arg_shape) in desc.arg_shapes.iter().enumerate() {
+    for (i, arg) in desc.args.iter().enumerate() {
+        let arg_shape = arg.shape;
         if (is_rx(arg_shape) || is_tx(arg_shape)) && roam_channel_idx < roam_channel_ids.len() {
             modified_args[i] = serde_json::Value::Number(serde_json::Number::from(
-                roam_channel_ids[roam_channel_idx],
+                roam_channel_ids[roam_channel_idx].0,
             ));
             roam_channel_idx += 1;
         }
@@ -375,11 +381,14 @@ async fn setup_streaming_call(
     // Transcode the modified args to postcard
     let args_json = serde_json::to_vec(&modified_args)
         .map_err(|e| BridgeError::bad_request(format!("Failed to serialize args: {}", e)))?;
-    let postcard_payload = crate::transcode::json_args_to_postcard(&args_json, desc.arg_shapes)?;
+    let arg_shapes: Vec<&'static Shape> = desc.args.iter().map(|a| a.shape).collect();
+    let postcard_payload = crate::transcode::json_args_to_postcard(&args_json, &arg_shapes)?;
 
     // Set up channels for receiving data from roam (Tx channels)
-    let mut roam_receivers: Vec<(u64, roam_session::runtime::Receiver<IncomingChannelMessage>)> =
-        Vec::new();
+    let mut roam_receivers: Vec<(
+        ChannelId,
+        roam_session::runtime::Receiver<IncomingChannelMessage>,
+    )> = Vec::new();
     for &roam_channel_id in roam_to_ws_tx_map.keys() {
         let (tx, rx) = roam_session::runtime::channel("ws_roam_incoming", 256);
         handle.register_incoming(roam_channel_id, tx);
@@ -430,7 +439,7 @@ async fn setup_streaming_call(
         method_id: desc.id,
         metadata: Vec::new(),
         channels: roam_channel_ids,
-        payload: postcard_payload,
+        payload: Payload(postcard_payload),
         response_tx,
     };
 
@@ -528,7 +537,7 @@ async fn run_streaming_call(
     // Send the response without holding the session mutex across await.
     let msg = match response {
         Ok(response_data) => {
-            let response_bytes = &response_data.payload;
+            let response_bytes = &response_data.payload.0;
             if response_bytes.is_empty() {
                 ServerMessage::protocol_error(request_id, "empty_response")
             } else {
@@ -667,7 +676,7 @@ async fn handle_data(
         .send(DriverMessage::Data {
             conn_id: roam_types::ConnectionId::ROOT,
             channel_id: roam_channel_id,
-            payload: postcard_bytes,
+            payload: Payload(postcard_bytes),
         })
         .await
         .map_err(|_| BridgeError::internal("Failed to send data to roam"))?;

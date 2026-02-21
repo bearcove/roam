@@ -8,6 +8,8 @@ use std::sync::Arc;
 use facet_core::Shape;
 use roam_session::DriverMessage;
 
+use roam_types::ChannelId;
+
 use crate::{BridgeError, BridgeService};
 
 use super::messages::ServerMessage;
@@ -64,7 +66,7 @@ pub struct ChannelState {
     /// Sender for Data messages to the roam connection (ClientToServer channels).
     pub roam_tx: Option<roam_session::runtime::Sender<Vec<u8>>>,
     /// The corresponding roam channel ID (for forwarding).
-    pub roam_channel_id: Option<u64>,
+    pub roam_channel_id: Option<ChannelId>,
     /// Outstanding credit (bytes) for this channel.
     pub credit: u64,
 }
@@ -161,14 +163,14 @@ impl WsSession {
     }
 
     /// Set the roam channel ID for a WebSocket channel.
-    pub fn set_roam_channel_id(&mut self, ws_channel_id: u64, roam_channel_id: u64) {
+    pub fn set_roam_channel_id(&mut self, ws_channel_id: u64, roam_channel_id: ChannelId) {
         if let Some(channel) = self.channels.get_mut(&ws_channel_id) {
             channel.roam_channel_id = Some(roam_channel_id);
         }
     }
 
     /// Get the roam channel ID for a WebSocket channel.
-    pub fn get_roam_channel_id(&self, ws_channel_id: u64) -> Option<u64> {
+    pub fn get_roam_channel_id(&self, ws_channel_id: u64) -> Option<ChannelId> {
         self.channels
             .get(&ws_channel_id)
             .and_then(|c| c.roam_channel_id)
