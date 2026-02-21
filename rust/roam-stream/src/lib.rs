@@ -68,7 +68,7 @@ pub use roam_session::{
 };
 
 // Re-export wire types for convenience
-pub use roam_wire::{Hello, Message};
+pub use roam_types::{Hello, Message};
 
 // Re-export tokio IO traits for convenience
 pub use tokio::io::{AsyncRead, AsyncWrite};

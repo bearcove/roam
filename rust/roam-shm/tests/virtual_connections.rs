@@ -13,7 +13,7 @@ use roam_shm::host::ShmHost;
 use roam_shm::layout::SegmentConfig;
 
 use roam_shm::transport::ShmGuestTransport;
-use roam_wire::Metadata;
+use roam_types::Metadata;
 
 /// Simple service for virtual connection tests.
 #[roam::service]

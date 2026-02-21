@@ -54,15 +54,15 @@ impl BridgeMetadata {
     }
 
     /// Convert to roam wire metadata format.
-    pub fn to_wire_metadata(&self) -> roam_wire::Metadata {
-        use roam_wire::metadata_flags;
+    pub fn to_wire_metadata(&self) -> roam_types::Metadata {
+        use roam_types::metadata_flags;
 
         self.entries
             .iter()
             .map(|(k, v)| {
                 let wire_value = match v {
-                    MetadataValue::String(s) => roam_wire::MetadataValue::String(s.clone()),
-                    MetadataValue::Bytes(b) => roam_wire::MetadataValue::Bytes(b.clone()),
+                    MetadataValue::String(s) => roam_types::MetadataValue::String(s.clone()),
+                    MetadataValue::Bytes(b) => roam_types::MetadataValue::Bytes(b.clone()),
                 };
                 // r[call.metadata.flags] - Mark authorization as sensitive
                 let flags = if k == "authorization" {

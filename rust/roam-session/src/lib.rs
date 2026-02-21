@@ -56,8 +56,8 @@ pub use extensions::*;
 mod middleware;
 pub use middleware::*;
 
-mod rpc_plan;
-pub use rpc_plan::*;
+pub use facet_reflect::TypePlanCore;
+pub use roam_types::{ChannelKind, MethodDescriptor, MethodId, RpcPlan, ServiceDescriptor};
 
 pub(crate) const CHANNEL_SIZE: usize = 1024;
 pub(crate) const RX_STREAM_BUFFER_SIZE: usize = 1024;

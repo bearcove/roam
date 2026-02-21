@@ -6,7 +6,7 @@
 
 use facet::Facet;
 use roam_session::MessageTransport;
-use roam_wire::Message;
+use roam_types::Message;
 use std::io;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};

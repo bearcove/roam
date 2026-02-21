@@ -68,7 +68,7 @@ macro_rules! define_caller_trait {
                 self.call_with_metadata(
                     descriptor,
                     args,
-                    roam_wire::Metadata::default(),
+                    roam_types::Metadata::default(),
                 )
             }
 
@@ -77,7 +77,7 @@ macro_rules! define_caller_trait {
                 &self,
                 descriptor: &'static MethodDescriptor,
                 args: &mut T,
-                metadata: roam_wire::Metadata,
+                metadata: roam_types::Metadata,
             ) -> impl std::future::Future<Output = Result<ResponseData, TransportError>> $(+ $send)?;
 
             /// Bind receivers for `Rx<T>` channels in the response.
@@ -104,7 +104,7 @@ macro_rules! define_caller_trait {
                 &self,
                 descriptor: &'static MethodDescriptor,
                 args_ptr: SendPtr,
-                metadata: roam_wire::Metadata,
+                metadata: roam_types::Metadata,
             ) -> impl std::future::Future<Output = Result<ResponseData, TransportError>> $(+ $send)?;
 
             /// Bind receivers for `Rx<T>` channels in the response using reflection (non-generic).
@@ -134,7 +134,7 @@ impl Caller for ConnectionHandle {
         &self,
         descriptor: &'static MethodDescriptor,
         args: &mut T,
-        metadata: roam_wire::Metadata,
+        metadata: roam_types::Metadata,
     ) -> Result<ResponseData, TransportError> {
         let args_ptr = args as *mut T as *mut ();
         #[allow(unsafe_code)]
@@ -157,7 +157,7 @@ impl Caller for ConnectionHandle {
         &self,
         descriptor: &'static MethodDescriptor,
         args_ptr: SendPtr,
-        metadata: roam_wire::Metadata,
+        metadata: roam_types::Metadata,
     ) -> impl std::future::Future<Output = Result<ResponseData, TransportError>> {
         unsafe {
             ConnectionHandle::call_with_metadata_by_plan(
@@ -219,7 +219,7 @@ where
     caller: C,
     descriptor: &'static MethodDescriptor,
     args: Args,
-    metadata: roam_wire::Metadata,
+    metadata: roam_types::Metadata,
     _phantom: PhantomData<fn() -> (Ok, Err)>,
 }
 
@@ -236,7 +236,7 @@ where
             caller,
             descriptor,
             args,
-            metadata: roam_wire::Metadata::default(),
+            metadata: roam_types::Metadata::default(),
             _phantom: PhantomData,
         }
     }
@@ -245,7 +245,7 @@ where
     ///
     /// Metadata is a list of key-value pairs that will be sent with the request.
     /// The server can access this via `Context::metadata()`.
-    pub fn with_metadata(mut self, metadata: roam_wire::Metadata) -> Self {
+    pub fn with_metadata(mut self, metadata: roam_types::Metadata) -> Self {
         self.metadata = metadata;
         self
     }

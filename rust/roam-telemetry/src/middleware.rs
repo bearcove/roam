@@ -39,7 +39,7 @@ impl PendingSpan {
             .iter()
             .find(|(k, _, _)| k == TraceContext::TRACEPARENT_KEY)
             .and_then(|(_, v, _)| match v {
-                roam_wire::MetadataValue::String(s) => TraceContext::parse(s),
+                roam_types::MetadataValue::String(s) => TraceContext::parse(s),
                 _ => None,
             });
 
@@ -59,22 +59,22 @@ impl PendingSpan {
         let mut attributes = vec![
             KeyValue::string("rpc.system", "roam"),
             KeyValue::string("rpc.method", &name),
-            KeyValue::int("rpc.request_id", ctx.request_id().raw() as i64),
-            KeyValue::int("network.peer.connection_id", ctx.conn_id().raw() as i64),
+            KeyValue::int("rpc.request_id", ctx.request_id().0 as i64),
+            KeyValue::int("network.peer.connection_id", ctx.conn_id().0 as i64),
         ];
 
         // Add metadata as attributes (limited to avoid bloat)
         // r[impl call.metadata.flags] - Respect SENSITIVE flag
         for (key, value, flags) in ctx.metadata().iter().take(10) {
             if key != TraceContext::TRACEPARENT_KEY {
-                let is_sensitive = (flags & roam_wire::metadata_flags::SENSITIVE) != 0;
+                let is_sensitive = (flags & roam_types::metadata_flags::SENSITIVE) != 0;
                 let value_str = if is_sensitive {
                     "[REDACTED]".to_string()
                 } else {
                     match value {
-                        roam_wire::MetadataValue::String(s) => s.clone(),
-                        roam_wire::MetadataValue::Bytes(b) => format!("<{} bytes>", b.len()),
-                        roam_wire::MetadataValue::U64(n) => n.to_string(),
+                        roam_types::MetadataValue::String(s) => s.clone(),
+                        roam_types::MetadataValue::Bytes(b) => format!("<{} bytes>", b.len()),
+                        roam_types::MetadataValue::U64(n) => n.to_string(),
                     }
                 };
                 attributes.push(KeyValue::string(format!("rpc.metadata.{}", key), value_str));

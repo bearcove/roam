@@ -82,7 +82,7 @@ impl TestService {
 
 impl ServiceDispatcher for TestService {
     fn service_descriptor(&self) -> &'static roam_session::ServiceDescriptor {
-        &roam_session::EMPTY_DESCRIPTOR
+        &roam_types::ServiceDescriptor::EMPTY
     }
 
     fn dispatch(
@@ -93,7 +93,7 @@ impl ServiceDispatcher for TestService {
     ) -> Pin<Box<dyn std::future::Future<Output = ()> + Send + 'static>> {
         self.call_count.fetch_add(1, Ordering::SeqCst);
 
-        match cx.method_id().raw() {
+        match cx.method_id().0 {
             // Echo method
             1 => dispatch_call::<String, String, (), _, _>(
                 &cx,

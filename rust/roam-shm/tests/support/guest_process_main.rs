@@ -42,7 +42,7 @@ struct TestService;
 
 impl ServiceDispatcher for TestService {
     fn service_descriptor(&self) -> &'static roam_session::ServiceDescriptor {
-        &roam_session::EMPTY_DESCRIPTOR
+        &roam_types::ServiceDescriptor::EMPTY
     }
 
     fn dispatch(
@@ -51,7 +51,7 @@ impl ServiceDispatcher for TestService {
         payload: Vec<u8>,
         registry: &mut ChannelRegistry,
     ) -> Pin<Box<dyn std::future::Future<Output = ()> + Send + 'static>> {
-        match cx.method_id().raw() {
+        match cx.method_id().0 {
             // Echo method: returns the input unchanged
             1 => dispatch_call::<String, String, (), _, _>(
                 &cx,

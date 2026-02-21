@@ -384,7 +384,7 @@ fn generate_dispatcher(parsed: &ServiceTrait, roam: &TokenStream2) -> TokenStrea
                 payload: Vec<u8>,
                 registry: &mut #roam::session::ChannelRegistry,
             ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'static>> {
-                let method_id = cx.method_id().raw();
+                let method_id = cx.method_id().0;
                 #(#dispatch_arms)*
                 else {
                     #roam::session::dispatch_unknown_method(&cx, registry)
@@ -575,7 +575,7 @@ fn generate_dispatch_method(
             let dispatch_ctx = registry.dispatch_context();
             let channels = cx.channels.clone();
             let conn_id = cx.conn_id;
-            let request_id = cx.request_id.raw();
+            let request_id = cx.request_id.0;
 
             // 1. Allocate args on stack
             let mut args_slot = MaybeUninit::<#tuple_type>::uninit();

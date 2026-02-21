@@ -454,10 +454,10 @@ mod tests {
 
         // Create a context (method_id doesn't matter for this test)
         let mut ctx = Context::new(
-            roam_wire::ConnectionId::new(1),
-            roam_wire::RequestId::new(1),
-            roam_wire::MethodId::new(0),
-            roam_wire::Metadata::default(),
+            roam_types::ConnectionId(1),
+            roam_types::RequestId(1),
+            roam_types::MethodId(0),
+            roam_types::Metadata::default(),
             vec![],
         );
 
@@ -525,10 +525,10 @@ mod tests {
         }
 
         let ctx = Context::new(
-            roam_wire::ConnectionId::new(1),
-            roam_wire::RequestId::new(1),
-            roam_wire::MethodId::new(0),
-            roam_wire::Metadata::default(),
+            roam_types::ConnectionId(1),
+            roam_types::RequestId(1),
+            roam_types::MethodId(0),
+            roam_types::Metadata::default(),
             vec![],
         );
 

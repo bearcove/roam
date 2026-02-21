@@ -3,7 +3,7 @@
 //! This module provides the bridge between roam's `MessageTransport` trait
 //! and the SHM v2-native `ShmMsg` type. It handles:
 //!
-//! - Converting between `roam_wire::Message` and `ShmMsg`
+//! - Converting between `roam_types::Message` and `ShmMsg`
 //! - Encoding/decoding metadata alongside payload
 //! - Async wrappers for the synchronous SHM operations
 //!
@@ -12,7 +12,7 @@
 use std::io;
 use std::time::Duration;
 
-use roam_wire::Message;
+use roam_types::Message;
 
 use crate::guest::{SendError, ShmGuest};
 use crate::msg::{ShmMsg, msg_type};
@@ -72,7 +72,7 @@ impl std::fmt::Display for ConvertError {
 
 impl std::error::Error for ConvertError {}
 
-/// Convert a `roam_wire::Message` to an `ShmMsg`.
+/// Convert a `roam_types::Message` to an `ShmMsg`.
 ///
 /// shm[impl shm.metadata.in-payload]
 ///
@@ -222,7 +222,7 @@ pub fn message_to_shm_msg(msg: &Message) -> Result<ShmMsg, ConvertError> {
     }
 }
 
-/// Convert an `ShmMsg` to a `roam_wire::Message`.
+/// Convert an `ShmMsg` to a `roam_types::Message`.
 ///
 /// shm[impl shm.metadata.in-payload]
 pub fn shm_msg_to_message(msg: ShmMsg) -> Result<Message, ConvertError> {
@@ -231,7 +231,7 @@ pub fn shm_msg_to_message(msg: ShmMsg) -> Result<Message, ConvertError> {
     match msg.msg_type {
         msg_type::GOODBYE => {
             let reason = String::from_utf8_lossy(payload_bytes).into_owned();
-            let conn_id = roam_wire::ConnectionId::ROOT;
+            let conn_id = roam_types::ConnectionId::ROOT;
             Ok(Message::Goodbye { conn_id, reason })
         }
 
@@ -270,8 +270,9 @@ pub fn shm_msg_to_message(msg: ShmMsg) -> Result<Message, ConvertError> {
                     "Cancel payload too short for conn_id".into(),
                 ));
             }
-            let decoded_conn_id =
-                roam_wire::ConnectionId(u64::from_le_bytes(payload_bytes[..8].try_into().unwrap()));
+            let decoded_conn_id = roam_types::ConnectionId(u64::from_le_bytes(
+                payload_bytes[..8].try_into().unwrap(),
+            ));
             Ok(Message::Cancel {
                 conn_id: decoded_conn_id,
                 request_id: msg.id as u64,
@@ -284,8 +285,9 @@ pub fn shm_msg_to_message(msg: ShmMsg) -> Result<Message, ConvertError> {
                     "Data payload too short for conn_id".into(),
                 ));
             }
-            let decoded_conn_id =
-                roam_wire::ConnectionId(u64::from_le_bytes(payload_bytes[..8].try_into().unwrap()));
+            let decoded_conn_id = roam_types::ConnectionId(u64::from_le_bytes(
+                payload_bytes[..8].try_into().unwrap(),
+            ));
             Ok(Message::Data {
                 conn_id: decoded_conn_id,
                 channel_id: msg.id as u64,
@@ -299,8 +301,9 @@ pub fn shm_msg_to_message(msg: ShmMsg) -> Result<Message, ConvertError> {
                     "Close payload too short for conn_id".into(),
                 ));
             }
-            let decoded_conn_id =
-                roam_wire::ConnectionId(u64::from_le_bytes(payload_bytes[..8].try_into().unwrap()));
+            let decoded_conn_id = roam_types::ConnectionId(u64::from_le_bytes(
+                payload_bytes[..8].try_into().unwrap(),
+            ));
             Ok(Message::Close {
                 conn_id: decoded_conn_id,
                 channel_id: msg.id as u64,
@@ -313,8 +316,9 @@ pub fn shm_msg_to_message(msg: ShmMsg) -> Result<Message, ConvertError> {
                     "Reset payload too short for conn_id".into(),
                 ));
             }
-            let decoded_conn_id =
-                roam_wire::ConnectionId(u64::from_le_bytes(payload_bytes[..8].try_into().unwrap()));
+            let decoded_conn_id = roam_types::ConnectionId(u64::from_le_bytes(
+                payload_bytes[..8].try_into().unwrap(),
+            ));
             Ok(Message::Reset {
                 conn_id: decoded_conn_id,
                 channel_id: msg.id as u64,
@@ -322,7 +326,7 @@ pub fn shm_msg_to_message(msg: ShmMsg) -> Result<Message, ConvertError> {
         }
 
         msg_type::CONNECT => {
-            let metadata: roam_wire::Metadata = facet_postcard::from_slice(payload_bytes)
+            let metadata: roam_types::Metadata = facet_postcard::from_slice(payload_bytes)
                 .map_err(|e| ConvertError::DecodeError(e.to_string()))?;
             Ok(Message::Connect {
                 request_id: msg.id as u64,
@@ -331,18 +335,18 @@ pub fn shm_msg_to_message(msg: ShmMsg) -> Result<Message, ConvertError> {
         }
 
         msg_type::ACCEPT => {
-            let (conn_id_val, metadata): (u64, roam_wire::Metadata) =
+            let (conn_id_val, metadata): (u64, roam_types::Metadata) =
                 facet_postcard::from_slice(payload_bytes)
                     .map_err(|e| ConvertError::DecodeError(e.to_string()))?;
             Ok(Message::Accept {
                 request_id: msg.id as u64,
-                conn_id: roam_wire::ConnectionId(conn_id_val),
+                conn_id: roam_types::ConnectionId(conn_id_val),
                 metadata,
             })
         }
 
         msg_type::REJECT => {
-            let (reason, metadata): (String, roam_wire::Metadata) =
+            let (reason, metadata): (String, roam_types::Metadata) =
                 facet_postcard::from_slice(payload_bytes)
                     .map_err(|e| ConvertError::DecodeError(e.to_string()))?;
             Ok(Message::Reject {
@@ -361,15 +365,15 @@ pub fn shm_msg_to_message(msg: ShmMsg) -> Result<Message, ConvertError> {
 #[derive(facet::Facet)]
 struct CombinedPayload {
     conn_id: u64,
-    metadata: roam_wire::Metadata,
+    metadata: roam_types::Metadata,
     channels: Vec<u64>,
     payload: Vec<u8>,
 }
 
 /// Encode conn_id + metadata + channels + payload for Request messages.
 fn encode_request_payload(
-    conn_id: roam_wire::ConnectionId,
-    metadata: &roam_wire::Metadata,
+    conn_id: roam_types::ConnectionId,
+    metadata: &roam_types::Metadata,
     channels: &[u64],
     payload: &[u8],
 ) -> Vec<u8> {
@@ -391,8 +395,8 @@ fn encode_request_payload(
 
 /// Encode conn_id + metadata + channels + payload for Response messages.
 fn encode_response_payload(
-    conn_id: roam_wire::ConnectionId,
-    metadata: &roam_wire::Metadata,
+    conn_id: roam_types::ConnectionId,
+    metadata: &roam_types::Metadata,
     channels: &[u64],
     payload: &[u8],
 ) -> Vec<u8> {
@@ -407,8 +411,8 @@ fn encode_response_payload(
 
 type DecodedRequestPayloadWithConnId = Result<
     (
-        roam_wire::ConnectionId,
-        roam_wire::Metadata,
+        roam_types::ConnectionId,
+        roam_types::Metadata,
         Vec<u64>,
         Vec<u8>,
     ),
@@ -417,8 +421,8 @@ type DecodedRequestPayloadWithConnId = Result<
 
 type DecodedResponsePayloadWithConnId = Result<
     (
-        roam_wire::ConnectionId,
-        roam_wire::Metadata,
+        roam_types::ConnectionId,
+        roam_types::Metadata,
         Vec<u64>,
         Vec<u8>,
     ),
@@ -431,7 +435,7 @@ fn decode_request_payload(data: &[u8]) -> DecodedRequestPayloadWithConnId {
     if data.is_empty() {
         tracing::debug!("decode_request_payload: empty data, returning empty");
         return Ok((
-            roam_wire::ConnectionId::ROOT,
+            roam_types::ConnectionId::ROOT,
             Vec::new(),
             Vec::new(),
             Vec::new(),
@@ -445,7 +449,7 @@ fn decode_request_payload(data: &[u8]) -> DecodedRequestPayloadWithConnId {
         "decode_request_payload: decoded"
     );
     Ok((
-        roam_wire::ConnectionId(combined.conn_id),
+        roam_types::ConnectionId(combined.conn_id),
         combined.metadata,
         combined.channels,
         combined.payload,
@@ -456,7 +460,7 @@ fn decode_request_payload(data: &[u8]) -> DecodedRequestPayloadWithConnId {
 fn decode_response_payload(data: &[u8]) -> DecodedResponsePayloadWithConnId {
     if data.is_empty() {
         return Ok((
-            roam_wire::ConnectionId::ROOT,
+            roam_types::ConnectionId::ROOT,
             Vec::new(),
             Vec::new(),
             Vec::new(),
@@ -465,7 +469,7 @@ fn decode_response_payload(data: &[u8]) -> DecodedResponsePayloadWithConnId {
     let combined: CombinedPayload =
         facet_postcard::from_slice(data).map_err(|e| format!("decode error: {}", e))?;
     Ok((
-        roam_wire::ConnectionId(combined.conn_id),
+        roam_types::ConnectionId(combined.conn_id),
         combined.metadata,
         combined.channels,
         combined.payload,
@@ -801,7 +805,7 @@ mod async_transport {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use roam_wire::{ConnectionId, Hello, MetadataValue};
+    use roam_types::{ConnectionId, Hello, MetadataValue};
 
     #[test]
     fn roundtrip_request() {

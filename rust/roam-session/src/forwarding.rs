@@ -91,7 +91,7 @@ impl Clone for ForwardingDispatcher {
 
 impl ServiceDispatcher for ForwardingDispatcher {
     fn service_descriptor(&self) -> &'static crate::ServiceDescriptor {
-        &crate::EMPTY_DESCRIPTOR
+        &roam_types::ServiceDescriptor::EMPTY
     }
 
     fn dispatch(
@@ -103,8 +103,8 @@ impl ServiceDispatcher for ForwardingDispatcher {
         let task_tx = registry.driver_tx();
         let upstream = self.upstream.clone();
         let conn_id = cx.conn_id;
-        let method_id = cx.method_id.raw();
-        let request_id = cx.request_id.raw();
+        let method_id = cx.method_id.0;
+        let request_id = cx.request_id.0;
         let channels = cx.channels.clone();
         let descriptor = forwarding_descriptor(method_id);
 
@@ -452,7 +452,7 @@ impl Clone for LateBoundForwarder {
 
 impl ServiceDispatcher for LateBoundForwarder {
     fn service_descriptor(&self) -> &'static crate::ServiceDescriptor {
-        &crate::EMPTY_DESCRIPTOR
+        &roam_types::ServiceDescriptor::EMPTY
     }
 
     fn dispatch(
@@ -463,13 +463,13 @@ impl ServiceDispatcher for LateBoundForwarder {
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'static>> {
         let task_tx = registry.driver_tx();
         let conn_id = cx.conn_id;
-        let request_id = cx.request_id.raw();
+        let request_id = cx.request_id.0;
 
         // Try to get the upstream handle
         let Some(upstream) = self.upstream.get().cloned() else {
             // Handle not bound yet - return Cancelled
             debug!(
-                method_id = cx.method_id.raw(),
+                method_id = %cx.method_id,
                 "LateBoundForwarder: upstream not bound, returning Cancelled"
             );
             return Box::pin(async move {

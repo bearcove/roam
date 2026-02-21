@@ -10,7 +10,7 @@ use roam_session::{
     FramedClient, HandshakeConfig, MessageConnector, MessageTransport, RetryPolicy,
     ServiceDispatcher, connect_framed, connect_framed_with_policy,
 };
-use roam_wire::Message;
+use roam_types::Message;
 use wasm_bindgen::JsCast;
 use wasm_bindgen::closure::Closure;
 use web_sys::{BinaryType, CloseEvent, ErrorEvent, MessageEvent, WebSocket};

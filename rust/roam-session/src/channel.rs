@@ -183,7 +183,7 @@ impl DriverTxSlot {
 #[facet(proxy = u64)]
 pub struct Tx<T: 'static> {
     /// The connection ID this channel belongs to.
-    pub conn_id: roam_wire::ConnectionId,
+    pub conn_id: roam_types::ConnectionId,
 
     /// The unique channel ID for this channel.
     /// Public so Connection can poke it when binding channels.
@@ -226,7 +226,7 @@ impl<T: 'static> TryFrom<u64> for Tx<T> {
         // Create a hollow Tx - no actual sender, Connection will bind later
         // conn_id will be set when binding
         Ok(Tx {
-            conn_id: roam_wire::ConnectionId::ROOT,
+            conn_id: roam_types::ConnectionId::ROOT,
             channel_id,
             sender: SenderSlot::empty(),
             driver_tx: DriverTxSlot::empty(),
@@ -239,7 +239,7 @@ impl<T: 'static> Tx<T> {
     /// Create a new Tx handle with the given ID and sender (client-side mode).
     pub fn new(channel_id: ChannelId, tx: Sender<IncomingChannelMessage>) -> Self {
         Self {
-            conn_id: roam_wire::ConnectionId::ROOT,
+            conn_id: roam_types::ConnectionId::ROOT,
             channel_id,
             sender: SenderSlot::new(tx),
             driver_tx: DriverTxSlot::empty(),
@@ -253,7 +253,7 @@ impl<T: 'static> Tx<T> {
     /// Connection will poke the channel_id and conn_id when binding.
     pub fn unbound(tx: Sender<IncomingChannelMessage>) -> Self {
         Self {
-            conn_id: roam_wire::ConnectionId::ROOT,
+            conn_id: roam_types::ConnectionId::ROOT,
             channel_id: 0,
             sender: SenderSlot::new(tx),
             driver_tx: DriverTxSlot::empty(),
@@ -266,7 +266,7 @@ impl<T: 'static> Tx<T> {
     /// Used by `roam::channel()` when called during dispatch to create
     /// response channels that can send Data directly over the wire.
     pub fn bound(
-        conn_id: roam_wire::ConnectionId,
+        conn_id: roam_types::ConnectionId,
         channel_id: ChannelId,
         tx: Sender<IncomingChannelMessage>,
         driver_tx: Sender<DriverMessage>,
@@ -365,7 +365,7 @@ impl<T: 'static> Drop for Tx<T> {
                 .is_err()
             {
                 warn!(
-                    conn_id = conn_id.raw(),
+                    conn_id = %conn_id,
                     channel_id,
                     "failed to queue DriverMessage::Close with try_send, falling back to async send"
                 );
@@ -380,7 +380,7 @@ impl<T: 'static> Drop for Tx<T> {
                         .is_err()
                     {
                         warn!(
-                            conn_id = conn_id.raw(),
+                            conn_id = %conn_id,
                             channel_id, "failed to send DriverMessage::Close from drop fallback"
                         );
                     }
@@ -612,7 +612,7 @@ impl std::error::Error for RxError {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use roam_wire::ConnectionId;
+    use roam_types::ConnectionId;
 
     #[tokio::test]
     async fn tx_drop_fallback_handles_closed_driver_channel() {

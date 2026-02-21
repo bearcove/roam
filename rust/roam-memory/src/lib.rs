@@ -24,7 +24,7 @@ use std::io;
 use std::time::Duration;
 
 use roam_session::MessageTransport;
-use roam_wire::Message;
+use roam_types::Message;
 use tokio::sync::mpsc;
 
 /// A message transport backed by in-process channels.
@@ -138,8 +138,8 @@ mod tests {
         drop(b);
 
         let err = a
-            .send(&roam_wire::Message::Goodbye {
-                conn_id: roam_wire::ConnectionId::ROOT,
+            .send(&roam_types::Message::Goodbye {
+                conn_id: roam_types::ConnectionId::ROOT,
                 reason: "bye".to_string(),
             })
             .await

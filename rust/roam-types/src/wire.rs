@@ -2,8 +2,8 @@
 //!
 //! Canonical definitions live in `docs/content/spec/_index.md` and `docs/content/shm-spec/_index.md`.
 
+use crate::{ChannelId, ConnectionId, MethodId, Payload, RequestId};
 use facet::Facet;
-use roam_types::{ChannelId, ConnectionId, MethodId, Payload, RequestId};
 
 /// Hello message for handshake.
 // r[impl message.hello.structure]

@@ -15,7 +15,7 @@ use roam_session::{
     RpcPlan, ServiceDispatcher, accept_framed, dispatch_call, dispatch_unknown_method,
     initiate_framed,
 };
-use roam_wire::Message;
+use roam_types::Message;
 use tokio::sync::mpsc;
 
 // ============================================================================
@@ -57,7 +57,7 @@ impl TestService {
 
 impl ServiceDispatcher for TestService {
     fn service_descriptor(&self) -> &'static roam_session::ServiceDescriptor {
-        &roam_session::EMPTY_DESCRIPTOR
+        &roam_types::ServiceDescriptor::EMPTY
     }
 
     fn dispatch(
@@ -68,7 +68,7 @@ impl ServiceDispatcher for TestService {
     ) -> Pin<Box<dyn std::future::Future<Output = ()> + Send + 'static>> {
         self.calls_total.fetch_add(1, Ordering::Relaxed);
 
-        match cx.method_id().raw() {
+        match cx.method_id().0 {
             METHOD_BIG_DATA => dispatch_call::<Vec<u8>, Vec<u8>, (), _, _>(
                 &cx,
                 payload,

@@ -10,7 +10,7 @@
 use std::io;
 use std::time::Duration;
 
-use roam_wire::Message;
+use roam_types::Message;
 
 /// Trait for transports that can send and receive roam messages.
 ///

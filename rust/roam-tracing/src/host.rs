@@ -127,10 +127,10 @@ mod tests {
     /// Create a dummy context for tests that call trait methods directly
     fn dummy_cx() -> roam::Context {
         roam::Context::new(
-            roam::wire::ConnectionId::new(1),
-            roam::wire::RequestId::new(1),
-            roam::wire::MethodId::new(1),
-            roam::wire::Metadata::default(),
+            roam::types::ConnectionId(1),
+            roam::types::RequestId(1),
+            roam::types::MethodId(1),
+            roam::types::Metadata::default(),
             vec![],
         )
     }

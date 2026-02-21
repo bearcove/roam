@@ -41,7 +41,7 @@ use crate::{
     ChannelError, ChannelRegistry, ConnectionHandle, Context, DriverMessage, MessageTransport,
     ResponseData, RoamError, Role, RpcPlan, ServiceDispatcher, TransportError,
 };
-use roam_wire::{ConnectionId, Hello, Message};
+use roam_types::{ConnectionId, Hello, Message};
 
 /// Negotiated connection parameters after Hello exchange.
 #[derive(Debug, Clone)]
@@ -138,7 +138,7 @@ impl HandshakeConfig {
         if let Some(ref name) = self.name {
             metadata.push((
                 "name".to_string(),
-                roam_wire::MetadataValue::String(name.clone()),
+                roam_types::MetadataValue::String(name.clone()),
                 0,
             ));
         }
@@ -516,7 +516,7 @@ where
         &self,
         descriptor: &'static crate::MethodDescriptor,
         args: &mut T,
-        metadata: roam_wire::Metadata,
+        metadata: roam_types::Metadata,
     ) -> Result<ResponseData, TransportError> {
         let mut attempt = 0u32;
 
@@ -595,7 +595,7 @@ where
         &self,
         descriptor: &'static crate::MethodDescriptor,
         args_ptr: crate::SendPtr,
-        metadata: roam_wire::Metadata,
+        metadata: roam_types::Metadata,
     ) -> impl std::future::Future<Output = Result<ResponseData, TransportError>> {
         let this = self.clone();
 
@@ -782,7 +782,7 @@ pub struct IncomingConnection {
     /// The request ID for this Connect request.
     request_id: u64,
     /// Metadata from the Connect message.
-    pub metadata: roam_wire::Metadata,
+    pub metadata: roam_types::Metadata,
     /// Channel to send the Accept/Reject response.
     response_tx: crate::runtime::OneshotSender<IncomingConnectionResponse>,
 }
@@ -800,7 +800,7 @@ impl IncomingConnection {
     /// r[impl core.conn.only-root-accepts]
     pub async fn accept(
         self,
-        metadata: roam_wire::Metadata,
+        metadata: roam_types::Metadata,
         dispatcher: Option<Box<dyn ServiceDispatcher>>,
     ) -> Result<ConnectionHandle, TransportError> {
         let (handle_tx, handle_rx) = crate::runtime::oneshot("incoming_conn_accept");
@@ -818,7 +818,7 @@ impl IncomingConnection {
     }
 
     /// Reject this connection with a reason.
-    pub fn reject(self, reason: String, metadata: roam_wire::Metadata) {
+    pub fn reject(self, reason: String, metadata: roam_types::Metadata) {
         let _ = self.response_tx.send(IncomingConnectionResponse::Reject {
             request_id: self.request_id,
             reason,
@@ -831,14 +831,14 @@ impl IncomingConnection {
 enum IncomingConnectionResponse {
     Accept {
         request_id: u64,
-        metadata: roam_wire::Metadata,
+        metadata: roam_types::Metadata,
         dispatcher: Option<Box<dyn ServiceDispatcher>>,
         handle_tx: crate::runtime::OneshotSender<Result<ConnectionHandle, TransportError>>,
     },
     Reject {
         request_id: u64,
         reason: String,
-        metadata: roam_wire::Metadata,
+        metadata: roam_types::Metadata,
     },
 }
 
@@ -960,7 +960,7 @@ where
             } => {
                 // Allocate a new connection ID
                 // r[impl core.conn.id-allocation]
-                let conn_id = ConnectionId::new(self.next_conn_id);
+                let conn_id = ConnectionId(self.next_conn_id);
                 self.next_conn_id += 1;
 
                 // Create connection state
@@ -1085,7 +1085,7 @@ where
                 let (payload, channels) = if payload.len() as u32 > self.negotiated.max_payload_size
                 {
                     error!(
-                        conn_id = conn_id.raw(),
+                        conn_id = %conn_id,
                         request_id,
                         payload_len = payload.len(),
                         max_payload_size = self.negotiated.max_payload_size,
@@ -1303,13 +1303,13 @@ where
                             .send(Ok(ResponseData { payload, channels }));
                         if send_result.is_err() {
                             warn!(
-                                conn_id = conn_id.raw(),
+                                conn_id = %conn_id,
                                 request_id, "response receiver dropped before delivery"
                             );
                         }
                     } else {
                         warn!(
-                            conn_id = conn_id.raw(),
+                            conn_id = %conn_id,
                             request_id,
                             "received response for unknown request_id - protocol violation"
                         );
@@ -1317,7 +1317,7 @@ where
                     }
                 } else {
                     warn!(
-                        conn_id = conn_id.raw(),
+                        conn_id = %conn_id,
                         request_id, "received response for unknown conn_id"
                     );
                     return Err(self.goodbye("message.conn-id").await);
@@ -1367,7 +1367,7 @@ where
         conn_id: ConnectionId,
         request_id: u64,
         method_id: u64,
-        metadata: roam_wire::Metadata,
+        metadata: roam_types::Metadata,
         channels: Vec<u64>,
         payload: Vec<u8>,
     ) -> Result<(), ConnectionError> {
@@ -1390,7 +1390,7 @@ where
             return Err(self.goodbye("flow.request.concurrent-overrun").await);
         }
 
-        if let Err(rule_id) = roam_wire::validate_metadata(&metadata) {
+        if let Err(rule_id) = roam_types::validate_metadata(&metadata) {
             return Err(self.goodbye(rule_id).await);
         }
 
@@ -1414,15 +1414,15 @@ where
 
         let cx = Context::new(
             conn_id,
-            roam_wire::RequestId::new(request_id),
-            roam_wire::MethodId::new(method_id),
+            roam_types::RequestId(request_id),
+            roam_types::MethodId(method_id),
             metadata,
             channels,
         )
         .with_method_descriptor(method_desc);
 
         debug!(
-            conn_id = conn_id.raw(),
+            conn_id = %conn_id,
             request_id, method_id, "dispatching incoming request"
         );
 
@@ -1607,14 +1607,13 @@ where
         let now = Instant::now();
         let mut timed_out_connections = Vec::new();
         for (conn_id, conn) in self.connections.iter_mut() {
-            let conn_id_raw = conn_id.raw();
             let mut should_kill_connection = false;
             for (request_id, pending) in conn.pending_responses.iter_mut() {
                 let age = now.saturating_duration_since(pending.created_at);
                 if age >= PENDING_RESPONSE_KILL_AFTER {
                     should_kill_connection = true;
                     warn!(
-                        conn_id = conn_id_raw,
+                        conn_id = %conn_id,
                         request_id = *request_id,
                         age_ms = age.as_millis(),
                         "pending response exceeded hard timeout"
@@ -1622,7 +1621,7 @@ where
                 } else if age >= PENDING_RESPONSE_WARN_AFTER && !pending.warned_stale {
                     pending.warned_stale = true;
                     warn!(
-                        conn_id = conn_id_raw,
+                        conn_id = %conn_id,
                         request_id = *request_id,
                         age_ms = age.as_millis(),
                         "pending response has gone stale"
@@ -1638,7 +1637,7 @@ where
             if let Some(conn) = self.connections.get_mut(&conn_id) {
                 for (request_id, pending) in conn.pending_responses.drain() {
                     warn!(
-                        conn_id = conn_id.raw(),
+                        conn_id = %conn_id,
                         request_id,
                         "failing pending response due to stale-timeout connection teardown"
                     );
@@ -1767,7 +1766,7 @@ where
                     .iter()
                     .find(|(k, _, _)| k == "name")
                     .and_then(|(_, v, _)| match v {
-                        roam_wire::MetadataValue::String(s) => Some(s.clone()),
+                        roam_types::MetadataValue::String(s) => Some(s.clone()),
                         _ => None,
                     });
                 Ok(HelloParams {
@@ -1880,7 +1879,7 @@ pub struct NoDispatcher;
 
 impl ServiceDispatcher for NoDispatcher {
     fn service_descriptor(&self) -> &'static crate::ServiceDescriptor {
-        &crate::EMPTY_DESCRIPTOR
+        &roam_types::ServiceDescriptor::EMPTY
     }
 
     fn dispatch(
@@ -1890,7 +1889,7 @@ impl ServiceDispatcher for NoDispatcher {
         registry: &mut ChannelRegistry,
     ) -> Pin<Box<dyn Future<Output = ()> + Send + 'static>> {
         let conn_id = cx.conn_id;
-        let request_id = cx.request_id.raw();
+        let request_id = cx.request_id.0;
         let driver_tx = registry.driver_tx();
         Box::pin(async move {
             let response: Result<(), RoamError<()>> = Err(RoamError::UnknownMethod);
@@ -2017,7 +2016,7 @@ mod tests {
             metadata: vec![],
         });
         let unknown_conn_response = Message::Response {
-            conn_id: ConnectionId::new(999),
+            conn_id: ConnectionId(999),
             request_id: 7,
             metadata: vec![],
             channels: vec![],

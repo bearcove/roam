@@ -125,7 +125,7 @@ const METHOD_TRANSFORM: u64 = 4;
 
 impl ServiceDispatcher for StreamingService {
     fn service_descriptor(&self) -> &'static roam_session::ServiceDescriptor {
-        &roam_session::EMPTY_DESCRIPTOR
+        &roam_types::ServiceDescriptor::EMPTY
     }
 
     fn dispatch(
@@ -136,7 +136,7 @@ impl ServiceDispatcher for StreamingService {
     ) -> Pin<Box<dyn std::future::Future<Output = ()> + Send + 'static>> {
         self.call_count.fetch_add(1, Ordering::SeqCst);
 
-        match cx.method_id().raw() {
+        match cx.method_id().0 {
             // echo(message: String) -> String
             METHOD_ECHO => dispatch_call::<String, String, (), _, _>(
                 &cx,

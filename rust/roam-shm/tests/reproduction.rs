@@ -56,7 +56,7 @@ static DESC_3: LazyLock<&'static MethodDescriptor> = LazyLock::new(|| {
 struct MockDispatcher;
 impl roam_session::ServiceDispatcher for MockDispatcher {
     fn service_descriptor(&self) -> &'static roam_session::ServiceDescriptor {
-        &roam_session::EMPTY_DESCRIPTOR
+        &roam_types::ServiceDescriptor::EMPTY
     }
 
     fn dispatch(

@@ -289,7 +289,7 @@ where
         &self,
         descriptor: &'static roam_session::MethodDescriptor,
         args: &mut T,
-        metadata: roam_wire::Metadata,
+        metadata: roam_types::Metadata,
     ) -> Result<ResponseData, TransportError> {
         let mut attempt = 0u32;
 
@@ -371,7 +371,7 @@ where
         &self,
         descriptor: &'static roam_session::MethodDescriptor,
         args_ptr: SendPtr,
-        metadata: roam_wire::Metadata,
+        metadata: roam_types::Metadata,
     ) -> impl std::future::Future<Output = Result<ResponseData, TransportError>> {
         let this = self.clone();
 

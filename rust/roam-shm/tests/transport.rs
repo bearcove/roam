@@ -11,7 +11,7 @@ use roam_shm::guest::ShmGuest;
 use roam_shm::host::{PollResult, ShmHost};
 use roam_shm::layout::SegmentConfig;
 use roam_shm::transport::{ShmGuestTransport, message_to_shm_msg, shm_msg_to_message};
-use roam_wire::{Message, MetadataValue};
+use roam_types::{Message, MetadataValue};
 
 fn create_host_and_guest() -> (ShmHost, ShmGuest) {
     let config = SegmentConfig::default();
@@ -35,7 +35,7 @@ async fn guest_transport_send_request() {
 
     // Send a Request message through the transport
     let msg = Message::Request {
-        conn_id: roam_wire::ConnectionId::ROOT,
+        conn_id: roam_types::ConnectionId::ROOT,
         request_id: 42,
         method_id: 123,
         metadata: vec![(
@@ -69,7 +69,7 @@ async fn guest_transport_recv_response() {
 
     // Host sends a Response message
     let msg = Message::Response {
-        conn_id: roam_wire::ConnectionId::ROOT,
+        conn_id: roam_types::ConnectionId::ROOT,
         request_id: 42,
         metadata: vec![],
         channels: vec![],
@@ -92,7 +92,7 @@ async fn host_guest_transport_roundtrip() {
 
     // Guest sends request
     let request = Message::Request {
-        conn_id: roam_wire::ConnectionId::ROOT,
+        conn_id: roam_types::ConnectionId::ROOT,
         request_id: 1,
         method_id: 100,
         metadata: vec![
@@ -121,7 +121,7 @@ async fn host_guest_transport_roundtrip() {
 
     // Host sends response
     let response = Message::Response {
-        conn_id: roam_wire::ConnectionId::ROOT,
+        conn_id: roam_types::ConnectionId::ROOT,
         request_id: 1,
         metadata: vec![],
         channels: vec![],
@@ -144,7 +144,7 @@ async fn streaming_data_messages() {
     // Send multiple Data messages (simulating a stream)
     for i in 0..5 {
         let data = Message::Data {
-            conn_id: roam_wire::ConnectionId::ROOT,
+            conn_id: roam_types::ConnectionId::ROOT,
             channel_id: 7,
             payload: format!("chunk {}", i).into_bytes(),
         };
@@ -153,7 +153,7 @@ async fn streaming_data_messages() {
 
     // Send Close
     let close = Message::Close {
-        conn_id: roam_wire::ConnectionId::ROOT,
+        conn_id: roam_types::ConnectionId::ROOT,
         channel_id: 7,
     };
     guest_transport.send(&close).await.unwrap();
@@ -185,7 +185,7 @@ async fn cancel_message() {
 
     // Send a request, then cancel it
     let request = Message::Request {
-        conn_id: roam_wire::ConnectionId::ROOT,
+        conn_id: roam_types::ConnectionId::ROOT,
         request_id: 99,
         method_id: 1,
         metadata: vec![],
@@ -195,7 +195,7 @@ async fn cancel_message() {
     guest_transport.send(&request).await.unwrap();
 
     let cancel = Message::Cancel {
-        conn_id: roam_wire::ConnectionId::ROOT,
+        conn_id: roam_types::ConnectionId::ROOT,
         request_id: 99,
     };
     guest_transport.send(&cancel).await.unwrap();
@@ -222,7 +222,7 @@ async fn reset_message() {
 
     // Host sends Reset to guest
     let reset = Message::Reset {
-        conn_id: roam_wire::ConnectionId::ROOT,
+        conn_id: roam_types::ConnectionId::ROOT,
         channel_id: 42,
     };
     let shm_msg = message_to_shm_msg(&reset).unwrap();
@@ -240,7 +240,7 @@ async fn goodbye_message() {
 
     // Guest sends Goodbye
     let goodbye = Message::Goodbye {
-        conn_id: roam_wire::ConnectionId::ROOT,
+        conn_id: roam_types::ConnectionId::ROOT,
         reason: "shutting down".to_string(),
     };
     guest_transport.send(&goodbye).await.unwrap();
@@ -270,7 +270,7 @@ async fn large_metadata() {
     }
 
     let request = Message::Request {
-        conn_id: roam_wire::ConnectionId::ROOT,
+        conn_id: roam_types::ConnectionId::ROOT,
         request_id: 1,
         method_id: 1,
         metadata,
@@ -294,7 +294,7 @@ async fn empty_metadata_and_payload() {
     let mut guest_transport = create_guest_transport(guest);
 
     let request = Message::Request {
-        conn_id: roam_wire::ConnectionId::ROOT,
+        conn_id: roam_types::ConnectionId::ROOT,
         request_id: 1,
         method_id: 1,
         metadata: vec![],

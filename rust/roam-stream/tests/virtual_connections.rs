@@ -641,7 +641,7 @@ async fn many_virtual_connections() {
 // r[verify message.connect.metadata] - Connect can carry metadata
 #[tokio::test]
 async fn connect_with_metadata() {
-    use roam_wire::MetadataValue;
+    use roam_types::MetadataValue;
 
     let service = TestService::new();
     let (addr, _server) = start_server_accepting_virtual_connections(service.clone()).await;
@@ -705,7 +705,7 @@ async fn connect_explicit_rejection() {
                 "not authorized".to_string(),
                 vec![(
                     "error-code".to_string(),
-                    roam_wire::MetadataValue::String("401".to_string()),
+                    roam_types::MetadataValue::String("401".to_string()),
                     0,
                 )],
             );

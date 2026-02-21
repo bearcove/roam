@@ -12,7 +12,7 @@ use roam_shm::msg::ShmMsg;
 use roam_shm::peer::PeerId;
 use roam_shm::transport::{message_to_shm_msg, shm_msg_to_message};
 use roam_shm::{AddPeerOptions, ShmHost, msg_type};
-use roam_wire::{ConnectionId, Message};
+use roam_types::{ConnectionId, Message};
 use shm_primitives::Doorbell;
 use spec_proto::{
     Canvas, Color, LookupError, MathError, Person, Point, Rectangle, Shape, Testbed,

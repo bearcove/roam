@@ -55,7 +55,7 @@ impl Default for RequestIdGenerator {
 /// Shared state between ConnectionHandle and Driver.
 pub(crate) struct HandleShared {
     /// Connection ID for this handle (0 = root connection).
-    pub(crate) conn_id: roam_wire::ConnectionId,
+    pub(crate) conn_id: roam_types::ConnectionId,
     /// Unified channel to send all messages to the driver.
     pub(crate) driver_tx: Sender<DriverMessage>,
     /// Request ID generator.
@@ -95,7 +95,7 @@ impl ConnectionHandle {
     /// to ensure FIFO ordering.
     pub fn new(driver_tx: Sender<DriverMessage>, role: Role, initial_credit: u32) -> Self {
         Self::new_with_limits(
-            roam_wire::ConnectionId::ROOT,
+            roam_types::ConnectionId::ROOT,
             driver_tx,
             role,
             initial_credit,
@@ -105,7 +105,7 @@ impl ConnectionHandle {
 
     /// Create a new handle with a specific connection ID.
     pub fn new_with_limits(
-        conn_id: roam_wire::ConnectionId,
+        conn_id: roam_types::ConnectionId,
         driver_tx: Sender<DriverMessage>,
         role: Role,
         initial_credit: u32,
@@ -150,7 +150,7 @@ impl ConnectionHandle {
     }
 
     /// Get the connection ID for this handle.
-    pub fn conn_id(&self) -> roam_wire::ConnectionId {
+    pub fn conn_id(&self) -> roam_types::ConnectionId {
         self.shared.conn_id
     }
 
@@ -196,7 +196,7 @@ impl ConnectionHandle {
         let args_ptr = args as *mut T as *mut ();
         #[allow(unsafe_code)]
         unsafe {
-            self.call_with_metadata_by_plan(descriptor, args_ptr, roam_wire::Metadata::default())
+            self.call_with_metadata_by_plan(descriptor, args_ptr, roam_types::Metadata::default())
                 .await
         }
     }
@@ -216,7 +216,7 @@ impl ConnectionHandle {
         &self,
         descriptor: &'static crate::MethodDescriptor,
         args_ptr: *mut (),
-        metadata: roam_wire::Metadata,
+        metadata: roam_types::Metadata,
     ) -> impl std::future::Future<Output = Result<ResponseData, TransportError>> + Send + '_ {
         let args_plan = descriptor.args_plan;
         let args_shape = args_plan.type_plan.root().shape;
@@ -397,7 +397,7 @@ impl ConnectionHandle {
         &self,
         descriptor: &'static crate::MethodDescriptor,
         payload: Vec<u8>,
-        metadata: roam_wire::Metadata,
+        metadata: roam_types::Metadata,
     ) -> Result<Vec<u8>, TransportError> {
         self.call_raw_full(descriptor, metadata, Vec::new(), payload, None)
             .await
@@ -410,7 +410,7 @@ impl ConnectionHandle {
     async fn call_raw_full(
         &self,
         descriptor: &'static crate::MethodDescriptor,
-        metadata: roam_wire::Metadata,
+        metadata: roam_types::Metadata,
         channels: Vec<u64>,
         payload: Vec<u8>,
         args_debug: Option<String>,
@@ -431,7 +431,7 @@ impl ConnectionHandle {
     async fn call_raw_full_with_drains(
         &self,
         method_id: &'static crate::MethodId,
-        metadata: roam_wire::Metadata,
+        metadata: roam_types::Metadata,
         channels: Vec<u64>,
         payload: Vec<u8>,
         _args_debug: Option<String>,
@@ -491,7 +491,7 @@ impl ConnectionHandle {
                                     .is_err()
                                 {
                                     warn!(
-                                        conn_id = conn_id.raw(),
+                                        conn_id = %conn_id,
                                         channel_id, "drain task failed to send DriverMessage::Data"
                                     );
                                     break;
@@ -512,7 +512,7 @@ impl ConnectionHandle {
                                     .is_err()
                                 {
                                     warn!(
-                                        conn_id = conn_id.raw(),
+                                        conn_id = %conn_id,
                                         channel_id,
                                         "drain task failed to send DriverMessage::Close"
                                     );
@@ -563,7 +563,7 @@ impl ConnectionHandle {
     /// ```
     pub async fn connect(
         &self,
-        metadata: roam_wire::Metadata,
+        metadata: roam_types::Metadata,
         dispatcher: Option<Box<dyn ServiceDispatcher>>,
     ) -> Result<ConnectionHandle, crate::ConnectError> {
         let request_id = self.shared.request_ids.next();
@@ -878,7 +878,7 @@ mod tests {
     async fn call_respects_max_concurrent_requests_limit() {
         let (driver_tx, mut driver_rx) = crate::runtime::channel("test_driver", 8);
         let handle = ConnectionHandle::new_with_limits(
-            roam_wire::ConnectionId::ROOT,
+            roam_types::ConnectionId::ROOT,
             driver_tx,
             Role::Initiator,
             u32::MAX,

@@ -18,7 +18,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use roam_session::MessageTransport;
-use roam_wire::Message;
+use roam_types::Message;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 /// Enable wire-level message logging for debugging.
@@ -358,7 +358,7 @@ mod tests {
             .map(|i| (i as u8).wrapping_mul(31))
             .collect();
         let msg = Message::Response {
-            conn_id: roam_wire::ConnectionId::ROOT,
+            conn_id: roam_types::ConnectionId::ROOT,
             request_id: 42,
             metadata: vec![],
             channels: vec![],
@@ -442,7 +442,7 @@ mod tests {
             wire_spy_log(
                 "test",
                 &Message::Cancel {
-                    conn_id: roam_wire::ConnectionId::ROOT,
+                    conn_id: roam_types::ConnectionId::ROOT,
                     request_id: 1,
                 },
             );
@@ -485,7 +485,7 @@ mod tests {
     #[tokio::test]
     async fn message_transport_last_decoded_tracks_last_payload() {
         let msg = Message::Response {
-            conn_id: roam_wire::ConnectionId::ROOT,
+            conn_id: roam_types::ConnectionId::ROOT,
             request_id: 7,
             metadata: vec![],
             channels: vec![],

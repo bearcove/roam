@@ -9,7 +9,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use facet::Facet;
 use roam_session::{Caller, ResponseData, SendPtr, TransportError};
-use roam_wire::MetadataValue;
+use roam_types::MetadataValue;
 
 use crate::exporter::OtlpExporter;
 use crate::otlp::{KeyValue, Span, SpanKind, Status, generate_span_id, generate_trace_id};
@@ -89,7 +89,7 @@ impl<C: Caller> Caller for TracingCaller<C> {
         &self,
         descriptor: &'static roam_session::MethodDescriptor,
         args: &mut T,
-        mut metadata: roam_wire::Metadata,
+        mut metadata: roam_types::Metadata,
     ) -> Result<ResponseData, TransportError> {
         let (trace_id, parent_span_id) = roam_session::CURRENT_EXTENSIONS
             .try_with(|ext| {
@@ -173,7 +173,7 @@ impl<C: Caller> Caller for TracingCaller<C> {
         &self,
         descriptor: &'static roam_session::MethodDescriptor,
         args_ptr: SendPtr,
-        metadata: roam_wire::Metadata,
+        metadata: roam_types::Metadata,
     ) -> impl std::future::Future<Output = Result<ResponseData, TransportError>> {
         self.inner
             .call_with_metadata_by_plan(descriptor, args_ptr, metadata)

@@ -15,6 +15,8 @@ use facet_path::PathAccessError;
 use facet_postcard::PostcardParser;
 use facet_reflect::Partial;
 
+use roam_types::{MethodDescriptor, ServiceDescriptor};
+
 use crate::{
     ChannelId, ChannelIdAllocator, ChannelRegistry, DriverMessage, Extensions, Middleware,
     Rejection, RpcPlan, SendPeek, runtime::Sender,
@@ -33,7 +35,7 @@ use crate::{
 /// This is public for use by generated dispatchers with `DISPATCH_CONTEXT.scope()`.
 #[derive(Clone)]
 pub struct DispatchContext {
-    pub(crate) conn_id: roam_wire::ConnectionId,
+    pub(crate) conn_id: roam_types::ConnectionId,
     pub(crate) channel_ids: Arc<ChannelIdAllocator>,
     pub(crate) driver_tx: Sender<DriverMessage>,
 }
@@ -58,7 +60,7 @@ roam_task_local::task_local! {
     /// Task-local metadata for the current inbound RPC call.
     ///
     /// Outgoing calls can use this as propagation source.
-    pub static CURRENT_CALL_METADATA: roam_wire::Metadata;
+    pub static CURRENT_CALL_METADATA: roam_types::Metadata;
 }
 
 /// Get the current dispatch context, if any.
@@ -67,7 +69,7 @@ pub(crate) fn get_dispatch_context() -> Option<DispatchContext> {
 }
 
 /// Get metadata from the current inbound RPC context, if any.
-pub(crate) fn get_current_call_metadata() -> Option<roam_wire::Metadata> {
+pub(crate) fn get_current_call_metadata() -> Option<roam_types::Metadata> {
     CURRENT_CALL_METADATA.try_with(|m| m.clone()).ok()
 }
 
@@ -89,12 +91,12 @@ pub struct Context {
     ///
     /// For virtual connections, this identifies which specific connection
     /// the request came from, enabling bidirectional communication.
-    pub conn_id: roam_wire::ConnectionId,
+    pub conn_id: roam_types::ConnectionId,
 
     /// The request ID for this call.
     ///
     /// Unique within the connection; used for response routing and cancellation.
-    pub request_id: roam_wire::RequestId,
+    pub request_id: roam_types::RequestId,
 
     /// Method descriptor from the active service definition.
     ///
@@ -105,7 +107,7 @@ pub struct Context {
     /// Metadata sent with the request.
     ///
     /// This is the `metadata` field from the wire `Request` message.
-    pub metadata: roam_wire::Metadata,
+    pub metadata: roam_types::Metadata,
 
     /// Channel IDs from the request, in argument declaration order.
     ///
@@ -122,10 +124,10 @@ pub struct Context {
 impl Context {
     /// Create a new context.
     pub fn new(
-        conn_id: roam_wire::ConnectionId,
-        request_id: roam_wire::RequestId,
-        method_id: roam_wire::MethodId,
-        metadata: roam_wire::Metadata,
+        conn_id: roam_types::ConnectionId,
+        request_id: roam_types::RequestId,
+        method_id: roam_types::MethodId,
+        metadata: roam_types::Metadata,
         channels: Vec<u64>,
     ) -> Self {
         Self {
@@ -163,22 +165,22 @@ impl Context {
     }
 
     /// Get the connection ID.
-    pub fn conn_id(&self) -> roam_wire::ConnectionId {
+    pub fn conn_id(&self) -> roam_types::ConnectionId {
         self.conn_id
     }
 
     /// Get the request ID.
-    pub fn request_id(&self) -> roam_wire::RequestId {
+    pub fn request_id(&self) -> roam_types::RequestId {
         self.request_id
     }
 
     /// Get the method ID.
-    pub fn method_id(&self) -> roam_wire::MethodId {
+    pub fn method_id(&self) -> roam_types::MethodId {
         self.method_id
     }
 
     /// Get the request metadata.
-    pub fn metadata(&self) -> &roam_wire::Metadata {
+    pub fn metadata(&self) -> &roam_types::Metadata {
         &self.metadata
     }
 
@@ -277,7 +279,7 @@ where
     Fut: std::future::Future<Output = Result<R, E>> + Send + 'static,
 {
     let conn_id = cx.conn_id;
-    let request_id = cx.request_id.raw();
+    let request_id = cx.request_id.0;
 
     // Use MaybeUninit to avoid heap allocation for args.
     // Deserialization happens via non-generic prepare_sync.
@@ -364,7 +366,7 @@ where
     Fut: std::future::Future<Output = R> + Send + 'static,
 {
     let conn_id = cx.conn_id;
-    let request_id = cx.request_id.raw();
+    let request_id = cx.request_id.0;
 
     // Use MaybeUninit to avoid heap allocation for args.
     // Deserialization happens via non-generic prepare_sync.
@@ -422,7 +424,7 @@ pub fn dispatch_unknown_method(
     registry: &mut ChannelRegistry,
 ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'static>> {
     let conn_id = cx.conn_id;
-    let request_id = cx.request_id.raw();
+    let request_id = cx.request_id.0;
     let task_tx = registry.driver_tx();
     Box::pin(async move {
         // UnknownMethod error
@@ -669,7 +671,7 @@ pub async fn send_ok_response(
     result: SendPeek<'_>,
     response_plan: &RpcPlan,
     driver_tx: &Sender<DriverMessage>,
-    conn_id: roam_wire::ConnectionId,
+    conn_id: roam_types::ConnectionId,
     request_id: u64,
 ) {
     let peek = result.peek();
@@ -719,7 +721,7 @@ pub async fn send_ok_response(
 pub async fn send_error_response(
     error: SendPeek<'_>,
     driver_tx: &Sender<DriverMessage>,
-    conn_id: roam_wire::ConnectionId,
+    conn_id: roam_types::ConnectionId,
     request_id: u64,
 ) {
     let peek = error.peek();
@@ -801,7 +803,7 @@ pub async fn run_post_middleware(
 pub async fn send_prepare_error(
     error: PrepareError,
     driver_tx: &Sender<DriverMessage>,
-    conn_id: roam_wire::ConnectionId,
+    conn_id: roam_types::ConnectionId,
     request_id: u64,
 ) {
     let payload = match error {
@@ -999,7 +1001,7 @@ where
         payload: Vec<u8>,
         registry: &mut ChannelRegistry,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'static>> {
-        if self.primary_methods.contains(&cx.method_id().raw()) {
+        if self.primary_methods.contains(&cx.method_id().0) {
             self.primary.dispatch(cx, payload, registry)
         } else {
             self.fallback.dispatch(cx, payload, registry)

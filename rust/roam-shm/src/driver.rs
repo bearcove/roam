@@ -19,7 +19,7 @@ use roam_session::{
     ResponseData, Role, ServiceDispatcher, TransportError,
 };
 use roam_stream::MessageTransport;
-use roam_wire::{ConnectionId, Message};
+use roam_types::{ConnectionId, Message};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -188,7 +188,7 @@ pub struct IncomingConnection {
     /// The request ID for this Connect request.
     request_id: u64,
     /// Metadata from the Connect message.
-    pub metadata: roam_wire::Metadata,
+    pub metadata: roam_types::Metadata,
     /// Channel to send the Accept/Reject response.
     response_tx: roam_session::runtime::OneshotSender<IncomingConnectionResponse>,
 }
@@ -203,7 +203,7 @@ impl IncomingConnection {
     /// not received).
     pub async fn accept(
         self,
-        metadata: roam_wire::Metadata,
+        metadata: roam_types::Metadata,
         dispatcher: Option<Box<dyn ServiceDispatcher>>,
     ) -> Result<ConnectionHandle, TransportError> {
         let (handle_tx, handle_rx) = roam_session::runtime::oneshot("shm_incoming_conn_accept");
@@ -220,7 +220,7 @@ impl IncomingConnection {
     }
 
     /// Reject this connection with a reason.
-    pub fn reject(self, reason: String, metadata: roam_wire::Metadata) {
+    pub fn reject(self, reason: String, metadata: roam_types::Metadata) {
         let _ = self.response_tx.send(IncomingConnectionResponse::Reject {
             request_id: self.request_id,
             reason,
@@ -233,14 +233,14 @@ impl IncomingConnection {
 pub enum IncomingConnectionResponse {
     Accept {
         request_id: u64,
-        metadata: roam_wire::Metadata,
+        metadata: roam_types::Metadata,
         dispatcher: Option<Box<dyn ServiceDispatcher>>,
         handle_tx: roam_session::runtime::OneshotSender<Result<ConnectionHandle, TransportError>>,
     },
     Reject {
         request_id: u64,
         reason: String,
-        metadata: roam_wire::Metadata,
+        metadata: roam_types::Metadata,
     },
 }
 
@@ -347,7 +347,7 @@ where
                 handle_tx,
             } => {
                 // Allocate a new connection ID
-                let conn_id = ConnectionId::new(self.next_conn_id);
+                let conn_id = ConnectionId(self.next_conn_id);
                 self.next_conn_id += 1;
 
                 // Create connection state
@@ -742,7 +742,7 @@ where
         conn_id: ConnectionId,
         request_id: u64,
         method_id: u64,
-        metadata: roam_wire::Metadata,
+        metadata: roam_types::Metadata,
         channels: Vec<u64>,
         payload: Vec<u8>,
     ) -> Result<(), ShmConnectionError> {
@@ -771,7 +771,7 @@ where
         }
 
         // Validate metadata
-        if let Err(rule_id) = roam_wire::validate_metadata(&metadata) {
+        if let Err(rule_id) = roam_types::validate_metadata(&metadata) {
             return Err(self
                 .goodbye(
                     rule_id,
@@ -801,8 +801,8 @@ where
         // Build context for dispatch
         let cx = Context::new(
             conn_id,
-            roam_wire::RequestId::new(request_id),
-            roam_wire::MethodId::new(method_id),
+            roam_types::RequestId(request_id),
+            roam_types::MethodId(method_id),
             metadata,
             channels,
         );
@@ -816,7 +816,7 @@ where
         };
 
         debug!(
-            conn_id = conn_id.raw(),
+            conn_id = %conn_id,
             request_id, method_id, "dispatching incoming request"
         );
 
@@ -1665,7 +1665,7 @@ impl MultiPeerHostDriver {
                 handle_tx,
             } => {
                 // Allocate a new connection ID
-                let conn_id = ConnectionId::new(state.next_conn_id);
+                let conn_id = ConnectionId(state.next_conn_id);
                 state.next_conn_id += 1;
 
                 // Get driver_tx from existing root connection
@@ -2233,7 +2233,7 @@ impl MultiPeerHostDriver {
         conn_id: ConnectionId,
         request_id: u64,
         method_id: u64,
-        metadata: roam_wire::Metadata,
+        metadata: roam_types::Metadata,
         channels: Vec<u64>,
         payload: Vec<u8>,
     ) -> Result<(), ShmConnectionError> {
@@ -2268,7 +2268,7 @@ impl MultiPeerHostDriver {
         }
 
         // Validate metadata
-        if let Err(rule_id) = roam_wire::validate_metadata(&metadata) {
+        if let Err(rule_id) = roam_types::validate_metadata(&metadata) {
             return Err(self
                 .goodbye(
                     peer_id,
@@ -2301,8 +2301,8 @@ impl MultiPeerHostDriver {
         // Build context for dispatch
         let cx = Context::new(
             conn_id,
-            roam_wire::RequestId::new(request_id),
-            roam_wire::MethodId::new(method_id),
+            roam_types::RequestId(request_id),
+            roam_types::MethodId(method_id),
             metadata,
             channels,
         );
@@ -2317,7 +2317,7 @@ impl MultiPeerHostDriver {
 
         // Dispatch - spawn as a task so message loop can continue.
         debug!(
-            conn_id = conn_id.raw(),
+            conn_id = %conn_id,
             request_id, method_id, "dispatching incoming request"
         );
         conn.server_channel_registry
@@ -2773,7 +2773,7 @@ impl MultiPeerHostDriver {
             .send_to_peer(
                 peer_id,
                 &Message::Goodbye {
-                    conn_id: roam_wire::ConnectionId::ROOT,
+                    conn_id: roam_types::ConnectionId::ROOT,
                     reason: rule_id.into(),
                 },
             )

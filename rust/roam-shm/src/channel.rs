@@ -268,7 +268,7 @@ impl ChannelIdAllocator {
         }
         let id = self.next;
         self.next += 2; // Skip to next ID with same parity
-        ChannelId::new(id)
+        ChannelId(id)
     }
 }
 
@@ -312,7 +312,7 @@ impl RequestIdAllocator {
         if self.next == 0 {
             self.next = 1; // Skip 0
         }
-        RequestId::new(id)
+        RequestId(id)
     }
 }
 
@@ -378,13 +378,13 @@ mod tests {
     #[test]
     fn channel_id_parity() {
         // shm[verify shm.id.channel-parity]
-        assert!(ChannelId::new(1).unwrap().is_guest_allocated());
-        assert!(ChannelId::new(3).unwrap().is_guest_allocated());
-        assert!(ChannelId::new(2).unwrap().is_host_allocated());
-        assert!(ChannelId::new(4).unwrap().is_host_allocated());
+        assert!(ChannelId(1).unwrap().is_guest_allocated());
+        assert!(ChannelId(3).unwrap().is_guest_allocated());
+        assert!(ChannelId(2).unwrap().is_host_allocated());
+        assert!(ChannelId(4).unwrap().is_host_allocated());
 
         // Channel ID 0 is reserved
-        assert!(ChannelId::new(0).is_none());
+        assert!(ChannelId(0).is_none());
     }
 
     #[test]

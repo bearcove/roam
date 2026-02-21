@@ -90,10 +90,10 @@ pub struct ResponseData {
 pub enum DriverMessage {
     /// Send a Request and expect a Response (client-side call).
     Call {
-        conn_id: roam_wire::ConnectionId,
+        conn_id: roam_types::ConnectionId,
         request_id: u64,
         method_id: u64,
-        metadata: roam_wire::Metadata,
+        metadata: roam_types::Metadata,
         /// Channel IDs used by this call (Tx/Rx), in declaration order.
         channels: Vec<u64>,
         payload: Vec<u8>,
@@ -101,18 +101,18 @@ pub enum DriverMessage {
     },
     /// Send a Data message on a channel.
     Data {
-        conn_id: roam_wire::ConnectionId,
+        conn_id: roam_types::ConnectionId,
         channel_id: ChannelId,
         payload: Vec<u8>,
     },
     /// Send a Close message to end a channel.
     Close {
-        conn_id: roam_wire::ConnectionId,
+        conn_id: roam_types::ConnectionId,
         channel_id: ChannelId,
     },
     /// Send a Response message (server-side call completed).
     Response {
-        conn_id: roam_wire::ConnectionId,
+        conn_id: roam_types::ConnectionId,
         request_id: u64,
         /// Channel IDs for channels in the response (Tx/Rx returned by the method).
         channels: Vec<u64>,
@@ -121,7 +121,7 @@ pub enum DriverMessage {
     /// Request to open a new virtual connection.
     Connect {
         request_id: u64,
-        metadata: roam_wire::Metadata,
+        metadata: roam_types::Metadata,
         response_tx: OneshotSender<Result<ConnectionHandle, crate::ConnectError>>,
         /// Dispatcher for handling incoming requests on the virtual connection.
         /// If None, the connection can only make calls, not receive them.
@@ -140,7 +140,7 @@ pub enum DriverMessage {
 /// r[impl channeling.unknown] - Unknown channel IDs cause Goodbye.
 pub struct ChannelRegistry {
     /// Connection ID this registry belongs to.
-    conn_id: roam_wire::ConnectionId,
+    conn_id: roam_types::ConnectionId,
 
     /// Channels where we receive Data messages (backing `Rx<T>` or `Tx<T>` handles on our side).
     /// Key: channel_id, Value: sender to route Data payloads to the handle.
@@ -196,7 +196,7 @@ impl ChannelRegistry {
     ///
     /// r[impl flow.channel.initial-credit] - Each channel starts with this credit.
     pub fn new_with_credit_and_role(
-        conn_id: roam_wire::ConnectionId,
+        conn_id: roam_types::ConnectionId,
         initial_credit: u32,
         driver_tx: Sender<DriverMessage>,
         role: Role,
@@ -220,7 +220,7 @@ impl ChannelRegistry {
     /// r[impl flow.channel.initial-credit] - Each channel starts with this credit.
     pub fn new_with_credit(initial_credit: u32, driver_tx: Sender<DriverMessage>) -> Self {
         Self::new_with_credit_and_role(
-            roam_wire::ConnectionId::ROOT,
+            roam_types::ConnectionId::ROOT,
             initial_credit,
             driver_tx,
             Role::Acceptor,
@@ -237,7 +237,7 @@ impl ChannelRegistry {
     }
 
     /// Get the connection ID for this registry.
-    pub fn conn_id(&self) -> roam_wire::ConnectionId {
+    pub fn conn_id(&self) -> roam_types::ConnectionId {
         self.conn_id
     }
 
@@ -554,7 +554,7 @@ impl ChannelRegistry {
             // Set conn_id so Data/Close messages go to the correct virtual connection
             // r[impl core.conn.independence]
             if let Ok(mut conn_id_field) = ps.field_by_name("conn_id")
-                && let Ok(id_ref) = conn_id_field.get_mut::<roam_wire::ConnectionId>()
+                && let Ok(id_ref) = conn_id_field.get_mut::<roam_types::ConnectionId>()
             {
                 *id_ref = self.conn_id;
             }
