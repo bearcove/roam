@@ -14,6 +14,7 @@ rustdoc-args = ["--html-in-header", "arborium-header.html"]
 [dependencies]
 facet.workspace = true
 facet-postcard.workspace = true
+roam-types = { version = "3.0.0", path = "../roam-types" }
 
 [[bin]]
 name = "golden_vectors"

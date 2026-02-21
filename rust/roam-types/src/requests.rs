@@ -25,3 +25,13 @@ declare_u64_id!(
     /// r[impl call.request-id.uniqueness]
     RequestId
 );
+
+declare_u64_id!(
+    /// ID of a channel between two peers.
+    ChannelId
+);
+
+/// Opaque payload (arguments, response, etc.) encoded as postcard
+#[derive(Facet, Clone, Debug, PartialEq, Eq, Hash)]
+#[facet(transparent)]
+pub struct Payload(pub Vec<u8>);

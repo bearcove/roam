@@ -2670,6 +2670,7 @@ version = "3.0.0"
 dependencies = [
  "facet",
  "facet-postcard",
+ "roam-types",
 ]
 
 [[package]]

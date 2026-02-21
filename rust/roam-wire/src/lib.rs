@@ -4,9 +4,8 @@
 //!
 //! Canonical definitions live in `docs/content/spec/_index.md` and `docs/content/shm-spec/_index.md`.
 
-use std::fmt;
-
 use facet::Facet;
+use roam_types::{ChannelId, ConnectionId, MethodId, Payload, RequestId};
 
 /// Hello message for handshake.
 // r[impl message.hello.structure]
@@ -196,14 +195,14 @@ pub enum Message {
 
     /// r[impl message.accept.response] - Accept a virtual connection request.
     Accept {
-        request_id: u64,
+        request_id: RequestId,
         conn_id: ConnectionId,
         metadata: Metadata,
     } = 2,
 
     /// r[impl message.reject.response] - Reject a virtual connection request.
     Reject {
-        request_id: u64,
+        request_id: RequestId,
         reason: String,
         metadata: Metadata,
     } = 3,
@@ -226,33 +225,33 @@ pub enum Message {
     /// r[impl channeling.request.channels] - Channel IDs listed explicitly for proxy support.
     Request {
         conn_id: ConnectionId,
-        request_id: u64,
-        method_id: u64,
+        request_id: RequestId,
+        method_id: MethodId,
         metadata: Metadata,
         /// Channel IDs used by this call, in argument declaration order.
         /// This is the authoritative source - servers MUST use these IDs,
         /// not any IDs that may be embedded in the payload.
-        channels: Vec<u64>,
-        payload: Vec<u8>,
+        channels: Vec<ChannelId>,
+        payload: Payload,
     } = 5,
 
     /// r[impl core.metadata] - Response carries metadata key-value pairs.
     /// r[impl call.metadata.unknown] - Unknown keys are ignored.
     Response {
         conn_id: ConnectionId,
-        request_id: u64,
+        request_id: RequestId,
         metadata: Metadata,
         /// Channel IDs for streams in the response, in return type declaration order.
         /// Client uses these to bind receivers for incoming Data messages.
-        channels: Vec<u64>,
-        payload: Vec<u8>,
+        channels: Vec<ChannelId>,
+        payload: Payload,
     } = 6,
 
     /// r[impl call.cancel.message] - Cancel message requests callee stop processing.
     /// r[impl call.cancel.no-response-required] - Caller should timeout, not wait indefinitely.
     Cancel {
         conn_id: ConnectionId,
-        request_id: u64,
+        request_id: RequestId,
     } = 7,
 
     // ========================================================================
@@ -261,23 +260,23 @@ pub enum Message {
     // r[impl wire.stream] - Tx<T>/Rx<T> encoded as u64 channel ID on wire
     Data {
         conn_id: ConnectionId,
-        channel_id: u64,
-        payload: Vec<u8>,
+        channel_id: RequestId,
+        payload: Payload,
     } = 8,
 
     Close {
         conn_id: ConnectionId,
-        channel_id: u64,
+        channel_id: ChannelId,
     } = 9,
 
     Reset {
         conn_id: ConnectionId,
-        channel_id: u64,
+        channel_id: ChannelId,
     } = 10,
 
     Credit {
         conn_id: ConnectionId,
-        channel_id: u64,
+        channel_id: ChannelId,
         bytes: u32,
     } = 11,
 }
