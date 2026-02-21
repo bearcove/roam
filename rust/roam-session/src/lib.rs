@@ -58,8 +58,8 @@ pub use middleware::*;
 
 pub use facet_reflect::TypePlanCore;
 pub use roam_types::{
-    ChannelId, ChannelKind, ConnectionId, Metadata, MethodDescriptor, MethodId, RequestId, RpcPlan,
-    ServiceDescriptor,
+    ArgDescriptor, ChannelId, ChannelKind, ConnectionId, Metadata, MethodDescriptor, MethodId,
+    RequestId, RpcPlan, ServiceDescriptor,
 };
 
 pub(crate) const CHANNEL_SIZE: usize = 1024;

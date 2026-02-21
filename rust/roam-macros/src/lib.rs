@@ -120,11 +120,29 @@ fn generate_service_descriptor_fn(parsed: &ServiceTrait, roam: &TokenStream2) ->
         .map(|m| {
             let method_name_str = m.name();
 
-            // Build arg name strings array
-            let arg_name_strs: Vec<String> = m.args().map(|arg| arg.name().to_string()).collect();
+            // Build ArgDescriptor array
+            let arg_descriptors: Vec<TokenStream2> = m
+                .args()
+                .map(|arg| {
+                    let name_str = arg.name().to_string();
+                    let ty = arg.ty.to_token_stream();
+                    quote! {
+                        #roam::session::ArgDescriptor {
+                            name: #name_str,
+                            shape: <#ty as #roam::facet::Facet>::SHAPE,
+                        }
+                    }
+                })
+                .collect();
 
-            // Build arg shapes array
-            let arg_shapes: Vec<TokenStream2> = m
+            let args_expr = if arg_descriptors.is_empty() {
+                quote! { &[] }
+            } else {
+                quote! { &[#(#arg_descriptors),*] }
+            };
+
+            // Build arg shapes for method ID hashing
+            let arg_shapes_for_id: Vec<TokenStream2> = m
                 .args()
                 .map(|arg| {
                     let ty = arg.ty.to_token_stream();
@@ -132,16 +150,10 @@ fn generate_service_descriptor_fn(parsed: &ServiceTrait, roam: &TokenStream2) ->
                 })
                 .collect();
 
-            let args_shapes_expr = if arg_shapes.is_empty() {
+            let args_shapes_for_id = if arg_shapes_for_id.is_empty() {
                 quote! { &[] }
             } else {
-                quote! { &[#(#arg_shapes),*] }
-            };
-
-            let args_names_expr = if arg_name_strs.is_empty() {
-                quote! { &[] }
-            } else {
-                quote! { &[#(#arg_name_strs),*] }
+                quote! { &[#(#arg_shapes_for_id),*] }
             };
 
             // Build arg types tuple for args_plan
@@ -171,17 +183,16 @@ fn generate_service_descriptor_fn(parsed: &ServiceTrait, roam: &TokenStream2) ->
                     id: #roam::hash::method_id_from_shapes(
                         #service_name,
                         #method_name_str,
-                        #args_shapes_expr,
+                        #args_shapes_for_id,
                         <#return_ty_tokens as #roam::facet::Facet>::SHAPE,
                     ),
                     service_name: #service_name,
                     method_name: #method_name_str,
-                    arg_names: #args_names_expr,
-                    arg_shapes: #args_shapes_expr,
+                    args: #args_expr,
                     return_shape: <#return_ty_tokens as #roam::facet::Facet>::SHAPE,
-                    args_plan: Box::leak(Box::new(#roam::session::RpcPlan::for_type::<#tuple_type, ::roam::session::Tx, ::roam::session::Rx>())),
-                    ok_plan: Box::leak(Box::new(#roam::session::RpcPlan::for_type::<#ok_ty, ::roam::session::Tx, ::roam::session::Rx>())),
-                    err_plan: Box::leak(Box::new(#roam::session::RpcPlan::for_type::<#err_ty, ::roam::session::Tx, ::roam::session::Rx>())),
+                    args_plan: Box::leak(Box::new(#roam::session::RpcPlan::for_type::<#tuple_type, ::roam::session::Tx::<()>, ::roam::session::Rx::<()>>())),
+                    ok_plan: Box::leak(Box::new(#roam::session::RpcPlan::for_type::<#ok_ty, ::roam::session::Tx::<()>, ::roam::session::Rx::<()>>())),
+                    err_plan: Box::leak(Box::new(#roam::session::RpcPlan::for_type::<#err_ty, ::roam::session::Tx::<()>, ::roam::session::Rx::<()>>())),
                 }))
             }
         })
@@ -208,7 +219,7 @@ fn generate_service_descriptor_fn(parsed: &ServiceTrait, roam: &TokenStream2) ->
 // Method ID Generation
 // ============================================================================
 
-fn generate_method_id_module(parsed: &ServiceTrait, _roam: &TokenStream2) -> TokenStream2 {
+fn generate_method_id_module(parsed: &ServiceTrait, roam: &TokenStream2) -> TokenStream2 {
     let service_name = parsed.name();
     let mod_name = format_ident!("{}_method_id", service_name.to_snake_case());
     let descriptor_fn_name = format_ident!("{}_service_descriptor", service_name.to_snake_case());
@@ -220,7 +231,7 @@ fn generate_method_id_module(parsed: &ServiceTrait, _roam: &TokenStream2) -> Tok
             let fn_name = format_ident!("{}", m.name().to_snake_case());
             let idx = i;
             quote! {
-                pub fn #fn_name() -> MethodId {
+                pub fn #fn_name() -> #roam::session::MethodId {
                     super::#descriptor_fn_name().methods[#idx].id
                 }
             }
@@ -384,7 +395,7 @@ fn generate_dispatcher(parsed: &ServiceTrait, roam: &TokenStream2) -> TokenStrea
                 payload: Vec<u8>,
                 registry: &mut #roam::session::ChannelRegistry,
             ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'static>> {
-                let method_id = cx.method_id().0;
+                let method_id = cx.method_id();
                 #(#dispatch_arms)*
                 else {
                     #roam::session::dispatch_unknown_method(&cx, registry)
@@ -563,7 +574,7 @@ fn generate_dispatch_method(
             let dispatch_ctx = registry.dispatch_context();
             let channels = cx.channels.clone();
             let conn_id = cx.conn_id;
-            let request_id = cx.request_id.0;
+            let request_id = cx.request_id;
 
             // 1. Allocate args on stack
             let mut args_slot = MaybeUninit::<#tuple_type>::uninit();
@@ -590,7 +601,7 @@ fn generate_dispatch_method(
 
             Box::pin(#roam::session::DISPATCH_CONTEXT.scope(dispatch_ctx, async move {
                 let mut cx = cx;
-                cx.arg_names = desc.arg_names;
+                cx.args = desc.args;
 
                 // 4. Run pre-middleware (ASYNC)
                 if !middleware.is_empty() {

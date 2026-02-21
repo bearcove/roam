@@ -34,4 +34,5 @@ declare_u64_id!(
 /// Opaque payload (arguments, response, etc.) encoded as postcard
 #[derive(Facet, Clone, Debug, PartialEq, Eq, Hash)]
 #[facet(transparent)]
+#[repr(transparent)]
 pub struct Payload(pub Vec<u8>);

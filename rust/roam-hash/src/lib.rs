@@ -9,6 +9,7 @@ use std::collections::HashSet;
 use facet_core::{Def, ScalarType, Shape, StructKind, Type, UserType};
 use heck::ToKebabCase;
 use roam_schema::{MethodDetail, is_rx, is_tx};
+use roam_types::MethodId;
 
 /// Signature encoding tags for type serialization.
 mod sig {
@@ -346,9 +347,9 @@ pub fn method_id_from_shapes(
     method_name: &str,
     args: &[&'static Shape],
     return_type: &'static Shape,
-) -> u64 {
+) -> MethodId {
     let sig = signature_hash(args, return_type);
-    method_id(service_name, method_name, sig)
+    MethodId(method_id(service_name, method_name, sig))
 }
 
 #[cfg(test)]

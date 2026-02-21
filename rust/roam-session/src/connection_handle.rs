@@ -803,11 +803,10 @@ mod tests {
 
     static TEST_DESC: LazyLock<&'static MethodDescriptor> = LazyLock::new(|| {
         Box::leak(Box::new(MethodDescriptor {
-            id: 42,
+            id: MethodId(42),
             service_name: "Test",
             method_name: "test",
-            arg_names: &[],
-            arg_shapes: &[],
+            args: &[],
             return_shape: <() as Facet>::SHAPE,
             args_plan: Box::leak(Box::new(RpcPlan::for_type::<(crate::Rx<Vec<u8>>,)>())),
             ok_plan: Box::leak(Box::new(RpcPlan::for_type::<()>())),
@@ -817,11 +816,10 @@ mod tests {
 
     static RAW_DESC_1: LazyLock<&'static MethodDescriptor> = LazyLock::new(|| {
         Box::leak(Box::new(MethodDescriptor {
-            id: 1,
+            id: MethodId(1),
             service_name: "Test",
             method_name: "method1",
-            arg_names: &[],
-            arg_shapes: &[],
+            args: &[],
             return_shape: <() as Facet>::SHAPE,
             args_plan: Box::leak(Box::new(RpcPlan::for_type::<()>())),
             ok_plan: Box::leak(Box::new(RpcPlan::for_type::<()>())),
@@ -831,11 +829,10 @@ mod tests {
 
     static RAW_DESC_2: LazyLock<&'static MethodDescriptor> = LazyLock::new(|| {
         Box::leak(Box::new(MethodDescriptor {
-            id: 2,
+            id: MethodId(2),
             service_name: "Test",
             method_name: "method2",
-            arg_names: &[],
-            arg_shapes: &[],
+            args: &[],
             return_shape: <() as Facet>::SHAPE,
             args_plan: Box::leak(Box::new(RpcPlan::for_type::<()>())),
             ok_plan: Box::leak(Box::new(RpcPlan::for_type::<()>())),

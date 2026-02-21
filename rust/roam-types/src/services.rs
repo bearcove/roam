@@ -70,6 +70,7 @@ declare_u64_id!(
 ///
 /// Contains metadata about an argument including its name, shape, and
 /// whether it's a channel type (Rx/Tx).
+#[derive(Debug)]
 pub struct ArgDescriptor {
     /// Argument name (e.g., "user_id", "stream").
     pub name: &'static str,

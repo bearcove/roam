@@ -207,12 +207,13 @@ impl<E: SpanExporter> Middleware for TelemetryMiddleware<E> {
                 .with_colors(facet_pretty::ColorMode::Never)
                 .with_max_content_len(128);
 
-            let arg_names = ctx.arg_names();
+            let args_desc = ctx.args();
             let peek = args.peek();
 
             // Args is a tuple - iterate through its fields
             if let Ok(tuple) = peek.into_struct() {
-                for (i, name) in arg_names.iter().enumerate() {
+                for (i, arg) in args_desc.iter().enumerate() {
+                    let name = arg.name;
                     if let Ok(field) = tuple.field(i) {
                         let value_str = printer.format_peek(field);
                         span.attributes

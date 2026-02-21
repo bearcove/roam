@@ -16,8 +16,8 @@ use facet_postcard::PostcardParser;
 use facet_reflect::Partial;
 
 use roam_types::{
-    ChannelId, ConnectionId, Metadata, MethodDescriptor, MethodId, Payload, RequestId,
-    ServiceDescriptor,
+    ArgDescriptor, ChannelId, ConnectionId, Metadata, MethodDescriptor, MethodId, Payload,
+    RequestId, ServiceDescriptor,
 };
 
 use crate::{
@@ -108,8 +108,8 @@ pub struct Context {
     /// Channel IDs from the request, in argument declaration order.
     pub channels: Vec<ChannelId>,
 
-    /// Argument names for this request (set by generated dispatchers).
-    pub arg_names: &'static [&'static str],
+    /// Argument descriptors for this request (set by generated dispatchers).
+    pub args: &'static [ArgDescriptor],
 
     /// Type-safe extension storage.
     pub extensions: Extensions,
@@ -132,7 +132,7 @@ impl Context {
             metadata,
             channels,
             extensions: Extensions::new(),
-            arg_names: &[],
+            args: &[],
         }
     }
 
@@ -145,17 +145,17 @@ impl Context {
         self
     }
 
-    /// Set the argument names for this context.
+    /// Set the argument descriptors for this context.
     ///
     /// Called by generated dispatchers before invoking middleware.
-    pub fn with_arg_names(mut self, arg_names: &'static [&'static str]) -> Self {
-        self.arg_names = arg_names;
+    pub fn with_args(mut self, args: &'static [ArgDescriptor]) -> Self {
+        self.args = args;
         self
     }
 
-    /// Get the argument names.
-    pub fn arg_names(&self) -> &'static [&'static str] {
-        self.arg_names
+    /// Get the argument descriptors.
+    pub fn args(&self) -> &'static [ArgDescriptor] {
+        self.args
     }
 
     /// Get the connection ID.
@@ -208,7 +208,7 @@ impl Clone for Context {
             // This is intentional: middleware modifies extensions on its copy,
             // but the inner dispatch already captured what it needs.
             extensions: Extensions::new(),
-            arg_names: self.arg_names,
+            args: self.args,
         }
     }
 }

@@ -3,7 +3,7 @@ use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use roam_wire::{Hello, Message};
+use roam_types::{Hello, Message};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::process::{Child, Command};
@@ -404,7 +404,7 @@ pub mod wire_server {
         pub process_message: u64,
     }
 
-    fn metadata_empty() -> roam_wire::Metadata {
+    fn metadata_empty() -> roam_types::Metadata {
         Vec::new()
     }
 
@@ -447,7 +447,7 @@ pub mod wire_server {
                             .map_err(|e| format!("decode echo args: {e}"))?;
                         let response_payload = encode_ok(&args.0)?;
                         io.send(&Message::Response {
-                            conn_id: roam_wire::ConnectionId::ROOT,
+                            conn_id: roam_types::ConnectionId::ROOT,
                             request_id,
                             metadata: metadata_empty(),
                             channels: vec![],
@@ -462,7 +462,7 @@ pub mod wire_server {
                         let reversed: String = args.0.chars().rev().collect();
                         let response_payload = encode_ok(&reversed)?;
                         io.send(&Message::Response {
-                            conn_id: roam_wire::ConnectionId::ROOT,
+                            conn_id: roam_types::ConnectionId::ROOT,
                             request_id,
                             metadata: metadata_empty(),
                             channels: vec![],
@@ -491,7 +491,7 @@ pub mod wire_server {
                             let data_payload = facet_postcard::to_vec(&i)
                                 .map_err(|e| format!("encode data: {e}"))?;
                             io.send(&Message::Data {
-                                conn_id: roam_wire::ConnectionId::ROOT,
+                                conn_id: roam_types::ConnectionId::ROOT,
                                 channel_id,
                                 payload: data_payload,
                             })
@@ -501,7 +501,7 @@ pub mod wire_server {
 
                         // Send Close
                         io.send(&Message::Close {
-                            conn_id: roam_wire::ConnectionId::ROOT,
+                            conn_id: roam_types::ConnectionId::ROOT,
                             channel_id,
                         })
                         .await
@@ -510,7 +510,7 @@ pub mod wire_server {
                         // Send Response
                         let response_payload = encode_ok(&())?;
                         io.send(&Message::Response {
-                            conn_id: roam_wire::ConnectionId::ROOT,
+                            conn_id: roam_types::ConnectionId::ROOT,
                             request_id,
                             metadata: metadata_empty(),
                             channels: vec![],
@@ -539,7 +539,7 @@ pub mod wire_server {
 
                         let response_payload = encode_ok(&12.0_f64)?;
                         io.send(&Message::Response {
-                            conn_id: roam_wire::ConnectionId::ROOT,
+                            conn_id: roam_types::ConnectionId::ROOT,
                             request_id,
                             metadata: metadata_empty(),
                             channels: vec![],
@@ -599,7 +599,7 @@ pub mod wire_server {
                         };
                         let response_payload = encode_ok(&canvas)?;
                         io.send(&Message::Response {
-                            conn_id: roam_wire::ConnectionId::ROOT,
+                            conn_id: roam_types::ConnectionId::ROOT,
                             request_id,
                             metadata: metadata_empty(),
                             channels: vec![],
@@ -627,7 +627,7 @@ pub mod wire_server {
                         let response_msg = spec_proto::Message::Data(vec![4, 3, 2, 1]);
                         let response_payload = encode_ok(&response_msg)?;
                         io.send(&Message::Response {
-                            conn_id: roam_wire::ConnectionId::ROOT,
+                            conn_id: roam_types::ConnectionId::ROOT,
                             request_id,
                             metadata: metadata_empty(),
                             channels: vec![],
@@ -642,7 +642,7 @@ pub mod wire_server {
                         // Unknown method - send error response
                         let response_payload = vec![0x01, 0x01]; // Result::Err, RoamError::UnknownMethod
                         io.send(&Message::Response {
-                            conn_id: roam_wire::ConnectionId::ROOT,
+                            conn_id: roam_types::ConnectionId::ROOT,
                             request_id,
                             metadata: metadata_empty(),
                             channels: vec![],
@@ -675,7 +675,7 @@ pub mod wire_server {
                         let sum: i64 = data.iter().map(|&x| x as i64).sum();
                         let response_payload = encode_ok(&sum)?;
                         io.send(&Message::Response {
-                            conn_id: roam_wire::ConnectionId::ROOT,
+                            conn_id: roam_types::ConnectionId::ROOT,
                             request_id,
                             metadata: metadata_empty(),
                             channels: vec![],

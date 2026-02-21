@@ -19,7 +19,7 @@ use roam_session::{
     ResponseData, Role, ServiceDispatcher, TransportError,
 };
 use roam_stream::MessageTransport;
-use roam_types::{ConnectionId, Message};
+use roam_types::{ChannelId, ConnectionId, Message, MethodId, Payload, RequestId};
 use std::collections::HashMap;
 use std::sync::Arc;
 
