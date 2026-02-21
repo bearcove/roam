@@ -8,9 +8,11 @@ use std::sync::Arc;
 use std::collections::HashMap;
 use std::sync::LazyLock;
 
+use roam_types::{MethodId, Payload};
+
 use crate::{
     ChannelRegistry, ConnectionHandle, Context, DriverMessage, IncomingChannelMessage,
-    MethodDescriptor, RpcPlan, ServiceDispatcher, TransportError,
+    MethodDescriptor, RpcPlan, ServiceDescriptor, ServiceDispatcher, TransportError,
 };
 
 /// Get or create a `&'static MethodDescriptor` for forwarding a given method.
@@ -18,10 +20,10 @@ use crate::{
 /// Forwarding is schema-agnostic: it doesn't know the service at compile time.
 /// We cache leaked descriptors per method_id (bounded by the finite method set
 /// of the upstream service).
-fn forwarding_descriptor(method_id: u64) -> &'static MethodDescriptor {
+fn forwarding_descriptor(method_id: MethodId) -> &'static MethodDescriptor {
     static DUMMY_PLAN: LazyLock<&'static RpcPlan> =
-        LazyLock::new(|| Box::leak(Box::new(RpcPlan::for_type::<()>())));
-    static CACHE: LazyLock<std::sync::Mutex<HashMap<u64, &'static MethodDescriptor>>> =
+        LazyLock::new(|| Box::leak(Box::new(RpcPlan::for_type::<(), (), ()>())));
+    static CACHE: LazyLock<std::sync::Mutex<HashMap<MethodId, &'static MethodDescriptor>>> =
         LazyLock::new(|| std::sync::Mutex::new(HashMap::new()));
 
     let mut cache = CACHE.lock().unwrap();
@@ -35,8 +37,7 @@ fn forwarding_descriptor(method_id: u64) -> &'static MethodDescriptor {
         id: method_id,
         service_name: Box::leak("forwarded".to_string().into_boxed_str()),
         method_name: Box::leak(method_name.to_string().into_boxed_str()),
-        arg_names: &[],
-        arg_shapes: &[],
+        args: &[],
         return_shape: <() as facet::Facet>::SHAPE,
         args_plan: *DUMMY_PLAN,
         ok_plan: *DUMMY_PLAN,
@@ -91,7 +92,7 @@ impl Clone for ForwardingDispatcher {
 
 impl ServiceDispatcher for ForwardingDispatcher {
     fn service_descriptor(&self) -> &'static crate::ServiceDescriptor {
-        &roam_types::ServiceDescriptor::EMPTY
+        &ServiceDescriptor::EMPTY
     }
 
     fn dispatch(
@@ -103,8 +104,8 @@ impl ServiceDispatcher for ForwardingDispatcher {
         let task_tx = registry.driver_tx();
         let upstream = self.upstream.clone();
         let conn_id = cx.conn_id;
-        let method_id = cx.method_id.0;
-        let request_id = cx.request_id.0;
+        let method_id = cx.method_id;
+        let request_id = cx.request_id;
         let channels = cx.channels.clone();
         let descriptor = forwarding_descriptor(method_id);
 
@@ -125,11 +126,11 @@ impl ServiceDispatcher for ForwardingDispatcher {
                     Ok(data) => (data.payload, data.channels),
                     Err(TransportError::Encode(_)) => {
                         // Should not happen for raw call
-                        (vec![1, 2], Vec::new()) // Err(InvalidPayload)
+                        (Payload(vec![1, 2]), Vec::new()) // Err(InvalidPayload)
                     }
                     Err(TransportError::ConnectionClosed) | Err(TransportError::DriverGone) => {
                         // Connection to upstream failed - return Cancelled
-                        (vec![1, 3], Vec::new()) // Err(Cancelled)
+                        (Payload(vec![1, 3]), Vec::new()) // Err(Cancelled)
                     }
                 };
 
@@ -148,8 +149,8 @@ impl ServiceDispatcher for ForwardingDispatcher {
                         downstream_channels.push(downstream_id);
 
                         debug!(
-                            upstream_id,
-                            downstream_id, "ForwardingDispatcher: mapping channel IDs"
+                            %upstream_id,
+                            %downstream_id, "ForwardingDispatcher: mapping channel IDs"
                         );
 
                         // Set up forwarding: upstream → downstream
@@ -160,15 +161,15 @@ impl ServiceDispatcher for ForwardingDispatcher {
                         let task_tx_clone = task_tx.clone();
                         crate::runtime::spawn("roam_fwd_response_relay", async move {
                             debug!(
-                                upstream_id,
-                                downstream_id, "ForwardingDispatcher: forwarding task started"
+                                %upstream_id,
+                                %downstream_id, "ForwardingDispatcher: forwarding task started"
                             );
                             while let Some(msg) = rx.recv().await {
                                 match msg {
                                     IncomingChannelMessage::Data(data) => {
                                         debug!(
-                                            upstream_id,
-                                            downstream_id,
+                                            %upstream_id,
+                                            %downstream_id,
                                             data_len = data.len(),
                                             "ForwardingDispatcher: forwarding data"
                                         );
@@ -176,7 +177,7 @@ impl ServiceDispatcher for ForwardingDispatcher {
                                             .send(DriverMessage::Data {
                                                 conn_id,
                                                 channel_id: downstream_id,
-                                                payload: data,
+                                                payload: Payload(data),
                                             })
                                             .await;
                                     }
@@ -260,7 +261,7 @@ impl ServiceDispatcher for ForwardingDispatcher {
                                         .send(DriverMessage::Data {
                                             conn_id: upstream_conn_id,
                                             channel_id: upstream_id,
-                                            payload: data,
+                                            payload: Payload(data),
                                         })
                                         .await;
                                 }
@@ -289,7 +290,7 @@ impl ServiceDispatcher for ForwardingDispatcher {
                                         .send(DriverMessage::Data {
                                             conn_id,
                                             channel_id: downstream_id,
-                                            payload: data,
+                                            payload: Payload(data),
                                         })
                                         .await;
                                 }
@@ -313,17 +314,17 @@ impl ServiceDispatcher for ForwardingDispatcher {
                 let (response_payload, upstream_response_channels) = match response {
                     Ok(data) => (data.payload, data.channels),
                     Err(TransportError::Encode(_)) => {
-                        (vec![1, 2], Vec::new()) // Err(InvalidPayload)
+                        (Payload(vec![1, 2]), Vec::new()) // Err(InvalidPayload)
                     }
                     Err(TransportError::ConnectionClosed) | Err(TransportError::DriverGone) => {
-                        (vec![1, 3], Vec::new()) // Err(Cancelled)
+                        (Payload(vec![1, 3]), Vec::new()) // Err(Cancelled)
                     }
                 };
 
                 // Map upstream response channels back to downstream channel IDs.
                 // The downstream client allocated the original IDs and expects them
                 // in the Response, not the upstream IDs we allocated for forwarding.
-                let downstream_response_channels: Vec<u64> = upstream_response_channels
+                let downstream_response_channels: Vec<_> = upstream_response_channels
                     .iter()
                     .filter_map(|&upstream_id| {
                         channel_map
@@ -452,7 +453,7 @@ impl Clone for LateBoundForwarder {
 
 impl ServiceDispatcher for LateBoundForwarder {
     fn service_descriptor(&self) -> &'static crate::ServiceDescriptor {
-        &roam_types::ServiceDescriptor::EMPTY
+        &ServiceDescriptor::EMPTY
     }
 
     fn dispatch(
@@ -463,7 +464,7 @@ impl ServiceDispatcher for LateBoundForwarder {
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'static>> {
         let task_tx = registry.driver_tx();
         let conn_id = cx.conn_id;
-        let request_id = cx.request_id.0;
+        let request_id = cx.request_id;
 
         // Try to get the upstream handle
         let Some(upstream) = self.upstream.get().cloned() else {
@@ -478,7 +479,7 @@ impl ServiceDispatcher for LateBoundForwarder {
                         conn_id,
                         request_id,
                         channels: vec![],
-                        payload: vec![1, 3], // Err(Cancelled)
+                        payload: Payload(vec![1, 3]), // Err(Cancelled)
                     })
                     .await;
             });

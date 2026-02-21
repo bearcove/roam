@@ -41,7 +41,10 @@ use crate::{
     ChannelError, ChannelRegistry, ConnectionHandle, Context, DriverMessage, MessageTransport,
     ResponseData, RoamError, Role, RpcPlan, ServiceDispatcher, TransportError,
 };
-use roam_types::{ConnectionId, Hello, Message};
+use roam_types::{
+    ChannelId, ConnectionId, Hello, Message, Metadata, MetadataValue, MethodId, Payload, RequestId,
+    ServiceDescriptor, validate_metadata,
+};
 
 /// Negotiated connection parameters after Hello exchange.
 #[derive(Debug, Clone)]
@@ -136,11 +139,7 @@ impl HandshakeConfig {
     pub fn to_hello(&self) -> Hello {
         let mut metadata = vec![];
         if let Some(ref name) = self.name {
-            metadata.push((
-                "name".to_string(),
-                roam_types::MetadataValue::String(name.clone()),
-                0,
-            ));
+            metadata.push(("name".to_string(), MetadataValue::String(name.clone()), 0));
         }
         Hello::V6 {
             max_payload_size: self.max_payload_size,
@@ -516,7 +515,7 @@ where
         &self,
         descriptor: &'static crate::MethodDescriptor,
         args: &mut T,
-        metadata: roam_types::Metadata,
+        metadata: Metadata,
     ) -> Result<ResponseData, TransportError> {
         let mut attempt = 0u32;
 
@@ -595,7 +594,7 @@ where
         &self,
         descriptor: &'static crate::MethodDescriptor,
         args_ptr: crate::SendPtr,
-        metadata: roam_types::Metadata,
+        metadata: Metadata,
     ) -> impl std::future::Future<Output = Result<ResponseData, TransportError>> {
         let this = self.clone();
 
@@ -714,11 +713,11 @@ struct ConnectionState {
     dispatcher: Option<Box<dyn ServiceDispatcher>>,
 
     /// Pending responses (request_id -> response sender).
-    pending_responses: HashMap<u64, PendingResponse>,
+    pending_responses: HashMap<RequestId, PendingResponse>,
 
     /// In-flight server requests with their abort handles.
     /// r[impl call.cancel.best-effort] - We track abort handles to allow best-effort cancellation.
-    in_flight_server_requests: HashMap<u64, crate::runtime::AbortHandle>,
+    in_flight_server_requests: HashMap<RequestId, crate::runtime::AbortHandle>,
 }
 
 struct PendingResponse {
@@ -782,7 +781,7 @@ pub struct IncomingConnection {
     /// The request ID for this Connect request.
     request_id: u64,
     /// Metadata from the Connect message.
-    pub metadata: roam_types::Metadata,
+    pub metadata: Metadata,
     /// Channel to send the Accept/Reject response.
     response_tx: crate::runtime::OneshotSender<IncomingConnectionResponse>,
 }
@@ -800,7 +799,7 @@ impl IncomingConnection {
     /// r[impl core.conn.only-root-accepts]
     pub async fn accept(
         self,
-        metadata: roam_types::Metadata,
+        metadata: Metadata,
         dispatcher: Option<Box<dyn ServiceDispatcher>>,
     ) -> Result<ConnectionHandle, TransportError> {
         let (handle_tx, handle_rx) = crate::runtime::oneshot("incoming_conn_accept");
@@ -831,14 +830,14 @@ impl IncomingConnection {
 enum IncomingConnectionResponse {
     Accept {
         request_id: u64,
-        metadata: roam_types::Metadata,
+        metadata: Metadata,
         dispatcher: Option<Box<dyn ServiceDispatcher>>,
         handle_tx: crate::runtime::OneshotSender<Result<ConnectionHandle, TransportError>>,
     },
     Reject {
         request_id: u64,
         reason: String,
-        metadata: roam_types::Metadata,
+        metadata: Metadata,
     },
 }
 
@@ -877,7 +876,7 @@ pub struct Driver<T, D> {
     /// r[impl core.conn.id-allocation]
     next_conn_id: u64,
     /// Pending outgoing Connect requests (request_id -> response channel).
-    pending_connects: HashMap<u64, PendingConnect>,
+    pending_connects: HashMap<RequestId, PendingConnect>,
     /// Channel for incoming connection requests (only root can accept).
     /// r[impl core.conn.accept-required]
     incoming_connections_tx: Option<crate::runtime::Sender<IncomingConnection>>,
@@ -1082,20 +1081,20 @@ where
                 // r[impl flow.call.payload-limit] - Outgoing responses are also bounded
                 // by max_payload_size. If a handler produces a too-large response, send
                 // a Cancelled error instead so the call doesn't hang.
-                let (payload, channels) = if payload.len() as u32 > self.negotiated.max_payload_size
-                {
-                    error!(
-                        conn_id = %conn_id,
-                        request_id,
-                        payload_len = payload.len(),
-                        max_payload_size = self.negotiated.max_payload_size,
-                        "outgoing response exceeds max_payload_size, sending Cancelled"
-                    );
-                    // Cancelled error: Result::Err(1) + RoamError::Cancelled(3)
-                    (vec![1, 3], vec![])
-                } else {
-                    (payload, channels)
-                };
+                let (payload, channels) =
+                    if payload.0.len() as u32 > self.negotiated.max_payload_size {
+                        error!(
+                            conn_id = %conn_id,
+                            request_id = %request_id,
+                            payload_len = payload.0.len(),
+                            max_payload_size = self.negotiated.max_payload_size,
+                            "outgoing response exceeds max_payload_size, sending Cancelled"
+                        );
+                        // Cancelled error: Result::Err(1) + RoamError::Cancelled(3)
+                        (Payload(vec![1, 3]), vec![])
+                    } else {
+                        (payload, channels)
+                    };
                 let wire_msg = Message::Response {
                     conn_id,
                     request_id,
@@ -1365,11 +1364,11 @@ where
     async fn handle_incoming_request(
         &mut self,
         conn_id: ConnectionId,
-        request_id: u64,
-        method_id: u64,
-        metadata: roam_types::Metadata,
-        channels: Vec<u64>,
-        payload: Vec<u8>,
+        request_id: RequestId,
+        method_id: MethodId,
+        metadata: Metadata,
+        channels: Vec<ChannelId>,
+        payload: Payload,
     ) -> Result<(), ConnectionError> {
         // Validate connection existence and request limits without holding a mutable
         // borrow across awaits.
@@ -1390,11 +1389,11 @@ where
             return Err(self.goodbye("flow.request.concurrent-overrun").await);
         }
 
-        if let Err(rule_id) = roam_types::validate_metadata(&metadata) {
+        if let Err(rule_id) = validate_metadata(&metadata) {
             return Err(self.goodbye(rule_id).await);
         }
 
-        if payload.len() as u32 > self.negotiated.max_payload_size {
+        if payload.0.len() as u32 > self.negotiated.max_payload_size {
             return Err(self.goodbye("flow.call.payload-limit").await);
         }
 
@@ -1412,23 +1411,19 @@ where
         };
         let method_desc = dispatcher.method_descriptor(method_id);
 
-        let cx = Context::new(
-            conn_id,
-            roam_types::RequestId(request_id),
-            roam_types::MethodId(method_id),
-            metadata,
-            channels,
-        )
-        .with_method_descriptor(method_desc);
+        let cx = Context::new(conn_id, request_id, method_id, metadata, channels)
+            .with_method_descriptor(method_desc);
 
         debug!(
             conn_id = %conn_id,
-            request_id, method_id, "dispatching incoming request"
+            request_id = %request_id,
+            method_id = %method_id,
+            "dispatching incoming request"
         );
 
         conn.server_channel_registry
             .set_current_request_id(Some(request_id));
-        let dispatch_fut = dispatcher.dispatch(cx, payload, &mut conn.server_channel_registry);
+        let dispatch_fut = dispatcher.dispatch(cx, payload.0, &mut conn.server_channel_registry);
         conn.server_channel_registry.set_current_request_id(None);
 
         // r[impl call.cancel.best-effort] - Store abort handle for cancellation support
@@ -1449,7 +1444,7 @@ where
     async fn handle_cancel(
         &mut self,
         conn_id: ConnectionId,
-        request_id: u64,
+        request_id: RequestId,
     ) -> Result<(), ConnectionError> {
         // Get the connection
         let conn = match self.connections.get_mut(&conn_id) {
@@ -1473,7 +1468,7 @@ where
                 metadata: vec![],
                 channels: vec![],
                 // Cancelled error: Result::Err(1) + RoamError::Cancelled(3)
-                payload: vec![1, 3],
+                payload: Payload(vec![1, 3]),
             };
             self.io.send(&wire_msg).await?;
         }
@@ -1485,14 +1480,14 @@ where
     async fn handle_data(
         &mut self,
         conn_id: ConnectionId,
-        channel_id: u64,
-        payload: Vec<u8>,
+        channel_id: ChannelId,
+        payload: Payload,
     ) -> Result<(), ConnectionError> {
-        if channel_id == 0 {
+        if channel_id.0 == 0 {
             return Err(self.goodbye("channeling.id.zero-reserved").await);
         }
 
-        if payload.len() as u32 > self.negotiated.max_payload_size {
+        if payload.0.len() as u32 > self.negotiated.max_payload_size {
             return Err(self.goodbye("flow.call.payload-limit").await);
         }
 
@@ -1504,10 +1499,10 @@ where
 
         let result = if conn.server_channel_registry.contains_incoming(channel_id) {
             conn.server_channel_registry
-                .route_data(channel_id, payload)
+                .route_data(channel_id, payload.0)
                 .await
         } else if conn.handle.contains_channel(channel_id) {
-            conn.handle.route_data(channel_id, payload).await
+            conn.handle.route_data(channel_id, payload.0).await
         } else {
             Err(ChannelError::Unknown)
         };
@@ -1527,9 +1522,9 @@ where
     async fn handle_close(
         &mut self,
         conn_id: ConnectionId,
-        channel_id: u64,
+        channel_id: ChannelId,
     ) -> Result<(), ConnectionError> {
-        if channel_id == 0 {
+        if channel_id.0 == 0 {
             return Err(self.goodbye("channeling.id.zero-reserved").await);
         }
 
@@ -1551,7 +1546,7 @@ where
     fn handle_reset(
         &mut self,
         conn_id: ConnectionId,
-        channel_id: u64,
+        channel_id: ChannelId,
     ) -> Result<(), ConnectionError> {
         if let Some(conn) = self.connections.get_mut(&conn_id) {
             if conn.server_channel_registry.contains(channel_id) {
@@ -1566,7 +1561,7 @@ where
     fn handle_credit(
         &mut self,
         conn_id: ConnectionId,
-        channel_id: u64,
+        channel_id: ChannelId,
         bytes: u32,
     ) -> Result<(), ConnectionError> {
         if let Some(conn) = self.connections.get_mut(&conn_id) {
@@ -1766,7 +1761,7 @@ where
                     .iter()
                     .find(|(k, _, _)| k == "name")
                     .and_then(|(_, v, _)| match v {
-                        roam_types::MetadataValue::String(s) => Some(s.clone()),
+                        MetadataValue::String(s) => Some(s.clone()),
                         _ => None,
                     });
                 Ok(HelloParams {
@@ -1879,7 +1874,7 @@ pub struct NoDispatcher;
 
 impl ServiceDispatcher for NoDispatcher {
     fn service_descriptor(&self) -> &'static crate::ServiceDescriptor {
-        &roam_types::ServiceDescriptor::EMPTY
+        &ServiceDescriptor::EMPTY
     }
 
     fn dispatch(

@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use facet::{DeclId, Facet, Shape};
 use facet_path::{Path, walk_shape};
 use facet_reflect::TypePlanCore;
@@ -8,7 +10,7 @@ use facet_reflect::TypePlanCore;
 /// within the type structure. Computed once per monomorphized type via `OnceLock`.
 pub struct RpcPlan {
     /// Deserialization plan for this type.
-    pub type_plan: &'static TypePlanCore,
+    pub type_plan: Arc<TypePlanCore>,
     /// Locations of all Rx/Tx channels in this type, in declaration order.
     pub channel_locations: &'static [ChannelLocation],
 }
@@ -55,7 +57,7 @@ impl RpcPlan {
         walk_shape(shape, &mut visitor);
 
         RpcPlan {
-            type_plan: Box::leak(type_plan.into()),
+            type_plan: Arc::new(type_plan),
             channel_locations: visitor.locations.leak(),
         }
     }

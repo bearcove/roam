@@ -15,11 +15,13 @@ use facet_path::PathAccessError;
 use facet_postcard::PostcardParser;
 use facet_reflect::Partial;
 
-use roam_types::{MethodDescriptor, ServiceDescriptor};
+use roam_types::{
+    ChannelId, ConnectionId, Metadata, MethodDescriptor, MethodId, RequestId, ServiceDescriptor,
+};
 
 use crate::{
-    ChannelId, ChannelIdAllocator, ChannelRegistry, DriverMessage, Extensions, Middleware,
-    Rejection, RpcPlan, SendPeek, runtime::Sender,
+    ChannelIdAllocator, ChannelRegistry, DriverMessage, Extensions, Middleware, Rejection, RpcPlan,
+    SendPeek, runtime::Sender,
 };
 
 // ============================================================================
@@ -88,47 +90,38 @@ pub(crate) fn get_current_call_metadata() -> Option<roam_types::Metadata> {
 #[derive(Debug)]
 pub struct Context {
     /// The connection ID this request arrived on.
-    ///
-    /// For virtual connections, this identifies which specific connection
-    /// the request came from, enabling bidirectional communication.
-    pub conn_id: roam_types::ConnectionId,
+    pub conn_id: ConnectionId,
 
     /// The request ID for this call.
-    ///
-    /// Unique within the connection; used for response routing and cancellation.
-    pub request_id: roam_types::RequestId,
+    pub request_id: RequestId,
+
+    /// The method ID for this call.
+    pub method_id: MethodId,
 
     /// Method descriptor from the active service definition.
-    ///
-    /// Populated by the connection driver when the selected dispatcher can
-    /// resolve `method_id` against its static method descriptors.
     pub method_descriptor: Option<&'static MethodDescriptor>,
 
     /// Metadata sent with the request.
-    ///
-    /// This is the `metadata` field from the wire `Request` message.
-    pub metadata: roam_types::Metadata,
+    pub metadata: Metadata,
 
     /// Channel IDs from the request, in argument declaration order.
-    ///
-    /// Used for channel binding. Proxies can use this to remap channel IDs.
-    pub channels: Vec<u64>,
+    pub channels: Vec<ChannelId>,
+
+    /// Argument names for this request (set by generated dispatchers).
+    pub arg_names: &'static [&'static str],
 
     /// Type-safe extension storage.
-    ///
-    /// Middleware can insert values here (e.g., authenticated user info)
-    /// that handlers can later retrieve.
     pub extensions: Extensions,
 }
 
 impl Context {
     /// Create a new context.
     pub fn new(
-        conn_id: roam_types::ConnectionId,
-        request_id: roam_types::RequestId,
-        method_id: roam_types::MethodId,
-        metadata: roam_types::Metadata,
-        channels: Vec<u64>,
+        conn_id: ConnectionId,
+        request_id: RequestId,
+        method_id: MethodId,
+        metadata: Metadata,
+        channels: Vec<ChannelId>,
     ) -> Self {
         Self {
             conn_id,
@@ -165,27 +158,27 @@ impl Context {
     }
 
     /// Get the connection ID.
-    pub fn conn_id(&self) -> roam_types::ConnectionId {
+    pub fn conn_id(&self) -> ConnectionId {
         self.conn_id
     }
 
     /// Get the request ID.
-    pub fn request_id(&self) -> roam_types::RequestId {
+    pub fn request_id(&self) -> RequestId {
         self.request_id
     }
 
     /// Get the method ID.
-    pub fn method_id(&self) -> roam_types::MethodId {
+    pub fn method_id(&self) -> MethodId {
         self.method_id
     }
 
     /// Get the request metadata.
-    pub fn metadata(&self) -> &roam_types::Metadata {
+    pub fn metadata(&self) -> &Metadata {
         &self.metadata
     }
 
     /// Get the channel IDs.
-    pub fn channels(&self) -> &[u64] {
+    pub fn channels(&self) -> &[ChannelId] {
         &self.channels
     }
 
@@ -424,7 +417,7 @@ pub fn dispatch_unknown_method(
     registry: &mut ChannelRegistry,
 ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'static>> {
     let conn_id = cx.conn_id;
-    let request_id = cx.request_id.0;
+    let request_id = cx.request_id;
     let task_tx = registry.driver_tx();
     Box::pin(async move {
         // UnknownMethod error
@@ -433,7 +426,7 @@ pub fn dispatch_unknown_method(
                 conn_id,
                 request_id,
                 channels: Vec::new(),
-                payload: vec![1, 1],
+                payload: Payload(vec![1, 1]),
             })
             .await;
     })
@@ -528,7 +521,7 @@ pub unsafe fn prepare_sync(
     args_ptr: *mut (),
     plan: &RpcPlan,
     payload: &[u8],
-    channels: &[u64],
+    channels: &[ChannelId],
     registry: &mut ChannelRegistry,
 ) -> Result<(), PrepareError> {
     // 1. Deserialize into args_ptr using the precomputed type plan
@@ -621,7 +614,11 @@ pub unsafe fn deserialize_into(
 ///
 /// - `args_ptr` must point to valid, initialized memory matching the plan's shape
 #[allow(unsafe_code)]
-pub unsafe fn patch_channel_ids_with_plan(args_ptr: *mut (), plan: &RpcPlan, channels: &[u64]) {
+pub unsafe fn patch_channel_ids_with_plan(
+    args_ptr: *mut (),
+    plan: &RpcPlan,
+    channels: &[ChannelId],
+) {
     let shape = plan.type_plan.root().shape;
     trace!(channels = ?channels, "patch_channel_ids_with_plan: patching channels");
     let mut idx = 0;
@@ -671,8 +668,8 @@ pub async fn send_ok_response(
     result: SendPeek<'_>,
     response_plan: &RpcPlan,
     driver_tx: &Sender<DriverMessage>,
-    conn_id: roam_types::ConnectionId,
-    request_id: u64,
+    conn_id: ConnectionId,
+    request_id: RequestId,
 ) {
     let peek = result.peek();
 
@@ -721,8 +718,8 @@ pub async fn send_ok_response(
 pub async fn send_error_response(
     error: SendPeek<'_>,
     driver_tx: &Sender<DriverMessage>,
-    conn_id: roam_types::ConnectionId,
-    request_id: u64,
+    conn_id: ConnectionId,
+    request_id: RequestId,
 ) {
     let peek = error.peek();
 
@@ -803,8 +800,8 @@ pub async fn run_post_middleware(
 pub async fn send_prepare_error(
     error: PrepareError,
     driver_tx: &Sender<DriverMessage>,
-    conn_id: roam_types::ConnectionId,
-    request_id: u64,
+    conn_id: ConnectionId,
+    request_id: RequestId,
 ) {
     let payload = match error {
         PrepareError::Deserialize(_) => {
@@ -839,7 +836,7 @@ pub async fn send_prepare_error(
 }
 
 /// Collect channel IDs from a Peek value using a precomputed RpcPlan.
-pub fn collect_channel_ids_with_plan(peek: facet::Peek<'_, '_>, plan: &RpcPlan) -> Vec<u64> {
+pub fn collect_channel_ids_with_plan(peek: facet::Peek<'_, '_>, plan: &RpcPlan) -> Vec<ChannelId> {
     let mut ids = Vec::new();
     for loc in &plan.channel_locations {
         match peek.at_path(&loc.path) {
@@ -874,7 +871,7 @@ pub fn collect_channel_ids_with_plan(peek: facet::Peek<'_, '_>, plan: &RpcPlan) 
 /// The `plan` should be created once per type as a static in non-generic code.
 ///
 /// r[impl call.request.channels] - Collects channel IDs in declaration order for the Request.
-pub fn collect_channel_ids<T: Facet<'static>>(args: &T, plan: &RpcPlan) -> Vec<u64> {
+pub fn collect_channel_ids<T: Facet<'static>>(args: &T, plan: &RpcPlan) -> Vec<ChannelId> {
     let peek = facet::Peek::new(args);
     collect_channel_ids_with_plan(peek, plan)
 }
@@ -908,7 +905,7 @@ pub trait ServiceDispatcher: Send + Sync {
     ///
     /// Default implementation searches `service_descriptor().methods`.
     /// [`RoutedDispatcher`] overrides this to check primary then fallback.
-    fn method_descriptor(&self, method_id: u64) -> Option<&'static MethodDescriptor> {
+    fn method_descriptor(&self, method_id: MethodId) -> Option<&'static MethodDescriptor> {
         self.service_descriptor().by_id(method_id)
     }
 
@@ -989,7 +986,7 @@ where
         self.primary.service_descriptor()
     }
 
-    fn method_descriptor(&self, method_id: u64) -> Option<&'static MethodDescriptor> {
+    fn method_descriptor(&self, method_id: MethodId) -> Option<&'static MethodDescriptor> {
         self.primary
             .method_descriptor(method_id)
             .or_else(|| self.fallback.method_descriptor(method_id))

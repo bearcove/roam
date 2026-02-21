@@ -261,7 +261,7 @@ pub enum Message {
     // r[impl wire.stream] - Tx<T>/Rx<T> encoded as u64 channel ID on wire
     Data {
         conn_id: ConnectionId,
-        channel_id: RequestId,
+        channel_id: ChannelId,
         payload: Payload,
     } = 8,
 
