@@ -17,7 +17,7 @@ default = []
 [dependencies]
 facet.workspace = true
 tokio = { workspace = true, features = ["net", "io-util", "rt", "time", "sync"] }
-roam-wire.workspace = true
+roam-types.workspace = true
 roam-session.workspace = true
 facet-postcard.workspace = true
 facet-reflect.workspace = true

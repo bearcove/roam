@@ -22,3 +22,6 @@ pub use services::*;
 
 mod requests;
 pub use requests::*;
+
+mod wire;
+pub use wire::*;

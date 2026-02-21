@@ -11,11 +11,7 @@ specs (
                     rust/**/*.rs
                     spec/**/*.rs
                 )
-                exclude (
-                    target/**
-                    rust/roam-hash/**
-                    rust/roam-wire/**
-                )
+                exclude (target/**)
             }
             {
                 name swift
@@ -131,3 +127,4 @@ specs (
         )
     }
 )
+

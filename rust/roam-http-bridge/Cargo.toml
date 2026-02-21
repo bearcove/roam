@@ -21,7 +21,7 @@ tracing = ["dep:tracing"]
 [dependencies]
 roam-schema.workspace = true
 roam-session.workspace = true
-roam-wire.workspace = true
+roam-types.workspace = true
 
 facet.workspace = true
 facet-core.workspace = true

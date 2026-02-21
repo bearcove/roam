@@ -2,7 +2,6 @@
 resolver = "2"
 members = [
   "rust/roam",
-  "rust/roam-wire",
   "rust/roam-frame",
   "rust/roam-session",
   "rust/roam-hash",
@@ -33,7 +32,8 @@ members = [
   "typescript/peer-server",
   # Wasm browser tests
   "rust/wasm-browser-tests",
-  "rust/roam-miri-test", "rust/roam-types",
+  "rust/roam-miri-test",
+  "rust/roam-types",
 ]
 exclude = ["fuzz"]
 
@@ -47,12 +47,12 @@ repository = "https://github.com/bearcove/roam"
 [workspace.dependencies]
 # Internal crates
 roam = { path = "rust/roam", version = "3.0.0" }
+roam-types = { path = "rust/roam-types", version = "3.0.0" }
 roam-frame = { path = "rust/roam-frame", version = "3.0.0" }
 roam-hash = { path = "rust/roam-hash", version = "3.0.0" }
 roam-macros-parse = { path = "rust/roam-macros-parse", version = "3.0.0" }
 roam-service-macros = { path = "rust/roam-macros", version = "3.0.0" }
 roam-schema = { path = "rust/roam-schema", version = "3.0.0" }
-roam-wire = { path = "rust/roam-wire", version = "3.0.0" }
 roam-session = { path = "rust/roam-session", version = "3.0.0" }
 roam-stream = { path = "rust/roam-stream", version = "3.0.0" }
 roam-tracing = { path = "rust/roam-tracing", version = "3.0.0" }

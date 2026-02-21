@@ -1,5 +1,3 @@
-#![deny(unsafe_code)]
-
 //! Spec-level wire types.
 //!
 //! Canonical definitions live in `docs/content/spec/_index.md` and `docs/content/shm-spec/_index.md`.

@@ -14,7 +14,7 @@ description = "Compliance tests for the canonical roam spec in docs/content/"
 # to ensure we're testing the wire format, not roam-against-roam.
 #
 # Allowed exceptions (spec-level crates only):
-#   - roam-wire: Wire protocol message types (Hello, Request, Response, etc.)
+#   - roam-types: Protocol message types (Hello, Request, Response, etc.)
 #   - roam-hash: Method ID computation (blake3 hashing of MethodDetail)
 #   - roam-schema: Type descriptors for method signatures
 #
@@ -26,7 +26,7 @@ description = "Compliance tests for the canonical roam spec in docs/content/"
 # =============================================================================
 
 [dependencies]
-roam-wire = { path = "../../rust/roam-wire" }
+roam-types = { path = "../../rust/roam-types" }
 spec-proto = { path = "../spec-proto" }
 facet.workspace = true
 facet-postcard.workspace = true

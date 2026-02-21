@@ -2386,7 +2386,7 @@ dependencies = [
  "roam-schema",
  "roam-service-macros",
  "roam-session",
- "roam-wire",
+ "roam-types",
  "tracing",
 ]
 
@@ -2450,7 +2450,7 @@ dependencies = [
  "roam-schema",
  "roam-session",
  "roam-stream",
- "roam-wire",
+ "roam-types",
  "serde",
  "serde_json",
  "spec-proto",
@@ -2484,7 +2484,7 @@ dependencies = [
  "moire",
  "roam",
  "roam-session",
- "roam-wire",
+ "roam-types",
  "tokio",
 ]
 
@@ -2496,7 +2496,7 @@ dependencies = [
  "once_cell",
  "roam",
  "roam-session",
- "roam-wire",
+ "roam-types",
  "tokio",
 ]
 
@@ -2538,7 +2538,7 @@ dependencies = [
  "roam",
  "roam-frame",
  "roam-task-local",
- "roam-wire",
+ "roam-types",
  "tokio",
  "tracing",
  "ulid",
@@ -2563,7 +2563,7 @@ dependencies = [
  "roam-session",
  "roam-stream",
  "roam-tracing",
- "roam-wire",
+ "roam-types",
  "shm-primitives",
  "spec-proto",
  "tempfile",
@@ -2592,7 +2592,7 @@ dependencies = [
  "once_cell",
  "roam",
  "roam-session",
- "roam-wire",
+ "roam-types",
  "spec-proto",
  "tokio",
 ]
@@ -2617,7 +2617,7 @@ dependencies = [
  "roam",
  "roam-session",
  "roam-stream",
- "roam-wire",
+ "roam-types",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -2657,20 +2657,11 @@ dependencies = [
  "moire",
  "roam-session",
  "roam-stream",
- "roam-wire",
+ "roam-types",
  "tokio",
  "tokio-tungstenite 0.26.2",
  "wasm-bindgen",
  "web-sys",
-]
-
-[[package]]
-name = "roam-wire"
-version = "3.0.0"
-dependencies = [
- "facet",
- "facet-postcard",
- "roam-types",
 ]
 
 [[package]]
@@ -2977,7 +2968,7 @@ dependencies = [
  "facet-postcard",
  "roam-hash",
  "roam-schema",
- "roam-wire",
+ "roam-types",
  "spec-proto",
  "tokio",
 ]

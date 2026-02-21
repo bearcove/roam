@@ -13,7 +13,7 @@ rustdoc-args = ["--html-in-header", "arborium-header.html"]
 
 [dependencies]
 roam-session.workspace = true
-roam-wire.workspace = true
+roam-types.workspace = true
 tokio = { workspace = true, features = ["sync", "time"] }
 moire.workspace = true
 
