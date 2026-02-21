@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::sync::LazyLock;
 
 use facet_core::Shape;
-use roam_schema::{MethodDetail, ServiceDetail, contains_stream};
+use roam_schema::{MethodDetail, ServiceDetail, contains_channels};
 use roam_session::{ConnectionHandle, MethodDescriptor, RpcPlan};
 
 use crate::{
@@ -63,8 +63,8 @@ impl GenericBridgeService {
 
         for method in &detail.methods {
             let method_id = roam_hash::method_id_from_detail(method);
-            let has_channels = method.args.iter().any(|a| contains_stream(a.ty))
-                || contains_stream(method.return_type);
+            let has_channels = method.args.iter().any(|a| contains_channels(a.ty))
+                || contains_channels(method.return_type);
 
             // Collect arg shapes for encoding requests
             let arg_shapes: &'static [&'static Shape] = Box::leak(

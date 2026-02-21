@@ -10,7 +10,7 @@ use axum::extract::ws::{Message, WebSocket};
 use facet_core::{Def, Shape};
 use futures_util::{SinkExt, StreamExt};
 #[allow(unused_imports)]
-use roam_schema::{MethodDetail, contains_stream, is_rx, is_tx};
+use roam_schema::{MethodDetail, contains_channels, is_rx, is_tx};
 use roam_session::{IncomingChannelMessage, ResponseData, TransportError};
 
 use crate::{BridgeError, BridgeService, ProtocolErrorKind};
@@ -177,8 +177,8 @@ async fn handle_request(
                 match detail.methods.iter().find(|m| m.method_name == method_name) {
                     Some(method) => {
                         let method_id = roam_hash::method_id_from_detail(method);
-                        let has_channels = method.args.iter().any(|a| contains_stream(a.ty))
-                            || contains_stream(method.return_type);
+                        let has_channels = method.args.iter().any(|a| contains_channels(a.ty))
+                            || contains_channels(method.return_type);
                         Ok((service, method.clone(), method_id, has_channels))
                     }
                     None => Err((outgoing_tx, "unknown_method")),
