@@ -1,23 +1,18 @@
 //! Generic bridge service implementation.
 //!
 //! This module provides `GenericBridgeService`, which wraps a roam `ConnectionHandle`
-//! and `ServiceDetail` to implement `BridgeService` using runtime transcoding.
+//! and `ServiceDescriptor` to implement `BridgeService` using runtime transcoding.
 
-use std::borrow::Cow;
 use std::collections::HashMap;
-use std::sync::LazyLock;
 
 use facet_core::Shape;
-use roam_schema::{MethodDetail, ServiceDetail, contains_channels};
-use roam_session::{ConnectionHandle, MethodDescriptor, RpcPlan};
+use roam_schema::contains_channels;
+use roam_session::{ConnectionHandle, MethodDescriptor, ServiceDescriptor};
 
 use crate::{
     BoxFuture, BridgeError, BridgeMetadata, BridgeResponse, BridgeService, ProtocolErrorKind,
     transcode::{json_args_to_postcard, postcard_to_json_with_shape},
 };
-
-static DUMMY_PLAN: LazyLock<&'static RpcPlan> =
-    LazyLock::new(|| Box::leak(Box::new(RpcPlan::for_type::<()>())));
 
 /// A generic bridge service that wraps a roam connection.
 ///
@@ -26,8 +21,8 @@ static DUMMY_PLAN: LazyLock<&'static RpcPlan> =
 pub struct GenericBridgeService {
     /// The roam connection handle for making calls.
     handle: ConnectionHandle,
-    /// Service metadata (name, methods, types).
-    detail: &'static ServiceDetail,
+    /// Service descriptor (name, methods, types).
+    descriptor: &'static ServiceDescriptor,
     /// Precomputed method info for fast lookup.
     methods: HashMap<String, MethodInfo>,
 }
@@ -44,59 +39,25 @@ struct MethodInfo {
     error_shape: Option<&'static Shape>,
 }
 
-fn cow_to_static(cow: &Cow<'static, str>) -> &'static str {
-    match cow {
-        Cow::Borrowed(s) => s,
-        Cow::Owned(s) => Box::leak(s.clone().into_boxed_str()),
-    }
-}
-
 impl GenericBridgeService {
     /// Create a new bridge service wrapping a connection.
     ///
     /// # Arguments
     /// * `handle` - The roam connection handle for making RPC calls
-    /// * `detail` - Static service metadata (from generated code)
-    pub fn new(handle: ConnectionHandle, detail: &'static ServiceDetail) -> Self {
-        let service_name = cow_to_static(&detail.name);
+    /// * `descriptor` - Static service descriptor (from generated code)
+    pub fn new(handle: ConnectionHandle, descriptor: &'static ServiceDescriptor) -> Self {
         let mut methods = HashMap::new();
 
-        for method in &detail.methods {
-            let method_id = roam_hash::method_id_from_detail(method);
-            let has_channels = method.args.iter().any(|a| contains_channels(a.ty))
-                || contains_channels(method.return_type);
+        for &desc in descriptor.methods {
+            let has_channels = desc.arg_shapes.iter().any(|s| contains_channels(s))
+                || contains_channels(desc.return_shape);
 
-            // Collect arg shapes for encoding requests
-            let arg_shapes: &'static [&'static Shape] = Box::leak(
-                method
-                    .args
-                    .iter()
-                    .map(|a| a.ty)
-                    .collect::<Vec<_>>()
-                    .into_boxed_slice(),
-            );
-
-            // Extract return type and error type from the method signature
-            let (return_shape, error_shape) = extract_result_types(method);
-
-            let method_name = cow_to_static(&method.method_name);
-
-            let descriptor: &'static MethodDescriptor = Box::leak(Box::new(MethodDescriptor {
-                id: method_id,
-                service_name,
-                method_name,
-                arg_names: &[],
-                arg_shapes,
-                return_shape: method.return_type,
-                args_plan: *DUMMY_PLAN,
-                ok_plan: *DUMMY_PLAN,
-                err_plan: *DUMMY_PLAN,
-            }));
+            let (return_shape, error_shape) = extract_result_types(desc.return_shape);
 
             methods.insert(
-                method.method_name.to_string(),
+                desc.method_name.to_string(),
                 MethodInfo {
-                    descriptor,
+                    descriptor: desc,
                     has_channels,
                     return_shape,
                     error_shape,
@@ -106,7 +67,7 @@ impl GenericBridgeService {
 
         Self {
             handle,
-            detail,
+            descriptor,
             methods,
         }
     }
@@ -120,9 +81,7 @@ impl GenericBridgeService {
 ///
 /// The wire protocol always wraps in Result with protocol errors,
 /// but the schema reflects the natural signature.
-fn extract_result_types(method: &MethodDetail) -> (&'static Shape, Option<&'static Shape>) {
-    let return_shape = method.return_type;
-
+fn extract_result_types(return_shape: &'static Shape) -> (&'static Shape, Option<&'static Shape>) {
     // Check if the return type is Result<T, E>
     if let facet_core::Def::Result(result_def) = return_shape.def {
         let success_shape = result_def.t();
@@ -135,8 +94,8 @@ fn extract_result_types(method: &MethodDetail) -> (&'static Shape, Option<&'stat
 }
 
 impl BridgeService for GenericBridgeService {
-    fn service_detail(&self) -> &'static ServiceDetail {
-        self.detail
+    fn service_descriptor(&self) -> &'static ServiceDescriptor {
+        self.descriptor
     }
 
     fn connection_handle(&self) -> &ConnectionHandle {

@@ -189,7 +189,7 @@ fn generate_service_descriptor_fn(parsed: &ServiceTrait, roam: &TokenStream2) ->
 
     quote! {
         #[allow(non_snake_case, clippy::all)]
-        fn #descriptor_fn_name() -> &'static #roam::session::ServiceDescriptor {
+        pub fn #descriptor_fn_name() -> &'static #roam::session::ServiceDescriptor {
             static DESCRIPTOR: std::sync::OnceLock<&'static #roam::session::ServiceDescriptor> = std::sync::OnceLock::new();
             DESCRIPTOR.get_or_init(|| {
                 let methods: Vec<&'static #roam::session::MethodDescriptor> = vec![
