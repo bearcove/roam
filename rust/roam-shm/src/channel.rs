@@ -268,7 +268,7 @@ impl ChannelIdAllocator {
         }
         let id = self.next;
         self.next += 2; // Skip to next ID with same parity
-        ChannelId(id)
+        Some(ChannelId(id))
     }
 }
 

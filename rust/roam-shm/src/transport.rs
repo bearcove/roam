@@ -12,7 +12,7 @@
 use std::io;
 use std::time::Duration;
 
-use roam_types::Message;
+use roam_types::{ChannelId, Message, MethodId, Payload, RequestId};
 
 use crate::guest::{SendError, ShmGuest};
 use crate::msg::{ShmMsg, msg_type};
@@ -102,11 +102,12 @@ pub fn message_to_shm_msg(msg: &Message) -> Result<ShmMsg, ConvertError> {
             payload,
         } => {
             // shm[impl shm.metadata.in-payload]
-            let combined = encode_request_payload(*conn_id, metadata, channels, payload);
+            let channels_u64: Vec<u64> = channels.iter().map(|c| c.0).collect();
+            let combined = encode_request_payload(*conn_id, metadata, &channels_u64, &payload.0);
             Ok(ShmMsg::new(
                 msg_type::REQUEST,
-                *request_id as u32,
-                *method_id,
+                request_id.0 as u32,
+                method_id.0,
                 combined,
             ))
         }
@@ -119,10 +120,11 @@ pub fn message_to_shm_msg(msg: &Message) -> Result<ShmMsg, ConvertError> {
             payload,
         } => {
             // shm[impl shm.metadata.in-payload]
-            let combined = encode_response_payload(*conn_id, metadata, channels, payload);
+            let channels_u64: Vec<u64> = channels.iter().map(|c| c.0).collect();
+            let combined = encode_response_payload(*conn_id, metadata, &channels_u64, &payload.0);
             Ok(ShmMsg::new(
                 msg_type::RESPONSE,
-                *request_id as u32,
+                request_id.0 as u32,
                 0,
                 combined,
             ))
@@ -133,7 +135,7 @@ pub fn message_to_shm_msg(msg: &Message) -> Result<ShmMsg, ConvertError> {
             request_id,
         } => Ok(ShmMsg::new(
             msg_type::CANCEL,
-            *request_id as u32,
+            request_id.0 as u32,
             0,
             conn_id.0.to_le_bytes().to_vec(),
         )),
@@ -145,10 +147,15 @@ pub fn message_to_shm_msg(msg: &Message) -> Result<ShmMsg, ConvertError> {
         } => {
             // Prepend conn_id to payload for virtual connection support
             let conn_id_bytes = conn_id.0.to_le_bytes();
-            let mut combined = Vec::with_capacity(conn_id_bytes.len() + payload.len());
+            let mut combined = Vec::with_capacity(conn_id_bytes.len() + payload.0.len());
             combined.extend_from_slice(&conn_id_bytes);
-            combined.extend_from_slice(payload);
-            Ok(ShmMsg::new(msg_type::DATA, *channel_id as u32, 0, combined))
+            combined.extend_from_slice(&payload.0);
+            Ok(ShmMsg::new(
+                msg_type::DATA,
+                channel_id.0 as u32,
+                0,
+                combined,
+            ))
         }
 
         Message::Close {
@@ -156,7 +163,7 @@ pub fn message_to_shm_msg(msg: &Message) -> Result<ShmMsg, ConvertError> {
             channel_id,
         } => Ok(ShmMsg::new(
             msg_type::CLOSE,
-            *channel_id as u32,
+            channel_id.0 as u32,
             0,
             conn_id.0.to_le_bytes().to_vec(),
         )),
@@ -166,7 +173,7 @@ pub fn message_to_shm_msg(msg: &Message) -> Result<ShmMsg, ConvertError> {
             channel_id,
         } => Ok(ShmMsg::new(
             msg_type::RESET,
-            *channel_id as u32,
+            channel_id.0 as u32,
             0,
             conn_id.0.to_le_bytes().to_vec(),
         )),
@@ -178,7 +185,7 @@ pub fn message_to_shm_msg(msg: &Message) -> Result<ShmMsg, ConvertError> {
             let payload_bytes = facet_postcard::to_vec(metadata).unwrap_or_default();
             Ok(ShmMsg::new(
                 msg_type::CONNECT,
-                *request_id as u32,
+                request_id.0 as u32,
                 0,
                 payload_bytes,
             ))
@@ -193,7 +200,7 @@ pub fn message_to_shm_msg(msg: &Message) -> Result<ShmMsg, ConvertError> {
                 facet_postcard::to_vec(&(conn_id.0, metadata.clone())).unwrap_or_default();
             Ok(ShmMsg::new(
                 msg_type::ACCEPT,
-                *request_id as u32,
+                request_id.0 as u32,
                 0,
                 payload_bytes,
             ))
@@ -208,7 +215,7 @@ pub fn message_to_shm_msg(msg: &Message) -> Result<ShmMsg, ConvertError> {
                 facet_postcard::to_vec(&(reason.clone(), metadata.clone())).unwrap_or_default();
             Ok(ShmMsg::new(
                 msg_type::REJECT,
-                *request_id as u32,
+                request_id.0 as u32,
                 0,
                 payload_bytes,
             ))
@@ -236,31 +243,33 @@ pub fn shm_msg_to_message(msg: ShmMsg) -> Result<Message, ConvertError> {
         }
 
         msg_type::REQUEST => {
-            let (decoded_conn_id, metadata, channels, payload) =
+            let (decoded_conn_id, metadata, channels_u64, payload_bytes_inner) =
                 decode_request_payload(payload_bytes)
                     .map_err(|e| ConvertError::DecodeError(e.to_string()))?;
+            let channels: Vec<ChannelId> = channels_u64.into_iter().map(ChannelId).collect();
 
             Ok(Message::Request {
                 conn_id: decoded_conn_id,
-                request_id: msg.id as u64,
-                method_id: msg.method_id,
+                request_id: RequestId(msg.id as u64),
+                method_id: MethodId(msg.method_id),
                 metadata,
                 channels,
-                payload,
+                payload: Payload(payload_bytes_inner),
             })
         }
 
         msg_type::RESPONSE => {
-            let (decoded_conn_id, metadata, channels, payload) =
+            let (decoded_conn_id, metadata, channels_u64, payload_bytes_inner) =
                 decode_response_payload(payload_bytes)
                     .map_err(|e| ConvertError::DecodeError(e.to_string()))?;
+            let channels: Vec<ChannelId> = channels_u64.into_iter().map(ChannelId).collect();
 
             Ok(Message::Response {
                 conn_id: decoded_conn_id,
-                request_id: msg.id as u64,
+                request_id: RequestId(msg.id as u64),
                 metadata,
                 channels,
-                payload,
+                payload: Payload(payload_bytes_inner),
             })
         }
 
@@ -275,7 +284,7 @@ pub fn shm_msg_to_message(msg: ShmMsg) -> Result<Message, ConvertError> {
             ));
             Ok(Message::Cancel {
                 conn_id: decoded_conn_id,
-                request_id: msg.id as u64,
+                request_id: RequestId(msg.id as u64),
             })
         }
 
@@ -290,8 +299,8 @@ pub fn shm_msg_to_message(msg: ShmMsg) -> Result<Message, ConvertError> {
             ));
             Ok(Message::Data {
                 conn_id: decoded_conn_id,
-                channel_id: msg.id as u64,
-                payload: payload_bytes[8..].to_vec(),
+                channel_id: ChannelId(msg.id as u64),
+                payload: Payload(payload_bytes[8..].to_vec()),
             })
         }
 
@@ -306,7 +315,7 @@ pub fn shm_msg_to_message(msg: ShmMsg) -> Result<Message, ConvertError> {
             ));
             Ok(Message::Close {
                 conn_id: decoded_conn_id,
-                channel_id: msg.id as u64,
+                channel_id: ChannelId(msg.id as u64),
             })
         }
 
@@ -321,7 +330,7 @@ pub fn shm_msg_to_message(msg: ShmMsg) -> Result<Message, ConvertError> {
             ));
             Ok(Message::Reset {
                 conn_id: decoded_conn_id,
-                channel_id: msg.id as u64,
+                channel_id: ChannelId(msg.id as u64),
             })
         }
 
@@ -329,7 +338,7 @@ pub fn shm_msg_to_message(msg: ShmMsg) -> Result<Message, ConvertError> {
             let metadata: roam_types::Metadata = facet_postcard::from_slice(payload_bytes)
                 .map_err(|e| ConvertError::DecodeError(e.to_string()))?;
             Ok(Message::Connect {
-                request_id: msg.id as u64,
+                request_id: RequestId(msg.id as u64),
                 metadata,
             })
         }
@@ -339,7 +348,7 @@ pub fn shm_msg_to_message(msg: ShmMsg) -> Result<Message, ConvertError> {
                 facet_postcard::from_slice(payload_bytes)
                     .map_err(|e| ConvertError::DecodeError(e.to_string()))?;
             Ok(Message::Accept {
-                request_id: msg.id as u64,
+                request_id: RequestId(msg.id as u64),
                 conn_id: roam_types::ConnectionId(conn_id_val),
                 metadata,
             })
@@ -350,7 +359,7 @@ pub fn shm_msg_to_message(msg: ShmMsg) -> Result<Message, ConvertError> {
                 facet_postcard::from_slice(payload_bytes)
                     .map_err(|e| ConvertError::DecodeError(e.to_string()))?;
             Ok(Message::Reject {
-                request_id: msg.id as u64,
+                request_id: RequestId(msg.id as u64),
                 reason,
                 metadata,
             })

@@ -20,21 +20,22 @@ use std::pin::Pin;
 // RPC Plans
 // ============================================================================
 
-static STRING_ARGS_PLAN: Lazy<RpcPlan> = Lazy::new(RpcPlan::for_type::<String>);
+static STRING_ARGS_PLAN: Lazy<RpcPlan> = Lazy::new(RpcPlan::for_type::<String, (), ()>);
 static STRING_RESPONSE_PLAN: Lazy<&'static RpcPlan> =
-    Lazy::new(|| Box::leak(Box::new(RpcPlan::for_type::<String>())));
+    Lazy::new(|| Box::leak(Box::new(RpcPlan::for_type::<String, (), ()>())));
 
-static I32_I32_ARGS_PLAN: Lazy<RpcPlan> = Lazy::new(RpcPlan::for_type::<(i32, i32)>);
+static I32_I32_ARGS_PLAN: Lazy<RpcPlan> = Lazy::new(RpcPlan::for_type::<(i32, i32), (), ()>);
 static I32_RESPONSE_PLAN: Lazy<&'static RpcPlan> =
-    Lazy::new(|| Box::leak(Box::new(RpcPlan::for_type::<i32>())));
+    Lazy::new(|| Box::leak(Box::new(RpcPlan::for_type::<i32, (), ()>())));
 
-static RX_I32_ARGS_PLAN: Lazy<RpcPlan> = Lazy::new(RpcPlan::for_type::<Rx<i32>>);
+static RX_I32_ARGS_PLAN: Lazy<RpcPlan> = Lazy::new(RpcPlan::for_type::<Rx<i32>, Tx<i32>, Rx<i32>>);
 static I64_RESPONSE_PLAN: Lazy<&'static RpcPlan> =
-    Lazy::new(|| Box::leak(Box::new(RpcPlan::for_type::<i64>())));
+    Lazy::new(|| Box::leak(Box::new(RpcPlan::for_type::<i64, (), ()>())));
 
-static U32_TX_I32_ARGS_PLAN: Lazy<RpcPlan> = Lazy::new(RpcPlan::for_type::<(u32, Tx<i32>)>);
+static U32_TX_I32_ARGS_PLAN: Lazy<RpcPlan> =
+    Lazy::new(RpcPlan::for_type::<(u32, Tx<i32>), Tx<i32>, Rx<i32>>);
 static UNIT_RESPONSE_PLAN: Lazy<&'static RpcPlan> =
-    Lazy::new(|| Box::leak(Box::new(RpcPlan::for_type::<()>())));
+    Lazy::new(|| Box::leak(Box::new(RpcPlan::for_type::<(), (), ()>())));
 
 /// Test service matching the one in driver.rs tests
 #[derive(Clone)]

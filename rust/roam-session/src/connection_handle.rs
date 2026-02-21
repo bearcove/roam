@@ -802,42 +802,42 @@ mod tests {
     use std::time::Duration;
 
     static TEST_DESC: LazyLock<&'static MethodDescriptor> = LazyLock::new(|| {
-        Box::leak(Box::new(MethodDescriptor {
+        crate::make_method_descriptor! {
             id: MethodId(42),
             service_name: "Test",
             method_name: "test",
             args: &[],
             return_shape: <() as Facet>::SHAPE,
-            args_plan: Box::leak(Box::new(RpcPlan::for_type::<(crate::Rx<Vec<u8>>,)>())),
-            ok_plan: Box::leak(Box::new(RpcPlan::for_type::<()>())),
-            err_plan: Box::leak(Box::new(RpcPlan::for_type::<std::convert::Infallible>())),
-        }))
+            args_plan: (crate::Rx<Vec<u8>>,),
+            ok_plan: (),
+            err_plan: std::convert::Infallible,
+        }
     });
 
     static RAW_DESC_1: LazyLock<&'static MethodDescriptor> = LazyLock::new(|| {
-        Box::leak(Box::new(MethodDescriptor {
+        crate::make_method_descriptor! {
             id: MethodId(1),
             service_name: "Test",
             method_name: "method1",
             args: &[],
             return_shape: <() as Facet>::SHAPE,
-            args_plan: Box::leak(Box::new(RpcPlan::for_type::<()>())),
-            ok_plan: Box::leak(Box::new(RpcPlan::for_type::<()>())),
-            err_plan: Box::leak(Box::new(RpcPlan::for_type::<()>())),
-        }))
+            args_plan: (),
+            ok_plan: (),
+            err_plan: (),
+        }
     });
 
     static RAW_DESC_2: LazyLock<&'static MethodDescriptor> = LazyLock::new(|| {
-        Box::leak(Box::new(MethodDescriptor {
+        crate::make_method_descriptor! {
             id: MethodId(2),
             service_name: "Test",
             method_name: "method2",
             args: &[],
             return_shape: <() as Facet>::SHAPE,
-            args_plan: Box::leak(Box::new(RpcPlan::for_type::<()>())),
-            ok_plan: Box::leak(Box::new(RpcPlan::for_type::<()>())),
-            err_plan: Box::leak(Box::new(RpcPlan::for_type::<()>())),
-        }))
+            args_plan: (),
+            ok_plan: (),
+            err_plan: (),
+        }
     });
 
     #[tokio::test]

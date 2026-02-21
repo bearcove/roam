@@ -68,5 +68,11 @@ pub(crate) const RX_STREAM_BUFFER_SIZE: usize = 1024;
 /// Re-export `Infallible` for use as the error type in infallible methods.
 pub use std::convert::Infallible;
 
+/// Build an [`RpcPlan`] for type `T`, defaulting the `Tx` and `Rx` channel
+/// type parameters to `Tx::<()>` / `Rx::<()>`.
+pub fn rpc_plan<T: facet::Facet<'static>>() -> RpcPlan {
+    RpcPlan::for_type::<T, Tx<()>, Rx<()>>()
+}
+
 #[cfg(test)]
 mod tests;
