@@ -16,7 +16,8 @@ use facet_postcard::PostcardParser;
 use facet_reflect::Partial;
 
 use roam_types::{
-    ChannelId, ConnectionId, Metadata, MethodDescriptor, MethodId, RequestId, ServiceDescriptor,
+    ChannelId, ConnectionId, Metadata, MethodDescriptor, MethodId, Payload, RequestId,
+    ServiceDescriptor,
 };
 
 use crate::{
@@ -272,7 +273,7 @@ where
     Fut: std::future::Future<Output = Result<R, E>> + Send + 'static,
 {
     let conn_id = cx.conn_id;
-    let request_id = cx.request_id.0;
+    let request_id = cx.request_id;
 
     // Use MaybeUninit to avoid heap allocation for args.
     // Deserialization happens via non-generic prepare_sync.
@@ -359,7 +360,7 @@ where
     Fut: std::future::Future<Output = R> + Send + 'static,
 {
     let conn_id = cx.conn_id;
-    let request_id = cx.request_id.0;
+    let request_id = cx.request_id;
 
     // Use MaybeUninit to avoid heap allocation for args.
     // Deserialization happens via non-generic prepare_sync.
@@ -622,7 +623,7 @@ pub unsafe fn patch_channel_ids_with_plan(
     let shape = plan.type_plan.root().shape;
     trace!(channels = ?channels, "patch_channel_ids_with_plan: patching channels");
     let mut idx = 0;
-    for loc in &plan.channel_locations {
+    for loc in plan.channel_locations {
         // SAFETY: args_ptr is valid and initialized
         let poke =
             unsafe { facet::Poke::from_raw_parts(PtrMut::new(args_ptr.cast::<u8>()), shape) };
@@ -699,7 +700,7 @@ pub async fn send_ok_response(
             conn_id,
             request_id,
             channels: response_channels,
-            payload,
+            payload: Payload(payload),
         })
         .await;
 }
@@ -746,7 +747,7 @@ pub async fn send_error_response(
             conn_id,
             request_id,
             channels: Vec::new(),
-            payload,
+            payload: Payload(payload),
         })
         .await;
 }
@@ -830,7 +831,7 @@ pub async fn send_prepare_error(
             conn_id,
             request_id,
             channels: Vec::new(),
-            payload,
+            payload: Payload(payload),
         })
         .await;
 }
@@ -838,7 +839,7 @@ pub async fn send_prepare_error(
 /// Collect channel IDs from a Peek value using a precomputed RpcPlan.
 pub fn collect_channel_ids_with_plan(peek: facet::Peek<'_, '_>, plan: &RpcPlan) -> Vec<ChannelId> {
     let mut ids = Vec::new();
-    for loc in &plan.channel_locations {
+    for loc in plan.channel_locations {
         match peek.at_path(&loc.path) {
             Ok(channel_peek) => {
                 if let Ok(ps) = channel_peek.into_struct()
@@ -883,7 +884,7 @@ pub fn collect_channel_ids<T: Facet<'static>>(args: &T, plan: &RpcPlan) -> Vec<C
 ///
 /// The `plan` should be created once per type as a static in non-generic code.
 #[allow(unsafe_code)]
-pub fn patch_channel_ids<T: Facet<'static>>(args: &mut T, plan: &RpcPlan, channels: &[u64]) {
+pub fn patch_channel_ids<T: Facet<'static>>(args: &mut T, plan: &RpcPlan, channels: &[ChannelId]) {
     trace!(channels = ?channels, "patch_channel_ids: patching channels");
     let args_ptr = args as *mut T as *mut ();
     unsafe { patch_channel_ids_with_plan(args_ptr, plan, channels) };
@@ -951,7 +952,7 @@ pub trait ServiceDispatcher: Send + Sync {
 pub struct RoutedDispatcher<A, B> {
     primary: A,
     fallback: B,
-    primary_methods: Vec<u64>,
+    primary_methods: Vec<MethodId>,
 }
 
 impl<A, B> RoutedDispatcher<A, B>
@@ -998,7 +999,7 @@ where
         payload: Vec<u8>,
         registry: &mut ChannelRegistry,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'static>> {
-        if self.primary_methods.contains(&cx.method_id().0) {
+        if self.primary_methods.contains(&cx.method_id()) {
             self.primary.dispatch(cx, payload, registry)
         } else {
             self.fallback.dispatch(cx, payload, registry)

@@ -57,7 +57,7 @@ impl RpcPlan {
         walk_shape(shape, &mut visitor);
 
         RpcPlan {
-            type_plan: Arc::new(type_plan),
+            type_plan,
             channel_locations: visitor.locations.leak(),
         }
     }

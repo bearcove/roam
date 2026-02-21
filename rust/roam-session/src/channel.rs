@@ -38,7 +38,7 @@ pub fn channel<T: 'static>() -> (Tx<T>, Rx<T>) {
     // Check if we're in a dispatch context - if so, create bound channels
     if let Some(ctx) = get_dispatch_context() {
         let channel_id = ctx.channel_ids.next();
-        debug!(channel_id, "roam::channel() creating bound channel pair");
+        debug!(channel_id = %channel_id, "roam::channel() creating bound channel pair");
 
         (
             Tx::bound(ctx.conn_id, channel_id, sender, ctx.driver_tx.clone()),
@@ -209,7 +209,7 @@ pub struct Tx<T: 'static> {
 impl<T: 'static> TryFrom<&Tx<T>> for u64 {
     type Error = Infallible;
     fn try_from(tx: &Tx<T>) -> Result<Self, Self::Error> {
-        Ok(tx.channel_id)
+        Ok(tx.channel_id.0)
     }
 }
 
@@ -227,7 +227,7 @@ impl<T: 'static> TryFrom<u64> for Tx<T> {
         // conn_id will be set when binding
         Ok(Tx {
             conn_id: roam_types::ConnectionId::ROOT,
-            channel_id,
+            channel_id: ChannelId(channel_id),
             sender: SenderSlot::empty(),
             driver_tx: DriverTxSlot::empty(),
             _marker: PhantomData,
@@ -254,7 +254,7 @@ impl<T: 'static> Tx<T> {
     pub fn unbound(tx: Sender<IncomingChannelMessage>) -> Self {
         Self {
             conn_id: roam_types::ConnectionId::ROOT,
-            channel_id: 0,
+            channel_id: ChannelId(0),
             sender: SenderSlot::new(tx),
             driver_tx: DriverTxSlot::empty(),
             _marker: PhantomData,
@@ -318,7 +318,7 @@ impl<T: 'static> Tx<T> {
                 .send(DriverMessage::Data {
                     conn_id: self.conn_id,
                     channel_id: self.channel_id,
-                    payload: bytes,
+                    payload: roam_types::Payload(bytes),
                 })
                 .await
                 .map_err(|_| TxError::Closed)
@@ -366,7 +366,7 @@ impl<T: 'static> Drop for Tx<T> {
             {
                 warn!(
                     conn_id = %conn_id,
-                    channel_id,
+                    channel_id = %channel_id,
                     "failed to queue DriverMessage::Close with try_send, falling back to async send"
                 );
                 // Channel full or closed - spawn as fallback (see warning above)
@@ -381,7 +381,7 @@ impl<T: 'static> Drop for Tx<T> {
                     {
                         warn!(
                             conn_id = %conn_id,
-                            channel_id, "failed to send DriverMessage::Close from drop fallback"
+                            channel_id = %channel_id, "failed to send DriverMessage::Close from drop fallback"
                         );
                     }
                 });
@@ -503,7 +503,7 @@ pub struct Rx<T: 'static> {
 impl<T: 'static> TryFrom<&Rx<T>> for u64 {
     type Error = Infallible;
     fn try_from(rx: &Rx<T>) -> Result<Self, Self::Error> {
-        Ok(rx.channel_id)
+        Ok(rx.channel_id.0)
     }
 }
 
@@ -519,7 +519,7 @@ impl<T: 'static> TryFrom<u64> for Rx<T> {
     fn try_from(channel_id: u64) -> Result<Self, Self::Error> {
         // Create a hollow Rx - no actual receiver, Connection will bind later
         Ok(Rx {
-            channel_id,
+            channel_id: ChannelId(channel_id),
             receiver: ReceiverSlot::empty(),
             _marker: PhantomData,
         })
@@ -542,7 +542,7 @@ impl<T: 'static> Rx<T> {
     /// Connection will poke the channel_id when binding.
     pub fn unbound(rx: Receiver<IncomingChannelMessage>) -> Self {
         Self {
-            channel_id: 0,
+            channel_id: ChannelId(0),
             receiver: ReceiverSlot::new(rx),
             _marker: PhantomData,
         }

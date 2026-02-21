@@ -20,6 +20,7 @@ use roam_session::{
     Caller, ConnectError, ConnectionError, ConnectionHandle, HandshakeConfig, ResponseData,
     RetryPolicy, SendPtr, ServiceDispatcher, TransportError,
 };
+use roam_types::{ChannelId, Metadata, Payload};
 
 /// A factory that creates new byte-stream connections on demand.
 ///
@@ -223,7 +224,7 @@ where
         &self,
         descriptor: &'static roam_session::MethodDescriptor,
         payload: Vec<u8>,
-    ) -> Result<Vec<u8>, ConnectError> {
+    ) -> Result<Payload, ConnectError> {
         let mut last_error: Option<io::Error> = None;
         let mut attempt = 0u32;
 
@@ -289,7 +290,7 @@ where
         &self,
         descriptor: &'static roam_session::MethodDescriptor,
         args: &mut T,
-        metadata: roam_types::Metadata,
+        metadata: Metadata,
     ) -> Result<ResponseData, TransportError> {
         let mut attempt = 0u32;
 
@@ -353,7 +354,7 @@ where
         &self,
         response: &mut R,
         plan: &roam_session::RpcPlan,
-        channels: &[u64],
+        channels: &[ChannelId],
     ) {
         let handle = self.current_handle.lock().as_ref().cloned();
         if let Some(handle) = handle {
@@ -371,7 +372,7 @@ where
         &self,
         descriptor: &'static roam_session::MethodDescriptor,
         args_ptr: SendPtr,
-        metadata: roam_types::Metadata,
+        metadata: Metadata,
     ) -> impl std::future::Future<Output = Result<ResponseData, TransportError>> {
         let this = self.clone();
 
@@ -438,7 +439,7 @@ where
         &self,
         response_ptr: *mut (),
         response_plan: &roam_session::RpcPlan,
-        channels: &[u64],
+        channels: &[ChannelId],
     ) {
         let handle = self.current_handle.lock().as_ref().cloned();
         if let Some(handle) = handle {

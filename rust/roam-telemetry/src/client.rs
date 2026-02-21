@@ -9,7 +9,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use facet::Facet;
 use roam_session::{Caller, ResponseData, SendPtr, TransportError};
-use roam_types::MetadataValue;
+use roam_types::{ChannelId, Metadata, MetadataValue};
 
 use crate::exporter::OtlpExporter;
 use crate::otlp::{KeyValue, Span, SpanKind, Status, generate_span_id, generate_trace_id};
@@ -163,7 +163,7 @@ impl<C: Caller> Caller for TracingCaller<C> {
         &self,
         response: &mut T,
         plan: &roam_session::RpcPlan,
-        channels: &[u64],
+        channels: &[ChannelId],
     ) {
         self.inner.bind_response_channels(response, plan, channels)
     }

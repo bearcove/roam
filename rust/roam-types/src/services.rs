@@ -51,6 +51,16 @@ pub struct MethodDescriptor {
     pub err_plan: &'static RpcPlan,
 }
 
+impl std::fmt::Debug for MethodDescriptor {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MethodDescriptor")
+            .field("id", &self.id)
+            .field("service_name", &self.service_name)
+            .field("method_name", &self.method_name)
+            .finish_non_exhaustive()
+    }
+}
+
 declare_u64_id!(
     /// A unique method identifier — hash of service name, method na me, arg shapes, return shape
     MethodId

@@ -449,7 +449,7 @@ where
         &self,
         descriptor: &'static crate::MethodDescriptor,
         payload: Vec<u8>,
-    ) -> Result<Vec<u8>, ConnectError> {
+    ) -> Result<Payload, ConnectError> {
         let mut last_error: Option<io::Error> = None;
         let mut attempt = 0u32;
 
@@ -578,7 +578,7 @@ where
         &self,
         response: &mut R,
         plan: &RpcPlan,
-        channels: &[u64],
+        channels: &[ChannelId],
     ) {
         // FramedClient wraps a ConnectionHandle, but we don't have direct access to it
         // during bind_response_channels. For reconnecting clients, response channel binding
@@ -660,7 +660,7 @@ where
         &self,
         response_ptr: *mut (),
         response_plan: &crate::RpcPlan,
-        channels: &[u64],
+        channels: &[ChannelId],
     ) {
         // Same as bind_response_channels - this is a no-op for FramedClient.
         // Users should use ConnectionHandle directly if they need response channel binding.
@@ -779,7 +779,7 @@ impl ConnectionState {
 /// or `reject()` to refuse it.
 pub struct IncomingConnection {
     /// The request ID for this Connect request.
-    request_id: u64,
+    request_id: RequestId,
     /// Metadata from the Connect message.
     pub metadata: Metadata,
     /// Channel to send the Accept/Reject response.
@@ -817,7 +817,7 @@ impl IncomingConnection {
     }
 
     /// Reject this connection with a reason.
-    pub fn reject(self, reason: String, metadata: roam_types::Metadata) {
+    pub fn reject(self, reason: String, metadata: Metadata) {
         let _ = self.response_tx.send(IncomingConnectionResponse::Reject {
             request_id: self.request_id,
             reason,
@@ -829,13 +829,13 @@ impl IncomingConnection {
 /// Internal response for incoming connection handling.
 enum IncomingConnectionResponse {
     Accept {
-        request_id: u64,
+        request_id: RequestId,
         metadata: Metadata,
         dispatcher: Option<Box<dyn ServiceDispatcher>>,
         handle_tx: crate::runtime::OneshotSender<Result<ConnectionHandle, TransportError>>,
     },
     Reject {
-        request_id: u64,
+        request_id: RequestId,
         reason: String,
         metadata: Metadata,
     },
@@ -1303,13 +1303,13 @@ where
                         if send_result.is_err() {
                             warn!(
                                 conn_id = %conn_id,
-                                request_id, "response receiver dropped before delivery"
+                                request_id = %request_id, "response receiver dropped before delivery"
                             );
                         }
                     } else {
                         warn!(
                             conn_id = %conn_id,
-                            request_id,
+                            request_id = %request_id,
                             "received response for unknown request_id - protocol violation"
                         );
                         return Err(self.goodbye("call.response.unknown-request-id").await);
@@ -1317,7 +1317,7 @@ where
                 } else {
                     warn!(
                         conn_id = %conn_id,
-                        request_id, "received response for unknown conn_id"
+                        request_id = %request_id, "received response for unknown conn_id"
                     );
                     return Err(self.goodbye("message.conn-id").await);
                 }
@@ -1609,7 +1609,7 @@ where
                     should_kill_connection = true;
                     warn!(
                         conn_id = %conn_id,
-                        request_id = *request_id,
+                        request_id = %*request_id,
                         age_ms = age.as_millis(),
                         "pending response exceeded hard timeout"
                     );
@@ -1617,7 +1617,7 @@ where
                     pending.warned_stale = true;
                     warn!(
                         conn_id = %conn_id,
-                        request_id = *request_id,
+                        request_id = %*request_id,
                         age_ms = age.as_millis(),
                         "pending response has gone stale"
                     );
@@ -1633,7 +1633,7 @@ where
                 for (request_id, pending) in conn.pending_responses.drain() {
                     warn!(
                         conn_id = %conn_id,
-                        request_id,
+                        request_id = %request_id,
                         "failing pending response due to stale-timeout connection teardown"
                     );
                     let _ = pending.tx.send(Err(TransportError::ConnectionClosed));
@@ -1884,7 +1884,7 @@ impl ServiceDispatcher for NoDispatcher {
         registry: &mut ChannelRegistry,
     ) -> Pin<Box<dyn Future<Output = ()> + Send + 'static>> {
         let conn_id = cx.conn_id;
-        let request_id = cx.request_id.0;
+        let request_id = cx.request_id;
         let driver_tx = registry.driver_tx();
         Box::pin(async move {
             let response: Result<(), RoamError<()>> = Err(RoamError::UnknownMethod);
@@ -1894,7 +1894,7 @@ impl ServiceDispatcher for NoDispatcher {
                     conn_id,
                     request_id,
                     channels: Vec::new(),
-                    payload,
+                    payload: Payload(payload),
                 })
                 .await;
         })

@@ -7,10 +7,12 @@ use facet::Facet;
 
 use facet_core::PtrMut;
 
+use roam_types::{ChannelId, ConnectionId, Metadata, Payload, RequestId};
+
 use crate::{
-    ChannelError, ChannelId, ChannelIdAllocator, ChannelRegistry, DriverMessage,
-    IncomingChannelMessage, RX_STREAM_BUFFER_SIZE, ReceiverSlot, ResponseData, SenderSlot,
-    ServiceDispatcher, TransportError, patch_channel_ids, runtime::oneshot,
+    ChannelError, ChannelIdAllocator, ChannelRegistry, DriverMessage, IncomingChannelMessage,
+    RX_STREAM_BUFFER_SIZE, ReceiverSlot, ResponseData, SenderSlot, ServiceDispatcher,
+    TransportError, patch_channel_ids, runtime::oneshot,
 };
 use crate::{
     Role,
@@ -37,8 +39,8 @@ impl RequestIdGenerator {
     }
 
     /// Generate the next unique request ID.
-    pub fn next(&self) -> u64 {
-        self.next.fetch_add(1, Ordering::Relaxed)
+    pub fn next(&self) -> RequestId {
+        RequestId(self.next.fetch_add(1, Ordering::Relaxed))
     }
 }
 
@@ -55,7 +57,7 @@ impl Default for RequestIdGenerator {
 /// Shared state between ConnectionHandle and Driver.
 pub(crate) struct HandleShared {
     /// Connection ID for this handle (0 = root connection).
-    pub(crate) conn_id: roam_types::ConnectionId,
+    pub(crate) conn_id: ConnectionId,
     /// Unified channel to send all messages to the driver.
     pub(crate) driver_tx: Sender<DriverMessage>,
     /// Request ID generator.
@@ -95,7 +97,7 @@ impl ConnectionHandle {
     /// to ensure FIFO ordering.
     pub fn new(driver_tx: Sender<DriverMessage>, role: Role, initial_credit: u32) -> Self {
         Self::new_with_limits(
-            roam_types::ConnectionId::ROOT,
+            ConnectionId::ROOT,
             driver_tx,
             role,
             initial_credit,
@@ -105,7 +107,7 @@ impl ConnectionHandle {
 
     /// Create a new handle with a specific connection ID.
     pub fn new_with_limits(
-        conn_id: roam_types::ConnectionId,
+        conn_id: ConnectionId,
         driver_tx: Sender<DriverMessage>,
         role: Role,
         initial_credit: u32,
@@ -150,7 +152,7 @@ impl ConnectionHandle {
     }
 
     /// Get the connection ID for this handle.
-    pub fn conn_id(&self) -> roam_types::ConnectionId {
+    pub fn conn_id(&self) -> ConnectionId {
         self.shared.conn_id
     }
 
@@ -196,7 +198,7 @@ impl ConnectionHandle {
         let args_ptr = args as *mut T as *mut ();
         #[allow(unsafe_code)]
         unsafe {
-            self.call_with_metadata_by_plan(descriptor, args_ptr, roam_types::Metadata::default())
+            self.call_with_metadata_by_plan(descriptor, args_ptr, Metadata::default())
                 .await
         }
     }
@@ -216,7 +218,7 @@ impl ConnectionHandle {
         &self,
         descriptor: &'static crate::MethodDescriptor,
         args_ptr: *mut (),
-        metadata: roam_types::Metadata,
+        metadata: Metadata,
     ) -> impl std::future::Future<Output = Result<ResponseData, TransportError>> + Send + '_ {
         let args_plan = descriptor.args_plan;
         let args_shape = args_plan.type_plan.root().shape;
@@ -231,7 +233,7 @@ impl ConnectionHandle {
 
         // SAFETY: Caller guarantees args_ptr is valid and initialized
         // Walk args and bind channels using precomputed paths
-        for loc in &args_plan.channel_locations {
+        for loc in args_plan.channel_locations {
             let poke = unsafe {
                 facet::Poke::from_raw_parts(PtrMut::new(args_ptr.cast::<u8>()), args_shape)
             };
@@ -291,7 +293,7 @@ impl ConnectionHandle {
     ) {
         let channel_id = self.alloc_channel_id();
         debug!(
-            channel_id,
+            channel_id = %channel_id,
             "OutgoingBinder::bind_rx_channel: allocated channel_id for Rx"
         );
 
@@ -302,8 +304,8 @@ impl ConnectionHandle {
                 && let Ok(id_ref) = channel_id_field.get_mut::<ChannelId>()
             {
                 debug!(
-                    old_id = *id_ref,
-                    new_id = channel_id,
+                    old_id = %*id_ref,
+                    new_id = %channel_id,
                     "OutgoingBinder::bind_rx_channel: overwriting channel_id"
                 );
                 *id_ref = channel_id;
@@ -315,7 +317,7 @@ impl ConnectionHandle {
                 && let Some(rx) = slot.take()
             {
                 debug!(
-                    channel_id,
+                    channel_id = %channel_id,
                     "OutgoingBinder::bind_rx_channel: took receiver, adding to drains"
                 );
                 drains.push((channel_id, rx));
@@ -328,7 +330,7 @@ impl ConnectionHandle {
     fn bind_tx_channel(&self, poke: facet::Poke<'_, '_>) {
         let channel_id = self.alloc_channel_id();
         debug!(
-            channel_id,
+            channel_id = %channel_id,
             "OutgoingBinder::bind_tx_channel: allocated channel_id for Tx"
         );
 
@@ -339,8 +341,8 @@ impl ConnectionHandle {
                 && let Ok(id_ref) = channel_id_field.get_mut::<ChannelId>()
             {
                 debug!(
-                    old_id = *id_ref,
-                    new_id = channel_id,
+                    old_id = %*id_ref,
+                    new_id = %channel_id,
                     "OutgoingBinder::bind_tx_channel: overwriting channel_id"
                 );
                 *id_ref = channel_id;
@@ -352,7 +354,7 @@ impl ConnectionHandle {
                 && let Some(tx) = slot.take()
             {
                 debug!(
-                    channel_id,
+                    channel_id = %channel_id,
                     "OutgoingBinder::bind_tx_channel: took sender, registering for incoming"
                 );
                 // Register for incoming Data routing
@@ -369,7 +371,7 @@ impl ConnectionHandle {
         &self,
         descriptor: &'static crate::MethodDescriptor,
         payload: Vec<u8>,
-    ) -> Result<Vec<u8>, TransportError> {
+    ) -> Result<Payload, TransportError> {
         self.call_raw_full(descriptor, Vec::new(), Vec::new(), payload, None)
             .await
             .map(|r| r.payload)
@@ -382,7 +384,7 @@ impl ConnectionHandle {
     pub(crate) async fn call_raw_with_channels(
         &self,
         descriptor: &'static crate::MethodDescriptor,
-        channels: Vec<u64>,
+        channels: Vec<ChannelId>,
         payload: Vec<u8>,
         args_debug: Option<String>,
     ) -> Result<ResponseData, TransportError> {
@@ -397,8 +399,8 @@ impl ConnectionHandle {
         &self,
         descriptor: &'static crate::MethodDescriptor,
         payload: Vec<u8>,
-        metadata: roam_types::Metadata,
-    ) -> Result<Vec<u8>, TransportError> {
+        metadata: Metadata,
+    ) -> Result<Payload, TransportError> {
         self.call_raw_full(descriptor, metadata, Vec::new(), payload, None)
             .await
             .map(|r| r.payload)
@@ -410,8 +412,8 @@ impl ConnectionHandle {
     async fn call_raw_full(
         &self,
         descriptor: &'static crate::MethodDescriptor,
-        metadata: roam_types::Metadata,
-        channels: Vec<u64>,
+        metadata: Metadata,
+        channels: Vec<ChannelId>,
         payload: Vec<u8>,
         args_debug: Option<String>,
     ) -> Result<ResponseData, TransportError> {
@@ -430,9 +432,9 @@ impl ConnectionHandle {
     #[allow(clippy::too_many_arguments)]
     async fn call_raw_full_with_drains(
         &self,
-        method_id: &'static crate::MethodId,
-        metadata: roam_types::Metadata,
-        channels: Vec<u64>,
+        descriptor: &'static crate::MethodDescriptor,
+        metadata: Metadata,
+        channels: Vec<ChannelId>,
         payload: Vec<u8>,
         _args_debug: Option<String>,
         drains: Vec<(ChannelId, Receiver<IncomingChannelMessage>)>,
@@ -444,10 +446,10 @@ impl ConnectionHandle {
         let msg = DriverMessage::Call {
             conn_id: self.shared.conn_id,
             request_id,
-            method_id,
+            method_id: descriptor.id,
             metadata,
             channels,
-            payload,
+            payload: Payload(payload),
             response_tx,
         };
 
@@ -485,14 +487,14 @@ impl ConnectionHandle {
                                     .send(DriverMessage::Data {
                                         conn_id,
                                         channel_id,
-                                        payload,
+                                        payload: Payload(payload),
                                     })
                                     .await
                                     .is_err()
                                 {
                                     warn!(
                                         conn_id = %conn_id,
-                                        channel_id, "drain task failed to send DriverMessage::Data"
+                                        channel_id = %channel_id, "drain task failed to send DriverMessage::Data"
                                     );
                                     break;
                                 }
@@ -513,7 +515,7 @@ impl ConnectionHandle {
                                 {
                                     warn!(
                                         conn_id = %conn_id,
-                                        channel_id,
+                                        channel_id = %channel_id,
                                         "drain task failed to send DriverMessage::Close"
                                     );
                                 }
@@ -563,7 +565,7 @@ impl ConnectionHandle {
     /// ```
     pub async fn connect(
         &self,
-        metadata: roam_types::Metadata,
+        metadata: Metadata,
         dispatcher: Option<Box<dyn ServiceDispatcher>>,
     ) -> Result<ConnectionHandle, crate::ConnectError> {
         let request_id = self.shared.request_ids.next();
@@ -596,7 +598,7 @@ impl ConnectionHandle {
     /// Allocate a unique request ID for an outgoing call.
     ///
     /// Used when manually constructing DriverMessage::Call.
-    pub fn alloc_request_id(&self) -> u64 {
+    pub fn alloc_request_id(&self) -> RequestId {
         self.shared.request_ids.next()
     }
 
@@ -694,7 +696,7 @@ impl ConnectionHandle {
         &self,
         response: &mut T,
         plan: &crate::RpcPlan,
-        channels: &[u64],
+        channels: &[ChannelId],
     ) {
         // Patch channel IDs from Response.channels into the deserialized response.
         // This is critical for ForwardingDispatcher where the payload contains upstream
@@ -717,7 +719,7 @@ impl ConnectionHandle {
         plan: &crate::RpcPlan,
     ) {
         let shape = plan.type_plan.root().shape;
-        for loc in &plan.channel_locations {
+        for loc in plan.channel_locations {
             // Only Rx needs binding in responses
             if loc.kind != crate::ChannelKind::Rx {
                 continue;
@@ -779,7 +781,7 @@ impl ConnectionHandle {
         &self,
         response_ptr: *mut (),
         response_plan: &crate::RpcPlan,
-        channels: &[u64],
+        channels: &[ChannelId],
     ) {
         // Patch channel IDs from Response.channels into the deserialized response.
         unsafe {
@@ -878,7 +880,7 @@ mod tests {
     async fn call_respects_max_concurrent_requests_limit() {
         let (driver_tx, mut driver_rx) = crate::runtime::channel("test_driver", 8);
         let handle = ConnectionHandle::new_with_limits(
-            roam_types::ConnectionId::ROOT,
+            ConnectionId::ROOT,
             driver_tx,
             Role::Initiator,
             u32::MAX,

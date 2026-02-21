@@ -56,7 +56,7 @@ impl ChannelIdAllocator {
 
     /// Allocate the next channel ID.
     pub fn next(&self) -> ChannelId {
-        self.next.fetch_add(2, Ordering::Relaxed)
+        ChannelId(self.next.fetch_add(2, Ordering::Relaxed))
     }
 }
 
@@ -477,7 +477,7 @@ impl ChannelRegistry {
         plan: &crate::RpcPlan,
     ) {
         let shape = plan.type_plan.root().shape;
-        for loc in &plan.channel_locations {
+        for loc in plan.channel_locations {
             // SAFETY: args_ptr is valid and initialized
             let poke = unsafe {
                 facet::Poke::from_raw_parts(facet_core::PtrMut::new(args_ptr.cast::<u8>()), shape)
@@ -519,7 +519,7 @@ impl ChannelRegistry {
                 return;
             };
 
-            trace!(channel_id, "bind_rx_channel: registering incoming channel");
+            trace!(channel_id = %channel_id, "bind_rx_channel: registering incoming channel");
 
             // Create channel and set receiver slot
             let (tx, rx) = crate::runtime::channel("rx_stream_bind", RX_STREAM_BUFFER_SIZE);
@@ -532,7 +532,7 @@ impl ChannelRegistry {
 
             // Register for incoming data routing
             self.register_incoming(channel_id, tx);
-            trace!(channel_id, "bind_rx_channel: channel registered");
+            trace!(channel_id = %channel_id, "bind_rx_channel: channel registered");
         } else {
             warn!("bind_rx_channel: could not convert poke to struct");
         }
