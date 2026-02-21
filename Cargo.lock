@@ -2644,6 +2644,7 @@ dependencies = [
  "facet-postcard",
  "futures-channel",
  "futures-util",
+ "getrandom 0.3.4",
  "js-sys",
  "moire",
  "roam-session",

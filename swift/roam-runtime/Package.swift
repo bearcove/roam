@@ -1,9 +1,6 @@
 // swift-tools-version: 6.0
 import PackageDescription
 
-// Path to the Rust workspace root (two levels up from this Package.swift)
-let rustTargetDir = "../../target/release"
-
 let package = Package(
     name: "roam-runtime",
     platforms: [
@@ -39,11 +36,14 @@ let package = Package(
             path: "Sources/CRoamShmFfi",
             publicHeadersPath: "include",
             linkerSettings: [
-                .unsafeFlags([
-                    "-L\(rustTargetDir)",
-                    "-lroam_shm_ffi",
-                ]),
-            ]
+                .linkedLibrary("roam_shm_ffi"),
+            ],
+            plugins: [.plugin(name: "BuildRustFFI")]
+        ),
+        .plugin(
+            name: "BuildRustFFI",
+            capability: .buildTool(),
+            path: "Plugins/BuildRustFFI"
         ),
         .executableTarget(
             name: "shm-bootstrap-client",
