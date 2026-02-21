@@ -796,48 +796,48 @@ impl ConnectionHandle {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{MethodDescriptor, RpcPlan};
+    use crate::MethodDescriptor;
     use facet::Facet;
     use std::sync::LazyLock;
     use std::time::Duration;
 
     static TEST_DESC: LazyLock<&'static MethodDescriptor> = LazyLock::new(|| {
-        crate::make_method_descriptor! {
+        Box::leak(Box::new(MethodDescriptor {
             id: MethodId(42),
             service_name: "Test",
             method_name: "test",
             args: &[],
             return_shape: <() as Facet>::SHAPE,
-            args_plan: (crate::Rx<Vec<u8>>,),
-            ok_plan: (),
-            err_plan: std::convert::Infallible,
-        }
+            args_plan: Box::leak(Box::new(crate::rpc_plan::<(crate::Rx<Vec<u8>>,)>())),
+            ok_plan: Box::leak(Box::new(crate::rpc_plan::<()>())),
+            err_plan: Box::leak(Box::new(crate::rpc_plan::<std::convert::Infallible>())),
+        }))
     });
 
     static RAW_DESC_1: LazyLock<&'static MethodDescriptor> = LazyLock::new(|| {
-        crate::make_method_descriptor! {
+        Box::leak(Box::new(MethodDescriptor {
             id: MethodId(1),
             service_name: "Test",
             method_name: "method1",
             args: &[],
             return_shape: <() as Facet>::SHAPE,
-            args_plan: (),
-            ok_plan: (),
-            err_plan: (),
-        }
+            args_plan: Box::leak(Box::new(crate::rpc_plan::<()>())),
+            ok_plan: Box::leak(Box::new(crate::rpc_plan::<()>())),
+            err_plan: Box::leak(Box::new(crate::rpc_plan::<()>())),
+        }))
     });
 
     static RAW_DESC_2: LazyLock<&'static MethodDescriptor> = LazyLock::new(|| {
-        crate::make_method_descriptor! {
+        Box::leak(Box::new(MethodDescriptor {
             id: MethodId(2),
             service_name: "Test",
             method_name: "method2",
             args: &[],
             return_shape: <() as Facet>::SHAPE,
-            args_plan: (),
-            ok_plan: (),
-            err_plan: (),
-        }
+            args_plan: Box::leak(Box::new(crate::rpc_plan::<()>())),
+            ok_plan: Box::leak(Box::new(crate::rpc_plan::<()>())),
+            err_plan: Box::leak(Box::new(crate::rpc_plan::<()>())),
+        }))
     });
 
     #[tokio::test]

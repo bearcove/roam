@@ -43,8 +43,9 @@ fn format_message(msg: &Message, direction: &str) -> String {
             payload,
             ..
         } => format!(
-            "{direction} Request {{ id: {request_id}, method: 0x{method_id:016x}, payload: {} bytes }}",
-            payload.len()
+            "{direction} Request {{ id: {request_id}, method: 0x{:016x}, payload: {} bytes }}",
+            method_id.0,
+            payload.0.len()
         ),
         Message::Response {
             request_id,
@@ -52,7 +53,7 @@ fn format_message(msg: &Message, direction: &str) -> String {
             ..
         } => format!(
             "{direction} Response {{ id: {request_id}, payload: {} bytes }}",
-            payload.len()
+            payload.0.len()
         ),
         Message::Cancel { request_id, .. } => format!("{direction} Cancel {{ id: {request_id} }}"),
         Message::Data {
@@ -61,7 +62,7 @@ fn format_message(msg: &Message, direction: &str) -> String {
             ..
         } => format!(
             "{direction} Data {{ channel: {channel_id}, payload: {} bytes }}",
-            payload.len()
+            payload.0.len()
         ),
         Message::Close { channel_id, .. } => {
             format!("{direction} Close {{ channel: {channel_id} }}")
@@ -422,9 +423,9 @@ pub mod wire_server {
         method_ids: &MethodIds,
     ) -> Result<(), String> {
         // Track open channels: channel_id -> accumulated data
-        let mut channels: HashMap<u64, Vec<i32>> = HashMap::new();
+        let mut channels: HashMap<ChannelId, Vec<i32>> = HashMap::new();
         // Track pending requests that are waiting for channel data
-        let mut pending_sum: Option<(u64, u64)> = None; // (request_id, channel_id)
+        let mut pending_sum: Option<(RequestId, ChannelId)> = None; // (request_id, channel_id)
         let mut scenario_satisfied = false;
 
         loop {
@@ -441,9 +442,9 @@ pub mod wire_server {
                     payload,
                     ..
                 } => {
-                    if method_id == method_ids.echo {
+                    if method_id == MethodId(method_ids.echo) {
                         // echo(message: String) -> String
-                        let args: (String,) = facet_postcard::from_slice(&payload)
+                        let args: (String,) = facet_postcard::from_slice(&payload.0)
                             .map_err(|e| format!("decode echo args: {e}"))?;
                         let response_payload = encode_ok(&args.0)?;
                         io.send(&Message::Response {
@@ -451,13 +452,13 @@ pub mod wire_server {
                             request_id,
                             metadata: metadata_empty(),
                             channels: vec![],
-                            payload: response_payload,
+                            payload: Payload(response_payload),
                         })
                         .await
                         .map_err(|e| format!("send response: {e}"))?;
-                    } else if method_id == method_ids.reverse {
+                    } else if method_id == MethodId(method_ids.reverse) {
                         // reverse(message: String) -> String
-                        let args: (String,) = facet_postcard::from_slice(&payload)
+                        let args: (String,) = facet_postcard::from_slice(&payload.0)
                             .map_err(|e| format!("decode reverse args: {e}"))?;
                         let reversed: String = args.0.chars().rev().collect();
                         let response_payload = encode_ok(&reversed)?;
@@ -466,23 +467,23 @@ pub mod wire_server {
                             request_id,
                             metadata: metadata_empty(),
                             channels: vec![],
-                            payload: response_payload,
+                            payload: Payload(response_payload),
                         })
                         .await
                         .map_err(|e| format!("send response: {e}"))?;
-                    } else if method_id == method_ids.sum {
+                    } else if method_id == MethodId(method_ids.sum) {
                         // sum(numbers: Rx<i32>) -> i64
                         // Payload is (channel_id: u64)
-                        let args: (u64,) = facet_postcard::from_slice(&payload)
+                        let args: (ChannelId,) = facet_postcard::from_slice(&payload.0)
                             .map_err(|e| format!("decode sum args: {e}"))?;
                         let channel_id = args.0;
                         channels.insert(channel_id, Vec::new());
                         pending_sum = Some((request_id, channel_id));
                         // Response will be sent when we receive Close
-                    } else if method_id == method_ids.generate {
+                    } else if method_id == MethodId(method_ids.generate) {
                         // generate(count: u32, output: Tx<i32>)
                         // Payload is (count: u32, channel_id: u64)
-                        let args: (u32, u64) = facet_postcard::from_slice(&payload)
+                        let args: (u32, ChannelId) = facet_postcard::from_slice(&payload.0)
                             .map_err(|e| format!("decode generate args: {e}"))?;
                         let (count, channel_id) = args;
 
@@ -493,7 +494,7 @@ pub mod wire_server {
                             io.send(&Message::Data {
                                 conn_id: roam_types::ConnectionId::ROOT,
                                 channel_id,
-                                payload: data_payload,
+                                payload: Payload(data_payload),
                             })
                             .await
                             .map_err(|e| format!("send data: {e}"))?;
@@ -514,17 +515,17 @@ pub mod wire_server {
                             request_id,
                             metadata: metadata_empty(),
                             channels: vec![],
-                            payload: response_payload,
+                            payload: Payload(response_payload),
                         })
                         .await
                         .map_err(|e| format!("send response: {e}"))?;
-                    } else if method_id == method_ids.transform {
+                    } else if method_id == MethodId(method_ids.transform) {
                         // transform(input: Rx<String>, output: Tx<String>)
                         // This is more complex - we'll handle it if needed
                         return Err("transform not yet implemented in wire server".to_string());
-                    } else if method_id == method_ids.shape_area {
+                    } else if method_id == MethodId(method_ids.shape_area) {
                         // shape_area(shape: Shape) -> f64
-                        let args: (spec_proto::Shape,) = facet_postcard::from_slice(&payload)
+                        let args: (spec_proto::Shape,) = facet_postcard::from_slice(&payload.0)
                             .map_err(|e| format!("decode shape_area args: {e}"))?;
                         match args.0 {
                             spec_proto::Shape::Rectangle { width, height }
@@ -543,17 +544,17 @@ pub mod wire_server {
                             request_id,
                             metadata: metadata_empty(),
                             channels: vec![],
-                            payload: response_payload,
+                            payload: Payload(response_payload),
                         })
                         .await
                         .map_err(|e| format!("send shape_area response: {e}"))?;
                         if scenario == "shape_area" {
                             scenario_satisfied = true;
                         }
-                    } else if method_id == method_ids.create_canvas {
+                    } else if method_id == MethodId(method_ids.create_canvas) {
                         // create_canvas(name: String, shapes: Vec<Shape>, background: Color) -> Canvas
                         let args: (String, Vec<spec_proto::Shape>, spec_proto::Color) =
-                            facet_postcard::from_slice(&payload)
+                            facet_postcard::from_slice(&payload.0)
                                 .map_err(|e| format!("decode create_canvas args: {e}"))?;
 
                         if args.0 != "enum-canvas" {
@@ -603,17 +604,18 @@ pub mod wire_server {
                             request_id,
                             metadata: metadata_empty(),
                             channels: vec![],
-                            payload: response_payload,
+                            payload: Payload(response_payload),
                         })
                         .await
                         .map_err(|e| format!("send create_canvas response: {e}"))?;
                         if scenario == "create_canvas" {
                             scenario_satisfied = true;
                         }
-                    } else if method_id == method_ids.process_message {
+                    } else if method_id == MethodId(method_ids.process_message) {
                         // process_message(msg: Message) -> Message
-                        let args: (spec_proto::Message,) = facet_postcard::from_slice(&payload)
-                            .map_err(|e| format!("decode process_message args: {e}"))?;
+                        let args: (spec_proto::Message,) =
+                            facet_postcard::from_slice(&payload.0)
+                                .map_err(|e| format!("decode process_message args: {e}"))?;
                         match args.0 {
                             spec_proto::Message::Data(ref data)
                                 if data.as_slice() == [1, 2, 3, 4] => {}
@@ -631,7 +633,7 @@ pub mod wire_server {
                             request_id,
                             metadata: metadata_empty(),
                             channels: vec![],
-                            payload: response_payload,
+                            payload: Payload(response_payload),
                         })
                         .await
                         .map_err(|e| format!("send process_message response: {e}"))?;
@@ -646,7 +648,7 @@ pub mod wire_server {
                             request_id,
                             metadata: metadata_empty(),
                             channels: vec![],
-                            payload: response_payload,
+                            payload: Payload(response_payload),
                         })
                         .await
                         .map_err(|e| format!("send error response: {e}"))?;
@@ -660,7 +662,7 @@ pub mod wire_server {
                 } => {
                     // Accumulate data for the channel
                     if let Some(data) = channels.get_mut(&channel_id) {
-                        let value: i32 = facet_postcard::from_slice(&payload)
+                        let value: i32 = facet_postcard::from_slice(&payload.0)
                             .map_err(|e| format!("decode channel data: {e}"))?;
                         data.push(value);
                     }
@@ -679,7 +681,7 @@ pub mod wire_server {
                             request_id,
                             metadata: metadata_empty(),
                             channels: vec![],
-                            payload: response_payload,
+                            payload: Payload(response_payload),
                         })
                         .await
                         .map_err(|e| format!("send sum response: {e}"))?;

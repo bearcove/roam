@@ -6,7 +6,7 @@
 //! This is a wire-level implementation that does not use any roam runtime types.
 
 use facet::Facet;
-use roam_wire::{Hello, Message};
+use roam_types::{Hello, Message, MethodId, Payload};
 use spec_tests::testbed::method_id;
 use std::env;
 use std::io::ErrorKind;
@@ -103,14 +103,14 @@ async fn handle_connection(stream: TcpStream) -> Result<(), Box<dyn std::error::
                 payload,
                 ..
             } => {
-                let response_payload = dispatch_method(method_id, &payload)?;
+                let response_payload = dispatch_method(method_id, &payload.0)?;
 
                 io.send(&Message::Response {
-                    conn_id: roam_wire::ConnectionId::ROOT,
+                    conn_id: roam_types::ConnectionId::ROOT,
                     request_id,
                     metadata: vec![],
                     channels: vec![],
-                    payload: response_payload,
+                    payload: Payload(response_payload),
                 })
                 .await?;
             }
@@ -134,7 +134,10 @@ fn encode_unknown_method() -> Vec<u8> {
     vec![0x01, 0x01] // Result::Err, RoamError::UnknownMethod
 }
 
-fn dispatch_method(method: u64, payload: &[u8]) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+fn dispatch_method(
+    method: MethodId,
+    payload: &[u8],
+) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
     // Simple RPC methods
     if method == method_id::echo() {
         let args: (String,) = facet_postcard::from_slice(payload)?;

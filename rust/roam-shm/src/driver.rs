@@ -885,7 +885,7 @@ where
             channel_id,
             payload.0.len()
         );
-        if channel_id.is_root() {
+        if channel_id == ChannelId(0) {
             return Err(self
                 .goodbye(
                     "streaming.id.zero-reserved",
@@ -975,7 +975,7 @@ where
         conn_id: ConnectionId,
         channel_id: ChannelId,
     ) -> Result<(), ShmConnectionError> {
-        if channel_id.is_root() {
+        if channel_id == ChannelId(0) {
             return Err(self
                 .goodbye(
                     "streaming.id.zero-reserved",
@@ -2384,7 +2384,7 @@ impl MultiPeerHostDriver {
         channel_id: ChannelId,
         payload: Payload,
     ) -> Result<(), ShmConnectionError> {
-        if channel_id.is_root() {
+        if channel_id == ChannelId(0) {
             return Err(self
                 .goodbye(
                     peer_id,
@@ -2490,7 +2490,7 @@ impl MultiPeerHostDriver {
         conn_id: ConnectionId,
         channel_id: ChannelId,
     ) -> Result<(), ShmConnectionError> {
-        if channel_id.is_root() {
+        if channel_id == ChannelId(0) {
             return Err(self
                 .goodbye(
                     peer_id,
