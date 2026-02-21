@@ -3,16 +3,21 @@
 //! This module provides `GenericBridgeService`, which wraps a roam `ConnectionHandle`
 //! and `ServiceDetail` to implement `BridgeService` using runtime transcoding.
 
+use std::borrow::Cow;
 use std::collections::HashMap;
+use std::sync::LazyLock;
 
 use facet_core::Shape;
 use roam_schema::{MethodDetail, ServiceDetail, contains_stream};
-use roam_session::ConnectionHandle;
+use roam_session::{ConnectionHandle, MethodDescriptor, RpcPlan};
 
 use crate::{
     BoxFuture, BridgeError, BridgeMetadata, BridgeResponse, BridgeService, ProtocolErrorKind,
     transcode::{json_args_to_postcard, postcard_to_json_with_shape},
 };
+
+static DUMMY_PLAN: LazyLock<&'static RpcPlan> =
+    LazyLock::new(|| Box::leak(Box::new(RpcPlan::for_type::<()>())));
 
 /// A generic bridge service that wraps a roam connection.
 ///
@@ -29,15 +34,21 @@ pub struct GenericBridgeService {
 
 /// Cached method information for fast lookup.
 struct MethodInfo {
-    method_id: u64,
+    descriptor: &'static MethodDescriptor,
     has_channels: bool,
-    /// The argument type shapes (for encoding requests).
-    arg_shapes: Vec<&'static Shape>,
     /// The return type shape (for decoding responses).
+    /// Unwrapped from Result<T, E> if the method is fallible.
     return_shape: &'static Shape,
     /// The error type shape (for decoding user errors), if any.
     /// For methods returning Result<T, E>, this is E's shape.
     error_shape: Option<&'static Shape>,
+}
+
+fn cow_to_static(cow: &Cow<'static, str>) -> &'static str {
+    match cow {
+        Cow::Borrowed(s) => s,
+        Cow::Owned(s) => Box::leak(s.clone().into_boxed_str()),
+    }
 }
 
 impl GenericBridgeService {
@@ -47,6 +58,7 @@ impl GenericBridgeService {
     /// * `handle` - The roam connection handle for making RPC calls
     /// * `detail` - Static service metadata (from generated code)
     pub fn new(handle: ConnectionHandle, detail: &'static ServiceDetail) -> Self {
+        let service_name = cow_to_static(&detail.name);
         let mut methods = HashMap::new();
 
         for method in &detail.methods {
@@ -55,17 +67,37 @@ impl GenericBridgeService {
                 || contains_stream(method.return_type);
 
             // Collect arg shapes for encoding requests
-            let arg_shapes: Vec<&'static Shape> = method.args.iter().map(|a| a.ty).collect();
+            let arg_shapes: &'static [&'static Shape] = Box::leak(
+                method
+                    .args
+                    .iter()
+                    .map(|a| a.ty)
+                    .collect::<Vec<_>>()
+                    .into_boxed_slice(),
+            );
 
             // Extract return type and error type from the method signature
             let (return_shape, error_shape) = extract_result_types(method);
 
+            let method_name = cow_to_static(&method.method_name);
+
+            let descriptor: &'static MethodDescriptor = Box::leak(Box::new(MethodDescriptor {
+                id: method_id,
+                service_name,
+                method_name,
+                arg_names: &[],
+                arg_shapes,
+                return_shape: method.return_type,
+                args_plan: *DUMMY_PLAN,
+                ok_plan: *DUMMY_PLAN,
+                err_plan: *DUMMY_PLAN,
+            }));
+
             methods.insert(
                 method.method_name.to_string(),
                 MethodInfo {
-                    method_id,
+                    descriptor,
                     has_channels,
-                    arg_shapes,
                     return_shape,
                     error_shape,
                 },
@@ -136,7 +168,8 @@ impl BridgeService for GenericBridgeService {
 
             // r[bridge.json.facet]
             // Transcode JSON array → postcard tuple using arg shapes
-            let postcard_payload = json_args_to_postcard(json_body, &method_info.arg_shapes)?;
+            let postcard_payload =
+                json_args_to_postcard(json_body, method_info.descriptor.arg_shapes)?;
 
             // Convert metadata to wire format
             let wire_metadata = metadata.to_wire_metadata();
@@ -144,12 +177,7 @@ impl BridgeService for GenericBridgeService {
             // Make the roam call
             let response_bytes = self
                 .handle
-                .call_raw_with_metadata(
-                    method_info.method_id,
-                    method_name,
-                    postcard_payload,
-                    wire_metadata,
-                )
+                .call_raw_with_metadata(method_info.descriptor, postcard_payload, wire_metadata)
                 .await
                 .map_err(|e| BridgeError::backend_unavailable(format!("Call failed: {e}")))?;
 

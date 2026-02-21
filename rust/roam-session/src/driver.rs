@@ -507,8 +507,7 @@ where
     /// Make a raw RPC call with automatic reconnection.
     pub async fn call_raw(
         &self,
-        method_id: u64,
-        method_name: &str,
+        descriptor: &'static crate::MethodDescriptor,
         payload: Vec<u8>,
     ) -> Result<Vec<u8>, ConnectError> {
         let mut last_error: Option<io::Error> = None;
@@ -533,10 +532,7 @@ where
                 Err(e) => return Err(e),
             };
 
-            match handle
-                .call_raw(method_id, method_name, payload.clone())
-                .await
-            {
+            match handle.call_raw(descriptor, payload.clone()).await {
                 Ok(response) => return Ok(response),
                 Err(TransportError::Encode(e)) => {
                     return Err(ConnectError::Rpc(TransportError::Encode(e)));

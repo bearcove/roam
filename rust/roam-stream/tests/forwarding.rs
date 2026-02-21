@@ -86,6 +86,20 @@ static TRANSFORM_DESC: Lazy<&'static MethodDescriptor> = Lazy::new(|| {
     }))
 });
 
+static ECHO_DESC: Lazy<&'static MethodDescriptor> = Lazy::new(|| {
+    Box::leak(Box::new(MethodDescriptor {
+        id: METHOD_ECHO,
+        service_name: "Test",
+        method_name: "echo",
+        arg_names: &[],
+        arg_shapes: &[],
+        return_shape: <String as Facet>::SHAPE,
+        args_plan: Box::leak(Box::new(RpcPlan::for_type::<String>())),
+        ok_plan: Box::leak(Box::new(RpcPlan::for_type::<String>())),
+        err_plan: Box::leak(Box::new(RpcPlan::for_type::<()>())),
+    }))
+});
+
 // ============================================================================
 // Test Service (Backend)
 // ============================================================================
@@ -292,7 +306,7 @@ async fn test_forwarding_unary() {
 
     // Make unary call through proxy
     let payload = facet_postcard::to_vec(&"hello through proxy".to_string()).unwrap();
-    let response = client.call_raw(METHOD_ECHO, "test", payload).await.unwrap();
+    let response = client.call_raw(*ECHO_DESC, payload).await.unwrap();
     let result: Result<String, RoamError<()>> = decode_result(response);
 
     assert_eq!(result.unwrap(), "hello through proxy");

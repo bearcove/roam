@@ -83,7 +83,7 @@ pub(crate) struct HandleShared {
 /// tokio::spawn(driver);
 ///
 /// // Use handle to make calls
-/// let response = handle.call_raw(method_id, "MyService.my_method", payload).await?;
+/// let response = handle.call_raw(descriptor, payload).await?;
 /// ```
 #[derive(Clone)]
 pub struct ConnectionHandle {
@@ -396,8 +396,10 @@ impl ConnectionHandle {
         // Now return an async block that doesn't capture args_ptr
         async move {
             let payload = payload_result.map_err(TransportError::Encode)?;
-            self.call_descriptor(descriptor, metadata, channels, payload, args_debug, drains)
-                .await
+            self.call_raw_full_with_drains(
+                descriptor, metadata, channels, payload, args_debug, drains,
+            )
+            .await
         }
     }
 
@@ -484,43 +486,27 @@ impl ConnectionHandle {
     /// Note: For channeled calls, use `call()` which handles channel binding.
     pub async fn call_raw(
         &self,
-        method_id: u64,
-        method_name: &str,
+        descriptor: &'static crate::MethodDescriptor,
         payload: Vec<u8>,
     ) -> Result<Vec<u8>, TransportError> {
-        self.call_raw_full(
-            method_id,
-            method_name,
-            Vec::new(),
-            Vec::new(),
-            payload,
-            None,
-        )
-        .await
-        .map(|r| r.payload)
+        self.call_raw_full(descriptor, Vec::new(), Vec::new(), payload, None)
+            .await
+            .map(|r| r.payload)
     }
 
     /// Make a raw RPC call with pre-serialized payload and channel IDs.
     ///
-    /// Used internally by `call()` after binding channels.
+    /// Used internally by forwarding after binding channels.
     /// Returns ResponseData so caller can handle response channels.
     pub(crate) async fn call_raw_with_channels(
         &self,
-        method_id: u64,
-        method_name: &str,
+        descriptor: &'static crate::MethodDescriptor,
         channels: Vec<u64>,
         payload: Vec<u8>,
         args_debug: Option<String>,
     ) -> Result<ResponseData, TransportError> {
-        self.call_raw_full(
-            method_id,
-            method_name,
-            Vec::new(),
-            channels,
-            payload,
-            args_debug,
-        )
-        .await
+        self.call_raw_full(descriptor, Vec::new(), channels, payload, args_debug)
+            .await
     }
 
     /// Make a raw RPC call with pre-serialized payload and metadata.
@@ -528,12 +514,11 @@ impl ConnectionHandle {
     /// Returns the raw response payload bytes.
     pub async fn call_raw_with_metadata(
         &self,
-        method_id: u64,
-        method_name: &str,
+        descriptor: &'static crate::MethodDescriptor,
         payload: Vec<u8>,
         metadata: roam_wire::Metadata,
     ) -> Result<Vec<u8>, TransportError> {
-        self.call_raw_full(method_id, method_name, metadata, Vec::new(), payload, None)
+        self.call_raw_full(descriptor, metadata, Vec::new(), payload, None)
             .await
             .map(|r| r.payload)
     }
@@ -543,16 +528,14 @@ impl ConnectionHandle {
     /// Returns ResponseData containing the payload and any response channel IDs.
     async fn call_raw_full(
         &self,
-        method_id: u64,
-        #[allow(unused_variables)] method_name: &str,
+        descriptor: &'static crate::MethodDescriptor,
         metadata: roam_wire::Metadata,
         channels: Vec<u64>,
         payload: Vec<u8>,
         args_debug: Option<String>,
     ) -> Result<ResponseData, TransportError> {
         self.call_raw_full_with_drains(
-            method_id,
-            method_name,
+            descriptor,
             metadata,
             channels,
             payload,
@@ -562,9 +545,9 @@ impl ConnectionHandle {
         .await
     }
 
-    /// Typed call path: uses descriptor fields directly for diagnostics.
+    /// Core call implementation: sends a DriverMessage::Call, spawns drain tasks, waits for response.
     #[allow(clippy::too_many_arguments)]
-    async fn call_descriptor(
+    async fn call_raw_full_with_drains(
         &self,
         descriptor: &'static crate::MethodDescriptor,
         metadata: roam_wire::Metadata,
@@ -629,89 +612,7 @@ impl ConnectionHandle {
             diag.associate_channels_with_request(&channels, request_id);
         }
 
-        let (response_tx, response_rx) = oneshot("call_descriptor");
-        let msg = DriverMessage::Call {
-            conn_id: self.shared.conn_id,
-            request_id,
-            method_id,
-            metadata,
-            channels,
-            payload,
-            response_tx,
-        };
-
-        self.send_and_drain(msg, drains, response_rx).await
-    }
-
-    /// Raw call path: parses service/method names from the full method name string.
-    #[allow(clippy::too_many_arguments)]
-    async fn call_raw_full_with_drains(
-        &self,
-        method_id: u64,
-        #[allow(unused_variables)] method_name: &str,
-        metadata: roam_wire::Metadata,
-        channels: Vec<u64>,
-        payload: Vec<u8>,
-        args_debug: Option<String>,
-        drains: Vec<(ChannelId, Receiver<IncomingChannelMessage>)>,
-    ) -> Result<ResponseData, TransportError> {
-        let _request_permit = self.acquire_request_slot().await?;
-
-        let request_id = self.shared.request_ids.next();
-        #[cfg(feature = "diagnostics")]
-        let mut metadata = self.merged_outgoing_metadata(metadata, request_id, method_name);
-        #[cfg(not(feature = "diagnostics"))]
-        let metadata = self.merged_outgoing_metadata(metadata, request_id, method_name);
-
-        #[cfg(feature = "diagnostics")]
-        {
-            let request_handle = if let Some(diag) = self.shared.diagnostic_state.as_deref() {
-                let args_debug_str = args_debug.as_deref().unwrap_or("");
-                let (service_name, method_name_only) =
-                    method_name.rsplit_once('.').unwrap_or(("", method_name));
-                let args_json = if args_debug_str.is_empty() {
-                    String::from("[]")
-                } else {
-                    args_debug_str.to_string()
-                };
-                let request_body = moire_types::RequestEntity {
-                    service_name: String::from(service_name),
-                    method_name: String::from(method_name_only),
-                    args_json: moire_types::Json::new(args_json),
-                };
-                Some(diag.emit_request_node(method_name.to_string(), request_body))
-            } else {
-                None
-            };
-
-            if let Some(request_wire_id) = request_handle.as_ref().and_then(|h| h.id_for_wire()) {
-                Self::upsert_metadata_entry(
-                    &mut metadata,
-                    crate::MOIRE_REQUEST_ENTITY_ID_METADATA_KEY,
-                    roam_wire::MetadataValue::String(request_wire_id),
-                    roam_wire::metadata_flags::NONE,
-                );
-            }
-        }
-
-        // Track outgoing request for diagnostics
-        if let Some(diag) = &self.shared.diagnostic_state {
-            let args = args_debug.as_ref().map(|s| {
-                let mut map = std::collections::HashMap::new();
-                map.insert("args".to_string(), s.clone());
-                map
-            });
-            diag.record_outgoing_request(crate::diagnostic::RequestRecord {
-                conn_id: self.shared.conn_id.raw(),
-                request_id,
-                method_id,
-                metadata: Some(&metadata),
-                args,
-            });
-            diag.associate_channels_with_request(&channels, request_id);
-        }
-
-        let (response_tx, response_rx) = oneshot("call_raw_full_with_drains");
+        let (response_tx, response_rx) = oneshot("call");
         let msg = DriverMessage::Call {
             conn_id: self.shared.conn_id,
             request_id,
@@ -830,7 +731,7 @@ impl ConnectionHandle {
     /// let virtual_conn = handle.connect(vec![], Some(dispatcher)).await?;
     ///
     /// // Use the new connection for calls
-    /// let response = virtual_conn.call_raw(method_id, "MyService.my_method", payload).await?;
+    /// let response = virtual_conn.call_raw(descriptor, payload).await?;
     /// ```
     pub async fn connect(
         &self,
@@ -1100,6 +1001,34 @@ mod tests {
         }))
     });
 
+    static RAW_DESC_1: LazyLock<&'static MethodDescriptor> = LazyLock::new(|| {
+        Box::leak(Box::new(MethodDescriptor {
+            id: 1,
+            service_name: "Test",
+            method_name: "method1",
+            arg_names: &[],
+            arg_shapes: &[],
+            return_shape: <() as Facet>::SHAPE,
+            args_plan: Box::leak(Box::new(RpcPlan::for_type::<()>())),
+            ok_plan: Box::leak(Box::new(RpcPlan::for_type::<()>())),
+            err_plan: Box::leak(Box::new(RpcPlan::for_type::<()>())),
+        }))
+    });
+
+    static RAW_DESC_2: LazyLock<&'static MethodDescriptor> = LazyLock::new(|| {
+        Box::leak(Box::new(MethodDescriptor {
+            id: 2,
+            service_name: "Test",
+            method_name: "method2",
+            arg_names: &[],
+            arg_shapes: &[],
+            return_shape: <() as Facet>::SHAPE,
+            args_plan: Box::leak(Box::new(RpcPlan::for_type::<()>())),
+            ok_plan: Box::leak(Box::new(RpcPlan::for_type::<()>())),
+            err_plan: Box::leak(Box::new(RpcPlan::for_type::<()>())),
+        }))
+    });
+
     #[tokio::test]
     async fn drain_task_exits_when_driver_data_send_fails() {
         let (driver_tx, mut driver_rx) = crate::runtime::channel("test_driver", 8);
@@ -1147,7 +1076,7 @@ mod tests {
 
         let first = tokio::spawn({
             let handle = handle.clone();
-            async move { handle.call_raw(1, "test", vec![1]).await }
+            async move { handle.call_raw(*RAW_DESC_1, vec![1]).await }
         });
 
         let first_msg = driver_rx.recv().await.expect("first call should be sent");
@@ -1158,7 +1087,7 @@ mod tests {
 
         let second = tokio::spawn({
             let handle = handle.clone();
-            async move { handle.call_raw(2, "test", vec![2]).await }
+            async move { handle.call_raw(*RAW_DESC_2, vec![2]).await }
         });
 
         let blocked = tokio::time::timeout(Duration::from_millis(100), driver_rx.recv()).await;
