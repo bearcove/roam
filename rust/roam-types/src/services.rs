@@ -12,6 +12,9 @@ pub struct ServiceDescriptor {
 
     /// All methods in this service.
     pub methods: &'static [&'static MethodDescriptor],
+
+    /// Documentation string, if any.
+    pub doc: Option<&'static str>,
 }
 
 impl ServiceDescriptor {
@@ -49,6 +52,9 @@ pub struct MethodDescriptor {
 
     /// Precomputed plan for the Err type (Infallible if infallible).
     pub err_plan: &'static RpcPlan,
+
+    /// Documentation string, if any.
+    pub doc: Option<&'static str>,
 }
 
 impl std::fmt::Debug for MethodDescriptor {
@@ -84,5 +90,6 @@ impl ServiceDescriptor {
     pub const EMPTY: ServiceDescriptor = ServiceDescriptor {
         service_name: "<Empty>",
         methods: &[],
+        doc: None,
     };
 }

@@ -178,6 +178,11 @@ fn generate_service_descriptor_fn(parsed: &ServiceTrait, roam: &TokenStream2) ->
                 (return_type.to_token_stream(), quote! { ::core::convert::Infallible })
             };
 
+            let method_doc_expr = match m.doc() {
+                Some(d) => quote! { Some(#d) },
+                None => quote! { None },
+            };
+
             quote! {
                 Box::leak(Box::new(#roam::session::MethodDescriptor {
                     id: #roam::hash::method_id_from_shapes(
@@ -193,10 +198,16 @@ fn generate_service_descriptor_fn(parsed: &ServiceTrait, roam: &TokenStream2) ->
                     args_plan: Box::leak(Box::new(#roam::session::RpcPlan::for_type::<#tuple_type, ::roam::session::Tx::<()>, ::roam::session::Rx::<()>>())),
                     ok_plan: Box::leak(Box::new(#roam::session::RpcPlan::for_type::<#ok_ty, ::roam::session::Tx::<()>, ::roam::session::Rx::<()>>())),
                     err_plan: Box::leak(Box::new(#roam::session::RpcPlan::for_type::<#err_ty, ::roam::session::Tx::<()>, ::roam::session::Rx::<()>>())),
+                    doc: #method_doc_expr,
                 }))
             }
         })
         .collect();
+
+    let service_doc_expr = match parsed.doc() {
+        Some(d) => quote! { Some(#d) },
+        None => quote! { None },
+    };
 
     quote! {
         #[allow(non_snake_case, clippy::all)]
@@ -209,6 +220,7 @@ fn generate_service_descriptor_fn(parsed: &ServiceTrait, roam: &TokenStream2) ->
                 Box::leak(Box::new(#roam::session::ServiceDescriptor {
                     service_name: #service_name,
                     methods: Box::leak(methods.into_boxed_slice()),
+                    doc: #service_doc_expr,
                 }))
             })
         }

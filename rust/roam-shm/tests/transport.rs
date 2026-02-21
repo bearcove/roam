@@ -11,7 +11,7 @@ use roam_shm::guest::ShmGuest;
 use roam_shm::host::{PollResult, ShmHost};
 use roam_shm::layout::SegmentConfig;
 use roam_shm::transport::{ShmGuestTransport, message_to_shm_msg, shm_msg_to_message};
-use roam_types::{Message, MetadataValue};
+use roam_types::{ChannelId, Message, MetadataValue, MethodId, Payload, RequestId};
 
 fn create_host_and_guest() -> (ShmHost, ShmGuest) {
     let config = SegmentConfig::default();
@@ -36,15 +36,15 @@ async fn guest_transport_send_request() {
     // Send a Request message through the transport
     let msg = Message::Request {
         conn_id: roam_types::ConnectionId::ROOT,
-        request_id: 42,
-        method_id: 123,
+        request_id: RequestId(42),
+        method_id: MethodId(123),
         metadata: vec![(
             "auth".to_string(),
             MetadataValue::String("token123".to_string()),
             0, // flags
         )],
         channels: vec![],
-        payload: b"request body".to_vec(),
+        payload: Payload(b"request body".to_vec()),
     };
 
     transport.send(&msg).await.unwrap();
@@ -70,10 +70,10 @@ async fn guest_transport_recv_response() {
     // Host sends a Response message
     let msg = Message::Response {
         conn_id: roam_types::ConnectionId::ROOT,
-        request_id: 42,
+        request_id: RequestId(42),
         metadata: vec![],
         channels: vec![],
-        payload: b"response body".to_vec(),
+        payload: Payload(b"response body".to_vec()),
     };
 
     let shm_msg = message_to_shm_msg(&msg).unwrap();
@@ -93,8 +93,8 @@ async fn host_guest_transport_roundtrip() {
     // Guest sends request
     let request = Message::Request {
         conn_id: roam_types::ConnectionId::ROOT,
-        request_id: 1,
-        method_id: 100,
+        request_id: RequestId(1),
+        method_id: MethodId(100),
         metadata: vec![
             (
                 "key1".to_string(),
@@ -108,7 +108,7 @@ async fn host_guest_transport_roundtrip() {
             ),
         ],
         channels: vec![],
-        payload: b"hello server".to_vec(),
+        payload: Payload(b"hello server".to_vec()),
     };
     guest_transport.send(&request).await.unwrap();
 
@@ -122,10 +122,10 @@ async fn host_guest_transport_roundtrip() {
     // Host sends response
     let response = Message::Response {
         conn_id: roam_types::ConnectionId::ROOT,
-        request_id: 1,
+        request_id: RequestId(1),
         metadata: vec![],
         channels: vec![],
-        payload: b"hello client".to_vec(),
+        payload: Payload(b"hello client".to_vec()),
     };
     let response_shm_msg = message_to_shm_msg(&response).unwrap();
     host.send(peer_id, &response_shm_msg).unwrap();
@@ -145,8 +145,8 @@ async fn streaming_data_messages() {
     for i in 0..5 {
         let data = Message::Data {
             conn_id: roam_types::ConnectionId::ROOT,
-            channel_id: 7,
-            payload: format!("chunk {}", i).into_bytes(),
+            channel_id: ChannelId(7),
+            payload: Payload(format!("chunk {}", i).into_bytes()),
         };
         guest_transport.send(&data).await.unwrap();
     }
@@ -154,7 +154,7 @@ async fn streaming_data_messages() {
     // Send Close
     let close = Message::Close {
         conn_id: roam_types::ConnectionId::ROOT,
-        channel_id: 7,
+        channel_id: ChannelId(7),
     };
     guest_transport.send(&close).await.unwrap();
 
@@ -167,15 +167,27 @@ async fn streaming_data_messages() {
     for i in 0..5 {
         let (_, shm_msg) = messages.pop().unwrap();
         let msg = shm_msg_to_message(shm_msg).unwrap();
-        assert!(matches!(msg, Message::Data { channel_id: 7, .. }));
+        assert!(matches!(
+            msg,
+            Message::Data {
+                channel_id: ChannelId(7),
+                ..
+            }
+        ));
         if let Message::Data { payload, .. } = msg {
-            assert_eq!(payload, format!("chunk {}", i).into_bytes());
+            assert_eq!(payload.0, format!("chunk {}", i).into_bytes());
         }
     }
 
     let (_, last_shm_msg) = messages.pop().unwrap();
     let last_msg = shm_msg_to_message(last_shm_msg).unwrap();
-    assert!(matches!(last_msg, Message::Close { channel_id: 7, .. }));
+    assert!(matches!(
+        last_msg,
+        Message::Close {
+            channel_id: ChannelId(7),
+            ..
+        }
+    ));
 }
 
 #[tokio::test]
@@ -186,17 +198,17 @@ async fn cancel_message() {
     // Send a request, then cancel it
     let request = Message::Request {
         conn_id: roam_types::ConnectionId::ROOT,
-        request_id: 99,
-        method_id: 1,
+        request_id: RequestId(99),
+        method_id: MethodId(1),
         metadata: vec![],
         channels: vec![],
-        payload: vec![],
+        payload: Payload(vec![]),
     };
     guest_transport.send(&request).await.unwrap();
 
     let cancel = Message::Cancel {
         conn_id: roam_types::ConnectionId::ROOT,
-        request_id: 99,
+        request_id: RequestId(99),
     };
     guest_transport.send(&cancel).await.unwrap();
 
@@ -210,8 +222,20 @@ async fn cancel_message() {
     let msg1 = shm_msg_to_message(shm_msg1).unwrap();
     let msg2 = shm_msg_to_message(shm_msg2).unwrap();
 
-    assert!(matches!(msg1, Message::Request { request_id: 99, .. }));
-    assert!(matches!(msg2, Message::Cancel { request_id: 99, .. }));
+    assert!(matches!(
+        msg1,
+        Message::Request {
+            request_id: RequestId(99),
+            ..
+        }
+    ));
+    assert!(matches!(
+        msg2,
+        Message::Cancel {
+            request_id: RequestId(99),
+            ..
+        }
+    ));
 }
 
 #[tokio::test]
@@ -223,7 +247,7 @@ async fn reset_message() {
     // Host sends Reset to guest
     let reset = Message::Reset {
         conn_id: roam_types::ConnectionId::ROOT,
-        channel_id: 42,
+        channel_id: ChannelId(42),
     };
     let shm_msg = message_to_shm_msg(&reset).unwrap();
     host.send(peer_id, &shm_msg).unwrap();
@@ -271,11 +295,11 @@ async fn large_metadata() {
 
     let request = Message::Request {
         conn_id: roam_types::ConnectionId::ROOT,
-        request_id: 1,
-        method_id: 1,
+        request_id: RequestId(1),
+        method_id: MethodId(1),
         metadata,
         channels: vec![],
-        payload: b"small payload".to_vec(),
+        payload: Payload(b"small payload".to_vec()),
     };
 
     guest_transport.send(&request).await.unwrap();
@@ -295,11 +319,11 @@ async fn empty_metadata_and_payload() {
 
     let request = Message::Request {
         conn_id: roam_types::ConnectionId::ROOT,
-        request_id: 1,
-        method_id: 1,
+        request_id: RequestId(1),
+        method_id: MethodId(1),
         metadata: vec![],
         channels: vec![],
-        payload: vec![],
+        payload: Payload(vec![]),
     };
 
     guest_transport.send(&request).await.unwrap();

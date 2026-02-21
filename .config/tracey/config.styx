@@ -45,10 +45,7 @@ specs (
         impls (
             {
                 name rust
-                include (
-                    crates/**/*.rs
-                    rust/**/*.rs
-                )
+                include (rust/**/*.rs)
                 exclude (target/**)
             }
         )
@@ -60,10 +57,7 @@ specs (
         impls (
             {
                 name rust
-                include (
-                    crates/**/*.rs
-                    rust/**/*.rs
-                )
+                include (rust/**/*.rs)
                 exclude (target/**)
             }
         )
@@ -87,10 +81,7 @@ specs (
         impls (
             {
                 name rust
-                include (
-                    rust/**/*.rs
-                    crates/**/*.rs
-                )
+                include (crates/**/*.rs)
                 exclude (target/**)
             }
         )
@@ -112,19 +103,6 @@ specs (
                     typescript/**/*.js
                 )
             }
-            {
-                name go
-                include (go/**/*.go)
-            }
-            {
-                name java
-                include (java/**/*.java)
-            }
-            {
-                name python
-                include (python/**/*.py)
-            }
         )
     }
 )
-

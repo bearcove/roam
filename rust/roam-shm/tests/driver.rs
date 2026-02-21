@@ -22,12 +22,12 @@ static DESC_999: LazyLock<&'static MethodDescriptor> = LazyLock::new(|| {
         id: 999,
         service_name: "Test",
         method_name: "test",
-        arg_names: &[],
-        arg_shapes: &[],
+        args: &[],
         return_shape: <() as Facet>::SHAPE,
-        args_plan: Box::leak(Box::new(RpcPlan::for_type::<()>())),
-        ok_plan: Box::leak(Box::new(RpcPlan::for_type::<()>())),
-        err_plan: Box::leak(Box::new(RpcPlan::for_type::<()>())),
+        args_plan: Box::leak(Box::new(RpcPlan::for_type::<(), Tx<()>, Rx<()>>())),
+        ok_plan: Box::leak(Box::new(RpcPlan::for_type::<(), Tx<()>, Rx<()>>())),
+        err_plan: Box::leak(Box::new(RpcPlan::for_type::<(), Tx<()>, Rx<()>>())),
+        doc: None,
     }))
 });
 
@@ -36,12 +36,12 @@ static DESC_1: LazyLock<&'static MethodDescriptor> = LazyLock::new(|| {
         id: 1,
         service_name: "Test",
         method_name: "test",
-        arg_names: &[],
-        arg_shapes: &[],
+        args: &[],
         return_shape: <() as Facet>::SHAPE,
-        args_plan: Box::leak(Box::new(RpcPlan::for_type::<()>())),
-        ok_plan: Box::leak(Box::new(RpcPlan::for_type::<()>())),
-        err_plan: Box::leak(Box::new(RpcPlan::for_type::<()>())),
+        args_plan: Box::leak(Box::new(RpcPlan::for_type::<(), Tx<()>, Rx<()>>())),
+        ok_plan: Box::leak(Box::new(RpcPlan::for_type::<(), Tx<()>, Rx<()>>())),
+        err_plan: Box::leak(Box::new(RpcPlan::for_type::<(), Tx<()>, Rx<()>>())),
+        doc: None,
     }))
 });
 
@@ -50,12 +50,12 @@ static DESC_2: LazyLock<&'static MethodDescriptor> = LazyLock::new(|| {
         id: 2,
         service_name: "Test",
         method_name: "test",
-        arg_names: &[],
-        arg_shapes: &[],
+        args: &[],
         return_shape: <() as Facet>::SHAPE,
-        args_plan: Box::leak(Box::new(RpcPlan::for_type::<()>())),
-        ok_plan: Box::leak(Box::new(RpcPlan::for_type::<()>())),
-        err_plan: Box::leak(Box::new(RpcPlan::for_type::<()>())),
+        args_plan: Box::leak(Box::new(RpcPlan::for_type::<(), Tx<()>, Rx<()>>())),
+        ok_plan: Box::leak(Box::new(RpcPlan::for_type::<(), Tx<()>, Rx<()>>())),
+        err_plan: Box::leak(Box::new(RpcPlan::for_type::<(), Tx<()>, Rx<()>>())),
+        doc: None,
     }))
 });
 
@@ -259,7 +259,7 @@ async fn unknown_method_returns_error() {
         .await
         .unwrap();
 
-    assert_eq!(response[0], 1, "Expected error marker");
+    assert_eq!(response.0[0], 1, "Expected error marker");
 }
 
 #[test(tokio::test)]
@@ -612,8 +612,8 @@ async fn test_lazy_spawn_real_processes() {
     let input1 = "Hello from host to guest 1".to_string();
     let payload1 = facet_postcard::to_vec(&input1).unwrap();
     let response1 = peer1_handle.call_raw(*DESC_1, payload1).await.unwrap();
-    assert_eq!(response1[0], 0);
-    let result1: String = facet_postcard::from_slice(&response1[1..]).unwrap();
+    assert_eq!(response1.0[0], 0);
+    let result1: String = facet_postcard::from_slice(&response1.0[1..]).unwrap();
     assert_eq!(result1, input1);
 
     // Create SECOND peer dynamically while first is still running
@@ -642,21 +642,21 @@ async fn test_lazy_spawn_real_processes() {
     let input2 = "Hello from host to guest 2".to_string();
     let payload2 = facet_postcard::to_vec(&input2).unwrap();
     let response2 = peer2_handle.call_raw(*DESC_1, payload2).await.unwrap();
-    assert_eq!(response2[0], 0);
-    let result2: String = facet_postcard::from_slice(&response2[1..]).unwrap();
+    assert_eq!(response2.0[0], 0);
+    let result2: String = facet_postcard::from_slice(&response2.0[1..]).unwrap();
     assert_eq!(result2, input2);
 
     // Verify both guests are still alive and responding
     let add_payload1 = facet_postcard::to_vec(&(10i32, 20i32)).unwrap();
     let add_response1 = peer1_handle.call_raw(*DESC_2, add_payload1).await.unwrap();
-    assert_eq!(add_response1[0], 0);
-    let sum1: i32 = facet_postcard::from_slice(&add_response1[1..]).unwrap();
+    assert_eq!(add_response1.0[0], 0);
+    let sum1: i32 = facet_postcard::from_slice(&add_response1.0[1..]).unwrap();
     assert_eq!(sum1, 30);
 
     let add_payload2 = facet_postcard::to_vec(&(100i32, 200i32)).unwrap();
     let add_response2 = peer2_handle.call_raw(*DESC_2, add_payload2).await.unwrap();
-    assert_eq!(add_response2[0], 0);
-    let sum2: i32 = facet_postcard::from_slice(&add_response2[1..]).unwrap();
+    assert_eq!(add_response2.0[0], 0);
+    let sum2: i32 = facet_postcard::from_slice(&add_response2.0[1..]).unwrap();
     assert_eq!(sum2, 300);
 
     // Clean shutdown

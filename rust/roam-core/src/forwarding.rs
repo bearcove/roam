@@ -42,6 +42,7 @@ fn forwarding_descriptor(method_id: MethodId) -> &'static MethodDescriptor {
         args_plan: *DUMMY_PLAN,
         ok_plan: *DUMMY_PLAN,
         err_plan: *DUMMY_PLAN,
+        doc: None,
     }));
     cache.insert(method_id, desc);
     desc

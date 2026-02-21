@@ -1225,7 +1225,6 @@ where
                 // Handle response to our outgoing Connect request
                 if let Some(pending) = self.pending_connects.remove(&request_id) {
                     // Create connection state for the new virtual connection
-                    // r[impl core.conn.dispatcher-custom]
                     // Use the dispatcher provided by the initiator
                     let conn_state = ConnectionState::new(
                         conn_id,
@@ -2012,10 +2011,10 @@ mod tests {
         });
         let unknown_conn_response = Message::Response {
             conn_id: ConnectionId(999),
-            request_id: 7,
+            request_id: RequestId(7),
             metadata: vec![],
             channels: vec![],
-            payload: vec![1, 2, 3],
+            payload: Payload(vec![1, 2, 3]),
         };
         let transport = TestTransport::scripted(
             vec![Ok(Some(peer_hello))],
@@ -2055,10 +2054,10 @@ mod tests {
         });
         let unknown_request_response = Message::Response {
             conn_id: ConnectionId::ROOT,
-            request_id: 4242,
+            request_id: RequestId(4242),
             metadata: vec![],
             channels: vec![],
-            payload: vec![9, 9, 9],
+            payload: Payload(vec![9, 9, 9]),
         };
         let transport = TestTransport::scripted(
             vec![Ok(Some(peer_hello))],
@@ -2112,7 +2111,7 @@ mod tests {
             .expect("root connection exists")
             .pending_responses
             .insert(
-                1337,
+                RequestId(1337),
                 PendingResponse {
                     created_at: Instant::now()
                         - (PENDING_RESPONSE_KILL_AFTER + Duration::from_secs(1)),
@@ -2175,7 +2174,7 @@ mod tests {
             .expect("root connection exists")
             .pending_responses
             .insert(
-                9001,
+                RequestId(9001),
                 PendingResponse {
                     created_at: Instant::now(),
                     warned_stale: false,
@@ -2200,7 +2199,7 @@ mod tests {
                 .get(&ConnectionId::ROOT)
                 .expect("root connection exists")
                 .pending_responses
-                .contains_key(&9001),
+                .contains_key(&RequestId(9001)),
             "pending response should be removed even when receiver was dropped"
         );
 
@@ -2240,16 +2239,17 @@ mod tests {
         let never_finishes = crate::runtime::spawn_with_abort("roam_test_pending", async {
             std::future::pending::<()>().await;
         });
-        root.in_flight_server_requests.insert(1, never_finishes);
+        root.in_flight_server_requests
+            .insert(RequestId(1), never_finishes);
 
         let err = driver
             .handle_message(Message::Request {
                 conn_id: ConnectionId::ROOT,
-                request_id: 2,
-                method_id: 42,
+                request_id: RequestId(2),
+                method_id: MethodId(42),
                 metadata: vec![],
                 channels: vec![],
-                payload: vec![],
+                payload: Payload(vec![]),
             })
             .await
             .expect_err("request overrun should fail connection");

@@ -25,20 +25,23 @@ use tokio::net::TcpStream;
 // RPC Plans
 // ============================================================================
 
-static STRING_ARGS_PLAN: Lazy<RpcPlan> = Lazy::new(RpcPlan::for_type::<String>);
+static STRING_ARGS_PLAN: Lazy<RpcPlan> =
+    Lazy::new(|| RpcPlan::for_type::<String, Tx<()>, Rx<()>>());
 static STRING_RESPONSE_PLAN: Lazy<&'static RpcPlan> =
-    Lazy::new(|| Box::leak(Box::new(RpcPlan::for_type::<String>())));
+    Lazy::new(|| Box::leak(Box::new(RpcPlan::for_type::<String, Tx<()>, Rx<()>>())));
 
-static RX_I32_ARGS_PLAN: Lazy<RpcPlan> = Lazy::new(RpcPlan::for_type::<Rx<i32>>);
+static RX_I32_ARGS_PLAN: Lazy<RpcPlan> =
+    Lazy::new(|| RpcPlan::for_type::<Rx<i32>, Tx<()>, Rx<()>>());
 static I64_RESPONSE_PLAN: Lazy<&'static RpcPlan> =
-    Lazy::new(|| Box::leak(Box::new(RpcPlan::for_type::<i64>())));
+    Lazy::new(|| Box::leak(Box::new(RpcPlan::for_type::<i64, Tx<()>, Rx<()>>())));
 
-static U32_TX_I32_ARGS_PLAN: Lazy<RpcPlan> = Lazy::new(RpcPlan::for_type::<(u32, Tx<i32>)>);
+static U32_TX_I32_ARGS_PLAN: Lazy<RpcPlan> =
+    Lazy::new(|| RpcPlan::for_type::<(u32, Tx<i32>), Tx<()>, Rx<()>>());
 static UNIT_RESPONSE_PLAN: Lazy<&'static RpcPlan> =
-    Lazy::new(|| Box::leak(Box::new(RpcPlan::for_type::<()>())));
+    Lazy::new(|| Box::leak(Box::new(RpcPlan::for_type::<(), Tx<()>, Rx<()>>())));
 
 static RX_STRING_TX_STRING_ARGS_PLAN: Lazy<RpcPlan> =
-    Lazy::new(RpcPlan::for_type::<(Rx<String>, Tx<String>)>);
+    Lazy::new(|| RpcPlan::for_type::<(Rx<String>, Tx<String>), Tx<()>, Rx<()>>());
 
 // ============================================================================
 // Method Descriptors
@@ -49,12 +52,12 @@ static SUM_DESC: Lazy<&'static MethodDescriptor> = Lazy::new(|| {
         id: METHOD_SUM,
         service_name: "Test",
         method_name: "sum",
-        arg_names: &[],
-        arg_shapes: &[],
+        args: &[],
         return_shape: <i64 as Facet>::SHAPE,
-        args_plan: Box::leak(Box::new(RpcPlan::for_type::<Rx<i32>>())),
-        ok_plan: Box::leak(Box::new(RpcPlan::for_type::<i64>())),
-        err_plan: Box::leak(Box::new(RpcPlan::for_type::<()>())),
+        args_plan: Box::leak(Box::new(RpcPlan::for_type::<Rx<i32>, Tx<()>, Rx<()>>())),
+        ok_plan: Box::leak(Box::new(RpcPlan::for_type::<i64, Tx<()>, Rx<()>>())),
+        err_plan: Box::leak(Box::new(RpcPlan::for_type::<(), Tx<()>, Rx<()>>())),
+        doc: None,
     }))
 });
 
@@ -63,12 +66,14 @@ static GENERATE_DESC: Lazy<&'static MethodDescriptor> = Lazy::new(|| {
         id: METHOD_GENERATE,
         service_name: "Test",
         method_name: "generate",
-        arg_names: &[],
-        arg_shapes: &[],
+        args: &[],
         return_shape: <() as Facet>::SHAPE,
-        args_plan: Box::leak(Box::new(RpcPlan::for_type::<(u32, Tx<i32>)>())),
-        ok_plan: Box::leak(Box::new(RpcPlan::for_type::<()>())),
-        err_plan: Box::leak(Box::new(RpcPlan::for_type::<()>())),
+        args_plan: Box::leak(Box::new(
+            RpcPlan::for_type::<(u32, Tx<i32>), Tx<()>, Rx<()>>(),
+        )),
+        ok_plan: Box::leak(Box::new(RpcPlan::for_type::<(), Tx<()>, Rx<()>>())),
+        err_plan: Box::leak(Box::new(RpcPlan::for_type::<(), Tx<()>, Rx<()>>())),
+        doc: None,
     }))
 });
 
@@ -77,12 +82,16 @@ static TRANSFORM_DESC: Lazy<&'static MethodDescriptor> = Lazy::new(|| {
         id: METHOD_TRANSFORM,
         service_name: "Test",
         method_name: "transform",
-        arg_names: &[],
-        arg_shapes: &[],
+        args: &[],
         return_shape: <() as Facet>::SHAPE,
-        args_plan: Box::leak(Box::new(RpcPlan::for_type::<(Rx<String>, Tx<String>)>())),
-        ok_plan: Box::leak(Box::new(RpcPlan::for_type::<()>())),
-        err_plan: Box::leak(Box::new(RpcPlan::for_type::<()>())),
+        args_plan: Box::leak(Box::new(RpcPlan::for_type::<
+            (Rx<String>, Tx<String>),
+            Tx<()>,
+            Rx<()>,
+        >())),
+        ok_plan: Box::leak(Box::new(RpcPlan::for_type::<(), Tx<()>, Rx<()>>())),
+        err_plan: Box::leak(Box::new(RpcPlan::for_type::<(), Tx<()>, Rx<()>>())),
+        doc: None,
     }))
 });
 
@@ -91,12 +100,12 @@ static ECHO_DESC: Lazy<&'static MethodDescriptor> = Lazy::new(|| {
         id: METHOD_ECHO,
         service_name: "Test",
         method_name: "echo",
-        arg_names: &[],
-        arg_shapes: &[],
+        args: &[],
         return_shape: <String as Facet>::SHAPE,
-        args_plan: Box::leak(Box::new(RpcPlan::for_type::<String>())),
-        ok_plan: Box::leak(Box::new(RpcPlan::for_type::<String>())),
-        err_plan: Box::leak(Box::new(RpcPlan::for_type::<()>())),
+        args_plan: Box::leak(Box::new(RpcPlan::for_type::<String, Tx<()>, Rx<()>>())),
+        ok_plan: Box::leak(Box::new(RpcPlan::for_type::<String, Tx<()>, Rx<()>>())),
+        err_plan: Box::leak(Box::new(RpcPlan::for_type::<(), Tx<()>, Rx<()>>())),
+        doc: None,
     }))
 });
 

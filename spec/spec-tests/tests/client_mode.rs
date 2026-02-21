@@ -12,14 +12,14 @@ use spec_tests::testbed::method_id;
 
 fn method_ids() -> wire_server::MethodIds {
     wire_server::MethodIds {
-        echo: method_id::echo(),
-        reverse: method_id::reverse(),
-        sum: method_id::sum(),
-        generate: method_id::generate(),
-        transform: method_id::transform(),
-        shape_area: method_id::shape_area(),
-        create_canvas: method_id::create_canvas(),
-        process_message: method_id::process_message(),
+        echo: method_id::echo().0,
+        reverse: method_id::reverse().0,
+        sum: method_id::sum().0,
+        generate: method_id::generate().0,
+        transform: method_id::transform().0,
+        shape_area: method_id::shape_area().0,
+        create_canvas: method_id::create_canvas().0,
+        process_message: method_id::process_message().0,
     }
 }
 

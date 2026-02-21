@@ -9,7 +9,7 @@
 use std::sync::Arc;
 
 use facet::Facet;
-use facet_core::{PtrConst, PtrMut, PtrUninit, Shape};
+use facet_core::{PtrConst, PtrMut, PtrUninit};
 use facet_format::{FormatDeserializer, MetaSource};
 use facet_path::PathAccessError;
 use facet_postcard::PostcardParser;

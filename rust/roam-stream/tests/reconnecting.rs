@@ -30,9 +30,15 @@ use tokio::net::TcpStream;
 // RPC Plans
 // ============================================================================
 
-static STRING_ARGS_PLAN: Lazy<RpcPlan> = Lazy::new(RpcPlan::for_type::<String>);
-static STRING_RESPONSE_PLAN: Lazy<&'static RpcPlan> =
-    Lazy::new(|| Box::leak(Box::new(RpcPlan::for_type::<String>())));
+static STRING_ARGS_PLAN: Lazy<RpcPlan> =
+    Lazy::new(|| RpcPlan::for_type::<String, roam_core::Tx<()>, roam_core::Rx<()>>());
+static STRING_RESPONSE_PLAN: Lazy<&'static RpcPlan> = Lazy::new(|| {
+    Box::leak(Box::new(RpcPlan::for_type::<
+        String,
+        roam_core::Tx<()>,
+        roam_core::Rx<()>,
+    >()))
+});
 
 // ============================================================================
 // Method Descriptors
@@ -43,12 +49,24 @@ static DESC_1: Lazy<&'static MethodDescriptor> = Lazy::new(|| {
         id: 1,
         service_name: "Test",
         method_name: "test",
-        arg_names: &[],
-        arg_shapes: &[],
+        args: &[],
         return_shape: <() as Facet>::SHAPE,
-        args_plan: Box::leak(Box::new(RpcPlan::for_type::<()>())),
-        ok_plan: Box::leak(Box::new(RpcPlan::for_type::<()>())),
-        err_plan: Box::leak(Box::new(RpcPlan::for_type::<()>())),
+        args_plan: Box::leak(Box::new(RpcPlan::for_type::<
+            (),
+            roam_core::Tx<()>,
+            roam_core::Rx<()>,
+        >())),
+        ok_plan: Box::leak(Box::new(RpcPlan::for_type::<
+            (),
+            roam_core::Tx<()>,
+            roam_core::Rx<()>,
+        >())),
+        err_plan: Box::leak(Box::new(RpcPlan::for_type::<
+            (),
+            roam_core::Tx<()>,
+            roam_core::Rx<()>,
+        >())),
+        doc: None,
     }))
 });
 
@@ -57,12 +75,24 @@ static DESC_999: Lazy<&'static MethodDescriptor> = Lazy::new(|| {
         id: 999,
         service_name: "Test",
         method_name: "test",
-        arg_names: &[],
-        arg_shapes: &[],
+        args: &[],
         return_shape: <() as Facet>::SHAPE,
-        args_plan: Box::leak(Box::new(RpcPlan::for_type::<()>())),
-        ok_plan: Box::leak(Box::new(RpcPlan::for_type::<()>())),
-        err_plan: Box::leak(Box::new(RpcPlan::for_type::<()>())),
+        args_plan: Box::leak(Box::new(RpcPlan::for_type::<
+            (),
+            roam_core::Tx<()>,
+            roam_core::Rx<()>,
+        >())),
+        ok_plan: Box::leak(Box::new(RpcPlan::for_type::<
+            (),
+            roam_core::Tx<()>,
+            roam_core::Rx<()>,
+        >())),
+        err_plan: Box::leak(Box::new(RpcPlan::for_type::<
+            (),
+            roam_core::Tx<()>,
+            roam_core::Rx<()>,
+        >())),
+        doc: None,
     }))
 });
 

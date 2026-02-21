@@ -185,6 +185,8 @@ impl Default for FlowControl {
 ///
 /// shm[impl shm.id.channel-id]
 /// shm[impl shm.id.channel-scope]
+///
+/// [TODO] migrate to roam-types ChannelId? reconcile those somehow
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ChannelId(u32);
 
@@ -378,13 +380,13 @@ mod tests {
     #[test]
     fn channel_id_parity() {
         // shm[verify shm.id.channel-parity]
-        assert!(ChannelId(1).unwrap().is_guest_allocated());
-        assert!(ChannelId(3).unwrap().is_guest_allocated());
-        assert!(ChannelId(2).unwrap().is_host_allocated());
-        assert!(ChannelId(4).unwrap().is_host_allocated());
+        assert!(ChannelId::new(1).unwrap().is_guest_allocated());
+        assert!(ChannelId::new(3).unwrap().is_guest_allocated());
+        assert!(ChannelId::new(2).unwrap().is_host_allocated());
+        assert!(ChannelId::new(4).unwrap().is_host_allocated());
 
         // Channel ID 0 is reserved
-        assert!(ChannelId(0).is_none());
+        assert!(ChannelId::new(0).is_none());
     }
 
     #[test]

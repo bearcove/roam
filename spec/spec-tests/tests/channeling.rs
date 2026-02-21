@@ -8,7 +8,7 @@
 use std::time::Duration;
 
 use facet::Facet;
-use roam_wire::{Hello, Message, MetadataValue};
+use roam_types::{Hello, Message, MetadataValue};
 use std::convert::Infallible;
 
 use spec_tests::harness::{accept_subject, our_hello, run_async};
@@ -70,7 +70,7 @@ fn channeling_sum_client_to_server() {
         let req_payload =
             facet_postcard::to_vec(&(channel_id,)).map_err(|e| format!("postcard args: {e}"))?;
         let req = Message::Request {
-            conn_id: roam_wire::ConnectionId::ROOT,
+            conn_id: roam_types::ConnectionId::ROOT,
             request_id: 1,
             method_id,
             metadata: metadata_empty(),
@@ -84,7 +84,7 @@ fn channeling_sum_client_to_server() {
             let data_payload =
                 facet_postcard::to_vec(&n).map_err(|e| format!("postcard data: {e}"))?;
             io.send(&Message::Data {
-                conn_id: roam_wire::ConnectionId::ROOT,
+                conn_id: roam_types::ConnectionId::ROOT,
                 channel_id,
                 payload: data_payload,
             })
@@ -94,7 +94,7 @@ fn channeling_sum_client_to_server() {
 
         // Send Close to end the channel
         io.send(&Message::Close {
-            conn_id: roam_wire::ConnectionId::ROOT,
+            conn_id: roam_types::ConnectionId::ROOT,
             channel_id,
         })
         .await
@@ -161,7 +161,7 @@ fn channeling_generate_server_to_client() {
         let req_payload = facet_postcard::to_vec(&(count, channel_id))
             .map_err(|e| format!("postcard args: {e}"))?;
         let req = Message::Request {
-            conn_id: roam_wire::ConnectionId::ROOT,
+            conn_id: roam_types::ConnectionId::ROOT,
             request_id: 1,
             method_id,
             metadata: metadata_empty(),
@@ -259,7 +259,7 @@ fn channeling_transform_bidirectional() {
         let req_payload = facet_postcard::to_vec(&(input_channel_id, output_channel_id))
             .map_err(|e| format!("postcard args: {e}"))?;
         let req = Message::Request {
-            conn_id: roam_wire::ConnectionId::ROOT,
+            conn_id: roam_types::ConnectionId::ROOT,
             request_id: 1,
             method_id,
             metadata: metadata_empty(),
@@ -277,7 +277,7 @@ fn channeling_transform_bidirectional() {
             let data_payload = facet_postcard::to_vec(&msg.to_string())
                 .map_err(|e| format!("postcard data: {e}"))?;
             io.send(&Message::Data {
-                conn_id: roam_wire::ConnectionId::ROOT,
+                conn_id: roam_types::ConnectionId::ROOT,
                 channel_id: input_channel_id,
                 payload: data_payload,
             })
@@ -312,7 +312,7 @@ fn channeling_transform_bidirectional() {
 
         // Close input channel
         io.send(&Message::Close {
-            conn_id: roam_wire::ConnectionId::ROOT,
+            conn_id: roam_types::ConnectionId::ROOT,
             channel_id: input_channel_id,
         })
         .await

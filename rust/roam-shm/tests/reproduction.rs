@@ -14,12 +14,24 @@ static DESC_1: LazyLock<&'static MethodDescriptor> = LazyLock::new(|| {
         id: 1,
         service_name: "Test",
         method_name: "test",
-        arg_names: &[],
-        arg_shapes: &[],
+        args: &[],
         return_shape: <() as Facet>::SHAPE,
-        args_plan: Box::leak(Box::new(RpcPlan::for_type::<()>())),
-        ok_plan: Box::leak(Box::new(RpcPlan::for_type::<()>())),
-        err_plan: Box::leak(Box::new(RpcPlan::for_type::<()>())),
+        args_plan: Box::leak(Box::new(RpcPlan::for_type::<
+            (),
+            roam_core::Tx<()>,
+            roam_core::Rx<()>,
+        >())),
+        ok_plan: Box::leak(Box::new(RpcPlan::for_type::<
+            (),
+            roam_core::Tx<()>,
+            roam_core::Rx<()>,
+        >())),
+        err_plan: Box::leak(Box::new(RpcPlan::for_type::<
+            (),
+            roam_core::Tx<()>,
+            roam_core::Rx<()>,
+        >())),
+        doc: None,
     }))
 });
 
@@ -28,12 +40,24 @@ static DESC_2: LazyLock<&'static MethodDescriptor> = LazyLock::new(|| {
         id: 2,
         service_name: "Test",
         method_name: "test",
-        arg_names: &[],
-        arg_shapes: &[],
+        args: &[],
         return_shape: <() as Facet>::SHAPE,
-        args_plan: Box::leak(Box::new(RpcPlan::for_type::<()>())),
-        ok_plan: Box::leak(Box::new(RpcPlan::for_type::<()>())),
-        err_plan: Box::leak(Box::new(RpcPlan::for_type::<()>())),
+        args_plan: Box::leak(Box::new(RpcPlan::for_type::<
+            (),
+            roam_core::Tx<()>,
+            roam_core::Rx<()>,
+        >())),
+        ok_plan: Box::leak(Box::new(RpcPlan::for_type::<
+            (),
+            roam_core::Tx<()>,
+            roam_core::Rx<()>,
+        >())),
+        err_plan: Box::leak(Box::new(RpcPlan::for_type::<
+            (),
+            roam_core::Tx<()>,
+            roam_core::Rx<()>,
+        >())),
+        doc: None,
     }))
 });
 
@@ -42,12 +66,24 @@ static DESC_3: LazyLock<&'static MethodDescriptor> = LazyLock::new(|| {
         id: 3,
         service_name: "Test",
         method_name: "test",
-        arg_names: &[],
-        arg_shapes: &[],
+        args: &[],
         return_shape: <() as Facet>::SHAPE,
-        args_plan: Box::leak(Box::new(RpcPlan::for_type::<()>())),
-        ok_plan: Box::leak(Box::new(RpcPlan::for_type::<()>())),
-        err_plan: Box::leak(Box::new(RpcPlan::for_type::<()>())),
+        args_plan: Box::leak(Box::new(RpcPlan::for_type::<
+            (),
+            roam_core::Tx<()>,
+            roam_core::Rx<()>,
+        >())),
+        ok_plan: Box::leak(Box::new(RpcPlan::for_type::<
+            (),
+            roam_core::Tx<()>,
+            roam_core::Rx<()>,
+        >())),
+        err_plan: Box::leak(Box::new(RpcPlan::for_type::<
+            (),
+            roam_core::Tx<()>,
+            roam_core::Rx<()>,
+        >())),
+        doc: None,
     }))
 });
 

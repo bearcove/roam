@@ -820,15 +820,15 @@ mod tests {
     fn roundtrip_request() {
         let msg = Message::Request {
             conn_id: ConnectionId::ROOT,
-            request_id: 42,
-            method_id: 123,
+            request_id: RequestId(42),
+            method_id: MethodId(123),
             metadata: vec![(
                 "key".to_string(),
                 MetadataValue::String("value".to_string()),
                 0,
             )],
             channels: vec![],
-            payload: b"hello world".to_vec(),
+            payload: Payload(b"hello world".to_vec()),
         };
 
         let shm_msg = message_to_shm_msg(&msg).unwrap();
@@ -841,11 +841,11 @@ mod tests {
     fn roundtrip_request_with_channels() {
         let msg = Message::Request {
             conn_id: ConnectionId::ROOT,
-            request_id: 42,
-            method_id: 123,
+            request_id: RequestId(42),
+            method_id: MethodId(123),
             metadata: vec![],
-            channels: vec![1, 3, 5],
-            payload: b"hello world".to_vec(),
+            channels: vec![ChannelId(1), ChannelId(3), ChannelId(5)],
+            payload: Payload(b"hello world".to_vec()),
         };
 
         let shm_msg = message_to_shm_msg(&msg).unwrap();
@@ -858,10 +858,10 @@ mod tests {
     fn roundtrip_response() {
         let msg = Message::Response {
             conn_id: ConnectionId::ROOT,
-            request_id: 99,
+            request_id: RequestId(99),
             metadata: vec![],
             channels: vec![],
-            payload: b"response data".to_vec(),
+            payload: Payload(b"response data".to_vec()),
         };
 
         let shm_msg = message_to_shm_msg(&msg).unwrap();
@@ -874,10 +874,10 @@ mod tests {
     fn roundtrip_response_with_channels() {
         let msg = Message::Response {
             conn_id: ConnectionId::ROOT,
-            request_id: 99,
+            request_id: RequestId(99),
             metadata: vec![],
-            channels: vec![2, 4, 6],
-            payload: b"response data".to_vec(),
+            channels: vec![ChannelId(2), ChannelId(4), ChannelId(6)],
+            payload: Payload(b"response data".to_vec()),
         };
 
         let shm_msg = message_to_shm_msg(&msg).unwrap();
@@ -890,8 +890,8 @@ mod tests {
     fn roundtrip_data() {
         let msg = Message::Data {
             conn_id: ConnectionId::ROOT,
-            channel_id: 7,
-            payload: b"stream chunk".to_vec(),
+            channel_id: ChannelId(7),
+            payload: Payload(b"stream chunk".to_vec()),
         };
 
         let shm_msg = message_to_shm_msg(&msg).unwrap();
@@ -905,15 +905,15 @@ mod tests {
         let messages = vec![
             Message::Cancel {
                 conn_id: ConnectionId::ROOT,
-                request_id: 10,
+                request_id: RequestId(10),
             },
             Message::Close {
                 conn_id: ConnectionId::ROOT,
-                channel_id: 20,
+                channel_id: ChannelId(20),
             },
             Message::Reset {
                 conn_id: ConnectionId::ROOT,
-                channel_id: 30,
+                channel_id: ChannelId(30),
             },
             Message::Goodbye {
                 conn_id: ConnectionId::ROOT,
@@ -947,7 +947,7 @@ mod tests {
     fn credit_not_supported() {
         let msg = Message::Credit {
             conn_id: ConnectionId::ROOT,
-            channel_id: 1,
+            channel_id: ChannelId(1),
             bytes: 1024,
         };
 
@@ -961,8 +961,8 @@ mod tests {
     fn small_payload_roundtrip() {
         let msg = Message::Data {
             conn_id: ConnectionId::ROOT,
-            channel_id: 1,
-            payload: b"tiny".to_vec(),
+            channel_id: ChannelId(1),
+            payload: Payload(b"tiny".to_vec()),
         };
 
         let shm_msg = message_to_shm_msg(&msg).unwrap();
@@ -976,8 +976,8 @@ mod tests {
     fn large_payload_roundtrip() {
         let msg = Message::Data {
             conn_id: ConnectionId::ROOT,
-            channel_id: 1,
-            payload: vec![0u8; 100],
+            channel_id: ChannelId(1),
+            payload: Payload(vec![0u8; 100]),
         };
 
         let shm_msg = message_to_shm_msg(&msg).unwrap();

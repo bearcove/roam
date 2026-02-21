@@ -3,7 +3,7 @@ use std::time::Duration;
 use facet::Facet;
 use roam_hash::method_id_from_detail;
 use roam_schema::{ArgDetail, MethodDetail};
-use roam_wire::{Hello, Message, MetadataValue};
+use roam_types::{Hello, Message, MetadataValue};
 use spec_proto::MathError;
 use spec_tests::harness::{accept_subject, our_hello, run_async};
 use spec_tests::testbed::method_id;
@@ -107,7 +107,7 @@ fn rpc_echo_roundtrip() {
         let req_payload = facet_postcard::to_vec(&(String::from("hello"),))
             .map_err(|e| format!("postcard args: {e}"))?;
         let req = Message::Request {
-            conn_id: roam_wire::ConnectionId::ROOT,
+            conn_id: roam_types::ConnectionId::ROOT,
             request_id: 1,
             method_id: method_id::echo(),
             metadata: metadata_empty(),
@@ -177,7 +177,7 @@ fn rpc_user_error_roundtrip() {
         let req_payload =
             facet_postcard::to_vec(&(10i64, 0i64)).map_err(|e| format!("postcard args: {e}"))?;
         let req = Message::Request {
-            conn_id: roam_wire::ConnectionId::ROOT,
+            conn_id: roam_types::ConnectionId::ROOT,
             request_id: 100,
             method_id: divide_method_id,
             metadata: metadata_empty(),
@@ -255,7 +255,7 @@ fn rpc_unknown_method_returns_unknownmethod_error() {
         let req_payload = facet_postcard::to_vec(&(String::from("hello"),))
             .map_err(|e| format!("postcard args: {e}"))?;
         let req = Message::Request {
-            conn_id: roam_wire::ConnectionId::ROOT,
+            conn_id: roam_types::ConnectionId::ROOT,
             request_id: 2,
             method_id: 0xdeadbeef,
             metadata: metadata_empty(),
@@ -320,7 +320,7 @@ fn rpc_invalid_payload_returns_invalidpayload_error() {
 
         // Send request with invalid payload (random bytes, not valid postcard).
         let req = Message::Request {
-            conn_id: roam_wire::ConnectionId::ROOT,
+            conn_id: roam_types::ConnectionId::ROOT,
             request_id: 3,
             method_id: method_id::echo(),
             metadata: metadata_empty(),
@@ -392,7 +392,7 @@ fn rpc_pipelining_multiple_requests() {
             let req_payload = facet_postcard::to_vec(&(msg.to_string(),))
                 .map_err(|e| format!("postcard args: {e}"))?;
             let req = Message::Request {
-                conn_id: roam_wire::ConnectionId::ROOT,
+                conn_id: roam_types::ConnectionId::ROOT,
                 request_id: (i + 10) as u64, // Use 10, 11, 12 to distinguish from other tests
                 method_id: method_id::echo(),
                 metadata: metadata_empty(),

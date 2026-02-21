@@ -26,15 +26,28 @@ use tokio::net::{UnixListener, UnixStream};
 // RPC Plans
 // ============================================================================
 
-static UNIT_ARGS_PLAN: Lazy<RpcPlan> = Lazy::new(RpcPlan::for_type::<()>);
-static U32_RESPONSE_PLAN: Lazy<&'static RpcPlan> =
-    Lazy::new(|| Box::leak(Box::new(RpcPlan::for_type::<u32>())));
+static UNIT_ARGS_PLAN: Lazy<RpcPlan> =
+    Lazy::new(|| RpcPlan::for_type::<(), roam_core::Tx<()>, roam_core::Rx<()>>());
+static U32_RESPONSE_PLAN: Lazy<&'static RpcPlan> = Lazy::new(|| {
+    Box::leak(Box::new(RpcPlan::for_type::<
+        u32,
+        roam_core::Tx<()>,
+        roam_core::Rx<()>,
+    >()))
+});
 
-static U32_ARGS_PLAN: Lazy<RpcPlan> = Lazy::new(RpcPlan::for_type::<u32>);
+static U32_ARGS_PLAN: Lazy<RpcPlan> =
+    Lazy::new(|| RpcPlan::for_type::<u32, roam_core::Tx<()>, roam_core::Rx<()>>());
 
-static STRING_ARGS_PLAN: Lazy<RpcPlan> = Lazy::new(RpcPlan::for_type::<String>);
-static STRING_RESPONSE_PLAN: Lazy<&'static RpcPlan> =
-    Lazy::new(|| Box::leak(Box::new(RpcPlan::for_type::<String>())));
+static STRING_ARGS_PLAN: Lazy<RpcPlan> =
+    Lazy::new(|| RpcPlan::for_type::<String, roam_core::Tx<()>, roam_core::Rx<()>>());
+static STRING_RESPONSE_PLAN: Lazy<&'static RpcPlan> = Lazy::new(|| {
+    Box::leak(Box::new(RpcPlan::for_type::<
+        String,
+        roam_core::Tx<()>,
+        roam_core::Rx<()>,
+    >()))
+});
 
 // ============================================================================
 // Test Service with Fast and Slow Methods
@@ -74,12 +87,24 @@ static INSTANT_DESC: Lazy<&'static MethodDescriptor> = Lazy::new(|| {
         id: METHOD_INSTANT,
         service_name: "Test",
         method_name: "instant",
-        arg_names: &[],
-        arg_shapes: &[],
+        args: &[],
         return_shape: <u32 as Facet>::SHAPE,
-        args_plan: Box::leak(Box::new(RpcPlan::for_type::<u32>())),
-        ok_plan: Box::leak(Box::new(RpcPlan::for_type::<u32>())),
-        err_plan: Box::leak(Box::new(RpcPlan::for_type::<()>())),
+        args_plan: Box::leak(Box::new(RpcPlan::for_type::<
+            u32,
+            roam_core::Tx<()>,
+            roam_core::Rx<()>,
+        >())),
+        ok_plan: Box::leak(Box::new(RpcPlan::for_type::<
+            u32,
+            roam_core::Tx<()>,
+            roam_core::Rx<()>,
+        >())),
+        err_plan: Box::leak(Box::new(RpcPlan::for_type::<
+            (),
+            roam_core::Tx<()>,
+            roam_core::Rx<()>,
+        >())),
+        doc: None,
     }))
 });
 
@@ -88,12 +113,24 @@ static FAST_DESC: Lazy<&'static MethodDescriptor> = Lazy::new(|| {
         id: METHOD_FAST,
         service_name: "Test",
         method_name: "fast",
-        arg_names: &[],
-        arg_shapes: &[],
+        args: &[],
         return_shape: <u32 as Facet>::SHAPE,
-        args_plan: Box::leak(Box::new(RpcPlan::for_type::<u32>())),
-        ok_plan: Box::leak(Box::new(RpcPlan::for_type::<u32>())),
-        err_plan: Box::leak(Box::new(RpcPlan::for_type::<()>())),
+        args_plan: Box::leak(Box::new(RpcPlan::for_type::<
+            u32,
+            roam_core::Tx<()>,
+            roam_core::Rx<()>,
+        >())),
+        ok_plan: Box::leak(Box::new(RpcPlan::for_type::<
+            u32,
+            roam_core::Tx<()>,
+            roam_core::Rx<()>,
+        >())),
+        err_plan: Box::leak(Box::new(RpcPlan::for_type::<
+            (),
+            roam_core::Tx<()>,
+            roam_core::Rx<()>,
+        >())),
+        doc: None,
     }))
 });
 
@@ -102,12 +139,24 @@ static MEDIUM_DESC: Lazy<&'static MethodDescriptor> = Lazy::new(|| {
         id: METHOD_MEDIUM,
         service_name: "Test",
         method_name: "medium",
-        arg_names: &[],
-        arg_shapes: &[],
+        args: &[],
         return_shape: <u32 as Facet>::SHAPE,
-        args_plan: Box::leak(Box::new(RpcPlan::for_type::<u32>())),
-        ok_plan: Box::leak(Box::new(RpcPlan::for_type::<u32>())),
-        err_plan: Box::leak(Box::new(RpcPlan::for_type::<()>())),
+        args_plan: Box::leak(Box::new(RpcPlan::for_type::<
+            u32,
+            roam_core::Tx<()>,
+            roam_core::Rx<()>,
+        >())),
+        ok_plan: Box::leak(Box::new(RpcPlan::for_type::<
+            u32,
+            roam_core::Tx<()>,
+            roam_core::Rx<()>,
+        >())),
+        err_plan: Box::leak(Box::new(RpcPlan::for_type::<
+            (),
+            roam_core::Tx<()>,
+            roam_core::Rx<()>,
+        >())),
+        doc: None,
     }))
 });
 
@@ -116,12 +165,24 @@ static SLOW_DESC: Lazy<&'static MethodDescriptor> = Lazy::new(|| {
         id: METHOD_SLOW,
         service_name: "Test",
         method_name: "slow",
-        arg_names: &[],
-        arg_shapes: &[],
+        args: &[],
         return_shape: <u32 as Facet>::SHAPE,
-        args_plan: Box::leak(Box::new(RpcPlan::for_type::<u32>())),
-        ok_plan: Box::leak(Box::new(RpcPlan::for_type::<u32>())),
-        err_plan: Box::leak(Box::new(RpcPlan::for_type::<()>())),
+        args_plan: Box::leak(Box::new(RpcPlan::for_type::<
+            u32,
+            roam_core::Tx<()>,
+            roam_core::Rx<()>,
+        >())),
+        ok_plan: Box::leak(Box::new(RpcPlan::for_type::<
+            u32,
+            roam_core::Tx<()>,
+            roam_core::Rx<()>,
+        >())),
+        err_plan: Box::leak(Box::new(RpcPlan::for_type::<
+            (),
+            roam_core::Tx<()>,
+            roam_core::Rx<()>,
+        >())),
+        doc: None,
     }))
 });
 
@@ -130,12 +191,24 @@ static VERY_SLOW_DESC: Lazy<&'static MethodDescriptor> = Lazy::new(|| {
         id: METHOD_VERY_SLOW,
         service_name: "Test",
         method_name: "very_slow",
-        arg_names: &[],
-        arg_shapes: &[],
+        args: &[],
         return_shape: <u32 as Facet>::SHAPE,
-        args_plan: Box::leak(Box::new(RpcPlan::for_type::<u32>())),
-        ok_plan: Box::leak(Box::new(RpcPlan::for_type::<u32>())),
-        err_plan: Box::leak(Box::new(RpcPlan::for_type::<()>())),
+        args_plan: Box::leak(Box::new(RpcPlan::for_type::<
+            u32,
+            roam_core::Tx<()>,
+            roam_core::Rx<()>,
+        >())),
+        ok_plan: Box::leak(Box::new(RpcPlan::for_type::<
+            u32,
+            roam_core::Tx<()>,
+            roam_core::Rx<()>,
+        >())),
+        err_plan: Box::leak(Box::new(RpcPlan::for_type::<
+            (),
+            roam_core::Tx<()>,
+            roam_core::Rx<()>,
+        >())),
+        doc: None,
     }))
 });
 
@@ -144,12 +217,24 @@ static ECHO_DESC: Lazy<&'static MethodDescriptor> = Lazy::new(|| {
         id: METHOD_ECHO,
         service_name: "Test",
         method_name: "echo",
-        arg_names: &[],
-        arg_shapes: &[],
+        args: &[],
         return_shape: <String as Facet>::SHAPE,
-        args_plan: Box::leak(Box::new(RpcPlan::for_type::<String>())),
-        ok_plan: Box::leak(Box::new(RpcPlan::for_type::<String>())),
-        err_plan: Box::leak(Box::new(RpcPlan::for_type::<()>())),
+        args_plan: Box::leak(Box::new(RpcPlan::for_type::<
+            String,
+            roam_core::Tx<()>,
+            roam_core::Rx<()>,
+        >())),
+        ok_plan: Box::leak(Box::new(RpcPlan::for_type::<
+            String,
+            roam_core::Tx<()>,
+            roam_core::Rx<()>,
+        >())),
+        err_plan: Box::leak(Box::new(RpcPlan::for_type::<
+            (),
+            roam_core::Tx<()>,
+            roam_core::Rx<()>,
+        >())),
+        doc: None,
     }))
 });
 

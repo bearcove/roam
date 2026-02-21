@@ -798,6 +798,7 @@ mod tests {
     use super::*;
     use crate::MethodDescriptor;
     use facet::Facet;
+    use roam_types::MethodId;
     use std::sync::LazyLock;
     use std::time::Duration;
 
@@ -811,6 +812,7 @@ mod tests {
             args_plan: Box::leak(Box::new(crate::rpc_plan::<(crate::Rx<Vec<u8>>,)>())),
             ok_plan: Box::leak(Box::new(crate::rpc_plan::<()>())),
             err_plan: Box::leak(Box::new(crate::rpc_plan::<std::convert::Infallible>())),
+            doc: None,
         }))
     });
 
@@ -824,6 +826,7 @@ mod tests {
             args_plan: Box::leak(Box::new(crate::rpc_plan::<()>())),
             ok_plan: Box::leak(Box::new(crate::rpc_plan::<()>())),
             err_plan: Box::leak(Box::new(crate::rpc_plan::<()>())),
+            doc: None,
         }))
     });
 
@@ -837,6 +840,7 @@ mod tests {
             args_plan: Box::leak(Box::new(crate::rpc_plan::<()>())),
             ok_plan: Box::leak(Box::new(crate::rpc_plan::<()>())),
             err_plan: Box::leak(Box::new(crate::rpc_plan::<()>())),
+            doc: None,
         }))
     });
 
@@ -908,12 +912,15 @@ mod tests {
 
         first_response_tx
             .send(Ok(ResponseData {
-                payload: vec![10],
+                payload: Payload(vec![10]),
                 channels: vec![],
             }))
             .expect("first response receiver should still exist");
         let first_result = first.await.expect("first task should not panic");
-        assert_eq!(first_result.expect("first call should succeed"), vec![10]);
+        assert_eq!(
+            first_result.expect("first call should succeed"),
+            Payload(vec![10])
+        );
 
         let second_msg = driver_rx.recv().await.expect("second call should be sent");
         let second_response_tx = match second_msg {
@@ -922,12 +929,15 @@ mod tests {
         };
         second_response_tx
             .send(Ok(ResponseData {
-                payload: vec![20],
+                payload: Payload(vec![20]),
                 channels: vec![],
             }))
             .expect("second response receiver should still exist");
 
         let second_result = second.await.expect("second task should not panic");
-        assert_eq!(second_result.expect("second call should succeed"), vec![20]);
+        assert_eq!(
+            second_result.expect("second call should succeed"),
+            Payload(vec![20])
+        );
     }
 }

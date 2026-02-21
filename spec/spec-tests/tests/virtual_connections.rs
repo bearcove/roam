@@ -10,7 +10,7 @@
 
 use std::time::Duration;
 
-use roam_wire::{ConnectionId, Hello, Message, MetadataValue};
+use roam_types::{ConnectionId, Hello, Message, MetadataValue};
 use spec_tests::harness::{accept_subject, accept_subject_with_options, our_hello, run_async};
 use spec_tests::testbed::method_id;
 
