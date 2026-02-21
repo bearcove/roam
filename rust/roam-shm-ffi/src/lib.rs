@@ -50,30 +50,47 @@ pub extern "C" fn roam_bipbuf_header_size() -> u32 {
 
 /// Initialize a BipBuffer header. The caller must provide a zeroed 128-byte
 /// region at `header_ptr` followed by `capacity` bytes of data space.
+///
+/// # Safety
+///
+/// `header_ptr` must point to a valid, zeroed, 128-byte-aligned region followed
+/// by at least `capacity` bytes of writable data space.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn roam_bipbuf_init(header_ptr: *mut c_void, capacity: u32) {
     let header = header_ptr as *mut BipBufHeader;
     unsafe { (*header).init(capacity) };
 }
 
+/// # Safety
+///
+/// `header_ptr` must point to a valid, initialized `BipBufHeader`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn roam_bipbuf_capacity(header_ptr: *const c_void) -> u32 {
     let header = header_ptr as *const BipBufHeader;
     unsafe { (*header).capacity }
 }
 
+/// # Safety
+///
+/// `header_ptr` must point to a valid, initialized `BipBufHeader`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn roam_bipbuf_load_write_acquire(header_ptr: *const c_void) -> u32 {
     let header = header_ptr as *const BipBufHeader;
     unsafe { (*header).write.load(Ordering::Acquire) }
 }
 
+/// # Safety
+///
+/// `header_ptr` must point to a valid, initialized `BipBufHeader`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn roam_bipbuf_load_read_acquire(header_ptr: *const c_void) -> u32 {
     let header = header_ptr as *const BipBufHeader;
     unsafe { (*header).read.load(Ordering::Acquire) }
 }
 
+/// # Safety
+///
+/// `header_ptr` must point to a valid, initialized `BipBufHeader`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn roam_bipbuf_load_watermark_acquire(header_ptr: *const c_void) -> u32 {
     let header = header_ptr as *const BipBufHeader;
@@ -85,6 +102,13 @@ pub unsafe extern "C" fn roam_bipbuf_load_watermark_acquire(header_ptr: *const c
 /// Returns 1 on success (offset written to `*out_offset`),
 /// 0 if there isn't enough contiguous space (would block),
 /// -1 if `len` exceeds the buffer capacity (error).
+///
+/// # Safety
+///
+/// - `header_ptr` must point to a valid, initialized `BipBufHeader` followed by
+///   its data region.
+/// - `out_offset` must be non-null and writable.
+/// - Only one writer may call this concurrently.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn roam_bipbuf_try_grant(
     header_ptr: *mut c_void,
@@ -119,6 +143,11 @@ pub unsafe extern "C" fn roam_bipbuf_try_grant(
 /// Commit `len` previously granted bytes, making them visible to the consumer.
 ///
 /// Returns 0 on success, -1 on overflow.
+///
+/// # Safety
+///
+/// - `header_ptr` must point to a valid, initialized `BipBufHeader`.
+/// - `len` must not exceed the previously granted region.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn roam_bipbuf_commit(header_ptr: *mut c_void, len: u32) -> i32 {
     let header = header_ptr as *mut BipBufHeader;
@@ -137,6 +166,13 @@ pub unsafe extern "C" fn roam_bipbuf_commit(header_ptr: *mut c_void, len: u32) -
 ///
 /// On success, writes the readable region's offset and length to the out
 /// pointers and returns 1. Returns 0 if the buffer is empty.
+///
+/// # Safety
+///
+/// - `header_ptr` must point to a valid, initialized `BipBufHeader` followed by
+///   its data region.
+/// - `out_offset` and `out_len` must be non-null and writable.
+/// - Only one reader may call this concurrently.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn roam_bipbuf_try_read(
     header_ptr: *mut c_void,
@@ -163,6 +199,11 @@ pub unsafe extern "C" fn roam_bipbuf_try_read(
 /// Release `len` bytes from the consumer side.
 ///
 /// Returns 0 on success, -1 on overflow.
+///
+/// # Safety
+///
+/// - `header_ptr` must point to a valid, initialized `BipBufHeader`.
+/// - `len` must not exceed the previously read region.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn roam_bipbuf_release(header_ptr: *mut c_void, len: u32) -> i32 {
     let header = header_ptr as *mut BipBufHeader;
@@ -194,6 +235,12 @@ pub unsafe extern "C" fn roam_bipbuf_release(header_ptr: *mut c_void, len: u32) 
 ///
 /// Does NOT initialize the pool — call `roam_var_slot_pool_init` for that.
 /// Returns a heap-allocated opaque handle, or null on failure.
+///
+/// # Safety
+///
+/// - `region_ptr` must point to a valid shared-memory region of at least
+///   `region_len` bytes, and must remain valid for the lifetime of the pool.
+/// - `classes` must point to a valid array of `num_classes` `RoamSizeClass` entries.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn roam_var_slot_pool_attach(
     region_ptr: *mut u8,
@@ -218,6 +265,12 @@ pub unsafe extern "C" fn roam_var_slot_pool_attach(
 }
 
 /// Initialize all extent-0 slots and free lists. Call once during segment creation.
+///
+/// # Safety
+///
+/// `pool` must be a valid pointer returned by `roam_var_slot_pool_attach`.
+/// The underlying region must be writable and large enough for the configured
+/// size classes.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn roam_var_slot_pool_init(pool: *mut RoamVarSlotPool) {
     let pool = unsafe { &mut *pool };
@@ -225,6 +278,11 @@ pub unsafe extern "C" fn roam_var_slot_pool_init(pool: *mut RoamVarSlotPool) {
 }
 
 /// Update the region pointer after a resize/remap.
+///
+/// # Safety
+///
+/// - `pool` must be a valid pointer returned by `roam_var_slot_pool_attach`.
+/// - `region_ptr` must point to a valid region of at least `region_len` bytes.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn roam_var_slot_pool_update_region(
     pool: *mut RoamVarSlotPool,
@@ -239,6 +297,11 @@ pub unsafe extern "C" fn roam_var_slot_pool_update_region(
 /// Allocate a slot that can hold `size` bytes.
 ///
 /// Returns 1 on success (handle written to `*out_handle`), 0 if exhausted.
+///
+/// # Safety
+///
+/// - `pool` must be a valid pointer returned by `roam_var_slot_pool_attach`.
+/// - `out_handle` must be non-null and writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn roam_var_slot_pool_alloc(
     pool: *const RoamVarSlotPool,
@@ -266,6 +329,10 @@ pub unsafe extern "C" fn roam_var_slot_pool_alloc(
 /// Transition a slot from Allocated to InFlight.
 ///
 /// Returns 0 on success, -1 on error (generation mismatch or wrong state).
+///
+/// # Safety
+///
+/// `pool` must be a valid pointer returned by `roam_var_slot_pool_attach`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn roam_var_slot_pool_mark_in_flight(
     pool: *const RoamVarSlotPool,
@@ -282,6 +349,10 @@ pub unsafe extern "C" fn roam_var_slot_pool_mark_in_flight(
 /// Free an in-flight slot back to its pool.
 ///
 /// Returns 0 on success, -1 on error.
+///
+/// # Safety
+///
+/// `pool` must be a valid pointer returned by `roam_var_slot_pool_attach`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn roam_var_slot_pool_free(
     pool: *const RoamVarSlotPool,
@@ -298,6 +369,10 @@ pub unsafe extern "C" fn roam_var_slot_pool_free(
 /// Free an allocated (never sent) slot back to its pool.
 ///
 /// Returns 0 on success, -1 on error.
+///
+/// # Safety
+///
+/// `pool` must be a valid pointer returned by `roam_var_slot_pool_attach`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn roam_var_slot_pool_free_allocated(
     pool: *const RoamVarSlotPool,
@@ -314,6 +389,11 @@ pub unsafe extern "C" fn roam_var_slot_pool_free_allocated(
 /// Get a pointer to the slot's payload data area.
 ///
 /// Returns null if the handle is invalid.
+///
+/// # Safety
+///
+/// `pool` must be a valid pointer returned by `roam_var_slot_pool_attach`.
+/// The returned pointer is only valid while the pool and its region remain alive.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn roam_var_slot_pool_payload_ptr(
     pool: *const RoamVarSlotPool,
@@ -327,6 +407,10 @@ pub unsafe extern "C" fn roam_var_slot_pool_payload_ptr(
 /// Get the current state of a slot.
 ///
 /// Returns 0 = Free, 1 = Allocated, 2 = InFlight, -1 = invalid handle.
+///
+/// # Safety
+///
+/// `pool` must be a valid pointer returned by `roam_var_slot_pool_attach`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn roam_var_slot_pool_slot_state(
     pool: *const RoamVarSlotPool,
@@ -343,6 +427,10 @@ pub unsafe extern "C" fn roam_var_slot_pool_slot_state(
 /// Get the slot size for a given class index.
 ///
 /// Returns 0 if the class index is out of range.
+///
+/// # Safety
+///
+/// `pool` must be a valid pointer returned by `roam_var_slot_pool_attach`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn roam_var_slot_pool_slot_size(
     pool: *const RoamVarSlotPool,
@@ -353,6 +441,10 @@ pub unsafe extern "C" fn roam_var_slot_pool_slot_size(
 }
 
 /// Recover all slots owned by a crashed peer.
+///
+/// # Safety
+///
+/// `pool` must be a valid pointer returned by `roam_var_slot_pool_attach`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn roam_var_slot_pool_recover_peer(
     pool: *const RoamVarSlotPool,
@@ -363,6 +455,10 @@ pub unsafe extern "C" fn roam_var_slot_pool_recover_peer(
 }
 
 /// Calculate the total size needed for a variable slot pool (extent 0 only).
+///
+/// # Safety
+///
+/// `classes` must point to a valid array of `num_classes` `RoamSizeClass` entries.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn roam_var_slot_pool_calculate_size(
     classes: *const RoamSizeClass,
@@ -380,6 +476,12 @@ pub unsafe extern "C" fn roam_var_slot_pool_calculate_size(
 }
 
 /// Destroy a VarSlotPool, freeing its heap allocation.
+///
+/// # Safety
+///
+/// `pool` must be either null or a valid pointer previously returned by
+/// `roam_var_slot_pool_attach`. After this call, `pool` is dangling and must
+/// not be used again.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn roam_var_slot_pool_destroy(pool: *mut RoamVarSlotPool) {
     if !pool.is_null() {
@@ -392,18 +494,29 @@ pub unsafe extern "C" fn roam_var_slot_pool_destroy(pool: *mut RoamVarSlotPool) 
 // Thin wrappers so Swift can perform atomic operations on shared memory
 // without needing C stdatomic interop.
 
+/// # Safety
+///
+/// `ptr` must point to a naturally-aligned `u32` in valid shared memory.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn roam_atomic_load_u32_acquire(ptr: *const u32) -> u32 {
     let a = ptr as *const AtomicU32;
     unsafe { (*a).load(Ordering::Acquire) }
 }
 
+/// # Safety
+///
+/// `ptr` must point to a naturally-aligned `u32` in valid shared memory.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn roam_atomic_store_u32_release(ptr: *mut u32, value: u32) {
     let a = ptr as *const AtomicU32;
     unsafe { (*a).store(value, Ordering::Release) };
 }
 
+/// # Safety
+///
+/// - `ptr` must point to a naturally-aligned `u32` in valid shared memory.
+/// - `expected` must be non-null and writable (updated with the actual value on
+///   failure).
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn roam_atomic_compare_exchange_u32(
     ptr: *mut u32,
@@ -421,24 +534,38 @@ pub unsafe extern "C" fn roam_atomic_compare_exchange_u32(
     }
 }
 
+/// # Safety
+///
+/// `ptr` must point to a naturally-aligned `u32` in valid shared memory.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn roam_atomic_fetch_add_u32(ptr: *mut u32, value: u32) -> u32 {
     let a = ptr as *const AtomicU32;
     unsafe { (*a).fetch_add(value, Ordering::AcqRel) }
 }
 
+/// # Safety
+///
+/// `ptr` must point to a naturally-aligned `u64` in valid shared memory.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn roam_atomic_load_u64_acquire(ptr: *const u64) -> u64 {
     let a = ptr as *const AtomicU64;
     unsafe { (*a).load(Ordering::Acquire) }
 }
 
+/// # Safety
+///
+/// `ptr` must point to a naturally-aligned `u64` in valid shared memory.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn roam_atomic_store_u64_release(ptr: *mut u64, value: u64) {
     let a = ptr as *const AtomicU64;
     unsafe { (*a).store(value, Ordering::Release) };
 }
 
+/// # Safety
+///
+/// - `ptr` must point to a naturally-aligned `u64` in valid shared memory.
+/// - `expected` must be non-null and writable (updated with the actual value on
+///   failure).
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn roam_atomic_compare_exchange_u64(
     ptr: *mut u64,
