@@ -6,12 +6,6 @@ macro_rules! declare_u64_id {
         #[facet(transparent)]
         pub struct $name(pub u64);
 
-        impl $name {
-            pub const fn new(id: u64) -> Self {
-                Self(id)
-            }
-        }
-
         impl ::std::fmt::Display for $name {
             fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
                 write!(f, "{}", self.0)

@@ -2,7 +2,8 @@
 //!
 //! Writes binary files to a shared fixtures directory that Swift tests can read.
 
-use roam_wire::{ConnectionId, Hello, Message, MetadataValue};
+use roam_types::{ChannelId, ConnectionId, MethodId, Payload, RequestId};
+use roam_wire::{Hello, Message, MetadataValue};
 use std::fs;
 use std::path::Path;
 
@@ -70,7 +71,7 @@ fn main() {
 
     // Connect/Accept/Reject (new in v2)
     let msg = Message::Connect {
-        request_id: 1,
+        request_id: RequestId(1),
         metadata: vec![],
     };
     write_vector(
@@ -80,7 +81,7 @@ fn main() {
     );
 
     let msg = Message::Connect {
-        request_id: 2,
+        request_id: RequestId(2),
         metadata: vec![(
             "auth".to_string(),
             MetadataValue::String("token123".to_string()),
@@ -94,8 +95,8 @@ fn main() {
     );
 
     let msg = Message::Accept {
-        request_id: 1,
-        conn_id: ConnectionId::new(1),
+        request_id: RequestId(1),
+        conn_id: ConnectionId(1),
         metadata: vec![],
     };
     write_vector(
@@ -105,7 +106,7 @@ fn main() {
     );
 
     let msg = Message::Reject {
-        request_id: 1,
+        request_id: RequestId(1),
         reason: "not listening".to_string(),
         metadata: vec![],
     };
@@ -127,7 +128,7 @@ fn main() {
     );
 
     let msg = Message::Goodbye {
-        conn_id: ConnectionId::new(1),
+        conn_id: ConnectionId(1),
         reason: "done".to_string(),
     };
     write_vector(
@@ -139,11 +140,11 @@ fn main() {
     // Request variants (now has conn_id)
     let msg = Message::Request {
         conn_id: ConnectionId::ROOT,
-        request_id: 1,
-        method_id: 42,
+        request_id: RequestId(1),
+        method_id: MethodId(42),
         metadata: vec![],
         channels: vec![],
-        payload: vec![],
+        payload: Payload(vec![]),
     };
     write_vector(
         &wire_dir,
@@ -153,11 +154,11 @@ fn main() {
 
     let msg = Message::Request {
         conn_id: ConnectionId::ROOT,
-        request_id: 1,
-        method_id: 42,
+        request_id: RequestId(1),
+        method_id: MethodId(42),
         metadata: vec![],
         channels: vec![],
-        payload: vec![0xDE, 0xAD, 0xBE, 0xEF],
+        payload: Payload(vec![0xDE, 0xAD, 0xBE, 0xEF]),
     };
     write_vector(
         &wire_dir,
@@ -167,15 +168,15 @@ fn main() {
 
     let msg = Message::Request {
         conn_id: ConnectionId::ROOT,
-        request_id: 5,
-        method_id: 100,
+        request_id: RequestId(5),
+        method_id: MethodId(100),
         metadata: vec![(
             "key".to_string(),
             MetadataValue::String("value".to_string()),
             0, // flags
         )],
         channels: vec![],
-        payload: vec![],
+        payload: Payload(vec![]),
     };
     write_vector(
         &wire_dir,
@@ -186,11 +187,11 @@ fn main() {
     // Request with channels (for proxy support)
     let msg = Message::Request {
         conn_id: ConnectionId::ROOT,
-        request_id: 6,
-        method_id: 200,
+        request_id: RequestId(6),
+        method_id: MethodId(200),
         metadata: vec![],
-        channels: vec![1, 3],
-        payload: vec![0x42],
+        channels: vec![ChannelId(1), ChannelId(3)],
+        payload: Payload(vec![0x42]),
     };
     write_vector(
         &wire_dir,
@@ -200,12 +201,12 @@ fn main() {
 
     // Request on virtual connection
     let msg = Message::Request {
-        conn_id: ConnectionId::new(1),
-        request_id: 1,
-        method_id: 42,
+        conn_id: ConnectionId(1),
+        request_id: RequestId(1),
+        method_id: MethodId(42),
         metadata: vec![],
         channels: vec![],
-        payload: vec![0x42],
+        payload: Payload(vec![0x42]),
     };
     write_vector(
         &wire_dir,
@@ -216,10 +217,10 @@ fn main() {
     // Response (now has conn_id)
     let msg = Message::Response {
         conn_id: ConnectionId::ROOT,
-        request_id: 1,
+        request_id: RequestId(1),
         metadata: vec![],
         channels: vec![],
-        payload: vec![0x42],
+        payload: Payload(vec![0x42]),
     };
     write_vector(
         &wire_dir,
@@ -230,7 +231,7 @@ fn main() {
     // Cancel (now has conn_id)
     let msg = Message::Cancel {
         conn_id: ConnectionId::ROOT,
-        request_id: 99,
+        request_id: RequestId(99),
     };
     write_vector(
         &wire_dir,
@@ -241,8 +242,8 @@ fn main() {
     // Data (now has conn_id)
     let msg = Message::Data {
         conn_id: ConnectionId::ROOT,
-        channel_id: 1,
-        payload: vec![1, 2, 3],
+        channel_id: RequestId(1),
+        payload: Payload(vec![1, 2, 3]),
     };
     write_vector(
         &wire_dir,
@@ -253,7 +254,7 @@ fn main() {
     // Close (now has conn_id)
     let msg = Message::Close {
         conn_id: ConnectionId::ROOT,
-        channel_id: 7,
+        channel_id: ChannelId(7),
     };
     write_vector(
         &wire_dir,
@@ -264,7 +265,7 @@ fn main() {
     // Reset (now has conn_id)
     let msg = Message::Reset {
         conn_id: ConnectionId::ROOT,
-        channel_id: 5,
+        channel_id: ChannelId(5),
     };
     write_vector(
         &wire_dir,
@@ -275,7 +276,7 @@ fn main() {
     // Credit (now has conn_id)
     let msg = Message::Credit {
         conn_id: ConnectionId::ROOT,
-        channel_id: 3,
+        channel_id: ChannelId(3),
         bytes: 4096,
     };
     write_vector(

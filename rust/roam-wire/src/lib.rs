@@ -191,7 +191,10 @@ pub enum Message {
     // Virtual connection control
     // ========================================================================
     /// r[impl message.connect.initiate] - Request a new virtual connection.
-    Connect { request_id: u64, metadata: Metadata } = 1,
+    Connect {
+        request_id: RequestId,
+        metadata: Metadata,
+    } = 1,
 
     /// r[impl message.accept.response] - Accept a virtual connection request.
     Accept {
