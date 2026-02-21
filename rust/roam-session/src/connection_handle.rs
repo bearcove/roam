@@ -394,20 +394,10 @@ impl ConnectionHandle {
         };
 
         // Now return an async block that doesn't capture args_ptr
-        let method_name_full = format!("{}.{}", descriptor.service_name, descriptor.method_name);
-        let method_id = descriptor.id;
         async move {
             let payload = payload_result.map_err(TransportError::Encode)?;
-            self.call_raw_full_with_drains(
-                method_id,
-                &method_name_full,
-                metadata,
-                channels,
-                payload,
-                args_debug,
-                drains,
-            )
-            .await
+            self.call_descriptor(descriptor, metadata, channels, payload, args_debug, drains)
+                .await
         }
     }
 
@@ -572,6 +562,88 @@ impl ConnectionHandle {
         .await
     }
 
+    /// Typed call path: uses descriptor fields directly for diagnostics.
+    #[allow(clippy::too_many_arguments)]
+    async fn call_descriptor(
+        &self,
+        descriptor: &'static crate::MethodDescriptor,
+        metadata: roam_wire::Metadata,
+        channels: Vec<u64>,
+        payload: Vec<u8>,
+        args_debug: Option<String>,
+        drains: Vec<(ChannelId, Receiver<IncomingChannelMessage>)>,
+    ) -> Result<ResponseData, TransportError> {
+        let _request_permit = self.acquire_request_slot().await?;
+
+        let method_id = descriptor.id;
+        let request_id = self.shared.request_ids.next();
+        let method_name_full = format!("{}.{}", descriptor.service_name, descriptor.method_name);
+        #[cfg(feature = "diagnostics")]
+        let mut metadata = self.merged_outgoing_metadata(metadata, request_id, &method_name_full);
+        #[cfg(not(feature = "diagnostics"))]
+        let metadata = self.merged_outgoing_metadata(metadata, request_id, &method_name_full);
+
+        #[cfg(feature = "diagnostics")]
+        {
+            let request_handle = if let Some(diag) = self.shared.diagnostic_state.as_deref() {
+                let args_debug_str = args_debug.as_deref().unwrap_or("");
+                let args_json = if args_debug_str.is_empty() {
+                    String::from("[]")
+                } else {
+                    args_debug_str.to_string()
+                };
+                let request_body = moire_types::RequestEntity {
+                    service_name: String::from(descriptor.service_name),
+                    method_name: String::from(descriptor.method_name),
+                    args_json: moire_types::Json::new(args_json),
+                };
+                Some(diag.emit_request_node(method_name_full.clone(), request_body))
+            } else {
+                None
+            };
+
+            if let Some(request_wire_id) = request_handle.as_ref().and_then(|h| h.id_for_wire()) {
+                Self::upsert_metadata_entry(
+                    &mut metadata,
+                    crate::MOIRE_REQUEST_ENTITY_ID_METADATA_KEY,
+                    roam_wire::MetadataValue::String(request_wire_id),
+                    roam_wire::metadata_flags::NONE,
+                );
+            }
+        }
+
+        // Track outgoing request for diagnostics
+        if let Some(diag) = &self.shared.diagnostic_state {
+            let args = args_debug.as_ref().map(|s| {
+                let mut map = std::collections::HashMap::new();
+                map.insert("args".to_string(), s.clone());
+                map
+            });
+            diag.record_outgoing_request(crate::diagnostic::RequestRecord {
+                conn_id: self.shared.conn_id.raw(),
+                request_id,
+                method_id,
+                metadata: Some(&metadata),
+                args,
+            });
+            diag.associate_channels_with_request(&channels, request_id);
+        }
+
+        let (response_tx, response_rx) = oneshot("call_descriptor");
+        let msg = DriverMessage::Call {
+            conn_id: self.shared.conn_id,
+            request_id,
+            method_id,
+            metadata,
+            channels,
+            payload,
+            response_tx,
+        };
+
+        self.send_and_drain(msg, drains, response_rx).await
+    }
+
+    /// Raw call path: parses service/method names from the full method name string.
     #[allow(clippy::too_many_arguments)]
     async fn call_raw_full_with_drains(
         &self,
@@ -590,38 +662,36 @@ impl ConnectionHandle {
         let mut metadata = self.merged_outgoing_metadata(metadata, request_id, method_name);
         #[cfg(not(feature = "diagnostics"))]
         let metadata = self.merged_outgoing_metadata(metadata, request_id, method_name);
-        let (response_tx, response_rx) = oneshot("call_raw_with_channels");
 
         #[cfg(feature = "diagnostics")]
-        let args_debug_str = args_debug.as_deref().unwrap_or("").to_string();
-
-        #[cfg(feature = "diagnostics")]
-        let request_handle = if let Some(diag) = self.shared.diagnostic_state.as_deref() {
-            let (service_name, method_name_only) =
-                method_name.rsplit_once('.').unwrap_or(("", method_name));
-            let args_json = if args_debug_str.is_empty() {
-                String::from("[]")
+        {
+            let request_handle = if let Some(diag) = self.shared.diagnostic_state.as_deref() {
+                let args_debug_str = args_debug.as_deref().unwrap_or("");
+                let (service_name, method_name_only) =
+                    method_name.rsplit_once('.').unwrap_or(("", method_name));
+                let args_json = if args_debug_str.is_empty() {
+                    String::from("[]")
+                } else {
+                    args_debug_str.to_string()
+                };
+                let request_body = moire_types::RequestEntity {
+                    service_name: String::from(service_name),
+                    method_name: String::from(method_name_only),
+                    args_json: moire_types::Json::new(args_json),
+                };
+                Some(diag.emit_request_node(method_name.to_string(), request_body))
             } else {
-                args_debug_str.clone()
+                None
             };
-            let request_body = moire_types::RequestEntity {
-                service_name: String::from(service_name),
-                method_name: String::from(method_name_only),
-                args_json: moire_types::Json::new(args_json),
-            };
-            Some(diag.emit_request_node(method_name.to_string(), request_body))
-        } else {
-            None
-        };
 
-        #[cfg(feature = "diagnostics")]
-        if let Some(request_wire_id) = request_handle.as_ref().and_then(|h| h.id_for_wire()) {
-            Self::upsert_metadata_entry(
-                &mut metadata,
-                crate::MOIRE_REQUEST_ENTITY_ID_METADATA_KEY,
-                roam_wire::MetadataValue::String(request_wire_id),
-                roam_wire::metadata_flags::NONE,
-            );
+            if let Some(request_wire_id) = request_handle.as_ref().and_then(|h| h.id_for_wire()) {
+                Self::upsert_metadata_entry(
+                    &mut metadata,
+                    crate::MOIRE_REQUEST_ENTITY_ID_METADATA_KEY,
+                    roam_wire::MetadataValue::String(request_wire_id),
+                    roam_wire::metadata_flags::NONE,
+                );
+            }
         }
 
         // Track outgoing request for diagnostics
@@ -638,10 +708,10 @@ impl ConnectionHandle {
                 metadata: Some(&metadata),
                 args,
             });
-            // Associate channels with this request
             diag.associate_channels_with_request(&channels, request_id);
         }
 
+        let (response_tx, response_rx) = oneshot("call_raw_full_with_drains");
         let msg = DriverMessage::Call {
             conn_id: self.shared.conn_id,
             request_id,
@@ -652,80 +722,89 @@ impl ConnectionHandle {
             response_tx,
         };
 
-        let call_fut = async {
-            let send_driver_result = self.shared.driver_tx.send(msg).await;
-            send_driver_result.map_err(|_| TransportError::DriverGone)?;
+        self.send_and_drain(msg, drains, response_rx).await
+    }
 
-            let conn_id = self.shared.conn_id;
-            if !drains.is_empty() {
-                let task_tx = self.shared.channel_registry.lock().driver_tx();
-                for (channel_id, mut rx) in drains {
-                    let task_tx = task_tx.clone();
-                    crate::runtime::spawn("roam_tx_drain", async move {
-                        loop {
-                            match rx.recv().await {
-                                Some(IncomingChannelMessage::Data(payload)) => {
-                                    debug!(
-                                        "drain task: received {} bytes on channel {}",
-                                        payload.len(),
-                                        channel_id
-                                    );
-                                    if task_tx
-                                        .send(DriverMessage::Data {
-                                            conn_id,
-                                            channel_id,
-                                            payload,
-                                        })
-                                        .await
-                                        .is_err()
-                                    {
-                                        warn!(
-                                            conn_id = conn_id.raw(),
-                                            channel_id,
-                                            "drain task failed to send DriverMessage::Data"
-                                        );
-                                        break;
-                                    }
-                                    debug!(
-                                        "drain task: sent DriverMessage::Data for channel {}",
-                                        channel_id
-                                    );
-                                }
-                                Some(IncomingChannelMessage::Close) | None => {
-                                    debug!("drain task: channel {} closed", channel_id);
-                                    if task_tx
-                                        .send(DriverMessage::Close {
-                                            conn_id,
-                                            channel_id,
-                                        })
-                                        .await
-                                        .is_err()
-                                    {
-                                        warn!(
-                                            conn_id = conn_id.raw(),
-                                            channel_id,
-                                            "drain task failed to send DriverMessage::Close"
-                                        );
-                                    }
-                                    debug!(
-                                        "drain task: sent DriverMessage::Close for channel {}",
-                                        channel_id
+    /// Send a DriverMessage::Call, spawn drain tasks, and wait for the response.
+    async fn send_and_drain(
+        &self,
+        msg: DriverMessage,
+        drains: Vec<(ChannelId, Receiver<IncomingChannelMessage>)>,
+        response_rx: crate::runtime::OneshotReceiver<Result<ResponseData, TransportError>>,
+    ) -> Result<ResponseData, TransportError> {
+        self.shared
+            .driver_tx
+            .send(msg)
+            .await
+            .map_err(|_| TransportError::DriverGone)?;
+
+        let conn_id = self.shared.conn_id;
+        if !drains.is_empty() {
+            let task_tx = self.shared.channel_registry.lock().driver_tx();
+            for (channel_id, mut rx) in drains {
+                let task_tx = task_tx.clone();
+                crate::runtime::spawn("roam_tx_drain", async move {
+                    loop {
+                        match rx.recv().await {
+                            Some(IncomingChannelMessage::Data(payload)) => {
+                                debug!(
+                                    "drain task: received {} bytes on channel {}",
+                                    payload.len(),
+                                    channel_id
+                                );
+                                if task_tx
+                                    .send(DriverMessage::Data {
+                                        conn_id,
+                                        channel_id,
+                                        payload,
+                                    })
+                                    .await
+                                    .is_err()
+                                {
+                                    warn!(
+                                        conn_id = conn_id.raw(),
+                                        channel_id, "drain task failed to send DriverMessage::Data"
                                     );
                                     break;
                                 }
+                                debug!(
+                                    "drain task: sent DriverMessage::Data for channel {}",
+                                    channel_id
+                                );
+                            }
+                            Some(IncomingChannelMessage::Close) | None => {
+                                debug!("drain task: channel {} closed", channel_id);
+                                if task_tx
+                                    .send(DriverMessage::Close {
+                                        conn_id,
+                                        channel_id,
+                                    })
+                                    .await
+                                    .is_err()
+                                {
+                                    warn!(
+                                        conn_id = conn_id.raw(),
+                                        channel_id,
+                                        "drain task failed to send DriverMessage::Close"
+                                    );
+                                }
+                                debug!(
+                                    "drain task: sent DriverMessage::Close for channel {}",
+                                    channel_id
+                                );
+                                break;
                             }
                         }
-                    });
-                }
+                    }
+                });
             }
+        }
 
-            let response_result = response_rx.recv().await;
-            response_result
-                .map_err(|_| TransportError::DriverGone)?
-                .map_err(|_| TransportError::ConnectionClosed)
-        };
-
-        call_fut.await
+        response_rx
+            .recv()
+            .await
+            .map_err(|_| TransportError::DriverGone)?
+            .map_err(|_| TransportError::ConnectionClosed)
     }
 
     /// Open a new virtual connection on the link.
