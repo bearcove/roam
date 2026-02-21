@@ -105,8 +105,6 @@ pub(crate) struct GuestState {
     pub(crate) on_death: Option<DeathCallback>,
     /// Whether we've already notified death for this peer
     pub(crate) death_notified: bool,
-    /// Call statistics for diagnostics
-    pub(crate) stats: crate::diagnostic::PeerCallStats,
 }
 
 impl ShmHost {
@@ -228,7 +226,6 @@ impl ShmHost {
                 doorbell: Some(host_doorbell),
                 on_death: options.on_death,
                 death_notified: false,
-                stats: crate::diagnostic::PeerCallStats::new(),
             },
         );
         tracing::debug!("add_peer: doorbell stored for {:?}", peer_id);
@@ -540,7 +537,6 @@ impl ShmHost {
                     doorbell: None,
                     on_death: None,
                     death_notified: false,
-                    stats: crate::diagnostic::PeerCallStats::new(),
                 })
                 .last_epoch = current_epoch;
         }
@@ -739,7 +735,6 @@ impl ShmHost {
                 doorbell: None,
                 on_death: None,
                 death_notified: false,
-                stats: crate::diagnostic::PeerCallStats::new(),
             });
             state.pending_slots.push(handle);
         }

@@ -8,10 +8,7 @@
 #[macro_use]
 mod macros;
 
-pub mod diagnostic;
-pub mod diagnostic_snapshot;
 pub mod driver;
-pub mod request_response_spy;
 pub mod runtime;
 pub mod transport;
 
@@ -20,7 +17,7 @@ pub use driver::{
     IncomingConnections, MessageConnector, Negotiated, NoDispatcher, RetryPolicy, accept_framed,
     connect_framed, connect_framed_with_policy, initiate_framed,
 };
-pub use transport::{DiagnosticTransport, MessageTransport};
+pub use transport::MessageTransport;
 
 pub use roam_frame::{Frame, MsgDesc, OwnedMessage, Payload};
 
@@ -64,12 +61,6 @@ pub use rpc_plan::*;
 
 pub(crate) const CHANNEL_SIZE: usize = 1024;
 pub(crate) const RX_STREAM_BUFFER_SIZE: usize = 1024;
-pub const MOIRE_CHAIN_ID_METADATA_KEY: &str = "moire.chain_id";
-pub const MOIRE_SPAN_ID_METADATA_KEY: &str = "moire.span_id";
-pub const MOIRE_PARENT_SPAN_ID_METADATA_KEY: &str = "moire.parent_span_id";
-pub const MOIRE_METHOD_NAME_METADATA_KEY: &str = "moire.method_name";
-pub const MOIRE_REQUEST_ENTITY_ID_METADATA_KEY: &str = "moire.request_entity_id";
-pub const MOIRE_CONNECTION_CORRELATION_ID_METADATA_KEY: &str = "moire.connection_correlation_id";
 
 /// Re-export `Infallible` for use as the error type in infallible methods.
 pub use std::convert::Infallible;

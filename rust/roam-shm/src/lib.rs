@@ -74,7 +74,6 @@ pub mod var_slot_pool;
 pub mod auditable;
 pub mod bootstrap;
 pub mod cleanup;
-pub mod diagnostic;
 pub mod driver;
 pub mod guest;
 pub mod host;
@@ -97,10 +96,6 @@ pub use var_slot_pool::{SizeClassHeader, VarFreeError, VarSlotHandle, VarSlotPoo
 pub use shm_primitives::FileCleanup;
 
 pub use auditable::dump_all_channels;
-pub use diagnostic::{
-    ShmDiagnosticView, ShmDiagnostics, dump_all_shm_diagnostics, dump_all_state,
-    register_shm_diagnostic_view,
-};
 pub use host::{PollResult, ShmHost};
 
 pub use guest::ShmGuest;

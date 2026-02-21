@@ -108,18 +108,7 @@ impl ServiceDispatcher for ForwardingDispatcher {
         let method_id = cx.method_id.raw();
         let request_id = cx.request_id.raw();
         let channels = cx.channels.clone();
-        let method_name = cx.method_name().or_else(|| {
-            cx.metadata()
-                .iter()
-                .find_map(|(k, v, _)| match (k.as_str(), v) {
-                    (
-                        crate::MOIRE_METHOD_NAME_METADATA_KEY,
-                        roam_wire::MetadataValue::String(s),
-                    ) => Some(s.clone()),
-                    _ => None,
-                })
-        });
-        let Some(method_name) = method_name else {
+        let Some(method_name) = cx.method_name() else {
             return Box::pin(async move {
                 let _ = task_tx
                     .send(DriverMessage::Response {
@@ -131,6 +120,7 @@ impl ServiceDispatcher for ForwardingDispatcher {
                     .await;
             });
         };
+        let method_name = method_name.to_string();
 
         let descriptor = forwarding_descriptor(method_id, &method_name);
 

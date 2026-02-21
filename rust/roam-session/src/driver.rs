@@ -33,52 +33,15 @@ use std::sync::Arc;
 use std::time::Duration;
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::Instant;
-#[cfg(feature = "diagnostics")]
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use facet::Facet;
 
-#[cfg(feature = "diagnostics")]
-use crate::request_response_spy::{RequestResponseSpy, ResponseOutcome, TypedResponseHandle};
 use crate::runtime::{Mutex, Receiver, channel, sleep, spawn, spawn_with_abort};
 use crate::{
-    ChannelError, ChannelRegistry, ConnectionHandle, Context, DiagnosticTransport, DriverMessage,
-    MessageTransport, ResponseData, RoamError, Role, RpcPlan, ServiceDispatcher, TransportError,
+    ChannelError, ChannelRegistry, ConnectionHandle, Context, DriverMessage, MessageTransport,
+    ResponseData, RoamError, Role, RpcPlan, ServiceDispatcher, TransportError,
 };
 use roam_wire::{ConnectionId, Hello, Message};
-
-#[cfg(feature = "diagnostics")]
-#[inline]
-fn unix_now_ns() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos() as u64)
-        .unwrap_or(0)
-}
-
-#[cfg(feature = "diagnostics")]
-#[inline]
-fn response_outcome_from_payload(payload: &[u8]) -> ResponseOutcome {
-    match payload {
-        [0, ..] => ResponseOutcome::Ok,
-        [1, 3, ..] => ResponseOutcome::Cancelled,
-        [1, ..] => ResponseOutcome::Error,
-        _ => ResponseOutcome::Error,
-    }
-}
-
-#[cfg(feature = "diagnostics")]
-fn short_transport_name<T>() -> String {
-    std::any::type_name::<T>()
-        .rsplit("::")
-        .next()
-        .unwrap_or("unknown")
-        .to_string()
-}
-
-fn next_connection_correlation_id() -> String {
-    ulid::Ulid::new().to_string()
-}
 
 /// Negotiated connection parameters after Hello exchange.
 #[derive(Debug, Clone)]
@@ -153,12 +116,8 @@ pub struct HandshakeConfig {
     pub initial_channel_credit: u32,
     /// Maximum in-flight concurrent requests per connection.
     pub max_concurrent_requests: u32,
-    /// Optional peer name for identification in diagnostics.
+    /// Optional peer name.
     pub name: Option<String>,
-    /// Optional cross-process connection correlation key.
-    ///
-    /// If unset for an initiator connection, roam-session will generate one.
-    pub connection_correlation_id: Option<String>,
 }
 
 impl Default for HandshakeConfig {
@@ -168,7 +127,6 @@ impl Default for HandshakeConfig {
             initial_channel_credit: 64 * 1024, // 64 KiB
             max_concurrent_requests: 64,
             name: None,
-            connection_correlation_id: None,
         }
     }
 }
@@ -181,13 +139,6 @@ impl HandshakeConfig {
             metadata.push((
                 "name".to_string(),
                 roam_wire::MetadataValue::String(name.clone()),
-                0,
-            ));
-        }
-        if let Some(ref correlation_id) = self.connection_correlation_id {
-            metadata.push((
-                crate::MOIRE_CONNECTION_CORRELATION_ID_METADATA_KEY.to_string(),
-                roam_wire::MetadataValue::String(correlation_id.clone()),
                 0,
             ));
         }
@@ -351,14 +302,7 @@ pub async fn accept_framed<T, D>(
     transport: T,
     config: HandshakeConfig,
     dispatcher: D,
-) -> Result<
-    (
-        ConnectionHandle,
-        IncomingConnections,
-        Driver<DiagnosticTransport<T>, D>,
-    ),
-    ConnectionError,
->
+) -> Result<(ConnectionHandle, IncomingConnections, Driver<T, D>), ConnectionError>
 where
     T: MessageTransport,
     D: ServiceDispatcher,
@@ -479,10 +423,7 @@ where
             .await
             .map_err(ConnectError::ConnectFailed)?;
 
-        let mut config = self.config.clone();
-        if config.connection_correlation_id.is_none() {
-            config.connection_correlation_id = Some(next_connection_correlation_id());
-        }
+        let config = self.config.clone();
 
         let (handle, _incoming, driver) = establish(
             transport,
@@ -778,9 +719,6 @@ struct ConnectionState {
     /// In-flight server requests with their abort handles.
     /// r[impl call.cancel.best-effort] - We track abort handles to allow best-effort cancellation.
     in_flight_server_requests: HashMap<u64, crate::runtime::AbortHandle>,
-
-    #[cfg(feature = "diagnostics")]
-    in_flight_response_handles: HashMap<u64, TypedResponseHandle>,
 }
 
 struct PendingResponse {
@@ -799,20 +737,17 @@ impl ConnectionState {
         role: Role,
         initial_credit: u32,
         max_concurrent_requests: u32,
-        diagnostic_state: Option<Arc<crate::diagnostic::DiagnosticState>>,
         dispatcher: Option<Box<dyn ServiceDispatcher>>,
     ) -> Self {
-        let handle = ConnectionHandle::new_with_diagnostics_and_limits(
+        let handle = ConnectionHandle::new_with_limits(
             conn_id,
             driver_tx.clone(),
             role,
             initial_credit,
             max_concurrent_requests,
-            diagnostic_state.clone(),
         );
-        let mut server_channel_registry =
+        let server_channel_registry =
             ChannelRegistry::new_with_credit_and_role(conn_id, initial_credit, driver_tx, role);
-        server_channel_registry.set_diagnostic_state(diagnostic_state.clone());
         Self {
             conn_id,
             handle,
@@ -820,8 +755,6 @@ impl ConnectionState {
             dispatcher,
             pending_responses: HashMap::new(),
             in_flight_server_requests: HashMap::new(),
-            #[cfg(feature = "diagnostics")]
-            in_flight_response_handles: HashMap::new(),
         }
     }
 
@@ -837,8 +770,6 @@ impl ConnectionState {
         for (_, abort_handle) in self.in_flight_server_requests.drain() {
             abort_handle.abort();
         }
-        #[cfg(feature = "diagnostics")]
-        self.in_flight_response_handles.clear();
     }
 }
 
@@ -953,19 +884,6 @@ pub struct Driver<T, D> {
     /// Channel for incoming connection responses.
     incoming_response_rx: Option<Receiver<IncomingConnectionResponse>>,
     incoming_response_tx: crate::runtime::Sender<IncomingConnectionResponse>,
-    /// Diagnostic state for debugging.
-    diagnostic_state: Option<Arc<crate::diagnostic::DiagnosticState>>,
-}
-
-impl<T, D> Drop for Driver<T, D> {
-    fn drop(&mut self) {
-        #[cfg(feature = "diagnostics")]
-        if let Some(ref diag) = self.diagnostic_state {
-            diag.mark_connection_closed(unix_now_ns());
-            let _ = diag.ensure_connection_context();
-            diag.refresh_connection_context_if_dirty();
-        }
-    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -1000,10 +918,6 @@ where
             futures_util::select! {
                 msg = self.driver_rx.recv().fuse() => {
                     if let Some(msg) = msg {
-                        #[cfg(feature = "diagnostics")]
-                        if let Some(ref diag) = self.diagnostic_state {
-                            diag.record_driver_arm("driver_rx");
-                        }
                         self.handle_driver_message(msg).await?;
                     }
                 }
@@ -1017,19 +931,11 @@ where
                     }
                 }.fuse() => {
                     if let Some(response) = response {
-                        #[cfg(feature = "diagnostics")]
-                        if let Some(ref diag) = self.diagnostic_state {
-                            diag.record_driver_arm("incoming_response_rx");
-                        }
                         self.handle_incoming_response(response).await?;
                     }
                 }
 
                 result = self.io.recv().fuse() => {
-                    #[cfg(feature = "diagnostics")]
-                    if let Some(ref diag) = self.diagnostic_state {
-                        diag.record_driver_arm("io.recv");
-                    }
                     match self.handle_recv(result).await {
                         Ok(true) => continue,
                         Ok(false) => return Ok(()),
@@ -1064,7 +970,6 @@ where
                     self.role,
                     self.negotiated.initial_credit,
                     self.negotiated.max_concurrent_requests,
-                    self.diagnostic_state.clone(),
                     dispatcher,
                 );
                 let handle = conn_state.handle.clone();
@@ -1110,8 +1015,6 @@ where
             } => {
                 // Store pending response in the connection's state
                 if let Some(conn) = self.connections.get_mut(&conn_id) {
-                    #[cfg(feature = "diagnostics")]
-                    let len_before = conn.pending_responses.len();
                     conn.pending_responses.insert(
                         request_id,
                         PendingResponse {
@@ -1122,23 +1025,7 @@ where
                             tx: response_tx,
                         },
                     );
-                    #[cfg(feature = "diagnostics")]
-                    if let Some(ref diag) = self.diagnostic_state {
-                        let len_after = conn.pending_responses.len();
-                        diag.record_pending_map_event(
-                            "insert",
-                            conn_id.raw(),
-                            request_id,
-                            len_before,
-                            len_after,
-                        );
-                    }
                 } else {
-                    // Unknown connection - fail the call
-                    #[cfg(feature = "diagnostics")]
-                    if let Some(ref diag) = self.diagnostic_state {
-                        diag.record_pending_map_event("fail", conn_id.raw(), request_id, 0, 0);
-                    }
                     let _ = response_tx.send(Err(TransportError::ConnectionClosed));
                     return Ok(());
                 }
@@ -1180,16 +1067,10 @@ where
                 channels,
                 payload,
             } => {
-                #[cfg(feature = "diagnostics")]
-                let mut response_handle: Option<TypedResponseHandle> = None;
                 // Check that the request is in-flight for this connection
                 // r[impl call.cancel.best-effort] - If cancelled, abort handle was removed,
                 // so this will return None and we won't send a duplicate response.
                 let should_send = if let Some(conn) = self.connections.get_mut(&conn_id) {
-                    #[cfg(feature = "diagnostics")]
-                    {
-                        response_handle = conn.in_flight_response_handles.remove(&request_id);
-                    }
                     conn.in_flight_server_requests.remove(&request_id).is_some()
                 } else {
                     false
@@ -1215,8 +1096,6 @@ where
                 } else {
                     (payload, channels)
                 };
-                #[cfg(feature = "diagnostics")]
-                let response_outcome = response_outcome_from_payload(&payload);
                 let wire_msg = Message::Response {
                     conn_id,
                     request_id,
@@ -1225,26 +1104,6 @@ where
                     payload,
                 };
                 self.io.send(&wire_msg).await?;
-
-                // Update response node lifecycle after the response frame has been sent.
-                #[cfg(feature = "diagnostics")]
-                if let Some((diag, method_name, request_entity_id)) = self
-                    .strict_diag_response_identity_from_inflight(conn_id, request_id)
-                    .await?
-                {
-                    Self::mark_or_emit_response_outcome(
-                        &diag,
-                        response_handle,
-                        method_name,
-                        request_entity_id,
-                        response_outcome,
-                    );
-                }
-
-                // Track completion for diagnostics only after the response frame was sent.
-                if let Some(ref diag) = self.diagnostic_state {
-                    diag.complete_request(conn_id.raw(), request_id);
-                }
             }
             DriverMessage::Connect {
                 request_id,
@@ -1271,10 +1130,6 @@ where
                 self.io.send(&wire_msg).await?;
             }
             DriverMessage::SweepPendingResponses => {
-                #[cfg(feature = "diagnostics")]
-                if let Some(ref diag) = self.diagnostic_state {
-                    diag.record_driver_arm("sweep_pending_responses");
-                }
                 if self.sweep_pending_response_staleness() {
                     return Err(self.goodbye("call.response.stale-timeout").await);
                 }
@@ -1379,7 +1234,6 @@ where
                         self.role,
                         self.negotiated.initial_credit,
                         self.negotiated.max_concurrent_requests,
-                        self.diagnostic_state.clone(),
                         pending.dispatcher,
                     );
                     let handle = conn_state.handle.clone();
@@ -1443,22 +1297,7 @@ where
             } => {
                 // Route to the correct connection
                 if let Some(conn) = self.connections.get_mut(&conn_id) {
-                    #[cfg(feature = "diagnostics")]
-                    let len_before = conn.pending_responses.len();
                     if let Some(pending_response) = conn.pending_responses.remove(&request_id) {
-                        #[cfg(feature = "diagnostics")]
-                        if let Some(ref diag) = self.diagnostic_state {
-                            let len_after = conn.pending_responses.len();
-                            diag.record_pending_map_event(
-                                "remove",
-                                conn_id.raw(),
-                                request_id,
-                                len_before,
-                                len_after,
-                            );
-                        }
-                        #[cfg(feature = "diagnostics")]
-                        let response_outcome = response_outcome_from_payload(&payload);
                         let send_result = pending_response
                             .tx
                             .send(Ok(ResponseData { payload, channels }));
@@ -1468,28 +1307,7 @@ where
                                 request_id, "response receiver dropped before delivery"
                             );
                         }
-                        #[cfg(feature = "diagnostics")]
-                        if let Some((diag, method_name, request_entity_id)) = self
-                            .strict_diag_response_identity_from_inflight(conn_id, request_id)
-                            .await?
-                        {
-                            let response_handle =
-                                Self::emit_response_handle(&diag, method_name, &request_entity_id);
-                            response_handle.mark(response_outcome);
-                            diag.complete_request(conn_id.raw(), request_id);
-                        }
                     } else {
-                        #[cfg(feature = "diagnostics")]
-                        if let Some(ref diag) = self.diagnostic_state {
-                            let len_after = conn.pending_responses.len();
-                            diag.record_pending_map_event(
-                                "fail",
-                                conn_id.raw(),
-                                request_id,
-                                len_before,
-                                len_after,
-                            );
-                        }
                         warn!(
                             conn_id = conn_id.raw(),
                             request_id,
@@ -1498,10 +1316,6 @@ where
                         return Err(self.goodbye("call.response.unknown-request-id").await);
                     }
                 } else {
-                    #[cfg(feature = "diagnostics")]
-                    if let Some(ref diag) = self.diagnostic_state {
-                        diag.record_pending_map_event("fail", conn_id.raw(), request_id, 0, 0);
-                    }
                     warn!(
                         conn_id = conn_id.raw(),
                         request_id, "received response for unknown conn_id"
@@ -1545,9 +1359,6 @@ where
             }
         }
 
-        // Update per-channel credit snapshot in diagnostics
-        self.update_credit_snapshot();
-
         Ok(())
     }
 
@@ -1587,21 +1398,6 @@ where
             return Err(self.goodbye("flow.call.payload-limit").await);
         }
 
-        if let Some(ref diag) = self.diagnostic_state {
-            diag.record_incoming_request(crate::diagnostic::RequestRecord {
-                conn_id: conn_id.raw(),
-                request_id,
-                method_id,
-                metadata: Some(&metadata),
-                args: None,
-            });
-        }
-
-        #[cfg(feature = "diagnostics")]
-        let strict_diag_response_identity = self
-            .strict_diag_response_identity_from_metadata(method_id, &metadata)
-            .await?;
-
         let conn = self
             .connections
             .get_mut(&conn_id)
@@ -1615,15 +1411,6 @@ where
             &self.dispatcher
         };
         let method_desc = dispatcher.method_descriptor(method_id);
-
-        // Create typed response handle linked to propagated request identity.
-        #[cfg(feature = "diagnostics")]
-        if let Some((diag, method_name, request_entity_id)) = strict_diag_response_identity {
-            let response_handle =
-                Self::emit_response_handle(&diag, method_name, &request_entity_id);
-            conn.in_flight_response_handles
-                .insert(request_id, response_handle);
-        }
 
         let cx = Context::new(
             conn_id,
@@ -1643,16 +1430,10 @@ where
             .set_current_request_id(Some(request_id));
         let dispatch_fut = dispatcher.dispatch(cx, payload, &mut conn.server_channel_registry);
         conn.server_channel_registry.set_current_request_id(None);
-        #[cfg(feature = "diagnostics")]
-        let diag_for_handler = self.diagnostic_state.clone();
 
         // r[impl call.cancel.best-effort] - Store abort handle for cancellation support
         let abort_handle = spawn_with_abort("roam_request_handler", async move {
             dispatch_fut.await;
-            #[cfg(feature = "diagnostics")]
-            if let Some(ref diag) = diag_for_handler {
-                diag.mark_request_handled(conn_id.raw(), request_id);
-            }
         });
         conn.in_flight_server_requests
             .insert(request_id, abort_handle);
@@ -1681,30 +1462,8 @@ where
 
         // Remove and abort the in-flight request if it exists
         if let Some(abort_handle) = conn.in_flight_server_requests.remove(&request_id) {
-            #[cfg(feature = "diagnostics")]
-            let response_handle = conn.in_flight_response_handles.remove(&request_id);
             // Abort the handler task (best-effort)
             abort_handle.abort();
-
-            // Mark response as cancelled.
-            #[cfg(feature = "diagnostics")]
-            if let Some((diag, method_name, request_entity_id)) = self
-                .strict_diag_response_identity_from_inflight(conn_id, request_id)
-                .await?
-            {
-                Self::mark_or_emit_response_outcome(
-                    &diag,
-                    response_handle,
-                    method_name,
-                    request_entity_id,
-                    ResponseOutcome::Cancelled,
-                );
-            }
-
-            // Track cancellation for diagnostics
-            if let Some(ref diag) = self.diagnostic_state {
-                diag.complete_request(conn_id.raw(), request_id);
-            }
 
             // Send a Cancelled response
             // r[impl call.cancel.best-effort] - The callee MUST still send a Response.
@@ -1821,127 +1580,6 @@ where
         Ok(())
     }
 
-    /// Update per-channel credit snapshot in diagnostic state.
-    fn update_credit_snapshot(&self) {
-        if let Some(ref diag) = self.diagnostic_state {
-            let mut all_credits = Vec::new();
-            for conn in self.connections.values() {
-                all_credits.extend(conn.server_channel_registry.snapshot_credits());
-            }
-            diag.update_channel_credits(all_credits);
-        }
-    }
-
-    #[cfg(feature = "diagnostics")]
-    async fn strict_diag_response_identity_from_inflight(
-        &mut self,
-        conn_id: ConnectionId,
-        request_id: u64,
-    ) -> Result<Option<(Arc<crate::diagnostic::DiagnosticState>, String, String)>, ConnectionError>
-    {
-        let Some(diag) = self.diagnostic_state.as_ref().cloned() else {
-            return Ok(None);
-        };
-
-        let Some(method_name) = diag.inflight_request_metadata_string(
-            conn_id.raw(),
-            request_id,
-            crate::MOIRE_METHOD_NAME_METADATA_KEY,
-        ) else {
-            error!(
-                conn_id = conn_id.raw(),
-                request_id, "missing required metadata moire.method_name"
-            );
-            return Err(self
-                .goodbye("diagnostics.response.missing-method-name")
-                .await);
-        };
-
-        let Some(request_entity_id) = diag.inflight_request_metadata_string(
-            conn_id.raw(),
-            request_id,
-            crate::MOIRE_REQUEST_ENTITY_ID_METADATA_KEY,
-        ) else {
-            error!(
-                conn_id = conn_id.raw(),
-                request_id, "missing required metadata moire.request_entity_id"
-            );
-            return Err(self
-                .goodbye("diagnostics.response.missing-request-entity-id")
-                .await);
-        };
-
-        Ok(Some((diag, method_name, request_entity_id)))
-    }
-
-    #[cfg(feature = "diagnostics")]
-    async fn strict_diag_response_identity_from_metadata(
-        &mut self,
-        method_id: u64,
-        metadata: &roam_wire::Metadata,
-    ) -> Result<Option<(Arc<crate::diagnostic::DiagnosticState>, String, String)>, ConnectionError>
-    {
-        let Some(diag) = self.diagnostic_state.as_ref().cloned() else {
-            return Ok(None);
-        };
-
-        let Some(method_name) =
-            roam_wire::metadata_string(metadata, crate::MOIRE_METHOD_NAME_METADATA_KEY)
-        else {
-            error!(
-                method_id,
-                "missing required metadata moire.method_name on incoming request"
-            );
-            return Err(self
-                .goodbye("diagnostics.response.missing-method-name")
-                .await);
-        };
-
-        let Some(request_entity_id) =
-            roam_wire::metadata_string(metadata, crate::MOIRE_REQUEST_ENTITY_ID_METADATA_KEY)
-        else {
-            error!(
-                method_id,
-                "missing required metadata moire.request_entity_id on incoming request"
-            );
-            return Err(self
-                .goodbye("diagnostics.response.missing-request-entity-id")
-                .await);
-        };
-
-        Ok(Some((diag, method_name, request_entity_id)))
-    }
-
-    #[cfg(feature = "diagnostics")]
-    fn emit_response_handle(
-        diag: &crate::diagnostic::DiagnosticState,
-        full_method_name: String,
-        request_entity_id: &str,
-    ) -> TypedResponseHandle {
-        let (service_name, method_name) = full_method_name
-            .rsplit_once('.')
-            .unwrap_or(("", &full_method_name));
-        let response_body = moire_types::ResponseEntity {
-            service_name: String::from(service_name),
-            method_name: String::from(method_name),
-            status: moire_types::ResponseStatus::Pending,
-        };
-        diag.emit_response_node(full_method_name, response_body, Some(request_entity_id))
-    }
-
-    #[cfg(feature = "diagnostics")]
-    fn mark_or_emit_response_outcome(
-        diag: &crate::diagnostic::DiagnosticState,
-        response_handle: Option<TypedResponseHandle>,
-        method_name: String,
-        request_entity_id: String,
-        outcome: ResponseOutcome,
-    ) {
-        let handle = response_handle
-            .unwrap_or_else(|| Self::emit_response_handle(diag, method_name, &request_entity_id));
-        handle.mark(outcome);
-    }
-
     async fn goodbye(&mut self, rule_id: &'static str) -> ConnectionError {
         // Fail all pending responses and abort in-flight requests on all connections
         for (_, conn) in self.connections.iter_mut() {
@@ -1998,26 +1636,12 @@ where
         let should_teardown_link = !timed_out_connections.is_empty();
         for conn_id in timed_out_connections {
             if let Some(conn) = self.connections.get_mut(&conn_id) {
-                #[cfg(feature = "diagnostics")]
-                let mut len_before = conn.pending_responses.len();
                 for (request_id, pending) in conn.pending_responses.drain() {
                     warn!(
                         conn_id = conn_id.raw(),
                         request_id,
                         "failing pending response due to stale-timeout connection teardown"
                     );
-                    #[cfg(feature = "diagnostics")]
-                    if let Some(ref diag) = self.diagnostic_state {
-                        let len_after = len_before.saturating_sub(1);
-                        diag.record_pending_map_event(
-                            "fail",
-                            conn_id.raw(),
-                            request_id,
-                            len_before,
-                            len_after,
-                        );
-                        len_before = len_after;
-                    }
                     let _ = pending.tx.send(Err(TransportError::ConnectionClosed));
                 }
                 conn.abort_in_flight_requests();
@@ -2049,23 +1673,13 @@ where
 /// the server will be automatically rejected.
 pub async fn initiate_framed<T, D>(
     transport: T,
-    mut config: HandshakeConfig,
+    config: HandshakeConfig,
     dispatcher: D,
-) -> Result<
-    (
-        ConnectionHandle,
-        IncomingConnections,
-        Driver<DiagnosticTransport<T>, D>,
-    ),
-    ConnectionError,
->
+) -> Result<(ConnectionHandle, IncomingConnections, Driver<T, D>), ConnectionError>
 where
     T: MessageTransport,
     D: ServiceDispatcher,
 {
-    if config.connection_correlation_id.is_none() {
-        config.connection_correlation_id = Some(next_connection_correlation_id());
-    }
     establish(transport, config.to_hello(), dispatcher, Role::Initiator).await
 }
 
@@ -2087,14 +1701,7 @@ async fn establish<T, D>(
     our_hello: Hello,
     dispatcher: D,
     role: Role,
-) -> Result<
-    (
-        ConnectionHandle,
-        IncomingConnections,
-        Driver<DiagnosticTransport<T>, D>,
-    ),
-    ConnectionError,
->
+) -> Result<(ConnectionHandle, IncomingConnections, Driver<T, D>), ConnectionError>
 where
     T: MessageTransport,
     D: ServiceDispatcher,
@@ -2145,7 +1752,6 @@ where
         initial_channel_credit: u32,
         max_concurrent_requests: u32,
         name: Option<String>,
-        correlation_id: Option<String>,
     }
 
     // Extract (max_payload, credit, max_concurrent, peer_name, correlation_id) from a Hello.
@@ -2164,19 +1770,11 @@ where
                         roam_wire::MetadataValue::String(s) => Some(s.clone()),
                         _ => None,
                     });
-                let correlation_id = metadata
-                    .iter()
-                    .find(|(k, _, _)| k == crate::MOIRE_CONNECTION_CORRELATION_ID_METADATA_KEY)
-                    .and_then(|(_, v, _)| match v {
-                        roam_wire::MetadataValue::String(s) => Some(s.clone()),
-                        _ => None,
-                    });
                 Ok(HelloParams {
                     max_payload_size: *max_payload_size,
                     initial_channel_credit: *initial_channel_credit,
                     max_concurrent_requests: *max_concurrent_requests,
                     name,
-                    correlation_id,
                 })
             }
             _ => Err(ConnectionError::UnsupportedProtocolVersion),
@@ -2187,51 +1785,14 @@ where
         max_payload_size: our_max,
         initial_channel_credit: our_credit,
         max_concurrent_requests: our_max_concurrent_requests,
-        name: our_name,
-        correlation_id: our_correlation_id,
+        name: _our_name,
     } = hello_params(&our_hello)?;
     let HelloParams {
         max_payload_size: peer_max,
         initial_channel_credit: peer_credit,
         max_concurrent_requests: peer_max_concurrent_requests,
         name: peer_name,
-        correlation_id: peer_correlation_id,
     } = hello_params(&peer_hello)?;
-    #[cfg(not(feature = "diagnostics"))]
-    let _ = &our_name;
-
-    #[cfg(feature = "diagnostics")]
-    let canonical_correlation_id = match role {
-        Role::Initiator => our_correlation_id.clone().or(peer_correlation_id.clone()),
-        Role::Acceptor => peer_correlation_id.clone().or(our_correlation_id.clone()),
-    };
-    #[cfg(not(feature = "diagnostics"))]
-    let _ = (&our_correlation_id, &peer_correlation_id);
-    if let (Some(our), Some(peer)) = (&our_correlation_id, &peer_correlation_id)
-        && our != peer
-    {
-        warn!(
-            ours = %our,
-            peer = %peer,
-            ?role,
-            "hello correlation IDs differ across peers; using role-preferred canonical value"
-        );
-    }
-
-    #[cfg(feature = "diagnostics")]
-    let local_name = our_name.unwrap_or_else(|| match role {
-        Role::Initiator => "initiator".to_string(),
-        Role::Acceptor => "acceptor".to_string(),
-    });
-    #[cfg(feature = "diagnostics")]
-    let remote_name = peer_name.clone().unwrap_or_else(|| match role {
-        Role::Initiator => "acceptor".to_string(),
-        Role::Acceptor => "initiator".to_string(),
-    });
-    #[cfg(feature = "diagnostics")]
-    let transport_name = short_transport_name::<T>();
-    #[cfg(feature = "diagnostics")]
-    let opened_at_ns = unix_now_ns();
 
     let negotiated = Negotiated {
         max_payload_size: our_max.min(peer_max),
@@ -2250,35 +1811,6 @@ where
     // Create unified channel for all messages
     let (driver_tx, driver_rx) = channel("roam_driver", 256);
 
-    // Create diagnostic state when the feature is enabled.
-    #[cfg(feature = "diagnostics")]
-    let diagnostic_state = {
-        let state = crate::diagnostic::DiagnosticState::new(local_name.clone());
-        state.set_peer_name(remote_name.clone());
-        state.set_connection_identity(local_name, remote_name, transport_name, opened_at_ns);
-        if let Some(correlation_id) = canonical_correlation_id.clone() {
-            state.set_connection_correlation_id(correlation_id);
-        }
-        state.set_negotiated_params(
-            negotiated.max_concurrent_requests,
-            negotiated.initial_credit,
-        );
-        let state = Arc::new(state);
-        crate::diagnostic::register_diagnostic_state(&state);
-        Some(state)
-    };
-    #[cfg(not(feature = "diagnostics"))]
-    let diagnostic_state: Option<Arc<crate::diagnostic::DiagnosticState>> = None;
-
-    // Wrap transport with diagnostic recording
-    let io = DiagnosticTransport::new(io, diagnostic_state.clone());
-
-    #[cfg(feature = "diagnostics")]
-    if let Some(ref diag) = diagnostic_state {
-        let _ = diag.ensure_connection_context();
-        diag.refresh_connection_context_if_dirty();
-    }
-
     // Create root connection (connection 0)
     // r[impl core.link.connection-zero]
     // Root uses None for dispatcher - it uses the link's dispatcher
@@ -2288,7 +1820,6 @@ where
         role,
         negotiated.initial_credit,
         negotiated.max_concurrent_requests,
-        diagnostic_state.clone(),
         None,
     );
     let handle = root_conn.handle.clone();
@@ -2316,7 +1847,6 @@ where
         incoming_connections_tx: Some(incoming_connections_tx), // Always created upfront
         incoming_response_rx: Some(incoming_response_rx),
         incoming_response_tx,
-        diagnostic_state,
     };
 
     #[cfg(not(target_arch = "wasm32"))]

@@ -55,7 +55,7 @@ pub async fn accept<S, D>(
     (
         ConnectionHandle,
         roam_session::IncomingConnections,
-        roam_session::Driver<roam_session::DiagnosticTransport<LengthPrefixedFramed<S>>, D>,
+        roam_session::Driver<LengthPrefixedFramed<S>, D>,
     ),
     ConnectionError,
 >

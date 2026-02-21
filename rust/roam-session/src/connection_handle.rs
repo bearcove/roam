@@ -1,10 +1,10 @@
-use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{
+    Arc,
+    atomic::{AtomicU64, Ordering},
+};
 
 use facet::Facet;
 
-#[cfg(feature = "diagnostics")]
-use crate::request_response_spy::RequestResponseSpy;
 use facet_core::PtrMut;
 
 use crate::{
@@ -65,8 +65,6 @@ pub(crate) struct HandleShared {
     /// Channel registry for routing incoming data.
     /// Protected by a mutex since handles may create channels concurrently.
     pub(crate) channel_registry: crate::runtime::Mutex<ChannelRegistry>,
-    /// Optional diagnostic state for SIGUSR1 dumps.
-    pub(crate) diagnostic_state: Option<Arc<crate::diagnostic::DiagnosticState>>,
     /// Optional request concurrency limiter.
     pub(crate) request_semaphore: Option<moire::sync::Semaphore>,
 }
@@ -91,32 +89,11 @@ pub struct ConnectionHandle {
 }
 
 impl ConnectionHandle {
-    fn upsert_metadata_entry(
-        metadata: &mut roam_wire::Metadata,
-        key: &str,
-        value: roam_wire::MetadataValue,
-        flags: u64,
-    ) {
-        if let Some((_, existing_value, existing_flags)) = metadata
-            .iter_mut()
-            .find(|(entry_key, _, _)| entry_key == key)
-        {
-            *existing_value = value;
-            *existing_flags = flags;
-            return;
-        }
-        metadata.push((key.to_string(), value, flags));
-    }
-
-    fn span_id_for_request(&self, _request_id: u64) -> String {
-        ulid::Ulid::new().to_string()
-    }
-
     fn merged_outgoing_metadata(
         &self,
         mut metadata: roam_wire::Metadata,
-        request_id: u64,
-        method_name: &str,
+        _request_id: u64,
+        _method_name: &str,
     ) -> roam_wire::Metadata {
         if let Some(current_call_metadata) = crate::dispatch::get_current_call_metadata() {
             for (key, value, flags) in current_call_metadata {
@@ -133,37 +110,6 @@ impl ConnectionHandle {
             }
         }
 
-        let parent_span = roam_wire::metadata_string(&metadata, crate::MOIRE_SPAN_ID_METADATA_KEY);
-        let span_id = self.span_id_for_request(request_id);
-        let chain_id = roam_wire::metadata_string(&metadata, crate::MOIRE_CHAIN_ID_METADATA_KEY)
-            .unwrap_or_else(|| span_id.clone());
-        Self::upsert_metadata_entry(
-            &mut metadata,
-            crate::MOIRE_CHAIN_ID_METADATA_KEY,
-            roam_wire::MetadataValue::String(chain_id),
-            roam_wire::metadata_flags::NONE,
-        );
-        Self::upsert_metadata_entry(
-            &mut metadata,
-            crate::MOIRE_SPAN_ID_METADATA_KEY,
-            roam_wire::MetadataValue::String(span_id.clone()),
-            roam_wire::metadata_flags::NONE,
-        );
-        Self::upsert_metadata_entry(
-            &mut metadata,
-            crate::MOIRE_METHOD_NAME_METADATA_KEY,
-            roam_wire::MetadataValue::String(method_name.to_owned()),
-            roam_wire::metadata_flags::NONE,
-        );
-        if let Some(parent_span) = parent_span {
-            Self::upsert_metadata_entry(
-                &mut metadata,
-                crate::MOIRE_PARENT_SPAN_ID_METADATA_KEY,
-                roam_wire::MetadataValue::String(parent_span),
-                roam_wire::metadata_flags::NONE,
-            );
-        }
-
         metadata
     }
 
@@ -172,44 +118,22 @@ impl ConnectionHandle {
     /// All messages (Call/Data/Close/Response) go through a single unified channel
     /// to ensure FIFO ordering.
     pub fn new(driver_tx: Sender<DriverMessage>, role: Role, initial_credit: u32) -> Self {
-        Self::new_with_diagnostics(
+        Self::new_with_limits(
             roam_wire::ConnectionId::ROOT,
             driver_tx,
             role,
             initial_credit,
-            None,
-        )
-    }
-
-    /// Create a new handle with a specific connection ID and optional diagnostic state.
-    ///
-    /// If `diagnostic_state` is provided, all RPC calls and channels will be tracked
-    /// for debugging purposes.
-    pub fn new_with_diagnostics(
-        conn_id: roam_wire::ConnectionId,
-        driver_tx: Sender<DriverMessage>,
-        role: Role,
-        initial_credit: u32,
-        diagnostic_state: Option<Arc<crate::diagnostic::DiagnosticState>>,
-    ) -> Self {
-        Self::new_with_diagnostics_and_limits(
-            conn_id,
-            driver_tx,
-            role,
-            initial_credit,
             u32::MAX,
-            diagnostic_state,
         )
     }
 
-    /// Create a new handle with explicit call concurrency limits.
-    pub fn new_with_diagnostics_and_limits(
+    /// Create a new handle with a specific connection ID.
+    pub fn new_with_limits(
         conn_id: roam_wire::ConnectionId,
         driver_tx: Sender<DriverMessage>,
         role: Role,
         initial_credit: u32,
         max_concurrent_requests: u32,
-        diagnostic_state: Option<Arc<crate::diagnostic::DiagnosticState>>,
     ) -> Self {
         let channel_registry = ChannelRegistry::new_with_credit(initial_credit, driver_tx.clone());
         let request_semaphore = if max_concurrent_requests == u32::MAX {
@@ -230,7 +154,6 @@ impl ConnectionHandle {
                     "ConnectionHandle.channel_registry",
                     channel_registry,
                 ),
-                diagnostic_state,
                 request_semaphore,
             }),
         }
@@ -253,11 +176,6 @@ impl ConnectionHandle {
     /// Get the connection ID for this handle.
     pub fn conn_id(&self) -> roam_wire::ConnectionId {
         self.shared.conn_id
-    }
-
-    /// Get the diagnostic state, if any.
-    pub fn diagnostic_state(&self) -> Option<&Arc<crate::diagnostic::DiagnosticState>> {
-        self.shared.diagnostic_state.as_ref()
     }
 
     /// Make a typed RPC call with automatic serialization and channel binding.
@@ -375,23 +293,8 @@ impl ConnectionHandle {
         };
         let payload_result = facet_postcard::peek_to_vec(peek);
 
-        // Generate args debug info for diagnostics when enabled
-        let args_debug = if cfg!(feature = "diagnostics") {
-            let peek = unsafe {
-                facet::Peek::unchecked_new(
-                    facet_core::PtrConst::new(args_ptr.cast::<u8>()),
-                    args_shape,
-                )
-            };
-            Some(
-                facet_pretty::PrettyPrinter::new()
-                    .with_colors(facet_pretty::ColorMode::Never)
-                    .with_max_content_len(64)
-                    .format_peek(peek),
-            )
-        } else {
-            None
-        };
+        // Reserved for optional request/response tracing hooks.
+        let args_debug = None;
 
         // Now return an async block that doesn't capture args_ptr
         async move {
@@ -416,6 +319,7 @@ impl ConnectionHandle {
             "OutgoingBinder::bind_rx_channel: allocated channel_id for Rx"
         );
 
+        // [FIXME] error handling??? anyone??
         if let Ok(mut ps) = poke.into_struct() {
             // Set channel_id field by getting mutable access to the u64
             if let Ok(mut channel_id_field) = ps.field_by_name("channel_id")
@@ -452,6 +356,7 @@ impl ConnectionHandle {
             "OutgoingBinder::bind_tx_channel: allocated channel_id for Tx"
         );
 
+        // [FIXME] error handling??? anyone??
         if let Ok(mut ps) = poke.into_struct() {
             // Set channel_id field by getting mutable access to the u64
             if let Ok(mut channel_id_field) = ps.field_by_name("channel_id")
@@ -553,7 +458,7 @@ impl ConnectionHandle {
         metadata: roam_wire::Metadata,
         channels: Vec<u64>,
         payload: Vec<u8>,
-        args_debug: Option<String>,
+        _args_debug: Option<String>,
         drains: Vec<(ChannelId, Receiver<IncomingChannelMessage>)>,
     ) -> Result<ResponseData, TransportError> {
         let _request_permit = self.acquire_request_slot().await?;
@@ -561,56 +466,7 @@ impl ConnectionHandle {
         let method_id = descriptor.id;
         let request_id = self.shared.request_ids.next();
         let method_name_full = format!("{}.{}", descriptor.service_name, descriptor.method_name);
-        #[cfg(feature = "diagnostics")]
-        let mut metadata = self.merged_outgoing_metadata(metadata, request_id, &method_name_full);
-        #[cfg(not(feature = "diagnostics"))]
         let metadata = self.merged_outgoing_metadata(metadata, request_id, &method_name_full);
-
-        #[cfg(feature = "diagnostics")]
-        {
-            let request_handle = if let Some(diag) = self.shared.diagnostic_state.as_deref() {
-                let args_debug_str = args_debug.as_deref().unwrap_or("");
-                let args_json = if args_debug_str.is_empty() {
-                    String::from("[]")
-                } else {
-                    args_debug_str.to_string()
-                };
-                let request_body = moire_types::RequestEntity {
-                    service_name: String::from(descriptor.service_name),
-                    method_name: String::from(descriptor.method_name),
-                    args_json: moire_types::Json::new(args_json),
-                };
-                Some(diag.emit_request_node(method_name_full.clone(), request_body))
-            } else {
-                None
-            };
-
-            if let Some(request_wire_id) = request_handle.as_ref().and_then(|h| h.id_for_wire()) {
-                Self::upsert_metadata_entry(
-                    &mut metadata,
-                    crate::MOIRE_REQUEST_ENTITY_ID_METADATA_KEY,
-                    roam_wire::MetadataValue::String(request_wire_id),
-                    roam_wire::metadata_flags::NONE,
-                );
-            }
-        }
-
-        // Track outgoing request for diagnostics
-        if let Some(diag) = &self.shared.diagnostic_state {
-            let args = args_debug.as_ref().map(|s| {
-                let mut map = std::collections::HashMap::new();
-                map.insert("args".to_string(), s.clone());
-                map
-            });
-            diag.record_outgoing_request(crate::diagnostic::RequestRecord {
-                conn_id: self.shared.conn_id.raw(),
-                request_id,
-                method_id,
-                metadata: Some(&metadata),
-                args,
-            });
-            diag.associate_channels_with_request(&channels, request_id);
-        }
 
         let (response_tx, response_rx) = oneshot("call");
         let msg = DriverMessage::Call {
@@ -776,10 +632,6 @@ impl ConnectionHandle {
     ///
     /// Used when schema has `Tx<T>` (callee sends to caller) - we receive that data.
     pub fn register_incoming(&self, channel_id: ChannelId, tx: Sender<IncomingChannelMessage>) {
-        // Track channel for diagnostics (request_id not available here)
-        if let Some(diag) = &self.shared.diagnostic_state {
-            diag.record_channel_open(channel_id, crate::diagnostic::ChannelDirection::Rx, None);
-        }
         self.shared
             .channel_registry
             .lock()
@@ -790,10 +642,6 @@ impl ConnectionHandle {
     ///
     /// The actual receiver is owned by the driver, not the registry.
     pub fn register_outgoing_credit(&self, channel_id: ChannelId) {
-        // Track channel for diagnostics (request_id not available here)
-        if let Some(diag) = &self.shared.diagnostic_state {
-            diag.record_channel_open(channel_id, crate::diagnostic::ChannelDirection::Tx, None);
-        }
         self.shared
             .channel_registry
             .lock()
@@ -819,19 +667,11 @@ impl ConnectionHandle {
 
     /// Close an incoming channel.
     pub fn close_channel(&self, channel_id: ChannelId) {
-        // Track channel close for diagnostics
-        if let Some(diag) = &self.shared.diagnostic_state {
-            diag.record_channel_close(channel_id);
-        }
         self.shared.channel_registry.lock().close(channel_id);
     }
 
     /// Reset a channel.
     pub fn reset_channel(&self, channel_id: ChannelId) {
-        // Track channel close for diagnostics
-        if let Some(diag) = &self.shared.diagnostic_state {
-            diag.record_channel_close(channel_id);
-        }
         self.shared.channel_registry.lock().reset(channel_id);
     }
 
@@ -1065,13 +905,12 @@ mod tests {
     #[tokio::test]
     async fn call_respects_max_concurrent_requests_limit() {
         let (driver_tx, mut driver_rx) = crate::runtime::channel("test_driver", 8);
-        let handle = ConnectionHandle::new_with_diagnostics_and_limits(
+        let handle = ConnectionHandle::new_with_limits(
             roam_wire::ConnectionId::ROOT,
             driver_tx,
             Role::Initiator,
             u32::MAX,
             1,
-            None,
         );
 
         let first = tokio::spawn({

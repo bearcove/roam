@@ -14,61 +14,19 @@
 //! shm[impl shm.handshake]
 //! shm[impl shm.flow.no-credit-message]
 
-use std::collections::HashMap;
-use std::sync::Arc;
-#[cfg(feature = "diagnostics")]
-use std::time::{SystemTime, UNIX_EPOCH};
-
-use roam_session::diagnostic::DiagnosticState;
-#[cfg(feature = "diagnostics")]
-use roam_session::request_response_spy::{
-    RequestResponseSpy, ResponseOutcome, TypedResponseHandle,
-};
 use roam_session::{
     ChannelError, ChannelRegistry, ConnectError, ConnectionHandle, Context, DriverMessage,
     ResponseData, Role, ServiceDispatcher, TransportError,
 };
-#[cfg(feature = "diagnostics")]
-use roam_session::{MOIRE_METHOD_NAME_METADATA_KEY, MOIRE_REQUEST_ENTITY_ID_METADATA_KEY};
 use roam_stream::MessageTransport;
 use roam_wire::{ConnectionId, Message};
+use std::collections::HashMap;
+use std::sync::Arc;
 
 use crate::auditable::{self, AuditableDequeMap, AuditableReceiver, AuditableSender};
 use crate::host::ShmHost;
 use crate::peer::PeerId;
 use crate::transport::{ShmGuestTransport, message_to_shm_msg, shm_msg_to_message};
-
-#[cfg(feature = "diagnostics")]
-#[inline]
-fn unix_now_ns() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos() as u64)
-        .unwrap_or(0)
-}
-
-#[cfg(feature = "diagnostics")]
-#[inline]
-fn response_outcome_from_payload(payload: &[u8]) -> ResponseOutcome {
-    match payload {
-        [0, ..] => ResponseOutcome::Ok,
-        [1, 3, ..] => ResponseOutcome::Cancelled,
-        [1, ..] => ResponseOutcome::Error,
-        _ => ResponseOutcome::Error,
-    }
-}
-
-#[cfg(feature = "diagnostics")]
-fn pending_response_body(full_method_name: &str) -> moire_types::ResponseEntity {
-    let (service_name, method_name) = full_method_name
-        .rsplit_once('.')
-        .unwrap_or(("", full_method_name));
-    moire_types::ResponseEntity {
-        service_name: String::from(service_name),
-        method_name: String::from(method_name),
-        status: moire_types::ResponseStatus::Pending,
-    }
-}
 
 /// Get a human-readable name for a message type.
 fn msg_type_name(msg: &Message) -> &'static str {
@@ -170,8 +128,6 @@ struct VirtualConnectionState {
         HashMap<u64, roam_session::runtime::OneshotSender<Result<ResponseData, TransportError>>>,
     /// In-flight server requests with their abort handles.
     in_flight_server_requests: HashMap<u64, roam_session::runtime::AbortHandle>,
-    #[cfg(feature = "diagnostics")]
-    in_flight_response_handles: HashMap<u64, TypedResponseHandle>,
 }
 
 impl VirtualConnectionState {
@@ -181,19 +137,17 @@ impl VirtualConnectionState {
         driver_tx: roam_session::runtime::Sender<DriverMessage>,
         role: Role,
         initial_credit: u32,
-        diagnostic_state: Option<Arc<DiagnosticState>>,
         dispatcher: Option<Box<dyn ServiceDispatcher>>,
     ) -> Self {
-        let handle = ConnectionHandle::new_with_diagnostics(
+        let handle = ConnectionHandle::new_with_limits(
             conn_id,
             driver_tx.clone(),
             role,
             initial_credit,
-            diagnostic_state.clone(),
+            u32::MAX,
         );
-        let mut server_channel_registry =
+        let server_channel_registry =
             ChannelRegistry::new_with_credit_and_role(conn_id, initial_credit, driver_tx, role);
-        server_channel_registry.set_diagnostic_state(diagnostic_state.clone());
         Self {
             conn_id,
             handle,
@@ -201,8 +155,6 @@ impl VirtualConnectionState {
             dispatcher,
             pending_responses: HashMap::new(),
             in_flight_server_requests: HashMap::new(),
-            #[cfg(feature = "diagnostics")]
-            in_flight_response_handles: HashMap::new(),
         }
     }
 
@@ -218,8 +170,6 @@ impl VirtualConnectionState {
         for (_, abort_handle) in self.in_flight_server_requests.drain() {
             abort_handle.abort();
         }
-        #[cfg(feature = "diagnostics")]
-        self.in_flight_response_handles.clear();
     }
 }
 
@@ -335,20 +285,6 @@ pub struct ShmDriver<T, D> {
     /// Channel for incoming connection responses (Accept/Reject from app code).
     incoming_response_rx: roam_session::runtime::Receiver<IncomingConnectionResponse>,
     incoming_response_tx: roam_session::runtime::Sender<IncomingConnectionResponse>,
-
-    /// Diagnostic state for tracking in-flight requests (for diagnostics dumps).
-    diagnostic_state: Option<Arc<DiagnosticState>>,
-}
-
-impl<T, D> Drop for ShmDriver<T, D> {
-    fn drop(&mut self) {
-        #[cfg(feature = "diagnostics")]
-        if let Some(ref diag) = self.diagnostic_state {
-            diag.mark_connection_closed(unix_now_ns());
-            let _ = diag.ensure_connection_context();
-            diag.refresh_connection_context_if_dirty();
-        }
-    }
 }
 
 impl<T, D> ShmDriver<T, D>
@@ -420,7 +356,6 @@ where
                     self.driver_tx.clone(),
                     self.role,
                     self.negotiated.initial_credit,
-                    self.diagnostic_state.clone(),
                     dispatcher,
                 );
                 let handle = conn_state.handle.clone();
@@ -458,13 +393,6 @@ where
         &mut self,
         msg: DriverMessage,
     ) -> Result<(), ShmConnectionError> {
-        #[cfg(feature = "diagnostics")]
-        let mut completed_response: Option<(
-            u64,
-            u64,
-            Option<TypedResponseHandle>,
-            ResponseOutcome,
-        )> = None;
         let wire_msg = match msg {
             DriverMessage::Call {
                 conn_id,
@@ -528,31 +456,16 @@ where
                 channels,
                 payload,
             } => {
-                #[cfg(feature = "diagnostics")]
-                let mut response_handle: Option<TypedResponseHandle> = None;
                 // Check that the request is in-flight for this connection
                 // r[impl call.cancel.best-effort] - If cancelled, abort handle was removed,
                 // so this will return None and we won't send a duplicate response.
                 let should_send = if let Some(conn) = self.connections.get_mut(&conn_id) {
-                    #[cfg(feature = "diagnostics")]
-                    {
-                        response_handle = conn.in_flight_response_handles.remove(&request_id);
-                    }
                     conn.in_flight_server_requests.remove(&request_id).is_some()
                 } else {
                     false
                 };
                 if !should_send {
                     return Ok(());
-                }
-                #[cfg(feature = "diagnostics")]
-                {
-                    completed_response = Some((
-                        conn_id.raw(),
-                        request_id,
-                        response_handle,
-                        response_outcome_from_payload(&payload),
-                    ));
                 }
                 Message::Response {
                     conn_id,
@@ -590,38 +503,6 @@ where
         };
         trace!("handle_driver_message: sending wire message");
         MessageTransport::send(&mut self.io, &wire_msg).await?;
-        #[cfg(feature = "diagnostics")]
-        if let Some((conn_id, request_id, response_handle, outcome)) = completed_response
-            && let Some(diag) = &self.diagnostic_state
-        {
-            let method_name = diag
-                .inflight_request_metadata_string(
-                    conn_id,
-                    request_id,
-                    MOIRE_METHOD_NAME_METADATA_KEY,
-                )
-                .or_else(|| {
-                    diag.inflight_request_method_id(conn_id, request_id)
-                        .and_then(roam_session::diagnostic::get_method_name)
-                        .map(|s| s.to_string())
-                })
-                .unwrap_or_else(|| "unknown".to_string());
-            let request_wire_id = diag.inflight_request_metadata_string(
-                conn_id,
-                request_id,
-                MOIRE_REQUEST_ENTITY_ID_METADATA_KEY,
-            );
-            let handle = response_handle.unwrap_or_else(|| {
-                diag.emit_response_node(
-                    method_name.clone(),
-                    pending_response_body(&method_name),
-                    request_wire_id.as_deref(),
-                )
-            });
-            handle.mark(outcome);
-            trace!(request_id, name = %diag.name, "completing incoming request");
-            diag.complete_request(conn_id, request_id);
-        }
         trace!("handle_driver_message: wire message sent");
         Ok(())
     }
@@ -742,7 +623,6 @@ where
                         self.driver_tx.clone(),
                         self.role,
                         self.negotiated.initial_credit,
-                        self.diagnostic_state.clone(),
                         pending.dispatcher,
                     );
                     let handle = conn_state.handle.clone();
@@ -811,36 +691,7 @@ where
                 if let Some(conn) = self.connections.get_mut(&conn_id)
                     && let Some(tx) = conn.pending_responses.remove(&request_id)
                 {
-                    #[cfg(feature = "diagnostics")]
-                    let response_outcome = response_outcome_from_payload(&payload);
                     let _ = tx.send(Ok(ResponseData { payload, channels }));
-                    #[cfg(feature = "diagnostics")]
-                    if let Some(diag) = &self.diagnostic_state {
-                        let method_name = diag
-                            .inflight_request_metadata_string(
-                                conn_id.raw(),
-                                request_id,
-                                MOIRE_METHOD_NAME_METADATA_KEY,
-                            )
-                            .or_else(|| {
-                                diag.inflight_request_method_id(conn_id.raw(), request_id)
-                                    .and_then(roam_session::diagnostic::get_method_name)
-                                    .map(|s| s.to_string())
-                            })
-                            .unwrap_or_else(|| "unknown".to_string());
-                        let request_wire_id = diag.inflight_request_metadata_string(
-                            conn_id.raw(),
-                            request_id,
-                            MOIRE_REQUEST_ENTITY_ID_METADATA_KEY,
-                        );
-                        let response_handle = diag.emit_response_node(
-                            method_name.clone(),
-                            pending_response_body(&method_name),
-                            request_wire_id.as_deref(),
-                        );
-                        response_handle.mark(response_outcome);
-                        diag.complete_request(conn_id.raw(), request_id);
-                    }
                 }
                 // Unknown response IDs are ignored per spec
             }
@@ -919,44 +770,8 @@ where
                 .await);
         }
 
-        // Track incoming request for diagnostics
-        if let Some(diag) = &self.diagnostic_state {
-            trace!(request_id, method_id, name = %diag.name, "recording incoming request");
-            diag.record_incoming_request(roam_session::diagnostic::RequestRecord {
-                conn_id: conn_id.raw(),
-                request_id,
-                method_id,
-                metadata: Some(&metadata),
-                args: None,
-            });
-        }
-
-        // Create typed response handle linked to propagated request identity.
-        #[cfg(feature = "diagnostics")]
-        {
-            let method_name = roam_wire::metadata_string(&metadata, MOIRE_METHOD_NAME_METADATA_KEY)
-                .or_else(|| {
-                    roam_session::diagnostic::get_method_name(method_id).map(|s| s.to_string())
-                })
-                .unwrap_or_else(|| format!("0x{method_id:x}"));
-            let request_wire_id =
-                roam_wire::metadata_string(&metadata, MOIRE_REQUEST_ENTITY_ID_METADATA_KEY);
-            if let Some(diag) = self.diagnostic_state.as_deref() {
-                let response_handle = diag.emit_response_node(
-                    method_name.clone(),
-                    pending_response_body(&method_name),
-                    request_wire_id.as_deref(),
-                );
-                conn.in_flight_response_handles
-                    .insert(request_id, response_handle);
-            }
-        };
-
         // Validate metadata
         if let Err(rule_id) = roam_wire::validate_metadata(&metadata) {
-            if let Some(diag) = &self.diagnostic_state {
-                diag.complete_request(conn_id.raw(), request_id);
-            }
             return Err(self
                 .goodbye(
                     rule_id,
@@ -967,9 +782,6 @@ where
 
         // Validate payload size
         if payload.len() as u32 > self.negotiated.max_payload_size {
-            if let Some(diag) = &self.diagnostic_state {
-                diag.complete_request(conn_id.raw(), request_id);
-            }
             return Err(self
                 .goodbye(
                     "flow.call.payload-limit",
@@ -1012,17 +824,11 @@ where
             .set_current_request_id(Some(request_id));
         let handler_fut = dispatcher.dispatch(cx, payload, &mut conn.server_channel_registry);
         conn.server_channel_registry.set_current_request_id(None);
-        #[cfg(feature = "diagnostics")]
-        let diag_for_handler = self.diagnostic_state.clone();
 
         // r[impl call.cancel.best-effort] - Store abort handle for cancellation support
         let abort_handle =
             roam_session::runtime::spawn_with_abort("roam_shm_handle_request", async move {
                 handler_fut.await;
-                #[cfg(feature = "diagnostics")]
-                if let Some(diag) = &diag_for_handler {
-                    diag.mark_request_handled(conn_id.raw(), request_id);
-                }
             });
         conn.in_flight_server_requests
             .insert(request_id, abort_handle);
@@ -1050,40 +856,8 @@ where
 
         // Remove and abort the in-flight request if it exists
         if let Some(abort_handle) = conn.in_flight_server_requests.remove(&request_id) {
-            #[cfg(feature = "diagnostics")]
-            let response_handle = conn.in_flight_response_handles.remove(&request_id);
             // Abort the handler task (best-effort)
             abort_handle.abort();
-
-            // Mark response as cancelled.
-            #[cfg(feature = "diagnostics")]
-            if let Some(diag) = &self.diagnostic_state {
-                let method_name = diag
-                    .inflight_request_metadata_string(
-                        conn_id.raw(),
-                        request_id,
-                        MOIRE_METHOD_NAME_METADATA_KEY,
-                    )
-                    .unwrap_or_else(|| "unknown".to_string());
-                let request_wire_id = diag.inflight_request_metadata_string(
-                    conn_id.raw(),
-                    request_id,
-                    MOIRE_REQUEST_ENTITY_ID_METADATA_KEY,
-                );
-                let handle = response_handle.unwrap_or_else(|| {
-                    diag.emit_response_node(
-                        method_name.clone(),
-                        pending_response_body(&method_name),
-                        request_wire_id.as_deref(),
-                    )
-                });
-                handle.mark(ResponseOutcome::Cancelled);
-            }
-
-            // Mark request completed for diagnostics
-            if let Some(diag) = &self.diagnostic_state {
-                diag.complete_request(conn_id.raw(), request_id);
-            }
 
             // Send a Cancelled response
             // r[impl call.cancel.best-effort] - The callee MUST still send a Response.
@@ -1343,42 +1117,6 @@ pub fn establish_guest<D>(
 where
     D: ServiceDispatcher,
 {
-    establish_guest_with_diagnostics(transport, dispatcher, None)
-}
-
-/// Create a guest connection with optional diagnostic state for diagnostics dumps.
-///
-/// Same as [`establish_guest`] but allows passing a [`roam_session::diagnostic::DiagnosticState`]
-/// for tracking in-flight requests and channels.
-pub fn establish_guest_with_diagnostics<D>(
-    transport: ShmGuestTransport,
-    dispatcher: D,
-    diagnostic_state: Option<Arc<DiagnosticState>>,
-) -> (
-    ConnectionHandle,
-    IncomingConnections,
-    ShmDriver<ShmGuestTransport, D>,
-)
-where
-    D: ServiceDispatcher,
-{
-    #[cfg(feature = "diagnostics")]
-    let guest_peer_id = transport.guest().peer_id().get();
-
-    #[cfg(feature = "diagnostics")]
-    let diagnostic_state = diagnostic_state.or_else(|| {
-        let state = Arc::new(DiagnosticState::new("shm-guest"));
-        // Note: guest name can be set later via state.set_peer_name() if needed
-        roam_session::diagnostic::register_diagnostic_state(&state);
-        Some(state)
-    });
-    #[cfg(feature = "diagnostics")]
-    if let Some(ref state) = diagnostic_state {
-        let src = format!("shm-guest-{guest_peer_id}");
-        let dst = "shm-host".to_string();
-        state.set_connection_identity(src, dst, "shm", unix_now_ns());
-    }
-
     // Get config from segment header (already read during attach)
     let config = transport.config();
     let negotiated = ShmNegotiated {
@@ -1401,7 +1139,6 @@ where
         driver_tx.clone(),
         role,
         initial_credit,
-        diagnostic_state.clone(),
         None,
     );
     let handle = root_conn.handle.clone();
@@ -1430,14 +1167,7 @@ where
         incoming_connections_tx: Some(incoming_connections_tx),
         incoming_response_rx,
         incoming_response_tx,
-        diagnostic_state,
     };
-
-    #[cfg(feature = "diagnostics")]
-    if let Some(ref diag) = driver.diagnostic_state {
-        let _ = diag.ensure_connection_context();
-        diag.refresh_connection_context_if_dirty();
-    }
 
     (handle, incoming_connections_rx, driver)
 }
@@ -1472,9 +1202,6 @@ struct PeerConnectionState {
 
     /// Channel for incoming connection responses (Accept/Reject from app code).
     incoming_response_tx: roam_session::runtime::Sender<IncomingConnectionResponse>,
-
-    /// Diagnostic state for tracking in-flight requests (for diagnostics dumps).
-    diagnostic_state: Option<Arc<DiagnosticState>>,
 }
 
 /// Command to control the multi-peer host driver.
@@ -1489,7 +1216,6 @@ enum ControlCommand {
     Add {
         peer_id: PeerId,
         dispatcher: Box<dyn ServiceDispatcher>,
-        diagnostic_state: Option<Arc<DiagnosticState>>,
         response: roam_session::runtime::OneshotSender<(ConnectionHandle, IncomingConnections)>,
     },
     /// Release a previously reserved peer slot.
@@ -1587,23 +1313,6 @@ pub struct MultiPeerHostDriver {
     /// When host slots are exhausted, messages are queued here and retried
     /// when the guest rings the doorbell (indicating it has consumed messages).
     pending_sends: AuditableDequeMap<PeerId, Message>,
-
-    /// Registered SHM segment view for global diagnostics dumps.
-    #[cfg(feature = "diagnostics")]
-    _shm_diagnostic_view: Option<Arc<crate::diagnostic::ShmDiagnosticView>>,
-}
-
-impl Drop for MultiPeerHostDriver {
-    fn drop(&mut self) {
-        #[cfg(feature = "diagnostics")]
-        for state in self.peers.values() {
-            if let Some(ref diag) = state.diagnostic_state {
-                diag.mark_connection_closed(unix_now_ns());
-                let _ = diag.ensure_connection_context();
-                diag.refresh_connection_context_if_dirty();
-            }
-        }
-    }
 }
 
 /// Handle for controlling a running MultiPeerHostDriver.
@@ -1617,7 +1326,7 @@ pub struct MultiPeerHostDriverHandle {
 /// Builder for `MultiPeerHostDriver`.
 pub struct MultiPeerHostDriverBuilder {
     host: ShmHost,
-    peers: Vec<(PeerId, Box<dyn ServiceDispatcher>, Option<String>)>,
+    peers: Vec<(PeerId, Box<dyn ServiceDispatcher>)>,
 }
 
 impl MultiPeerHostDriverBuilder {
@@ -1630,22 +1339,7 @@ impl MultiPeerHostDriverBuilder {
     where
         D: ServiceDispatcher + 'static,
     {
-        self.peers.push((peer_id, Box::new(dispatcher), None));
-        self
-    }
-
-    /// Add a peer with its dispatcher and a human-readable name for diagnostics.
-    pub fn add_peer_named<D>(
-        mut self,
-        peer_id: PeerId,
-        dispatcher: D,
-        name: impl Into<String>,
-    ) -> Self
-    where
-        D: ServiceDispatcher + 'static,
-    {
-        self.peers
-            .push((peer_id, Box::new(dispatcher), Some(name.into())));
+        self.peers.push((peer_id, Box::new(dispatcher)));
         self
     }
 
@@ -1664,13 +1358,6 @@ impl MultiPeerHostDriverBuilder {
         HashMap<PeerId, IncomingConnections>,
         MultiPeerHostDriverHandle,
     ) {
-        #[cfg(feature = "diagnostics")]
-        let shm_diagnostic_view = {
-            let view = Arc::new(crate::diagnostic::ShmDiagnosticView::from_host(&self.host));
-            crate::diagnostic::register_shm_diagnostic_view(&view);
-            Some(view)
-        };
-
         let config = self.host.config();
         let negotiated = ShmNegotiated {
             max_payload_size: config.max_payload_size,
@@ -1692,7 +1379,7 @@ impl MultiPeerHostDriverBuilder {
         let (incoming_response_tx, incoming_response_rx) =
             auditable::channel("incoming_responses", 256);
 
-        for (peer_id, dispatcher, _peer_name) in self.peers {
+        for (peer_id, dispatcher) in self.peers {
             // Create single unified channel for all messages (Call/Data/Close/Response).
             // Single channel ensures FIFO ordering.
             let (driver_tx, mut driver_rx) = roam_session::runtime::channel("shm_host_driver", 256);
@@ -1708,7 +1395,6 @@ impl MultiPeerHostDriverBuilder {
                 role,
                 initial_credit,
                 None,
-                None,
             );
             let handle = root_conn.handle.clone();
 
@@ -1718,26 +1404,6 @@ impl MultiPeerHostDriverBuilder {
             // Create channel for incoming connection requests from this peer
             let (incoming_connections_tx, incoming_connections_rx) =
                 roam_session::runtime::channel("shm_host_incoming_connections", 64);
-
-            #[cfg(feature = "diagnostics")]
-            let peer_diagnostic_state = {
-                let diag_name = if let Some(ref name) = _peer_name {
-                    format!("shm-host {}", name)
-                } else {
-                    format!("shm-host-peer-{}", peer_id.get())
-                };
-                let state = Arc::new(DiagnosticState::new(diag_name));
-                roam_session::diagnostic::register_diagnostic_state(&state);
-                Some(state)
-            };
-            #[cfg(not(feature = "diagnostics"))]
-            let peer_diagnostic_state: Option<Arc<DiagnosticState>> = None;
-            #[cfg(feature = "diagnostics")]
-            if let Some(ref state) = peer_diagnostic_state {
-                let src = "shm-host".to_string();
-                let dst = format!("shm-guest-{}", peer_id.get());
-                state.set_connection_identity(src, dst, "shm", unix_now_ns());
-            }
 
             // Create per-peer incoming response forwarder
             let peer_incoming_response_tx = incoming_response_tx.clone();
@@ -1757,11 +1423,6 @@ impl MultiPeerHostDriverBuilder {
 
             handles.insert(peer_id, handle);
             incoming_connections_map.insert(peer_id, incoming_connections_rx);
-            #[cfg(feature = "diagnostics")]
-            if let Some(ref diag) = peer_diagnostic_state {
-                let _ = diag.ensure_connection_context();
-                diag.refresh_connection_context_if_dirty();
-            }
 
             peers.insert(
                 peer_id,
@@ -1772,7 +1433,6 @@ impl MultiPeerHostDriverBuilder {
                     pending_connects: HashMap::new(),
                     incoming_connections_tx: Some(incoming_connections_tx),
                     incoming_response_tx: peer_response_tx,
-                    diagnostic_state: peer_diagnostic_state,
                 },
             );
 
@@ -1853,8 +1513,6 @@ impl MultiPeerHostDriverBuilder {
             incoming_response_rx,
             incoming_response_tx,
             pending_sends: AuditableDequeMap::new("pending_sends[", 1024),
-            #[cfg(feature = "diagnostics")]
-            _shm_diagnostic_view: shm_diagnostic_view,
         };
 
         let driver_handle = MultiPeerHostDriverHandle { control_tx };
@@ -2025,7 +1683,6 @@ impl MultiPeerHostDriver {
                     driver_tx,
                     Role::Acceptor,
                     self.negotiated.initial_credit,
-                    state.diagnostic_state.clone(),
                     dispatcher,
                 );
                 let handle = conn_state.handle.clone();
@@ -2069,25 +1726,9 @@ impl MultiPeerHostDriver {
             ControlCommand::Add {
                 peer_id,
                 dispatcher,
-                diagnostic_state,
                 response,
             } => {
                 trace!("MultiPeerHostDriver: adding peer {:?} dynamically", peer_id);
-                #[cfg(feature = "diagnostics")]
-                let diagnostic_state = diagnostic_state.or_else(|| {
-                    let state = Arc::new(DiagnosticState::new(format!(
-                        "shm-host-peer-{}",
-                        peer_id.get()
-                    )));
-                    roam_session::diagnostic::register_diagnostic_state(&state);
-                    Some(state)
-                });
-                #[cfg(feature = "diagnostics")]
-                if let Some(ref state) = diagnostic_state {
-                    let src = "shm-host".to_string();
-                    let dst = format!("shm-guest-{}", peer_id.get());
-                    state.set_connection_identity(src, dst, "shm", unix_now_ns());
-                }
                 // Create single unified channel for all messages (Call/Data/Close/Response).
                 let (driver_tx, mut driver_rx) =
                     roam_session::runtime::channel("shm_dynamic_peer_driver", 256);
@@ -2104,7 +1745,6 @@ impl MultiPeerHostDriver {
                     driver_tx.clone(),
                     role,
                     initial_credit,
-                    diagnostic_state.clone(),
                     None,
                 );
                 let handle = root_conn.handle.clone();
@@ -2141,14 +1781,8 @@ impl MultiPeerHostDriver {
                         pending_connects: HashMap::new(),
                         incoming_connections_tx: Some(incoming_connections_tx),
                         incoming_response_tx: peer_response_tx,
-                        diagnostic_state: diagnostic_state.clone(),
                     },
                 );
-                #[cfg(feature = "diagnostics")]
-                if let Some(ref diag) = diagnostic_state {
-                    let _ = diag.ensure_connection_context();
-                    diag.refresh_connection_context_if_dirty();
-                }
                 trace!("MultiPeerHostDriver: {} peers now active", self.peers.len());
 
                 // Spawn forwarder task for this peer's driver messages
@@ -2250,14 +1884,6 @@ impl MultiPeerHostDriver {
         peer_id: PeerId,
         msg: DriverMessage,
     ) -> Result<(), ShmConnectionError> {
-        #[allow(unreachable_patterns)]
-        #[cfg(feature = "diagnostics")]
-        let mut completed_response: Option<(
-            u64,
-            u64,
-            Option<TypedResponseHandle>,
-            ResponseOutcome,
-        )> = None;
         let wire_msg = match msg {
             DriverMessage::Call {
                 conn_id,
@@ -2318,17 +1944,11 @@ impl MultiPeerHostDriver {
                 channels,
                 payload,
             } => {
-                #[cfg(feature = "diagnostics")]
-                let mut response_handle: Option<TypedResponseHandle> = None;
                 // Check that the request is in-flight for this connection
                 // r[impl call.cancel.best-effort] - If cancelled, abort handle was removed,
                 // so this will return None and we won't send a duplicate response.
                 let should_send = if let Some(state) = self.peers.get_mut(&peer_id) {
                     if let Some(conn) = state.connections.get_mut(&conn_id) {
-                        #[cfg(feature = "diagnostics")]
-                        {
-                            response_handle = conn.in_flight_response_handles.remove(&request_id);
-                        }
                         conn.in_flight_server_requests.remove(&request_id).is_some()
                     } else {
                         false
@@ -2338,15 +1958,6 @@ impl MultiPeerHostDriver {
                 };
                 if !should_send {
                     return Ok(());
-                }
-                #[cfg(feature = "diagnostics")]
-                {
-                    completed_response = Some((
-                        conn_id.raw(),
-                        request_id,
-                        response_handle,
-                        response_outcome_from_payload(&payload),
-                    ));
                 }
                 Message::Response {
                     conn_id,
@@ -2389,40 +2000,6 @@ impl MultiPeerHostDriver {
         };
 
         self.send_to_peer(peer_id, &wire_msg).await?;
-
-        #[cfg(feature = "diagnostics")]
-        if let Some((conn_id, request_id, response_handle, outcome)) = completed_response
-            && let Some(state) = self.peers.get(&peer_id)
-            && let Some(diag) = &state.diagnostic_state
-        {
-            let method_name = diag
-                .inflight_request_metadata_string(
-                    conn_id,
-                    request_id,
-                    MOIRE_METHOD_NAME_METADATA_KEY,
-                )
-                .or_else(|| {
-                    diag.inflight_request_method_id(conn_id, request_id)
-                        .and_then(roam_session::diagnostic::get_method_name)
-                        .map(|s| s.to_string())
-                })
-                .unwrap_or_else(|| "unknown".to_string());
-            let request_wire_id = diag.inflight_request_metadata_string(
-                conn_id,
-                request_id,
-                MOIRE_REQUEST_ENTITY_ID_METADATA_KEY,
-            );
-            let handle = response_handle.unwrap_or_else(|| {
-                diag.emit_response_node(
-                    method_name.clone(),
-                    pending_response_body(&method_name),
-                    request_wire_id.as_deref(),
-                )
-            });
-            handle.mark(outcome);
-            trace!(request_id, name = %diag.name, "completing incoming request");
-            diag.complete_request(conn_id, request_id);
-        }
         Ok(())
     }
 
@@ -2516,7 +2093,6 @@ impl MultiPeerHostDriver {
                         driver_tx,
                         Role::Acceptor,
                         self.negotiated.initial_credit,
-                        state.diagnostic_state.clone(),
                         pending.dispatcher,
                     );
                     let handle = conn_state.handle.clone();
@@ -2604,36 +2180,7 @@ impl MultiPeerHostDriver {
                     && let Some(conn) = state.connections.get_mut(&conn_id)
                     && let Some(tx) = conn.pending_responses.remove(&request_id)
                 {
-                    #[cfg(feature = "diagnostics")]
-                    let response_outcome = response_outcome_from_payload(&payload);
                     let _ = tx.send(Ok(ResponseData { payload, channels }));
-                    #[cfg(feature = "diagnostics")]
-                    if let Some(diag) = &state.diagnostic_state {
-                        let method_name = diag
-                            .inflight_request_metadata_string(
-                                conn_id.raw(),
-                                request_id,
-                                MOIRE_METHOD_NAME_METADATA_KEY,
-                            )
-                            .or_else(|| {
-                                diag.inflight_request_method_id(conn_id.raw(), request_id)
-                                    .and_then(roam_session::diagnostic::get_method_name)
-                                    .map(|s| s.to_string())
-                            })
-                            .unwrap_or_else(|| "unknown".to_string());
-                        let request_wire_id = diag.inflight_request_metadata_string(
-                            conn_id.raw(),
-                            request_id,
-                            MOIRE_REQUEST_ENTITY_ID_METADATA_KEY,
-                        );
-                        let response_handle = diag.emit_response_node(
-                            method_name.clone(),
-                            pending_response_body(&method_name),
-                            request_wire_id.as_deref(),
-                        );
-                        response_handle.mark(response_outcome);
-                        diag.complete_request(conn_id.raw(), request_id);
-                    }
                 }
                 // Unknown response IDs are ignored per spec
             }
@@ -2720,49 +2267,8 @@ impl MultiPeerHostDriver {
                 .await);
         }
 
-        // Track incoming request for diagnostics
-        if let Some(diag) = &state.diagnostic_state {
-            trace!(request_id, method_id, name = %diag.name, "recording incoming request");
-            diag.record_incoming_request(roam_session::diagnostic::RequestRecord {
-                conn_id: conn_id.raw(),
-                request_id,
-                method_id,
-                metadata: Some(&metadata),
-                args: None,
-            });
-        } else {
-            trace!(
-                request_id,
-                method_id, "diagnostic_state is None, not tracking incoming request"
-            );
-        }
-
-        // Create typed response handle linked to propagated request identity.
-        #[cfg(feature = "diagnostics")]
-        {
-            let method_name = roam_wire::metadata_string(&metadata, MOIRE_METHOD_NAME_METADATA_KEY)
-                .or_else(|| {
-                    roam_session::diagnostic::get_method_name(method_id).map(|s| s.to_string())
-                })
-                .unwrap_or_else(|| format!("0x{method_id:x}"));
-            let request_wire_id =
-                roam_wire::metadata_string(&metadata, MOIRE_REQUEST_ENTITY_ID_METADATA_KEY);
-            if let Some(diag) = state.diagnostic_state.as_deref() {
-                let response_handle = diag.emit_response_node(
-                    method_name.clone(),
-                    pending_response_body(&method_name),
-                    request_wire_id.as_deref(),
-                );
-                conn.in_flight_response_handles
-                    .insert(request_id, response_handle);
-            }
-        };
-
         // Validate metadata
         if let Err(rule_id) = roam_wire::validate_metadata(&metadata) {
-            if let Some(diag) = &state.diagnostic_state {
-                diag.complete_request(conn_id.raw(), request_id);
-            }
             return Err(self
                 .goodbye(
                     peer_id,
@@ -2774,11 +2280,6 @@ impl MultiPeerHostDriver {
 
         // Validate payload size
         if payload.len() as u32 > self.negotiated.max_payload_size {
-            if let Some(state) = self.peers.get_mut(&peer_id)
-                && let Some(diag) = &state.diagnostic_state
-            {
-                diag.complete_request(conn_id.raw(), request_id);
-            }
             return Err(self
                 .goodbye(
                     peer_id,
@@ -2823,17 +2324,11 @@ impl MultiPeerHostDriver {
             .set_current_request_id(Some(request_id));
         let handler_fut = dispatcher.dispatch(cx, payload, &mut conn.server_channel_registry);
         conn.server_channel_registry.set_current_request_id(None);
-        #[cfg(feature = "diagnostics")]
-        let diag_for_handler = state.diagnostic_state.clone();
 
         // r[impl call.cancel.best-effort] - Store abort handle for cancellation support
         let abort_handle =
             roam_session::runtime::spawn_with_abort("roam_shm_handle_request", async move {
                 handler_fut.await;
-                #[cfg(feature = "diagnostics")]
-                if let Some(diag) = &diag_for_handler {
-                    diag.mark_request_handled(conn_id.raw(), request_id);
-                }
             });
         conn.in_flight_server_requests
             .insert(request_id, abort_handle);
@@ -2871,40 +2366,8 @@ impl MultiPeerHostDriver {
 
         // Remove and abort the in-flight request if it exists
         if let Some(abort_handle) = conn.in_flight_server_requests.remove(&request_id) {
-            #[cfg(feature = "diagnostics")]
-            let response_handle = conn.in_flight_response_handles.remove(&request_id);
             // Abort the handler task (best-effort)
             abort_handle.abort();
-
-            // Mark response as cancelled.
-            #[cfg(feature = "diagnostics")]
-            if let Some(diag) = &state.diagnostic_state {
-                let method_name = diag
-                    .inflight_request_metadata_string(
-                        conn_id.raw(),
-                        request_id,
-                        MOIRE_METHOD_NAME_METADATA_KEY,
-                    )
-                    .unwrap_or_else(|| "unknown".to_string());
-                let request_wire_id = diag.inflight_request_metadata_string(
-                    conn_id.raw(),
-                    request_id,
-                    MOIRE_REQUEST_ENTITY_ID_METADATA_KEY,
-                );
-                let handle = response_handle.unwrap_or_else(|| {
-                    diag.emit_response_node(
-                        method_name.clone(),
-                        pending_response_body(&method_name),
-                        request_wire_id.as_deref(),
-                    )
-                });
-                handle.mark(ResponseOutcome::Cancelled);
-            }
-
-            // Mark request completed for diagnostics
-            if let Some(diag) = &state.diagnostic_state {
-                diag.complete_request(conn_id.raw(), request_id);
-            }
 
             // Send a Cancelled response
             // r[impl call.cancel.best-effort] - The callee MUST still send a Response.
@@ -3400,32 +2863,11 @@ impl MultiPeerHostDriverHandle {
     where
         D: ServiceDispatcher + 'static,
     {
-        self.add_peer_with_diagnostics(peer_id, dispatcher, None)
-            .await
-    }
-
-    /// Register a peer after it's ready, with optional diagnostic state for diagnostics dumps.
-    ///
-    /// Same as [`Self::add_peer`] but allows passing a [`DiagnosticState`] to track
-    /// in-flight requests for debugging.
-    ///
-    /// Returns a tuple of (ConnectionHandle, IncomingConnections) where IncomingConnections
-    /// is a receiver for incoming virtual connection requests from this peer.
-    pub async fn add_peer_with_diagnostics<D>(
-        &self,
-        peer_id: PeerId,
-        dispatcher: D,
-        diagnostic_state: Option<Arc<DiagnosticState>>,
-    ) -> Result<(ConnectionHandle, IncomingConnections), ShmConnectionError>
-    where
-        D: ServiceDispatcher + 'static,
-    {
         let (response_tx, response_rx) = roam_session::runtime::oneshot("shm_conn_response");
 
         let cmd = ControlCommand::Add {
             peer_id,
             dispatcher: Box::new(dispatcher),
-            diagnostic_state,
             response: response_tx,
         };
 

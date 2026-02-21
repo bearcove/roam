@@ -13,7 +13,6 @@ rustdoc-args = ["--html-in-header", "arborium-header.html"]
 
 [features]
 default = []
-diagnostics = ["roam-session/diagnostics"]
 
 [dependencies]
 facet.workspace = true

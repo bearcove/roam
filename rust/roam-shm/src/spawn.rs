@@ -41,8 +41,6 @@ pub struct AddPeerOptions {
     ///
     /// shm[impl shm.death.callback]
     pub on_death: Option<DeathCallback>,
-    /// Diagnostic state for tracking in-flight requests (for diagnostics dumps)
-    pub diagnostic_state: Option<Arc<roam_session::diagnostic::DiagnosticState>>,
 }
 
 /// Information needed by a spawned guest to attach.

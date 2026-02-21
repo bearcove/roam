@@ -179,8 +179,7 @@ pub struct ChannelRegistry {
     /// Channel ID allocator for response channels created during dispatch.
     /// These are channels returned by service methods (e.g., `subscribe() -> Rx<Event>`).
     response_channel_ids: Arc<ChannelIdAllocator>,
-    /// Optional diagnostics sink used for channel lifecycle tracking.
-    diagnostic_state: Option<Arc<crate::diagnostic::DiagnosticState>>,
+
     /// Request currently being bound on this registry (server-side dispatch path).
     current_request_id: Option<u64>,
 }
@@ -211,7 +210,6 @@ impl ChannelRegistry {
             initial_credit,
             driver_tx,
             response_channel_ids: Arc::new(ChannelIdAllocator::new(role)),
-            diagnostic_state: None,
             current_request_id: None,
         }
     }
@@ -241,14 +239,6 @@ impl ChannelRegistry {
     /// Get the connection ID for this registry.
     pub fn conn_id(&self) -> roam_wire::ConnectionId {
         self.conn_id
-    }
-
-    /// Attach diagnostics state for channel open/close lifecycle recording.
-    pub fn set_diagnostic_state(
-        &mut self,
-        diagnostic_state: Option<Arc<crate::diagnostic::DiagnosticState>>,
-    ) {
-        self.diagnostic_state = diagnostic_state;
     }
 
     /// Set request context used while binding channels during server dispatch.
@@ -289,13 +279,6 @@ impl ChannelRegistry {
     ///
     /// r[impl flow.channel.initial-credit] - Channel starts with initial credit.
     pub fn register_incoming(&mut self, channel_id: ChannelId, tx: Sender<IncomingChannelMessage>) {
-        if let Some(diag) = &self.diagnostic_state {
-            diag.record_channel_open(
-                channel_id,
-                crate::diagnostic::ChannelDirection::Rx,
-                self.current_request_id,
-            );
-        }
         self.incoming.insert(channel_id, tx);
         // Grant initial credit - peer can send us this many bytes
         self.incoming_credit.insert(channel_id, self.initial_credit);
@@ -308,13 +291,6 @@ impl ChannelRegistry {
     ///
     /// r[impl flow.channel.initial-credit] - Channel starts with initial credit.
     pub fn register_outgoing_credit(&mut self, channel_id: ChannelId) {
-        if let Some(diag) = &self.diagnostic_state {
-            diag.record_channel_open(
-                channel_id,
-                crate::diagnostic::ChannelDirection::Tx,
-                self.current_request_id,
-            );
-        }
         // Assume peer grants us initial credit - we can send them this many bytes
         self.outgoing_credit.insert(channel_id, self.initial_credit);
     }
@@ -590,24 +566,5 @@ impl ChannelRegistry {
                 slot.set(self.driver_tx.clone());
             }
         }
-    }
-
-    /// Snapshot current per-channel credit state for diagnostics.
-    pub fn snapshot_credits(&self) -> Vec<crate::diagnostic::ChannelCreditInfo> {
-        // Collect all channel IDs that have either incoming or outgoing credit
-        let mut channel_ids: std::collections::HashSet<u64> = std::collections::HashSet::new();
-        channel_ids.extend(self.incoming_credit.keys());
-        channel_ids.extend(self.outgoing_credit.keys());
-
-        let mut result: Vec<crate::diagnostic::ChannelCreditInfo> = channel_ids
-            .into_iter()
-            .map(|ch_id| crate::diagnostic::ChannelCreditInfo {
-                channel_id: ch_id,
-                incoming_credit: self.incoming_credit.get(&ch_id).copied().unwrap_or(0),
-                outgoing_credit: self.outgoing_credit.get(&ch_id).copied().unwrap_or(0),
-            })
-            .collect();
-        result.sort_by_key(|c| c.channel_id);
-        result
     }
 }
