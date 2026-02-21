@@ -124,10 +124,12 @@ struct VirtualConnectionState {
     /// If None, inherits from the parent link's dispatcher.
     dispatcher: Option<Box<dyn ServiceDispatcher>>,
     /// Pending responses (request_id -> response sender).
-    pending_responses:
-        HashMap<u64, roam_session::runtime::OneshotSender<Result<ResponseData, TransportError>>>,
+    pending_responses: HashMap<
+        RequestId,
+        roam_session::runtime::OneshotSender<Result<ResponseData, TransportError>>,
+    >,
     /// In-flight server requests with their abort handles.
-    in_flight_server_requests: HashMap<u64, roam_session::runtime::AbortHandle>,
+    in_flight_server_requests: HashMap<RequestId, roam_session::runtime::AbortHandle>,
 }
 
 impl VirtualConnectionState {
@@ -186,7 +188,7 @@ struct PendingConnect {
 /// or `reject()` to refuse it.
 pub struct IncomingConnection {
     /// The request ID for this Connect request.
-    request_id: u64,
+    request_id: RequestId,
     /// Metadata from the Connect message.
     pub metadata: roam_types::Metadata,
     /// Channel to send the Accept/Reject response.
@@ -232,13 +234,13 @@ impl IncomingConnection {
 /// Internal response for incoming connection handling.
 pub enum IncomingConnectionResponse {
     Accept {
-        request_id: u64,
+        request_id: RequestId,
         metadata: roam_types::Metadata,
         dispatcher: Option<Box<dyn ServiceDispatcher>>,
         handle_tx: roam_session::runtime::OneshotSender<Result<ConnectionHandle, TransportError>>,
     },
     Reject {
-        request_id: u64,
+        request_id: RequestId,
         reason: String,
         metadata: roam_types::Metadata,
     },
@@ -277,7 +279,7 @@ pub struct ShmDriver<T, D> {
     next_conn_id: u64,
 
     /// Pending outgoing Connect requests (request_id -> response channel).
-    pending_connects: HashMap<u64, PendingConnect>,
+    pending_connects: HashMap<RequestId, PendingConnect>,
 
     /// Channel for incoming connection requests.
     incoming_connections_tx: Option<roam_session::runtime::Sender<IncomingConnection>>,
@@ -432,7 +434,7 @@ where
                 trace!(
                     "handle_driver_message: Data ch={}, {} bytes",
                     channel_id,
-                    payload.len()
+                    payload.0.len()
                 );
                 Message::Data {
                     conn_id,
@@ -669,8 +671,8 @@ where
                 payload,
             } => {
                 debug!(
-                    request_id,
-                    method_id,
+                    request_id = %request_id,
+                    method_id = %method_id,
                     ?conn_id,
                     channels = ?channels,
                     "ShmDriver: received Request with channels"
@@ -740,11 +742,11 @@ where
     async fn handle_incoming_request(
         &mut self,
         conn_id: ConnectionId,
-        request_id: u64,
-        method_id: u64,
+        request_id: RequestId,
+        method_id: MethodId,
         metadata: roam_types::Metadata,
-        channels: Vec<u64>,
-        payload: Vec<u8>,
+        channels: Vec<ChannelId>,
+        payload: Payload,
     ) -> Result<(), ShmConnectionError> {
         let conn = match self.connections.get_mut(&conn_id) {
             Some(c) => c,
@@ -781,13 +783,13 @@ where
         }
 
         // Validate payload size
-        if payload.len() as u32 > self.negotiated.max_payload_size {
+        if payload.0.len() as u32 > self.negotiated.max_payload_size {
             return Err(self
                 .goodbye(
                     "flow.call.payload-limit",
                     format!(
                         "Request payload too large: {} bytes (max {}) for request_id={}",
-                        payload.len(),
+                        payload.0.len(),
                         self.negotiated.max_payload_size,
                         request_id
                     ),
@@ -799,13 +801,7 @@ where
         let conn = self.connections.get_mut(&conn_id).unwrap();
 
         // Build context for dispatch
-        let cx = Context::new(
-            conn_id,
-            roam_types::RequestId(request_id),
-            roam_types::MethodId(method_id),
-            metadata,
-            channels,
-        );
+        let cx = Context::new(conn_id, request_id, method_id, metadata, channels);
 
         // r[impl core.conn.dispatcher] - Use connection-specific dispatcher if available
         let dispatcher: &dyn ServiceDispatcher = if let Some(ref conn_dispatcher) = conn.dispatcher
@@ -817,12 +813,12 @@ where
 
         debug!(
             conn_id = %conn_id,
-            request_id, method_id, "dispatching incoming request"
+            request_id = %request_id, method_id = %method_id, "dispatching incoming request"
         );
 
         conn.server_channel_registry
             .set_current_request_id(Some(request_id));
-        let handler_fut = dispatcher.dispatch(cx, payload, &mut conn.server_channel_registry);
+        let handler_fut = dispatcher.dispatch(cx, payload.0, &mut conn.server_channel_registry);
         conn.server_channel_registry.set_current_request_id(None);
 
         // r[impl call.cancel.best-effort] - Store abort handle for cancellation support
@@ -843,7 +839,7 @@ where
     async fn handle_cancel(
         &mut self,
         conn_id: ConnectionId,
-        request_id: u64,
+        request_id: RequestId,
     ) -> Result<(), ShmConnectionError> {
         // Get the connection
         let conn = match self.connections.get_mut(&conn_id) {
@@ -867,7 +863,7 @@ where
                 metadata: vec![],
                 channels: vec![],
                 // Cancelled error: Result::Err(1) + RoamError::Cancelled(3)
-                payload: vec![1, 3],
+                payload: Payload(vec![1, 3]),
             };
             self.io.send(&wire_msg).await?;
         }
@@ -880,16 +876,16 @@ where
     async fn handle_data(
         &mut self,
         conn_id: ConnectionId,
-        channel_id: u64,
-        payload: Vec<u8>,
+        channel_id: ChannelId,
+        payload: Payload,
     ) -> Result<(), ShmConnectionError> {
         trace!(
             "handle_data called for conn {:?} channel {}, {} bytes",
             conn_id,
             channel_id,
-            payload.len()
+            payload.0.len()
         );
-        if channel_id == 0 {
+        if channel_id == ChannelId(0) {
             return Err(self
                 .goodbye(
                     "streaming.id.zero-reserved",
@@ -898,13 +894,13 @@ where
                 .await);
         }
 
-        if payload.len() as u32 > self.negotiated.max_payload_size {
+        if payload.0.len() as u32 > self.negotiated.max_payload_size {
             return Err(self
                 .goodbye(
                     "flow.call.payload-limit",
                     format!(
                         "Data payload too large: {} bytes (max {})",
-                        payload.len(),
+                        payload.0.len(),
                         self.negotiated.max_payload_size
                     ),
                 )
@@ -926,16 +922,16 @@ where
         // Try server registry first, then client handle
         let in_server = conn.server_channel_registry.contains_incoming(channel_id);
         let in_client = conn.handle.contains_channel(channel_id);
-        let payload_len = payload.len();
+        let payload_len = payload.0.len();
 
         let result = if in_server {
             trace!("routing to server_channel_registry");
             conn.server_channel_registry
-                .route_data(channel_id, payload)
+                .route_data(channel_id, payload.0.clone())
                 .await
         } else if in_client {
             trace!("routing to client handle");
-            conn.handle.route_data(channel_id, payload).await
+            conn.handle.route_data(channel_id, payload.0).await
         } else {
             trace!("channel {} unknown", channel_id);
             Err(ChannelError::Unknown)
@@ -977,9 +973,9 @@ where
     async fn handle_close(
         &mut self,
         conn_id: ConnectionId,
-        channel_id: u64,
+        channel_id: ChannelId,
     ) -> Result<(), ShmConnectionError> {
-        if channel_id == 0 {
+        if channel_id == ChannelId(0) {
             return Err(self
                 .goodbye(
                     "streaming.id.zero-reserved",
@@ -1026,7 +1022,7 @@ where
     fn handle_reset(
         &mut self,
         conn_id: ConnectionId,
-        channel_id: u64,
+        channel_id: ChannelId,
     ) -> Result<(), ShmConnectionError> {
         let conn = match self.connections.get_mut(&conn_id) {
             Some(c) => c,
@@ -1195,7 +1191,7 @@ struct PeerConnectionState {
     next_conn_id: u64,
 
     /// Pending outgoing Connect requests (request_id -> response channel).
-    pending_connects: HashMap<u64, PendingConnect>,
+    pending_connects: HashMap<RequestId, PendingConnect>,
 
     /// Channel for incoming connection requests from this peer.
     incoming_connections_tx: Option<roam_session::runtime::Sender<IncomingConnection>>,
@@ -1895,8 +1891,8 @@ impl MultiPeerHostDriver {
                 response_tx,
             } => {
                 debug!(
-                    request_id,
-                    method_id,
+                    request_id = %request_id,
+                    method_id = %method_id,
                     ?conn_id,
                     channels = ?channels,
                     "MultiPeerHostDriver: sending Request with channels"
@@ -2157,8 +2153,8 @@ impl MultiPeerHostDriver {
                 payload,
             } => {
                 debug!(
-                    request_id,
-                    method_id,
+                    request_id = %request_id,
+                    method_id = %method_id,
                     ?conn_id,
                     channels = ?channels,
                     "MultiPeerHostDriver: received Request with channels"
@@ -2231,11 +2227,11 @@ impl MultiPeerHostDriver {
         &mut self,
         peer_id: PeerId,
         conn_id: ConnectionId,
-        request_id: u64,
-        method_id: u64,
+        request_id: RequestId,
+        method_id: MethodId,
         metadata: roam_types::Metadata,
-        channels: Vec<u64>,
-        payload: Vec<u8>,
+        channels: Vec<ChannelId>,
+        payload: Payload,
     ) -> Result<(), ShmConnectionError> {
         let state = match self.peers.get_mut(&peer_id) {
             Some(s) => s,
@@ -2279,14 +2275,14 @@ impl MultiPeerHostDriver {
         }
 
         // Validate payload size
-        if payload.len() as u32 > self.negotiated.max_payload_size {
+        if payload.0.len() as u32 > self.negotiated.max_payload_size {
             return Err(self
                 .goodbye(
                     peer_id,
                     "flow.call.payload-limit",
                     format!(
                         "Request payload too large: {} bytes (max {}) for request_id={}",
-                        payload.len(),
+                        payload.0.len(),
                         self.negotiated.max_payload_size,
                         request_id
                     ),
@@ -2299,13 +2295,7 @@ impl MultiPeerHostDriver {
         let conn = state.connections.get_mut(&conn_id).unwrap();
 
         // Build context for dispatch
-        let cx = Context::new(
-            conn_id,
-            roam_types::RequestId(request_id),
-            roam_types::MethodId(method_id),
-            metadata,
-            channels,
-        );
+        let cx = Context::new(conn_id, request_id, method_id, metadata, channels);
 
         // r[impl core.conn.dispatcher] - Use connection-specific dispatcher if available
         let dispatcher: &dyn ServiceDispatcher = if let Some(ref conn_dispatcher) = conn.dispatcher
@@ -2318,11 +2308,11 @@ impl MultiPeerHostDriver {
         // Dispatch - spawn as a task so message loop can continue.
         debug!(
             conn_id = %conn_id,
-            request_id, method_id, "dispatching incoming request"
+            request_id = %request_id, method_id = %method_id, "dispatching incoming request"
         );
         conn.server_channel_registry
             .set_current_request_id(Some(request_id));
-        let handler_fut = dispatcher.dispatch(cx, payload, &mut conn.server_channel_registry);
+        let handler_fut = dispatcher.dispatch(cx, payload.0, &mut conn.server_channel_registry);
         conn.server_channel_registry.set_current_request_id(None);
 
         // r[impl call.cancel.best-effort] - Store abort handle for cancellation support
@@ -2344,7 +2334,7 @@ impl MultiPeerHostDriver {
         &mut self,
         peer_id: PeerId,
         conn_id: ConnectionId,
-        request_id: u64,
+        request_id: RequestId,
     ) -> Result<(), ShmConnectionError> {
         // Get the peer state
         let state = match self.peers.get_mut(&peer_id) {
@@ -2377,7 +2367,7 @@ impl MultiPeerHostDriver {
                 metadata: vec![],
                 channels: vec![],
                 // Cancelled error: Result::Err(1) + RoamError::Cancelled(3)
-                payload: vec![1, 3],
+                payload: Payload(vec![1, 3]),
             };
             self.send_to_peer(peer_id, &wire_msg).await?;
         }
@@ -2391,10 +2381,10 @@ impl MultiPeerHostDriver {
         &mut self,
         peer_id: PeerId,
         conn_id: ConnectionId,
-        channel_id: u64,
-        payload: Vec<u8>,
+        channel_id: ChannelId,
+        payload: Payload,
     ) -> Result<(), ShmConnectionError> {
-        if channel_id == 0 {
+        if channel_id == ChannelId(0) {
             return Err(self
                 .goodbye(
                     peer_id,
@@ -2404,14 +2394,14 @@ impl MultiPeerHostDriver {
                 .await);
         }
 
-        if payload.len() as u32 > self.negotiated.max_payload_size {
+        if payload.0.len() as u32 > self.negotiated.max_payload_size {
             return Err(self
                 .goodbye(
                     peer_id,
                     "flow.call.payload-limit",
                     format!(
                         "Data payload too large: {} bytes (max {})",
-                        payload.len(),
+                        payload.0.len(),
                         self.negotiated.max_payload_size
                     ),
                 )
@@ -2440,19 +2430,19 @@ impl MultiPeerHostDriver {
         let in_server = conn.server_channel_registry.contains_incoming(channel_id);
         let in_client = conn.handle.contains_channel(channel_id);
         trace!(
-            channel_id,
+            channel_id = %channel_id,
             in_server, in_client, "handle_data: checking channel registries"
         );
 
         let result = if in_server {
             conn.server_channel_registry
-                .route_data(channel_id, payload.clone())
+                .route_data(channel_id, payload.0.clone())
                 .await
         } else if in_client {
-            conn.handle.route_data(channel_id, payload.clone()).await
+            conn.handle.route_data(channel_id, payload.0.clone()).await
         } else {
             warn!(
-                channel_id,
+                channel_id = %channel_id,
                 "handle_data: channel not found in either registry"
             );
             Err(ChannelError::Unknown)
@@ -2467,7 +2457,7 @@ impl MultiPeerHostDriver {
                         "streaming.unknown",
                         format!(
                             "Data for unknown channel_id={} (in_server={}, in_client={}, payload_len={})",
-                            channel_id, in_server, in_client, payload.len()
+                            channel_id, in_server, in_client, payload.0.len()
                         ),
                     )
                     .await)
@@ -2498,9 +2488,9 @@ impl MultiPeerHostDriver {
         &mut self,
         peer_id: PeerId,
         conn_id: ConnectionId,
-        channel_id: u64,
+        channel_id: ChannelId,
     ) -> Result<(), ShmConnectionError> {
-        if channel_id == 0 {
+        if channel_id == ChannelId(0) {
             return Err(self
                 .goodbye(
                     peer_id,
@@ -2555,7 +2545,7 @@ impl MultiPeerHostDriver {
         &mut self,
         peer_id: PeerId,
         conn_id: ConnectionId,
-        channel_id: u64,
+        channel_id: ChannelId,
     ) -> Result<(), ShmConnectionError> {
         let state = match self.peers.get_mut(&peer_id) {
             Some(s) => s,
