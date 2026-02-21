@@ -1,6 +1,9 @@
 // swift-tools-version: 6.0
 import PackageDescription
 
+// Path to the Rust workspace root (two levels up from this Package.swift)
+let rustTargetDir = "../../target/release"
+
 let package = Package(
     name: "roam-runtime",
     platforms: [
@@ -19,6 +22,7 @@ let package = Package(
             name: "RoamRuntime",
             dependencies: [
                 "CRoamShm",
+                "CRoamShmFfi",
                 .product(name: "NIO", package: "swift-nio"),
                 .product(name: "NIOCore", package: "swift-nio"),
                 .product(name: "NIOPosix", package: "swift-nio"),
@@ -29,6 +33,17 @@ let package = Package(
             name: "CRoamShm",
             path: "Sources/CRoamShm",
             publicHeadersPath: "include"
+        ),
+        .target(
+            name: "CRoamShmFfi",
+            path: "Sources/CRoamShmFfi",
+            publicHeadersPath: "include",
+            linkerSettings: [
+                .unsafeFlags([
+                    "-L\(rustTargetDir)",
+                    "-lroam_shm_ffi",
+                ]),
+            ]
         ),
         .executableTarget(
             name: "shm-bootstrap-client",
