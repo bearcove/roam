@@ -324,6 +324,22 @@ pub unsafe extern "C" fn roam_var_slot_pool_payload_ptr(
     pool.inner.payload_ptr(h).unwrap_or(core::ptr::null_mut())
 }
 
+/// Get the current state of a slot.
+///
+/// Returns 0 = Free, 1 = Allocated, 2 = InFlight, -1 = invalid handle.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn roam_var_slot_pool_slot_state(
+    pool: *const RoamVarSlotPool,
+    handle: RoamVarSlotHandle,
+) -> i32 {
+    let pool = unsafe { &*pool };
+    let h = to_handle(&handle);
+    match pool.inner.slot_state(&h) {
+        Some(state) => state as i32,
+        None => -1,
+    }
+}
+
 /// Get the slot size for a given class index.
 ///
 /// Returns 0 if the class index is out of range.

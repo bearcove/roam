@@ -144,6 +144,14 @@ uint8_t *roam_var_slot_pool_payload_ptr(const struct RoamVarSlotPool *pool,
                                         struct RoamVarSlotHandle handle);
 
 /**
+ * Get the current state of a slot.
+ *
+ * Returns 0 = Free, 1 = Allocated, 2 = InFlight, -1 = invalid handle.
+ */
+int32_t roam_var_slot_pool_slot_state(const struct RoamVarSlotPool *pool,
+                                      struct RoamVarSlotHandle handle);
+
+/**
  * Get the slot size for a given class index.
  *
  * Returns 0 if the class index is out of range.
