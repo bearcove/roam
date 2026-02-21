@@ -1,6 +1,8 @@
 // swift-tools-version: 6.0
 import PackageDescription
 
+let rustLibDir = "target/release"
+
 let package = Package(
     name: "roam",
     platforms: [
@@ -17,6 +19,7 @@ let package = Package(
             name: "RoamRuntime",
             dependencies: [
                 "CRoamShm",
+                "CRoamShmFfi",
                 .product(name: "NIO", package: "swift-nio"),
                 .product(name: "NIOCore", package: "swift-nio"),
                 .product(name: "NIOPosix", package: "swift-nio"),
@@ -27,6 +30,14 @@ let package = Package(
             name: "CRoamShm",
             path: "swift/roam-runtime/Sources/CRoamShm",
             publicHeadersPath: "include"
+        ),
+        .target(
+            name: "CRoamShmFfi",
+            path: "swift/roam-runtime/Sources/CRoamShmFfi",
+            publicHeadersPath: "include",
+            linkerSettings: [
+                .unsafeFlags(["-L\(rustLibDir)", "-lroam_shm_ffi"]),
+            ]
         ),
         .testTarget(
             name: "RoamRuntimeTests",

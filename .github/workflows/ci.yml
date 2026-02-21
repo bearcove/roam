@@ -187,6 +187,9 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
 
+      - name: Build Rust FFI staticlib
+        run: cargo build --release -p roam-shm-ffi
+
       - name: Build subject
         run: swift build -c release --package-path swift/subject
 
@@ -217,6 +220,9 @@ jobs:
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
+
+      - name: Build Rust FFI staticlib
+        run: cargo build --release -p roam-shm-ffi
 
       - name: Build subject
         run: swift build -c release --package-path swift/subject
