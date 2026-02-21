@@ -3,7 +3,7 @@
 //! This module provides connection handling for byte-stream transports
 //! (TCP, Unix sockets) that need length-prefixed framing.
 //!
-//! For message-based transports (WebSocket), use `roam_session` directly.
+//! For message-based transports (WebSocket), use `roam_core` directly.
 
 use moire::sync::Mutex;
 use moire::task::FutureExt as _;
@@ -16,7 +16,7 @@ use facet::Facet;
 use tokio::io::{AsyncRead, AsyncWrite};
 
 use crate::framing::LengthPrefixedFramed;
-use roam_session::{
+use roam_core::{
     Caller, ConnectError, ConnectionError, ConnectionHandle, HandshakeConfig, ResponseData,
     RetryPolicy, SendPtr, ServiceDispatcher, TransportError,
 };
@@ -28,7 +28,7 @@ use roam_types::{ChannelId, Metadata, Payload};
 /// in length-prefixed framing automatically.
 ///
 /// For transports that already provide message framing (like WebSocket),
-/// use [`roam_session::MessageConnector`] instead.
+/// use [`roam_core::MessageConnector`] instead.
 pub trait Connector: Send + Sync + 'static {
     /// The raw stream type (e.g., `TcpStream`, `UnixStream`).
     type Transport: AsyncRead + AsyncWrite + Unpin + Send;
@@ -55,8 +55,8 @@ pub async fn accept<S, D>(
 ) -> Result<
     (
         ConnectionHandle,
-        roam_session::IncomingConnections,
-        roam_session::Driver<LengthPrefixedFramed<S>, D>,
+        roam_core::IncomingConnections,
+        roam_core::Driver<LengthPrefixedFramed<S>, D>,
     ),
     ConnectionError,
 >
@@ -65,7 +65,7 @@ where
     D: ServiceDispatcher,
 {
     let framed = LengthPrefixedFramed::new(stream);
-    roam_session::accept_framed(framed, config, dispatcher).await
+    roam_core::accept_framed(framed, config, dispatcher).await
 }
 
 // ============================================================================
@@ -202,7 +202,7 @@ where
         let framed = LengthPrefixedFramed::new(stream);
 
         let (handle, _incoming, driver) =
-            roam_session::initiate_framed(framed, self.config.clone(), self.dispatcher.clone())
+            roam_core::initiate_framed(framed, self.config.clone(), self.dispatcher.clone())
                 .await
                 .map_err(|e| ConnectError::ConnectFailed(connection_error_to_io(e)))?;
 
@@ -222,7 +222,7 @@ where
     /// Make a raw RPC call with automatic reconnection.
     pub async fn call_raw(
         &self,
-        descriptor: &'static roam_session::MethodDescriptor,
+        descriptor: &'static roam_core::MethodDescriptor,
         payload: Vec<u8>,
     ) -> Result<Payload, ConnectError> {
         let mut last_error: Option<io::Error> = None;
@@ -288,7 +288,7 @@ where
 {
     async fn call_with_metadata<T: Facet<'static> + Send>(
         &self,
-        descriptor: &'static roam_session::MethodDescriptor,
+        descriptor: &'static roam_core::MethodDescriptor,
         args: &mut T,
         metadata: Metadata,
     ) -> Result<ResponseData, TransportError> {
@@ -318,7 +318,7 @@ where
             let args_ptr = args as *mut T as *mut ();
             #[allow(unsafe_code)]
             let call_result = unsafe {
-                roam_session::ConnectionHandle::call_with_metadata_by_plan(
+                roam_core::ConnectionHandle::call_with_metadata_by_plan(
                     &handle,
                     descriptor,
                     args_ptr,
@@ -353,7 +353,7 @@ where
     fn bind_response_channels<R: Facet<'static>>(
         &self,
         response: &mut R,
-        plan: &roam_session::RpcPlan,
+        plan: &roam_core::RpcPlan,
         channels: &[ChannelId],
     ) {
         let handle = self.current_handle.lock().as_ref().cloned();
@@ -370,7 +370,7 @@ where
     #[allow(unsafe_code)]
     fn call_with_metadata_by_plan(
         &self,
-        descriptor: &'static roam_session::MethodDescriptor,
+        descriptor: &'static roam_core::MethodDescriptor,
         args_ptr: SendPtr,
         metadata: Metadata,
     ) -> impl std::future::Future<Output = Result<ResponseData, TransportError>> {
@@ -438,7 +438,7 @@ where
     unsafe fn bind_response_channels_by_plan(
         &self,
         response_ptr: *mut (),
-        response_plan: &roam_session::RpcPlan,
+        response_plan: &roam_core::RpcPlan,
         channels: &[ChannelId],
     ) {
         let handle = self.current_handle.lock().as_ref().cloned();

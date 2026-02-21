@@ -15,7 +15,7 @@ use std::time::Duration;
 
 use facet::Facet;
 use once_cell::sync::Lazy;
-use roam_session::{
+use roam_core::{
     ChannelRegistry, Context, MethodDescriptor, RoamError, RpcPlan, ServiceDispatcher,
     dispatch_call, dispatch_unknown_method,
 };
@@ -175,7 +175,7 @@ static ALL_DESCS: Lazy<[&'static MethodDescriptor; 6]> = Lazy::new(|| {
 });
 
 impl ServiceDispatcher for TestService {
-    fn service_descriptor(&self) -> &'static roam_session::ServiceDescriptor {
+    fn service_descriptor(&self) -> &'static roam_core::ServiceDescriptor {
         &roam_types::ServiceDescriptor::EMPTY
     }
 

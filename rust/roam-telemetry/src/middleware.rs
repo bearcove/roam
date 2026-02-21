@@ -7,7 +7,7 @@ use std::pin::Pin;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use facet_pretty::PrettyPrinter;
-use roam_session::{Context, MethodOutcome, Middleware, Rejection, SendPeek};
+use roam_core::{Context, MethodOutcome, Middleware, Rejection, SendPeek};
 
 use crate::client::CurrentTrace;
 use crate::exporter::SpanExporter;

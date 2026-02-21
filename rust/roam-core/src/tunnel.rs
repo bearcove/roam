@@ -36,8 +36,8 @@ pub const DEFAULT_TUNNEL_CHUNK_SIZE: usize = 32 * 1024;
 ///
 /// ```ignore
 /// // Host side: create tunnel and pump to/from a socket
-/// let (local, remote) = roam_session::tunnel_pair();
-/// let (read_handle, write_handle) = roam_session::tunnel_stream(socket, local, 32 * 1024);
+/// let (local, remote) = roam_core::tunnel_pair();
+/// let (read_handle, write_handle) = roam_core::tunnel_stream(socket, local, 32 * 1024);
 ///
 /// // Pass `remote` to cell via RPC
 /// cell.handle_connection(remote).await?;

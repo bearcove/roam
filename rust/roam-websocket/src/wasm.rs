@@ -6,7 +6,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use futures_util::StreamExt;
-use roam_session::{
+use roam_core::{
     FramedClient, HandshakeConfig, MessageConnector, MessageTransport, RetryPolicy,
     ServiceDispatcher, connect_framed, connect_framed_with_policy,
 };
@@ -212,7 +212,7 @@ impl MessageTransport for WsTransport {
 
     /// Receive a message with timeout.
     async fn recv_timeout(&mut self, timeout: Duration) -> io::Result<Option<Message>> {
-        roam_session::runtime::timeout(timeout, self.recv(), "ws.recv.timeout")
+        roam_core::runtime::timeout(timeout, self.recv(), "ws.recv.timeout")
             .await
             .unwrap_or(Ok(None))
     }

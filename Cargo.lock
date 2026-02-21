@@ -2382,10 +2382,10 @@ dependencies = [
  "facet-core",
  "facet-postcard",
  "facet-pretty",
+ "roam-core",
  "roam-hash",
  "roam-schema",
  "roam-service-macros",
- "roam-session",
  "roam-types",
  "tracing",
 ]
@@ -2400,6 +2400,29 @@ dependencies = [
  "roam",
  "roam-hash",
  "roam-schema",
+]
+
+[[package]]
+name = "roam-core"
+version = "3.0.0"
+dependencies = [
+ "facet",
+ "facet-core",
+ "facet-format",
+ "facet-path",
+ "facet-postcard",
+ "facet-pretty",
+ "facet-reflect",
+ "futures-util",
+ "moire",
+ "moire-types",
+ "roam",
+ "roam-frame",
+ "roam-task-local",
+ "roam-types",
+ "tokio",
+ "tracing",
+ "ulid",
 ]
 
 [[package]]
@@ -2448,8 +2471,8 @@ dependencies = [
  "futures-util",
  "http",
  "reqwest",
+ "roam-core",
  "roam-schema",
- "roam-session",
  "roam-stream",
  "roam-types",
  "serde",
@@ -2484,7 +2507,7 @@ version = "3.0.0"
 dependencies = [
  "moire",
  "roam",
- "roam-session",
+ "roam-core",
  "roam-types",
  "tokio",
 ]
@@ -2496,7 +2519,7 @@ dependencies = [
  "facet",
  "once_cell",
  "roam",
- "roam-session",
+ "roam-core",
  "roam-types",
  "tokio",
 ]
@@ -2507,7 +2530,7 @@ version = "3.0.0"
 dependencies = [
  "facet",
  "facet-core",
- "roam-session",
+ "roam-core",
 ]
 
 [[package]]
@@ -2520,29 +2543,6 @@ dependencies = [
  "quote",
  "roam",
  "roam-macros-parse",
-]
-
-[[package]]
-name = "roam-session"
-version = "3.0.0"
-dependencies = [
- "facet",
- "facet-core",
- "facet-format",
- "facet-path",
- "facet-postcard",
- "facet-pretty",
- "facet-reflect",
- "futures-util",
- "moire",
- "moire-types",
- "roam",
- "roam-frame",
- "roam-task-local",
- "roam-types",
- "tokio",
- "tracing",
- "ulid",
 ]
 
 [[package]]
@@ -2559,9 +2559,9 @@ dependencies = [
  "moire-types",
  "once_cell",
  "roam",
+ "roam-core",
  "roam-fdpass",
  "roam-frame",
- "roam-session",
  "roam-stream",
  "roam-tracing",
  "roam-types",
@@ -2592,7 +2592,7 @@ dependencies = [
  "moire",
  "once_cell",
  "roam",
- "roam-session",
+ "roam-core",
  "roam-types",
  "spec-proto",
  "tokio",
@@ -2616,7 +2616,7 @@ dependencies = [
  "rand",
  "reqwest",
  "roam",
- "roam-session",
+ "roam-core",
  "roam-stream",
  "roam-types",
  "tokio",
@@ -2656,7 +2656,7 @@ dependencies = [
  "getrandom 0.3.4",
  "js-sys",
  "moire",
- "roam-session",
+ "roam-core",
  "roam-stream",
  "roam-types",
  "tokio",
@@ -3648,7 +3648,7 @@ dependencies = [
 name = "wasm-browser-tests"
 version = "3.0.0"
 dependencies = [
- "roam-session",
+ "roam-core",
  "roam-websocket",
  "spec-proto",
  "wasm-bindgen",

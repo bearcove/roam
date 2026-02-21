@@ -7,7 +7,7 @@
 
 #![cfg(target_arch = "wasm32")]
 
-use roam_session::{CallError, HandshakeConfig, NoDispatcher, RoamError, initiate_framed};
+use roam_core::{CallError, HandshakeConfig, NoDispatcher, RoamError, initiate_framed};
 use roam_websocket::WsTransport;
 use spec_proto::{Color, LookupError, MathError, Message, Point, Rectangle, Shape, TestbedClient};
 use wasm_bindgen::prelude::*;

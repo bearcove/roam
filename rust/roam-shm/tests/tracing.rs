@@ -51,8 +51,8 @@ impl HostService for HostServiceImpl {
 }
 
 struct TracingTestFixture {
-    guest_handle: roam_session::ConnectionHandle,
-    host_handle: roam_session::ConnectionHandle,
+    guest_handle: roam_core::ConnectionHandle,
+    host_handle: roam_core::ConnectionHandle,
     tracing_state: Arc<HostTracingState>,
     tracing_guard: CellTracingGuard,
     _dir: tempfile::TempDir,

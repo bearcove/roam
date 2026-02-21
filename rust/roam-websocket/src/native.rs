@@ -4,7 +4,7 @@ use std::io;
 use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
-use roam_session::MessageTransport;
+use roam_core::MessageTransport;
 use roam_stream::{
     ConnectionError, ConnectionHandle, Driver, FramedClient, HandshakeConfig, Message,
     MessageConnector, RetryPolicy, ServiceDispatcher, accept_framed, connect_framed,
@@ -139,7 +139,7 @@ pub async fn ws_accept<S, D>(
 ) -> Result<
     (
         ConnectionHandle,
-        roam_session::IncomingConnections,
+        roam_core::IncomingConnections,
         Driver<WsTransport<S>, D>,
     ),
     ConnectionError,

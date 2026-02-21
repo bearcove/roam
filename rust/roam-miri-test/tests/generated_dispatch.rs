@@ -5,7 +5,7 @@
 //! corruption when deserializing.
 
 use facet::Facet;
-use roam_session::MessageTransport;
+use roam_core::MessageTransport;
 use roam_types::Message;
 use std::io;
 use std::sync::Arc;
@@ -99,13 +99,13 @@ struct TestServiceImpl {
 }
 
 impl TestService for TestServiceImpl {
-    async fn handle_u64(&self, _cx: &roam_session::Context, n: u64) -> u64 {
+    async fn handle_u64(&self, _cx: &roam_core::Context, n: u64) -> u64 {
         self.calls.fetch_add(1, Ordering::Relaxed);
         tokio::time::sleep(Duration::from_millis(10)).await;
         n
     }
 
-    async fn handle_vec(&self, _cx: &roam_session::Context, data: Vec<u8>) -> Vec<u8> {
+    async fn handle_vec(&self, _cx: &roam_core::Context, data: Vec<u8>) -> Vec<u8> {
         self.calls.fetch_add(1, Ordering::Relaxed);
         tokio::time::sleep(Duration::from_millis(10)).await;
         let mut result = data;
@@ -113,11 +113,7 @@ impl TestService for TestServiceImpl {
         result
     }
 
-    async fn handle_vec_string(
-        &self,
-        _cx: &roam_session::Context,
-        tags: Vec<String>,
-    ) -> Vec<String> {
+    async fn handle_vec_string(&self, _cx: &roam_core::Context, tags: Vec<String>) -> Vec<String> {
         self.calls.fetch_add(1, Ordering::Relaxed);
         tokio::time::sleep(Duration::from_millis(10)).await;
         let mut result = tags;
@@ -127,7 +123,7 @@ impl TestService for TestServiceImpl {
 
     async fn handle_complex(
         &self,
-        _cx: &roam_session::Context,
+        _cx: &roam_core::Context,
         req: ComplexRequest,
     ) -> ComplexResponse {
         self.calls.fetch_add(1, Ordering::Relaxed);
@@ -147,7 +143,7 @@ impl TestService for TestServiceImpl {
 
 #[tokio::test]
 async fn test_concurrent_mixed_types() {
-    use roam_session::{HandshakeConfig, NoDispatcher, accept_framed, initiate_framed};
+    use roam_core::{HandshakeConfig, NoDispatcher, accept_framed, initiate_framed};
 
     // Create service
     let service_impl = TestServiceImpl {

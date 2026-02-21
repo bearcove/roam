@@ -15,7 +15,7 @@ ignored = ["getrandom"]
 rustdoc-args = ["--html-in-header", "arborium-header.html"]
 
 [dependencies]
-roam-session.workspace = true
+roam-core.workspace = true
 facet-postcard.workspace = true
 
 # Native dependencies

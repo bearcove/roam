@@ -4,7 +4,7 @@ use std::pin::Pin;
 use std::sync::LazyLock;
 
 use facet::Facet;
-use roam_session::{MethodDescriptor, RpcPlan};
+use roam_core::{MethodDescriptor, RpcPlan};
 use roam_shm::driver::establish_multi_peer_host;
 use roam_shm::host::ShmHost;
 use roam_shm::layout::SegmentConfig;
@@ -54,16 +54,16 @@ static DESC_3: LazyLock<&'static MethodDescriptor> = LazyLock::new(|| {
 // Mock dispatcher
 #[derive(Clone)]
 struct MockDispatcher;
-impl roam_session::ServiceDispatcher for MockDispatcher {
-    fn service_descriptor(&self) -> &'static roam_session::ServiceDescriptor {
+impl roam_core::ServiceDispatcher for MockDispatcher {
+    fn service_descriptor(&self) -> &'static roam_core::ServiceDescriptor {
         &roam_types::ServiceDescriptor::EMPTY
     }
 
     fn dispatch(
         &self,
-        _ctx: roam_session::Context,
+        _ctx: roam_core::Context,
         _payload: Vec<u8>,
-        _registry: &mut roam_session::ChannelRegistry,
+        _registry: &mut roam_core::ChannelRegistry,
     ) -> Pin<Box<dyn Future<Output = ()> + Send>> {
         Box::pin(async {})
     }

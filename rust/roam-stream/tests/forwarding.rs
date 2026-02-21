@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use facet::Facet;
 use once_cell::sync::Lazy;
-use roam_session::{
+use roam_core::{
     ChannelRegistry, Context, ForwardingDispatcher, MethodDescriptor, RoamError, RpcPlan, Rx,
     ServiceDispatcher, Tx, channel, dispatch_call, dispatch_unknown_method,
 };
@@ -124,7 +124,7 @@ const METHOD_GENERATE: u64 = 3;
 const METHOD_TRANSFORM: u64 = 4;
 
 impl ServiceDispatcher for StreamingService {
-    fn service_descriptor(&self) -> &'static roam_session::ServiceDescriptor {
+    fn service_descriptor(&self) -> &'static roam_core::ServiceDescriptor {
         &roam_types::ServiceDescriptor::EMPTY
     }
 

@@ -9,14 +9,14 @@
 //! # Example
 //!
 //! ```ignore
-//! use roam_session::{accept_framed, HandshakeConfig, NoDispatcher};
+//! use roam_core::{accept_framed, HandshakeConfig, NoDispatcher};
 //! use roam_websocket::WsTransport;
 //!
 //! let transport = WsTransport::connect("ws://localhost:9000").await?;
 //! let (handle, driver) = accept_framed(transport, HandshakeConfig::default(), NoDispatcher).await?;
 //!
 //! // Spawn the driver (uses runtime abstraction - works on native and WASM)
-//! roam_session::runtime::spawn(async move {
+//! roam_core::runtime::spawn(async move {
 //!     let _ = driver.run().await;
 //! });
 //!

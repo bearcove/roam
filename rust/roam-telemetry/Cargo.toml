@@ -19,7 +19,7 @@ rustls-tls = ["reqwest/rustls-tls"]
 
 [dependencies]
 # Roam
-roam-session = { workspace = true }
+roam-core = { workspace = true }
 roam-types = { workspace = true }
 
 # Facet for JSON serialization and pretty printing

@@ -8,7 +8,7 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use facet::Facet;
-use roam_session::{Caller, ResponseData, SendPtr, TransportError};
+use roam_core::{Caller, ResponseData, SendPtr, TransportError};
 use roam_types::{ChannelId, Metadata, MetadataValue};
 
 use crate::exporter::OtlpExporter;
@@ -87,11 +87,11 @@ impl<C> TracingCaller<C> {
 impl<C: Caller> Caller for TracingCaller<C> {
     async fn call_with_metadata<T: Facet<'static> + Send>(
         &self,
-        descriptor: &'static roam_session::MethodDescriptor,
+        descriptor: &'static roam_core::MethodDescriptor,
         args: &mut T,
         mut metadata: roam_types::Metadata,
     ) -> Result<ResponseData, TransportError> {
-        let (trace_id, parent_span_id) = roam_session::CURRENT_EXTENSIONS
+        let (trace_id, parent_span_id) = roam_core::CURRENT_EXTENSIONS
             .try_with(|ext| {
                 ext.get::<CurrentTrace>()
                     .map(|tc| (tc.trace_id.clone(), Some(tc.span_id.clone())))
@@ -162,7 +162,7 @@ impl<C: Caller> Caller for TracingCaller<C> {
     fn bind_response_channels<T: Facet<'static>>(
         &self,
         response: &mut T,
-        plan: &roam_session::RpcPlan,
+        plan: &roam_core::RpcPlan,
         channels: &[ChannelId],
     ) {
         self.inner.bind_response_channels(response, plan, channels)
@@ -171,7 +171,7 @@ impl<C: Caller> Caller for TracingCaller<C> {
     #[allow(unsafe_code)]
     fn call_with_metadata_by_plan(
         &self,
-        descriptor: &'static roam_session::MethodDescriptor,
+        descriptor: &'static roam_core::MethodDescriptor,
         args_ptr: SendPtr,
         metadata: Metadata,
     ) -> impl std::future::Future<Output = Result<ResponseData, TransportError>> {
@@ -183,7 +183,7 @@ impl<C: Caller> Caller for TracingCaller<C> {
     unsafe fn bind_response_channels_by_plan(
         &self,
         response_ptr: *mut (),
-        response_plan: &roam_session::RpcPlan,
+        response_plan: &roam_core::RpcPlan,
         channels: &[ChannelId],
     ) {
         unsafe {

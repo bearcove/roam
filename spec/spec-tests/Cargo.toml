@@ -19,7 +19,7 @@ description = "Compliance tests for the canonical roam spec in docs/content/"
 #   - roam-schema: Type descriptors for method signatures
 #
 # NOT allowed (runtime crates):
-#   - roam, roam-stream, roam-websocket, roam-session, etc.
+#   - roam, roam-stream, roam-websocket, roam-core, etc.
 #
 # Note: spec-proto depends on roam for the #[service] macro, but we only use
 # its generated method_id functions and type definitions, not runtime features.

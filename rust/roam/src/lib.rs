@@ -18,24 +18,22 @@ pub mod roam {
 pub use roam_service_macros::service;
 
 // Re-export session types for macro-generated code
-pub use roam_session as session;
+pub use roam_core as session;
 
 // Re-export Context at top level for convenience
-pub use roam_session::Context;
+pub use roam_core::Context;
 
 // Re-export streaming types for user-facing API
-pub use roam_session::{
+pub use roam_core::{
     ChannelError, ChannelId, ChannelIdAllocator, ChannelRegistry, DriverMessage, ReceiverSlot,
     Role, Rx, RxError, SenderSlot, Tx, TxError, channel,
 };
 
 // Re-export tunnel types for byte stream bridging
-pub use roam_session::{Tunnel, tunnel_pair};
+pub use roam_core::{Tunnel, tunnel_pair};
 
 #[cfg(not(target_arch = "wasm32"))]
-pub use roam_session::{
-    DEFAULT_TUNNEL_CHUNK_SIZE, pump_read_to_tx, pump_rx_to_write, tunnel_stream,
-};
+pub use roam_core::{DEFAULT_TUNNEL_CHUNK_SIZE, pump_read_to_tx, pump_rx_to_write, tunnel_stream};
 
 // Re-export schema types
 pub use roam_schema as schema;

@@ -60,7 +60,7 @@ fn forwarding_descriptor(method_id: MethodId) -> &'static MethodDescriptor {
 /// # Example
 ///
 /// ```ignore
-/// use roam_session::{ForwardingDispatcher, ConnectionHandle};
+/// use roam_core::{ForwardingDispatcher, ConnectionHandle};
 ///
 /// // Upstream connection to the actual service
 /// let upstream: ConnectionHandle = /* ... */;

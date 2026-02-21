@@ -13,14 +13,14 @@ rustdoc-args = ["--html-in-header", "arborium-header.html"]
 
 [features]
 default = ["tracing"]
-tracing = ["dep:tracing", "roam-session/tracing"]
+tracing = ["dep:tracing", "roam-core/tracing"]
 
 [dependencies]
 shm-primitives.workspace = true
 roam-frame.workspace = true
 ur-taking-me-with-you.workspace = true
 roam-types.workspace = true
-roam-session.workspace = true
+roam-core.workspace = true
 roam-stream.workspace = true
 facet.workspace = true
 facet-postcard = { workspace = true }
@@ -42,7 +42,7 @@ shm-primitives.workspace = true
 tempfile = "3"
 libc = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt", "time"] }
-roam-session.workspace = true
+roam-core.workspace = true
 roam.workspace = true
 roam-tracing.workspace = true
 futures = "0.3.31"

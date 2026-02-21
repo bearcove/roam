@@ -7,7 +7,7 @@
 use facet_testhelpers::test;
 
 use roam::session::ConnectionHandle;
-use roam_session::{Rx, Tx};
+use roam_core::{Rx, Tx};
 use roam_shm::driver::{IncomingConnections, establish_guest, establish_multi_peer_host};
 use roam_shm::host::ShmHost;
 use roam_shm::layout::SegmentConfig;

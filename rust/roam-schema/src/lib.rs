@@ -112,12 +112,12 @@ pub enum MismatchExplanation {
 
 /// Check if a shape represents a Tx (caller→callee) stream.
 pub fn is_tx(shape: &Shape) -> bool {
-    shape.decl_id == roam_session::Tx::<()>::SHAPE.decl_id
+    shape.decl_id == roam_core::Tx::<()>::SHAPE.decl_id
 }
 
 /// Check if a shape represents an Rx (callee→caller) stream.
 pub fn is_rx(shape: &Shape) -> bool {
-    shape.decl_id == roam_session::Rx::<()>::SHAPE.decl_id
+    shape.decl_id == roam_core::Rx::<()>::SHAPE.decl_id
 }
 
 /// Check if a shape represents any channel type (Tx or Rx).

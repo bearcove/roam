@@ -14,7 +14,7 @@
 //! shm[impl shm.handshake]
 //! shm[impl shm.flow.no-credit-message]
 
-use roam_session::{
+use roam_core::{
     ChannelError, ChannelRegistry, ConnectError, ConnectionHandle, Context, DriverMessage,
     ResponseData, Role, ServiceDispatcher, TransportError,
 };
@@ -124,19 +124,17 @@ struct VirtualConnectionState {
     /// If None, inherits from the parent link's dispatcher.
     dispatcher: Option<Box<dyn ServiceDispatcher>>,
     /// Pending responses (request_id -> response sender).
-    pending_responses: HashMap<
-        RequestId,
-        roam_session::runtime::OneshotSender<Result<ResponseData, TransportError>>,
-    >,
+    pending_responses:
+        HashMap<RequestId, roam_core::runtime::OneshotSender<Result<ResponseData, TransportError>>>,
     /// In-flight server requests with their abort handles.
-    in_flight_server_requests: HashMap<RequestId, roam_session::runtime::AbortHandle>,
+    in_flight_server_requests: HashMap<RequestId, roam_core::runtime::AbortHandle>,
 }
 
 impl VirtualConnectionState {
     /// Create a new virtual connection state.
     fn new(
         conn_id: ConnectionId,
-        driver_tx: roam_session::runtime::Sender<DriverMessage>,
+        driver_tx: roam_core::runtime::Sender<DriverMessage>,
         role: Role,
         initial_credit: u32,
         dispatcher: Option<Box<dyn ServiceDispatcher>>,
@@ -177,7 +175,7 @@ impl VirtualConnectionState {
 
 /// Pending outgoing Connect request.
 struct PendingConnect {
-    response_tx: roam_session::runtime::OneshotSender<Result<ConnectionHandle, ConnectError>>,
+    response_tx: roam_core::runtime::OneshotSender<Result<ConnectionHandle, ConnectError>>,
     dispatcher: Option<Box<dyn ServiceDispatcher>>,
 }
 
@@ -192,7 +190,7 @@ pub struct IncomingConnection {
     /// Metadata from the Connect message.
     pub metadata: roam_types::Metadata,
     /// Channel to send the Accept/Reject response.
-    response_tx: roam_session::runtime::OneshotSender<IncomingConnectionResponse>,
+    response_tx: roam_core::runtime::OneshotSender<IncomingConnectionResponse>,
 }
 
 impl IncomingConnection {
@@ -208,7 +206,7 @@ impl IncomingConnection {
         metadata: roam_types::Metadata,
         dispatcher: Option<Box<dyn ServiceDispatcher>>,
     ) -> Result<ConnectionHandle, TransportError> {
-        let (handle_tx, handle_rx) = roam_session::runtime::oneshot("shm_incoming_conn_accept");
+        let (handle_tx, handle_rx) = roam_core::runtime::oneshot("shm_incoming_conn_accept");
         let _ = self.response_tx.send(IncomingConnectionResponse::Accept {
             request_id: self.request_id,
             metadata,
@@ -237,7 +235,7 @@ pub enum IncomingConnectionResponse {
         request_id: RequestId,
         metadata: roam_types::Metadata,
         dispatcher: Option<Box<dyn ServiceDispatcher>>,
-        handle_tx: roam_session::runtime::OneshotSender<Result<ConnectionHandle, TransportError>>,
+        handle_tx: roam_core::runtime::OneshotSender<Result<ConnectionHandle, TransportError>>,
     },
     Reject {
         request_id: RequestId,
@@ -247,7 +245,7 @@ pub enum IncomingConnectionResponse {
 }
 
 /// Receiver for incoming virtual connection requests.
-pub type IncomingConnections = roam_session::runtime::Receiver<IncomingConnection>;
+pub type IncomingConnections = roam_core::runtime::Receiver<IncomingConnection>;
 
 // ============================================================================
 // ShmDriver - Single-peer driver (guest side)
@@ -266,11 +264,11 @@ pub struct ShmDriver<T, D> {
     negotiated: ShmNegotiated,
 
     /// Sender for driver messages (cloned to ConnectionHandles).
-    driver_tx: roam_session::runtime::Sender<DriverMessage>,
+    driver_tx: roam_core::runtime::Sender<DriverMessage>,
 
     /// Unified channel for all messages (Call/Data/Close/Response).
     /// Single channel ensures FIFO ordering.
-    driver_rx: roam_session::runtime::Receiver<DriverMessage>,
+    driver_rx: roam_core::runtime::Receiver<DriverMessage>,
 
     /// All virtual connections (including ROOT).
     connections: HashMap<ConnectionId, VirtualConnectionState>,
@@ -282,11 +280,11 @@ pub struct ShmDriver<T, D> {
     pending_connects: HashMap<RequestId, PendingConnect>,
 
     /// Channel for incoming connection requests.
-    incoming_connections_tx: Option<roam_session::runtime::Sender<IncomingConnection>>,
+    incoming_connections_tx: Option<roam_core::runtime::Sender<IncomingConnection>>,
 
     /// Channel for incoming connection responses (Accept/Reject from app code).
-    incoming_response_rx: roam_session::runtime::Receiver<IncomingConnectionResponse>,
-    incoming_response_tx: roam_session::runtime::Sender<IncomingConnectionResponse>,
+    incoming_response_rx: roam_core::runtime::Receiver<IncomingConnectionResponse>,
+    incoming_response_tx: roam_core::runtime::Sender<IncomingConnectionResponse>,
 }
 
 impl<T, D> ShmDriver<T, D>
@@ -577,7 +575,7 @@ where
                 if let Some(tx) = &self.incoming_connections_tx {
                     // Create a oneshot that routes through incoming_response_tx
                     let (response_tx, response_rx) =
-                        roam_session::runtime::oneshot("shm_conn_response");
+                        roam_core::runtime::oneshot("shm_conn_response");
                     let incoming = IncomingConnection {
                         request_id,
                         metadata,
@@ -586,7 +584,7 @@ where
                     if tx.try_send(incoming).is_ok() {
                         // Spawn a task to forward the response
                         let incoming_response_tx = self.incoming_response_tx.clone();
-                        roam_session::runtime::spawn("roam_shm_forward_response", async move {
+                        roam_core::runtime::spawn("roam_shm_forward_response", async move {
                             if let Ok(response) = response_rx.recv().await {
                                 let _ = incoming_response_tx.send(response).await;
                             }
@@ -823,7 +821,7 @@ where
 
         // r[impl call.cancel.best-effort] - Store abort handle for cancellation support
         let abort_handle =
-            roam_session::runtime::spawn_with_abort("roam_shm_handle_request", async move {
+            roam_core::runtime::spawn_with_abort("roam_shm_handle_request", async move {
                 handler_fut.await;
             });
         conn.in_flight_server_requests
@@ -1122,7 +1120,7 @@ where
 
     // Create single unified channel for all messages (Call/Data/Close/Response).
     // Single channel ensures FIFO ordering.
-    let (driver_tx, driver_rx) = roam_session::runtime::channel("shm_driver", 256);
+    let (driver_tx, driver_rx) = roam_core::runtime::channel("shm_driver", 256);
 
     // Guest is initiator (uses odd stream IDs)
     let role = Role::Initiator;
@@ -1144,11 +1142,11 @@ where
 
     // Create channel for incoming connection requests
     let (incoming_connections_tx, incoming_connections_rx) =
-        roam_session::runtime::channel("shm_incoming_connections", 64);
+        roam_core::runtime::channel("shm_incoming_connections", 64);
 
     // Create channel for incoming connection responses (Accept/Reject from app code)
     let (incoming_response_tx, incoming_response_rx) =
-        roam_session::runtime::channel("shm_incoming_responses", 64);
+        roam_core::runtime::channel("shm_incoming_responses", 64);
 
     let driver = ShmDriver {
         io: transport,
@@ -1194,10 +1192,10 @@ struct PeerConnectionState {
     pending_connects: HashMap<RequestId, PendingConnect>,
 
     /// Channel for incoming connection requests from this peer.
-    incoming_connections_tx: Option<roam_session::runtime::Sender<IncomingConnection>>,
+    incoming_connections_tx: Option<roam_core::runtime::Sender<IncomingConnection>>,
 
     /// Channel for incoming connection responses (Accept/Reject from app code).
-    incoming_response_tx: roam_session::runtime::Sender<IncomingConnectionResponse>,
+    incoming_response_tx: roam_core::runtime::Sender<IncomingConnectionResponse>,
 }
 
 /// Command to control the multi-peer host driver.
@@ -1206,18 +1204,18 @@ enum ControlCommand {
     Create {
         options: crate::spawn::AddPeerOptions,
         response:
-            roam_session::runtime::OneshotSender<Result<crate::spawn::SpawnTicket, std::io::Error>>,
+            roam_core::runtime::OneshotSender<Result<crate::spawn::SpawnTicket, std::io::Error>>,
     },
     /// Register a peer dynamically with a dispatcher.
     Add {
         peer_id: PeerId,
         dispatcher: Box<dyn ServiceDispatcher>,
-        response: roam_session::runtime::OneshotSender<(ConnectionHandle, IncomingConnections)>,
+        response: roam_core::runtime::OneshotSender<(ConnectionHandle, IncomingConnections)>,
     },
     /// Release a previously reserved peer slot.
     Release {
         peer_id: PeerId,
-        response: roam_session::runtime::OneshotSender<()>,
+        response: roam_core::runtime::OneshotSender<()>,
     },
 }
 
@@ -1378,7 +1376,7 @@ impl MultiPeerHostDriverBuilder {
         for (peer_id, dispatcher) in self.peers {
             // Create single unified channel for all messages (Call/Data/Close/Response).
             // Single channel ensures FIFO ordering.
-            let (driver_tx, mut driver_rx) = roam_session::runtime::channel("shm_host_driver", 256);
+            let (driver_tx, mut driver_rx) = roam_core::runtime::channel("shm_host_driver", 256);
 
             // Host is acceptor (uses even stream IDs)
             let role = Role::Acceptor;
@@ -1399,13 +1397,13 @@ impl MultiPeerHostDriverBuilder {
 
             // Create channel for incoming connection requests from this peer
             let (incoming_connections_tx, incoming_connections_rx) =
-                roam_session::runtime::channel("shm_host_incoming_connections", 64);
+                roam_core::runtime::channel("shm_host_incoming_connections", 64);
 
             // Create per-peer incoming response forwarder
             let peer_incoming_response_tx = incoming_response_tx.clone();
             let (peer_response_tx, mut peer_response_rx) =
-                roam_session::runtime::channel("shm_peer_response", 64);
-            roam_session::runtime::spawn("roam_shm_peer_response_router", async move {
+                roam_core::runtime::channel("shm_peer_response", 64);
+            roam_core::runtime::spawn("roam_shm_peer_response_router", async move {
                 while let Some(response) = peer_response_rx.recv().await {
                     if peer_incoming_response_tx
                         .send((peer_id, response))
@@ -1434,7 +1432,7 @@ impl MultiPeerHostDriverBuilder {
 
             // Spawn forwarder task for this peer's driver messages
             let driver_msg_tx_clone = driver_msg_tx.clone();
-            roam_session::runtime::spawn("roam_shm_peer_driver_fwd", async move {
+            roam_core::runtime::spawn("roam_shm_peer_driver_fwd", async move {
                 while let Some(msg) = driver_rx.recv().await {
                     if driver_msg_tx_clone.send((peer_id, msg)).await.is_err() {
                         // Driver shut down
@@ -1450,7 +1448,7 @@ impl MultiPeerHostDriverBuilder {
 
                 // Spawn doorbell waiter task with cloned Arc
                 let ring_tx_clone = ring_tx.clone();
-                roam_session::runtime::spawn("roam_shm_doorbell_waiter", async move {
+                roam_core::runtime::spawn("roam_shm_doorbell_waiter", async move {
                     trace!("Doorbell waiter task started for peer {:?}", peer_id);
                     // On Windows, accept the named pipe connection from the guest
                     if let Err(e) = doorbell.accept().await {
@@ -1727,7 +1725,7 @@ impl MultiPeerHostDriver {
                 trace!("MultiPeerHostDriver: adding peer {:?} dynamically", peer_id);
                 // Create single unified channel for all messages (Call/Data/Close/Response).
                 let (driver_tx, mut driver_rx) =
-                    roam_session::runtime::channel("shm_dynamic_peer_driver", 256);
+                    roam_core::runtime::channel("shm_dynamic_peer_driver", 256);
 
                 // Host is acceptor (uses even stream IDs)
                 let role = Role::Acceptor;
@@ -1750,13 +1748,13 @@ impl MultiPeerHostDriver {
 
                 // Create channel for incoming connection requests from this peer
                 let (incoming_connections_tx, incoming_connections_rx) =
-                    roam_session::runtime::channel("shm_dynamic_incoming_connections", 64);
+                    roam_core::runtime::channel("shm_dynamic_incoming_connections", 64);
 
                 // Create per-peer incoming response forwarder
                 let peer_incoming_response_tx = self.incoming_response_tx.clone();
                 let (peer_response_tx, mut peer_response_rx) =
-                    roam_session::runtime::channel("shm_dynamic_peer_response", 64);
-                roam_session::runtime::spawn("roam_shm_peer_response_fwd", async move {
+                    roam_core::runtime::channel("shm_dynamic_peer_response", 64);
+                roam_core::runtime::spawn("roam_shm_peer_response_fwd", async move {
                     while let Some(resp) = peer_response_rx.recv().await {
                         if peer_incoming_response_tx
                             .send((peer_id, resp))
@@ -1783,7 +1781,7 @@ impl MultiPeerHostDriver {
 
                 // Spawn forwarder task for this peer's driver messages
                 let driver_msg_tx = self.driver_msg_tx.clone();
-                roam_session::runtime::spawn("roam_shm_peer_driver_fwd", async move {
+                roam_core::runtime::spawn("roam_shm_peer_driver_fwd", async move {
                     while let Some(msg) = driver_rx.recv().await {
                         if driver_msg_tx.send((peer_id, msg)).await.is_err() {
                             // Driver shut down
@@ -1804,7 +1802,7 @@ impl MultiPeerHostDriver {
 
                     // Spawn doorbell waiter task with cloned Arc
                     let ring_tx = self.ring_tx.clone();
-                    roam_session::runtime::spawn("roam_shm_doorbell_waiter", async move {
+                    roam_core::runtime::spawn("roam_shm_doorbell_waiter", async move {
                         trace!("Doorbell waiter task started for peer {:?}", peer_id);
                         // On Windows, accept the named pipe connection from the guest
                         trace!("Doorbell waiter: calling accept() for {:?}", peer_id);
@@ -2027,7 +2025,7 @@ impl MultiPeerHostDriver {
                 if let Some(tx) = &state.incoming_connections_tx {
                     // Create a oneshot that routes through incoming_response_tx
                     let (response_tx, response_rx) =
-                        roam_session::runtime::oneshot("shm_conn_response");
+                        roam_core::runtime::oneshot("shm_conn_response");
                     let incoming = IncomingConnection {
                         request_id,
                         metadata,
@@ -2036,14 +2034,11 @@ impl MultiPeerHostDriver {
                     if tx.try_send(incoming).is_ok() {
                         // Spawn a task to forward the response
                         let incoming_response_tx = state.incoming_response_tx.clone();
-                        roam_session::runtime::spawn(
-                            "roam_shm_connect_response_relay",
-                            async move {
-                                if let Ok(response) = response_rx.recv().await {
-                                    let _ = incoming_response_tx.send(response).await;
-                                }
-                            },
-                        );
+                        roam_core::runtime::spawn("roam_shm_connect_response_relay", async move {
+                            if let Ok(response) = response_rx.recv().await {
+                                let _ = incoming_response_tx.send(response).await;
+                            }
+                        });
                     } else {
                         // Channel full or closed - reject
                         let msg = Message::Reject {
@@ -2317,7 +2312,7 @@ impl MultiPeerHostDriver {
 
         // r[impl call.cancel.best-effort] - Store abort handle for cancellation support
         let abort_handle =
-            roam_session::runtime::spawn_with_abort("roam_shm_handle_request", async move {
+            roam_core::runtime::spawn_with_abort("roam_shm_handle_request", async move {
                 handler_fut.await;
             });
         conn.in_flight_server_requests
@@ -2803,7 +2798,7 @@ impl MultiPeerHostDriverHandle {
         &self,
         options: crate::spawn::AddPeerOptions,
     ) -> Result<crate::spawn::SpawnTicket, ShmConnectionError> {
-        let (response_tx, response_rx) = roam_session::runtime::oneshot("shm_conn_response");
+        let (response_tx, response_rx) = roam_core::runtime::oneshot("shm_conn_response");
 
         let cmd = ControlCommand::Create {
             options,
@@ -2853,7 +2848,7 @@ impl MultiPeerHostDriverHandle {
     where
         D: ServiceDispatcher + 'static,
     {
-        let (response_tx, response_rx) = roam_session::runtime::oneshot("shm_conn_response");
+        let (response_tx, response_rx) = roam_core::runtime::oneshot("shm_conn_response");
 
         let cmd = ControlCommand::Add {
             peer_id,
@@ -2876,7 +2871,7 @@ impl MultiPeerHostDriverHandle {
     ///
     /// Call this when a bootstrap/spawn attempt fails after `create_peer`.
     pub async fn release_peer(&self, peer_id: PeerId) -> Result<(), ShmConnectionError> {
-        let (response_tx, response_rx) = roam_session::runtime::oneshot("shm_conn_response");
+        let (response_tx, response_rx) = roam_core::runtime::oneshot("shm_conn_response");
         let cmd = ControlCommand::Release {
             peer_id,
             response: response_tx,

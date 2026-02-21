@@ -20,7 +20,7 @@ jit = ["facet-postcard/jit"]
 
 [dependencies]
 # Re-exported crates for macro-generated code
-roam-session.workspace = true
+roam-core.workspace = true
 roam-schema.workspace = true
 roam-hash.workspace = true
 roam-types.workspace = true

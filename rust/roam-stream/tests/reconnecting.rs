@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 
 use facet::Facet;
 use once_cell::sync::Lazy;
-use roam_session::{
+use roam_core::{
     Caller, ChannelRegistry, Context, MethodDescriptor, RpcPlan, Rx, ServiceDispatcher,
     dispatch_call, dispatch_unknown_method,
 };
@@ -81,7 +81,7 @@ impl TestService {
 }
 
 impl ServiceDispatcher for TestService {
-    fn service_descriptor(&self) -> &'static roam_session::ServiceDescriptor {
+    fn service_descriptor(&self) -> &'static roam_core::ServiceDescriptor {
         &roam_types::ServiceDescriptor::EMPTY
     }
 
@@ -201,7 +201,7 @@ async fn test_basic_call() {
     // Make a call
     let payload = facet_postcard::to_vec(&"hello".to_string()).unwrap();
     let response = client.call_raw(*DESC_1, payload).await.unwrap();
-    let result: Result<String, roam_session::RoamError<()>> =
+    let result: Result<String, roam_core::RoamError<()>> =
         facet_postcard::from_slice(&response).unwrap();
 
     assert_eq!(result.unwrap(), "hello");
@@ -220,14 +220,11 @@ async fn test_unknown_method_not_reconnect() {
     // Call an unknown method
     let payload = facet_postcard::to_vec(&"test".to_string()).unwrap();
     let response = client.call_raw(*DESC_999, payload).await.unwrap();
-    let result: Result<String, roam_session::RoamError<()>> =
+    let result: Result<String, roam_core::RoamError<()>> =
         facet_postcard::from_slice(&response).unwrap();
 
     // Should get UnknownMethod error, not a reconnect error
-    assert!(matches!(
-        result,
-        Err(roam_session::RoamError::UnknownMethod)
-    ));
+    assert!(matches!(result, Err(roam_core::RoamError::UnknownMethod)));
 
     // Should only have connected once (no reconnection attempts)
     assert_eq!(connect_count.load(Ordering::SeqCst), 1);
@@ -316,7 +313,7 @@ async fn test_concurrent_callers() {
             let msg = format!("message_{}", i);
             let payload = facet_postcard::to_vec(&msg).unwrap();
             let response = client.call_raw(*DESC_1, payload).await.unwrap();
-            let result: Result<String, roam_session::RoamError<()>> =
+            let result: Result<String, roam_core::RoamError<()>> =
                 facet_postcard::from_slice(&response).unwrap();
             assert_eq!(result.unwrap(), msg);
         });
@@ -390,7 +387,7 @@ async fn test_reconnect_after_initial_failure() {
     // Should eventually succeed after retries
     let payload = facet_postcard::to_vec(&"hello".to_string()).unwrap();
     let response = client.call_raw(*DESC_1, payload).await.unwrap();
-    let result: Result<String, roam_session::RoamError<()>> =
+    let result: Result<String, roam_core::RoamError<()>> =
         facet_postcard::from_slice(&response).unwrap();
 
     assert_eq!(result.unwrap(), "hello");

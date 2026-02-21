@@ -24,7 +24,7 @@ use std::sync::Arc;
 /// # Example
 ///
 /// ```
-/// use roam_session::Extensions;
+/// use roam_core::Extensions;
 ///
 /// struct UserId(u64);
 /// struct RequestId(String);

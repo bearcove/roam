@@ -11,7 +11,7 @@
 //! # Example
 //!
 //! ```ignore
-//! use roam_session::{Middleware, Context, Rejection, SendPeek, MethodOutcome};
+//! use roam_core::{Middleware, Context, Rejection, SendPeek, MethodOutcome};
 //! use std::pin::Pin;
 //! use std::future::Future;
 //!

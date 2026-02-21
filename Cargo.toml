@@ -3,7 +3,7 @@ resolver = "2"
 members = [
   "rust/roam",
   "rust/roam-frame",
-  "rust/roam-session",
+  "rust/roam-core",
   "rust/roam-hash",
   "rust/roam-schema",
   "rust/roam-shm",
@@ -53,7 +53,7 @@ roam-hash = { path = "rust/roam-hash", version = "3.0.0" }
 roam-macros-parse = { path = "rust/roam-macros-parse", version = "3.0.0" }
 roam-service-macros = { path = "rust/roam-macros", version = "3.0.0" }
 roam-schema = { path = "rust/roam-schema", version = "3.0.0" }
-roam-session = { path = "rust/roam-session", version = "3.0.0" }
+roam-core = { path = "rust/roam-core", version = "3.0.0" }
 roam-stream = { path = "rust/roam-stream", version = "3.0.0" }
 roam-tracing = { path = "rust/roam-tracing", version = "3.0.0" }
 roam-codegen = { path = "rust/roam-codegen", version = "3.0.0" }

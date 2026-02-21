@@ -3,27 +3,27 @@
 //! In-memory transport for roam message-level connections.
 //!
 //! This crate provides a bidirectional in-memory [`MemoryTransport`] pair that
-//! implements [`roam_session::MessageTransport`]. It is useful for tests,
+//! implements [`roam_core::MessageTransport`]. It is useful for tests,
 //! benchmarks, and embedding scenarios where no OS transport is needed.
 //!
 //! # Example
 //!
 //! ```ignore
 //! use roam_memory::memory_transport_pair;
-//! use roam_session::{HandshakeConfig, NoDispatcher, accept_framed, initiate_framed};
+//! use roam_core::{HandshakeConfig, NoDispatcher, accept_framed, initiate_framed};
 //!
 //! let (client_transport, server_transport) = memory_transport_pair(256);
 //!
 //! let client_fut = initiate_framed(client_transport, HandshakeConfig::default(), NoDispatcher);
 //! let server_fut = accept_framed(server_transport, HandshakeConfig::default(), NoDispatcher);
 //! let _ = tokio::try_join!(client_fut, server_fut)?;
-//! # Ok::<(), roam_session::ConnectionError>(())
+//! # Ok::<(), roam_core::ConnectionError>(())
 //! ```
 
 use std::io;
 use std::time::Duration;
 
-use roam_session::MessageTransport;
+use roam_core::MessageTransport;
 use roam_types::Message;
 use tokio::sync::mpsc;
 
@@ -84,7 +84,7 @@ impl MessageTransport for MemoryTransport {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use roam_session::{HandshakeConfig, NoDispatcher, accept_framed, initiate_framed};
+    use roam_core::{HandshakeConfig, NoDispatcher, accept_framed, initiate_framed};
 
     #[roam::service]
     trait EchoService {
@@ -95,7 +95,7 @@ mod tests {
     struct EchoServiceImpl;
 
     impl EchoService for EchoServiceImpl {
-        async fn echo(&self, _cx: &roam_session::Context, text: String) -> String {
+        async fn echo(&self, _cx: &roam_core::Context, text: String) -> String {
             text
         }
     }

@@ -10,7 +10,7 @@ use facet_testhelpers::test;
 use std::sync::LazyLock;
 
 use facet::Facet;
-use roam_session::{MethodDescriptor, RpcPlan, Rx, Tx};
+use roam_core::{MethodDescriptor, RpcPlan, Rx, Tx};
 use roam_shm::driver::{establish_guest, establish_multi_peer_host};
 use roam_shm::host::ShmHost;
 use roam_shm::layout::SegmentConfig;
@@ -82,15 +82,15 @@ trait Testbed {
 struct TestbedImpl;
 
 impl Testbed for TestbedImpl {
-    async fn echo(&self, _cx: &roam_session::Context, input: String) -> String {
+    async fn echo(&self, _cx: &roam_core::Context, input: String) -> String {
         input
     }
 
-    async fn add(&self, _cx: &roam_session::Context, (a, b): (i32, i32)) -> i32 {
+    async fn add(&self, _cx: &roam_core::Context, (a, b): (i32, i32)) -> i32 {
         a + b
     }
 
-    async fn sum(&self, _cx: &roam_session::Context, mut numbers: Rx<i32>) -> i64 {
+    async fn sum(&self, _cx: &roam_core::Context, mut numbers: Rx<i32>) -> i64 {
         eprintln!("server: sum called");
         let mut total = 0i64;
         loop {
@@ -114,7 +114,7 @@ impl Testbed for TestbedImpl {
         total
     }
 
-    async fn generate(&self, _cx: &roam_session::Context, count: u32, output: Tx<i32>) {
+    async fn generate(&self, _cx: &roam_core::Context, count: u32, output: Tx<i32>) {
         for i in 0..count {
             if output.send(&(i as i32)).await.is_err() {
                 break;
@@ -122,7 +122,7 @@ impl Testbed for TestbedImpl {
         }
     }
 
-    async fn generate_large(&self, _cx: &roam_session::Context, count: u32, output: Tx<String>) {
+    async fn generate_large(&self, _cx: &roam_core::Context, count: u32, output: Tx<String>) {
         // Generate strings >32 bytes to force slot allocation (not inline)
         for i in 0..count {
             let large_string = format!("message_{:04}_padding_to_exceed_32_bytes_inline_limit", i);
@@ -132,7 +132,7 @@ impl Testbed for TestbedImpl {
         }
     }
 
-    async fn consume_large(&self, _cx: &roam_session::Context, mut input: Rx<String>) -> u32 {
+    async fn consume_large(&self, _cx: &roam_core::Context, mut input: Rx<String>) -> u32 {
         let mut count = 0u32;
         while let Ok(Some(_value)) = input.recv().await {
             count += 1;
@@ -144,7 +144,7 @@ impl Testbed for TestbedImpl {
 
     async fn consume_then_fail(
         &self,
-        _cx: &roam_session::Context,
+        _cx: &roam_core::Context,
         mut input: Rx<String>,
         fail_after: u32,
     ) -> (bool, u32) {
@@ -160,15 +160,15 @@ impl Testbed for TestbedImpl {
         (true, count)
     }
 
-    async fn recursive_call(&self, _cx: &roam_session::Context, depth: u32) -> u32 {
+    async fn recursive_call(&self, _cx: &roam_core::Context, depth: u32) -> u32 {
         // Basic impl without callback - just returns depth
         depth
     }
 }
 
 struct TestFixture {
-    guest_handle: roam_session::ConnectionHandle,
-    host_handle: roam_session::ConnectionHandle,
+    guest_handle: roam_core::ConnectionHandle,
+    host_handle: roam_core::ConnectionHandle,
     _dir: tempfile::TempDir, // Keep temp dir alive
 }
 
@@ -348,9 +348,9 @@ async fn server_streaming_generate() {
 // ============================================================================
 
 struct MultiPeerFixture {
-    guest1_handle: roam_session::ConnectionHandle,
-    guest2_handle: roam_session::ConnectionHandle,
-    host_handles: std::collections::HashMap<PeerId, roam_session::ConnectionHandle>,
+    guest1_handle: roam_core::ConnectionHandle,
+    guest2_handle: roam_core::ConnectionHandle,
+    host_handles: std::collections::HashMap<PeerId, roam_core::ConnectionHandle>,
     _dir: tempfile::TempDir,
 }
 
@@ -1375,15 +1375,15 @@ async fn recursive_calls_with_slot_exhaustion() {
     let spawn_args = ticket.into_spawn_args();
 
     // Lazy handles for bidirectional calls
-    let guest_to_host: std::sync::Arc<std::sync::OnceLock<roam_session::ConnectionHandle>> =
+    let guest_to_host: std::sync::Arc<std::sync::OnceLock<roam_core::ConnectionHandle>> =
         std::sync::Arc::new(std::sync::OnceLock::new());
-    let host_to_guest: std::sync::Arc<std::sync::OnceLock<roam_session::ConnectionHandle>> =
+    let host_to_guest: std::sync::Arc<std::sync::OnceLock<roam_core::ConnectionHandle>> =
         std::sync::Arc::new(std::sync::OnceLock::new());
 
     // Guest-side implementation of CellService
     #[derive(Clone)]
     struct CellServiceImpl {
-        to_host: std::sync::Arc<std::sync::OnceLock<roam_session::ConnectionHandle>>,
+        to_host: std::sync::Arc<std::sync::OnceLock<roam_core::ConnectionHandle>>,
     }
 
     impl CellService for CellServiceImpl {
@@ -1501,7 +1501,7 @@ async fn recursive_calls_with_slot_exhaustion() {
     // Host-side implementation of HostService
     #[derive(Clone)]
     struct HostServiceImpl {
-        to_guest: std::sync::Arc<std::sync::OnceLock<roam_session::ConnectionHandle>>,
+        to_guest: std::sync::Arc<std::sync::OnceLock<roam_core::ConnectionHandle>>,
     }
 
     impl HostService for HostServiceImpl {
@@ -1753,15 +1753,15 @@ async fn recursive_streaming_calls_with_slot_exhaustion() {
     let spawn_args = ticket.into_spawn_args();
 
     // Lazy handles for bidirectional calls
-    let guest_to_host: std::sync::Arc<std::sync::OnceLock<roam_session::ConnectionHandle>> =
+    let guest_to_host: std::sync::Arc<std::sync::OnceLock<roam_core::ConnectionHandle>> =
         std::sync::Arc::new(std::sync::OnceLock::new());
-    let host_to_guest: std::sync::Arc<std::sync::OnceLock<roam_session::ConnectionHandle>> =
+    let host_to_guest: std::sync::Arc<std::sync::OnceLock<roam_core::ConnectionHandle>> =
         std::sync::Arc::new(std::sync::OnceLock::new());
 
     // Guest-side implementation of CellService
     #[derive(Clone)]
     struct CellServiceImpl {
-        to_host: std::sync::Arc<std::sync::OnceLock<roam_session::ConnectionHandle>>,
+        to_host: std::sync::Arc<std::sync::OnceLock<roam_core::ConnectionHandle>>,
     }
 
     impl CellService for CellServiceImpl {
@@ -1846,7 +1846,7 @@ async fn recursive_streaming_calls_with_slot_exhaustion() {
     // Host-side implementation of HostService
     #[derive(Clone)]
     struct HostServiceImpl {
-        to_guest: std::sync::Arc<std::sync::OnceLock<roam_session::ConnectionHandle>>,
+        to_guest: std::sync::Arc<std::sync::OnceLock<roam_core::ConnectionHandle>>,
     }
 
     impl HostService for HostServiceImpl {

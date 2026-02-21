@@ -6,7 +6,7 @@
 //! roam services over TCP, Unix sockets, or any async byte stream.
 //!
 //! For message-based transports (like WebSocket) that already provide framing,
-//! use `roam_session` directly - it has the Driver and accept_framed/connect_framed.
+//! use `roam_core` directly - it has the Driver and accept_framed/connect_framed.
 //!
 //! # Example (Accepted connection)
 //!
@@ -55,14 +55,14 @@ pub use driver::{Client, Connector, accept, connect, connect_with_policy};
 // length-prefixed framing
 pub use framing::LengthPrefixedFramed;
 // Re-export types that moved to roam-session (backwards compat)
-pub use roam_session::{
+pub use roam_core::{
     ConnectError, ConnectionError, Driver, FramedClient, HandshakeConfig, IncomingConnection,
     IncomingConnections, MessageConnector, MessageTransport, Negotiated, NoDispatcher, RetryPolicy,
     accept_framed, connect_framed, connect_framed_with_policy, initiate_framed,
 };
 
 // Re-export session types for convenience
-pub use roam_session::{
+pub use roam_core::{
     CallError, Caller, ChannelIdAllocator, ChannelRegistry, ConnectionHandle, Role,
     ServiceDispatcher, TransportError,
 };

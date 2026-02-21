@@ -10,7 +10,7 @@
 //! Usage: spawned via SpawnTicket::spawn(), receives args automatically
 
 use once_cell::sync::Lazy;
-use roam_session::{ChannelRegistry, Context, RpcPlan, Rx, ServiceDispatcher, Tx, dispatch_call};
+use roam_core::{ChannelRegistry, Context, RpcPlan, Rx, ServiceDispatcher, Tx, dispatch_call};
 use roam_shm::driver::establish_guest;
 use roam_shm::spawn::{SpawnArgs, die_with_parent};
 use roam_shm::transport::ShmGuestTransport;
@@ -42,7 +42,7 @@ static UNIT_RESPONSE_PLAN: Lazy<&'static RpcPlan> =
 struct TestService;
 
 impl ServiceDispatcher for TestService {
-    fn service_descriptor(&self) -> &'static roam_session::ServiceDescriptor {
+    fn service_descriptor(&self) -> &'static roam_core::ServiceDescriptor {
         &roam_types::ServiceDescriptor::EMPTY
     }
 
@@ -100,7 +100,7 @@ impl ServiceDispatcher for TestService {
                     Ok(())
                 },
             ),
-            _ => roam_session::dispatch_unknown_method(&cx, registry),
+            _ => roam_core::dispatch_unknown_method(&cx, registry),
         }
     }
 }

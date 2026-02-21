@@ -17,7 +17,7 @@ use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use roam_session::MessageTransport;
+use roam_core::MessageTransport;
 use roam_types::Message;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 

@@ -44,7 +44,7 @@ pub use router::BridgeRouter;
 pub use service::GenericBridgeService;
 pub use transcode::{json_args_to_postcard, postcard_to_json_with_shape};
 
-use roam_session::ServiceDescriptor;
+use roam_core::ServiceDescriptor;
 use std::future::Future;
 use std::pin::Pin;
 
@@ -79,7 +79,7 @@ pub trait BridgeService: Send + Sync + 'static {
     ///
     /// This is required for WebSocket streaming where we need direct access
     /// to channel allocation and data routing.
-    fn connection_handle(&self) -> &roam_session::ConnectionHandle;
+    fn connection_handle(&self) -> &roam_core::ConnectionHandle;
 }
 
 /// Response from a bridged RPC call.
