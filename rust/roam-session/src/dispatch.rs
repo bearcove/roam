@@ -336,7 +336,7 @@ where
                         // and we don't mutate it while the Peek exists
                         let peek = facet::Peek::new(ok_result);
                         let send_peek = unsafe { SendPeek::new(peek) };
-                        send_ok_response(send_peek, &response_plan, &task_tx, conn_id, request_id)
+                        send_ok_response(send_peek, response_plan, &task_tx, conn_id, request_id)
                             .await;
                     }
                     Err(ref user_error) => {
@@ -417,7 +417,7 @@ where
                 // and we don't mutate it while the Peek exists
                 let peek = facet::Peek::new(&result);
                 let send_peek = unsafe { SendPeek::new(peek) };
-                send_ok_response(send_peek, &response_plan, &task_tx, conn_id, request_id).await;
+                send_ok_response(send_peek, response_plan, &task_tx, conn_id, request_id).await;
             })
             .await
     }))
