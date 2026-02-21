@@ -1,10 +1,6 @@
-use std::sync::Arc;
-
-use facet::{Facet, Shape};
+use facet::{DeclId, Facet, Shape};
 use facet_path::{Path, walk_shape};
 use facet_reflect::TypePlanCore;
-
-use crate::{Rx, Tx};
 
 /// Precomputed plan for an RPC type (args, response, or error).
 ///
@@ -12,9 +8,9 @@ use crate::{Rx, Tx};
 /// within the type structure. Computed once per monomorphized type via `OnceLock`.
 pub struct RpcPlan {
     /// Deserialization plan for this type.
-    pub type_plan: Arc<TypePlanCore>,
+    pub type_plan: &'static TypePlanCore,
     /// Locations of all Rx/Tx channels in this type, in declaration order.
-    pub channel_locations: Vec<ChannelLocation>,
+    pub channel_locations: &'static [ChannelLocation],
 }
 
 /// A precomputed location of a channel within a type structure.
@@ -40,7 +36,11 @@ impl RpcPlan {
     ///
     /// `shape` must come from a `Facet` implementation.
     #[allow(unsafe_code)]
-    pub unsafe fn from_shape(shape: &'static Shape) -> Self {
+    pub unsafe fn from_shape<Tx, Rx>(shape: &'static Shape) -> Self
+    where
+        Tx: Facet<'static>,
+        Rx: Facet<'static>,
+    {
         // Build deserialization plan
         // SAFETY: caller guarantees shape comes from a Facet implementation
         let type_plan =
@@ -48,45 +48,54 @@ impl RpcPlan {
 
         // Walk the type structure to discover channel locations
         let mut visitor = ChannelDiscovery {
+            tx_decl_id: Tx::SHAPE.decl_id,
+            rx_decl_id: Rx::SHAPE.decl_id,
             locations: Vec::new(),
         };
         walk_shape(shape, &mut visitor);
 
         RpcPlan {
-            type_plan,
-            channel_locations: visitor.locations,
+            type_plan: Box::leak(type_plan.into()),
+            channel_locations: visitor.locations.leak(),
         }
     }
 
     /// Build an RpcPlan for a concrete type.
     #[allow(unsafe_code)]
-    pub fn for_type<T: Facet<'static>>() -> Self {
+    pub fn for_type<T, Tx, Rx>() -> Self
+    where
+        T: Facet<'static>,
+        Tx: Facet<'static>,
+        Rx: Facet<'static>,
+    {
         // SAFETY: T::SHAPE comes from a Facet implementation
-        unsafe { Self::from_shape(T::SHAPE) }
+        unsafe { Self::from_shape::<Tx, Rx>(T::SHAPE) }
     }
 }
 
 /// Visitor that discovers Rx/Tx channel locations in a type structure.
 struct ChannelDiscovery {
+    tx_decl_id: DeclId,
+    rx_decl_id: DeclId,
     locations: Vec<ChannelLocation>,
 }
 
 impl facet_path::ShapeVisitor for ChannelDiscovery {
     fn enter(&mut self, path: &Path, shape: &'static Shape) -> facet_path::VisitDecision {
-        // Check if this is an Rx type
-        if shape.decl_id == Rx::<()>::SHAPE.decl_id {
+        // Check if this is a Tx type
+        if shape.decl_id == self.tx_decl_id {
             self.locations.push(ChannelLocation {
                 path: path.clone(),
-                kind: ChannelKind::Rx,
+                kind: ChannelKind::Tx,
             });
             return facet_path::VisitDecision::SkipChildren;
         }
 
-        // Check if this is a Tx type
-        if shape.decl_id == Tx::<()>::SHAPE.decl_id {
+        // Check if this is an Rx type
+        if shape.decl_id == self.rx_decl_id {
             self.locations.push(ChannelLocation {
                 path: path.clone(),
-                kind: ChannelKind::Tx,
+                kind: ChannelKind::Rx,
             });
             return facet_path::VisitDecision::SkipChildren;
         }

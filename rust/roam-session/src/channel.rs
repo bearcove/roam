@@ -486,9 +486,11 @@ pub struct Rx<T: 'static> {
     /// The unique channel ID for this channel.
     /// Public so Connection can poke it when binding channels.
     pub channel_id: ChannelId,
+
     /// Channel receiver for incoming data.
     /// Uses ReceiverSlot so it's pokeable (can .take() via Poke).
     pub receiver: ReceiverSlot,
+
     /// Phantom data for the element type.
     #[facet(opaque)]
     _marker: PhantomData<T>,
