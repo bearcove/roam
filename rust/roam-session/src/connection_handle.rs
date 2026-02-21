@@ -291,48 +291,18 @@ impl ConnectionHandle {
     /// let response = handle.call(method_id::SUM, &mut (rx,)).await?;
     /// // tx.send(&42).await to push values
     /// ```
-    /// Make an RPC call with default (empty) metadata.
+    /// Make a typed RPC call with default (empty) metadata.
     ///
-    /// The `args_plan` should be created once per type as a static in non-generic code.
+    /// The descriptor contains all precomputed plans and method metadata.
     pub async fn call<T: Facet<'static>>(
         &self,
-        method_id: u64,
-        method_name: &str,
+        descriptor: &'static crate::MethodDescriptor,
         args: &mut T,
-        args_plan: &crate::RpcPlan,
     ) -> Result<ResponseData, TransportError> {
         let args_ptr = args as *mut T as *mut ();
         #[allow(unsafe_code)]
         unsafe {
-            self.call_with_metadata_by_plan(
-                method_id,
-                method_name,
-                args_ptr,
-                args_plan,
-                roam_wire::Metadata::default(),
-            )
-            .await
-        }
-    }
-
-    /// Make an RPC call with custom metadata.
-    ///
-    /// The `args_plan` should be created once per type as a static in non-generic code.
-    #[deprecated(
-        note = "Use call_with_metadata_by_plan; all call sites should pass an explicit plan."
-    )]
-    pub async fn call_with_metadata<T: Facet<'static>>(
-        &self,
-        method_id: u64,
-        method_name: &str,
-        args: &mut T,
-        args_plan: &crate::RpcPlan,
-        metadata: roam_wire::Metadata,
-    ) -> Result<ResponseData, TransportError> {
-        let args_ptr = args as *mut T as *mut ();
-        #[allow(unsafe_code)]
-        unsafe {
-            self.call_with_metadata_by_plan(method_id, method_name, args_ptr, args_plan, metadata)
+            self.call_with_metadata_by_plan(descriptor, args_ptr, roam_wire::Metadata::default())
                 .await
         }
     }
@@ -340,23 +310,21 @@ impl ConnectionHandle {
     /// Make an RPC call using reflection (non-generic).
     ///
     /// This is the non-generic core implementation that avoids monomorphization.
-    /// The generic `call_with_metadata` delegates to this.
     ///
     /// # Safety
     ///
-    /// - `args_ptr` must point to valid, initialized memory matching the plan's shape
+    /// - `args_ptr` must point to valid, initialized memory matching the descriptor's args_plan shape
     /// - The args type must be `Send`
     #[doc(hidden)]
     #[allow(unsafe_code)]
     #[track_caller]
     pub unsafe fn call_with_metadata_by_plan(
         &self,
-        method_id: u64,
-        method_name: &str,
+        descriptor: &'static crate::MethodDescriptor,
         args_ptr: *mut (),
-        args_plan: &crate::RpcPlan,
         metadata: roam_wire::Metadata,
     ) -> impl std::future::Future<Output = Result<ResponseData, TransportError>> + Send + '_ {
+        let args_plan = descriptor.args_plan;
         let args_shape = args_plan.type_plan.root().shape;
 
         // Do all pointer work synchronously BEFORE creating the async block.
@@ -426,12 +394,13 @@ impl ConnectionHandle {
         };
 
         // Now return an async block that doesn't capture args_ptr
-        let method_name = method_name.to_owned();
+        let method_name_full = format!("{}.{}", descriptor.service_name, descriptor.method_name);
+        let method_id = descriptor.id;
         async move {
             let payload = payload_result.map_err(TransportError::Encode)?;
             self.call_raw_full_with_drains(
                 method_id,
-                &method_name,
+                &method_name_full,
                 metadata,
                 channels,
                 payload,
@@ -1033,8 +1002,24 @@ impl ConnectionHandle {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::RpcPlan;
+    use crate::{MethodDescriptor, RpcPlan};
+    use facet::Facet;
+    use std::sync::LazyLock;
     use std::time::Duration;
+
+    static TEST_DESC: LazyLock<&'static MethodDescriptor> = LazyLock::new(|| {
+        Box::leak(Box::new(MethodDescriptor {
+            id: 42,
+            service_name: "Test",
+            method_name: "test",
+            arg_names: &[],
+            arg_shapes: &[],
+            return_shape: <() as Facet>::SHAPE,
+            args_plan: Box::leak(Box::new(RpcPlan::for_type::<(crate::Rx<Vec<u8>>,)>())),
+            ok_plan: Box::leak(Box::new(RpcPlan::for_type::<()>())),
+            err_plan: Box::leak(Box::new(RpcPlan::for_type::<std::convert::Infallible>())),
+        }))
+    });
 
     #[tokio::test]
     async fn drain_task_exits_when_driver_data_send_fails() {
@@ -1043,9 +1028,7 @@ mod tests {
 
         let (stream_tx, stream_rx) = crate::channel::<Vec<u8>>();
         let mut args = (stream_rx,);
-        let args_plan = RpcPlan::for_type::<(crate::Rx<Vec<u8>>,)>();
-        let call_task =
-            tokio::spawn(async move { handle.call(42, "test", &mut args, &args_plan).await });
+        let call_task = tokio::spawn(async move { handle.call(*TEST_DESC, &mut args).await });
 
         let call_msg = driver_rx
             .recv()
