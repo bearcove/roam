@@ -1,8 +1,6 @@
 // swift-tools-version: 6.0
 import PackageDescription
 
-let rustLibDir = "target/release"
-
 let package = Package(
     name: "roam",
     platforms: [
@@ -36,7 +34,9 @@ let package = Package(
             path: "swift/roam-runtime/Sources/CRoamShmFfi",
             publicHeadersPath: "include",
             linkerSettings: [
-                .unsafeFlags(["-L\(rustLibDir)", "-lroam_shm_ffi"]),
+                // Consumer must build libroam_shm_ffi.a (cargo build --release -p roam-shm-ffi)
+                // and add its directory to LIBRARY_SEARCH_PATHS or pass -Xlinker -L<path>.
+                .linkedLibrary("roam_shm_ffi"),
             ]
         ),
         .testTarget(

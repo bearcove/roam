@@ -194,7 +194,7 @@ jobs:
         run: swift build -c release --package-path swift/subject
 
       - name: Run RoamRuntime Swift tests
-        run: swift test
+        run: swift test -Xlinker -L$(pwd)/target/release
 
       - name: Run spec tests
         run: cargo nextest run -p spec-tests
@@ -228,7 +228,7 @@ jobs:
         run: swift build -c release --package-path swift/subject
 
       - name: Run RoamRuntime Swift tests
-        run: swift test
+        run: swift test -Xlinker -L$(pwd)/target/release
 
       - name: Run spec tests
         run: cargo nextest run -p spec-tests
