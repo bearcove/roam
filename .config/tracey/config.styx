@@ -3,7 +3,7 @@
 specs (
     {
         name roam
-        include (docs/content/spec/**/*.md)
+        include (docs/content/spec.md)
         impls (
             {
                 name rust
@@ -16,61 +16,6 @@ specs (
             {
                 name swift
                 include (swift/**/*.swift)
-            }
-            {
-                name typescript
-                include (
-                    typescript/**/*.ts
-                    typescript/**/*.js
-                )
-            }
-            {
-                name go
-                include (go/**/*.go)
-            }
-            {
-                name java
-                include (java/**/*.java)
-            }
-            {
-                name python
-                include (python/**/*.py)
-            }
-        )
-    }
-
-    {
-        name shm
-        include (docs/content/shm-spec/**/*.md)
-        impls (
-            {
-                name rust
-                include (rust/**/*.rs)
-                exclude (target/**)
-            }
-        )
-    }
-
-    {
-        name rust
-        include (docs/content/rust-spec/**/*.md)
-        impls (
-            {
-                name rust
-                include (rust/**/*.rs)
-                exclude (target/**)
-            }
-        )
-    }
-
-    {
-        name http
-        include (docs/content/http-spec/**/*.md)
-        impls (
-            {
-                name rust
-                include (rust/**/*.rs)
-                exclude (target/**)
             }
             {
                 name typescript
