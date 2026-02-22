@@ -42,7 +42,7 @@ This section is prescriptive: it defines the target Rust architecture.
 > rs[term.virtual-connection]
 >
 > A **virtual connection** is a `conn_id`-scoped context carried on a link.
-> Every link has an implicit root virtual connection (`conn_id = 0`) and MAY
+> Every link has an implicit root virtual connection (`conn_id = 0`) and can
 > carry additional virtual connections opened with `Connect`/`Accept`
 > (`r[core.link.connection-zero]`, `r[core.conn.open]`).
 >
@@ -72,74 +72,108 @@ This section is prescriptive: it defines the target Rust architecture.
 > The transport layer is responsible only for moving roam `Message` values
 > and transport-specific framing/signaling.
 
-> rs[layer.transport.interface]
+> rs[layer.link.interface]
 >
-> Rust MUST provide one shared transport interface for all transports
+> Rust MUST provide one shared **link** interface for all transports
 > (stream, framed, shm), with a split sender/receiver model for roam
 > `Message` values.
 
 ```rust
-pub trait Transport {
-    type Sender: TransportSender;
-    type Receiver: TransportReceiver;
+pub trait Link {
+    type Sender: LinkSender;
+    type Receiver: LinkReceiver;
     fn split(self) -> (Self::Sender, Self::Receiver);
 }
 
-pub trait TransportSender {
-    fn send(&mut self, msg: &Message) -> impl Future<Output = io::Result<()>>;
-    fn close(&mut self) -> impl Future<Output = io::Result<()>>;
+pub trait LinkSender {
+    async fn send(&mut self, msg: &Message) -> io::Result<()>;
+    async fn close(&mut self) -> io::Result<()>;
 }
 
-pub trait TransportReceiver {
-    fn recv(&mut self) -> impl Future<Output = io::Result<Option<Message>>>;
+pub trait LinkReceiver {
+    async fn recv(&mut self) -> io::Result<Option<Message>>;
 }
 ```
 
-> rs[layer.transport.concurrent]
+> rs[layer.link.concurrent]
 >
 > Transports MUST support concurrent send and receive on the same link.
-> Implementations MAY satisfy this via split halves, internal synchronization,
-> or equivalent mechanisms, but the concurrency capability is required.
+> One execution context MUST be able to send while another receives on the
+> same link, without violating ordering or message integrity.
 
-> rs[layer.transport.backpressure]
+> rs[layer.link.backpressure]
 >
-> `TransportSender::send` MAY await due to transport backpressure. Successful
-> completion means exactly one whole roam `Message` has been accepted by the
-> transport boundary (not a partial message).
+> `LinkSender::send` MUST complete in exactly one of two ways:
+> - `Ok(())` only after exactly one whole roam `Message` has been accepted by
+>   the transport boundary (never a partial message)
+> - `Err(...)` if acceptance fails
+>
+> It MUST NOT report success before whole-message acceptance.
 
-> rs[layer.transport.recv]
+> rs[layer.link.recv]
 >
-> `TransportReceiver::recv` MAY await until:
+> `LinkReceiver::recv` MUST await until:
 > - a complete roam `Message` is available (`Ok(Some(msg))`)
 > - the transport closes cleanly (`Ok(None)`)
 > - an I/O/protocol error occurs (`Err(...)`)
 
-> rs[layer.transport.ordering]
+> rs[layer.link.close]
+>
+> `LinkSender::close` closes the sender's outbound transport direction:
+> - no new outbound `send` is accepted after close succeeds
+> - it MUST drain/flush all already-accepted outbound data before reporting
+>   `Ok(())` (or return `Err(...)` if drain/flush fails)
+> - close is transport-level only (not protocol-level)
+
+> rs[layer.link.close.messages]
+>
+> `LinkSender::close` MUST NOT synthesize roam protocol messages. In
+> particular, it MUST NOT emit `Goodbye`, `Close`, `Reset`, or any other
+> protocol-level message on behalf of higher layers.
+
+> rs[layer.link.close.idempotent]
+>
+> `LinkSender::close` MUST be idempotent. Calling it more than once MUST NOT
+> send additional protocol data and MUST return `Ok(())`.
+
+> rs[layer.link.close.after]
+>
+> After successful `LinkSender::close`, subsequent `send` calls on that sender
+> MUST fail.
+
+> rs[layer.link.ordering]
 >
 > Transports MUST preserve message ordering per direction on a link.
 > Implementations MUST NOT duplicate or silently drop successfully sent
 > messages.
 
-> rs[layer.transport.buffering]
+> rs[layer.link.buffering]
 >
-> Transports MAY buffer internally, but buffering MUST remain transparent to
+> If a transport buffers internally, that buffering MUST remain transparent to
 > higher layers: observable behavior must be equivalent to an ordered stream of
-> discrete roam `Message` values.
+> discrete roam `Message` values with no duplication or silent loss.
 
-> rs[layer.transport.no-channeling]
+> rs[layer.link.no-channeling]
 >
 > Transports MUST NOT own call/channel protocol semantics (request correlation,
 > channel binding, flow-control policy); those belong to link and call runtimes.
 
-> rs[layer.transport.connector]
+> rs[layer.link.semantic-blind]
+>
+> Transport/link implementations are message-semantic-agnostic: they move
+> serialized `Message` values and enforce framing/ordering, but MUST NOT make
+> decisions based on RPC semantics (method IDs, request lifecycle, channel
+> lifecycle, or protocol-level reasons).
+
+> rs[layer.link.connector]
 >
 > Reconnecting link runtimes SHOULD depend on a transport-agnostic connector
-> interface that yields fresh `Transport` instances.
+> interface that yields fresh `Link` instances.
 
 ```rust
 pub trait TransportConnector {
-    type Transport: Transport;
-    fn connect(&self) -> impl Future<Output = io::Result<Self::Transport>>;
+    type Link: Link;
+    async fn connect(&self) -> io::Result<Self::Link>;
 }
 ```
 
@@ -171,10 +205,15 @@ pub trait TransportConnector {
 > - channel message routing (`Data`/`Close`/`Reset`/`Credit`)
 > - protocol violation handling and error mapping
 
+> rs[layer.link-runtime.shutdown]
+>
+> Protocol-level shutdown behavior (including when/why to send `Goodbye`) is
+> owned by the link runtime, not by the transport/link abstraction.
+
 > rs[layer.link-runtime.interface]
 >
 > Rust MUST provide one primary link-runtime interface that consumes a
-> `Transport`, exposes root virtual-connection call capability, exposes incoming
+> `Link`, exposes root virtual-connection call capability, exposes incoming
 > virtual-connection requests, and runs the receive/send loop.
 
 ```rust
@@ -271,6 +310,16 @@ pub trait FlowControl {
 > Automatic reconnection and call retry are owned by reconnecting link-runtime
 > implementations (not by generated service clients).
 
+> rs[reconnect.new-link]
+>
+> Reconnection creates a new link instance. It does not resume the previous
+> link instance.
+
+> rs[reconnect.state-reset]
+>
+> On reconnect, link-scoped runtime state resets (request/channel id spaces,
+> root virtual connection state, and channel routing tables).
+
 > rs[reconnect.trigger]
 >
 > Reconnect/retry behavior MUST follow reconnect-spec rules:
@@ -285,6 +334,21 @@ pub trait FlowControl {
 > Retry means re-issuing the same logical call after reconnect due to transport
 > failure. This is transport-failure recovery behavior, not application-level
 > retry policy.
+
+> rs[reconnect.inflight.requests]
+>
+> In-flight requests on a failed link MUST complete with transport failure
+> unless explicitly retried by reconnect logic.
+
+> rs[reconnect.inflight.channels]
+>
+> Channels on a failed link are terminated with that link.
+
+> rs[reconnect.no-channel-resume]
+>
+> Implementations MUST NOT transparently resume an existing channel stream
+> across reconnect. If recovery is desired, the call must be restarted and
+> new channels established on the new link.
 
 ## Channel Binding
 
@@ -607,7 +671,7 @@ impl HealthServiceClient {
 >
 > Generated Rust clients SHOULD provide transparent protocol-mismatch
 > diagnostics on `RoamError::UnknownMethod` and `RoamError::InvalidPayload`.
-> This MAY involve additional RPC exchanges (for example, introspection calls
+> This can involve additional RPC exchanges (for example, introspection calls
 > to discover available methods/signatures) before surfacing the final error.
 
 > rs[client.protocol-mismatch.best-effort]
