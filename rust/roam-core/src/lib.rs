@@ -71,8 +71,8 @@ pub use std::convert::Infallible;
 
 /// Build an [`RpcPlan`] for type `T`, defaulting the `Tx` and `Rx` channel
 /// type parameters to `Tx::<()>` / `Rx::<()>`.
-pub fn rpc_plan<T: facet::Facet<'static>>() -> RpcPlan {
-    RpcPlan::for_type::<T, Tx<()>, Rx<()>>()
+pub fn rpc_plan<T: facet::Facet<'static>>() -> &'static RpcPlan {
+    Box::leak(Box::new(RpcPlan::for_type::<T, Tx<()>, Rx<()>>()))
 }
 
 #[cfg(test)]

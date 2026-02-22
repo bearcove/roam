@@ -15,34 +15,12 @@ use std::time::Duration;
 use facet::Facet;
 use once_cell::sync::Lazy;
 use roam_core::{
-    ChannelRegistry, Context, ForwardingDispatcher, MethodDescriptor, RoamError, RpcPlan, Rx,
-    ServiceDispatcher, Tx, channel, dispatch_call, dispatch_unknown_method,
+    ChannelRegistry, Context, ForwardingDispatcher, MethodDescriptor, RoamError, Rx,
+    ServiceDispatcher, Tx, channel, dispatch_call, dispatch_unknown_method, rpc_plan,
 };
 use roam_stream::{Connector, HandshakeConfig, NoDispatcher, accept, connect};
 use roam_types::{MethodId, Payload};
 use tokio::net::TcpStream;
-
-// ============================================================================
-// RPC Plans
-// ============================================================================
-
-static STRING_ARGS_PLAN: Lazy<RpcPlan> =
-    Lazy::new(|| RpcPlan::for_type::<String, Tx<()>, Rx<()>>());
-static STRING_RESPONSE_PLAN: Lazy<&'static RpcPlan> =
-    Lazy::new(|| Box::leak(Box::new(RpcPlan::for_type::<String, Tx<()>, Rx<()>>())));
-
-static RX_I32_ARGS_PLAN: Lazy<RpcPlan> =
-    Lazy::new(|| RpcPlan::for_type::<Rx<i32>, Tx<()>, Rx<()>>());
-static I64_RESPONSE_PLAN: Lazy<&'static RpcPlan> =
-    Lazy::new(|| Box::leak(Box::new(RpcPlan::for_type::<i64, Tx<()>, Rx<()>>())));
-
-static U32_TX_I32_ARGS_PLAN: Lazy<RpcPlan> =
-    Lazy::new(|| RpcPlan::for_type::<(u32, Tx<i32>), Tx<()>, Rx<()>>());
-static UNIT_RESPONSE_PLAN: Lazy<&'static RpcPlan> =
-    Lazy::new(|| Box::leak(Box::new(RpcPlan::for_type::<(), Tx<()>, Rx<()>>())));
-
-static RX_STRING_TX_STRING_ARGS_PLAN: Lazy<RpcPlan> =
-    Lazy::new(|| RpcPlan::for_type::<(Rx<String>, Tx<String>), Tx<()>, Rx<()>>());
 
 // ============================================================================
 // Method Descriptors
@@ -55,9 +33,9 @@ static SUM_DESC: Lazy<&'static MethodDescriptor> = Lazy::new(|| {
         method_name: "sum",
         args: &[],
         return_shape: <i64 as Facet>::SHAPE,
-        args_plan: Box::leak(Box::new(RpcPlan::for_type::<Rx<i32>, Tx<()>, Rx<()>>())),
-        ok_plan: Box::leak(Box::new(RpcPlan::for_type::<i64, Tx<()>, Rx<()>>())),
-        err_plan: Box::leak(Box::new(RpcPlan::for_type::<(), Tx<()>, Rx<()>>())),
+        args_plan: rpc_plan::<Rx<i32>>(),
+        ok_plan: rpc_plan::<i64>(),
+        err_plan: rpc_plan::<()>(),
         doc: None,
     }))
 });
@@ -69,11 +47,9 @@ static GENERATE_DESC: Lazy<&'static MethodDescriptor> = Lazy::new(|| {
         method_name: "generate",
         args: &[],
         return_shape: <() as Facet>::SHAPE,
-        args_plan: Box::leak(Box::new(
-            RpcPlan::for_type::<(u32, Tx<i32>), Tx<()>, Rx<()>>(),
-        )),
-        ok_plan: Box::leak(Box::new(RpcPlan::for_type::<(), Tx<()>, Rx<()>>())),
-        err_plan: Box::leak(Box::new(RpcPlan::for_type::<(), Tx<()>, Rx<()>>())),
+        args_plan: rpc_plan::<(u32, Tx<i32>)>(),
+        ok_plan: rpc_plan::<()>(),
+        err_plan: rpc_plan::<()>(),
         doc: None,
     }))
 });
@@ -85,13 +61,9 @@ static TRANSFORM_DESC: Lazy<&'static MethodDescriptor> = Lazy::new(|| {
         method_name: "transform",
         args: &[],
         return_shape: <() as Facet>::SHAPE,
-        args_plan: Box::leak(Box::new(RpcPlan::for_type::<
-            (Rx<String>, Tx<String>),
-            Tx<()>,
-            Rx<()>,
-        >())),
-        ok_plan: Box::leak(Box::new(RpcPlan::for_type::<(), Tx<()>, Rx<()>>())),
-        err_plan: Box::leak(Box::new(RpcPlan::for_type::<(), Tx<()>, Rx<()>>())),
+        args_plan: rpc_plan::<(Rx<String>, Tx<String>)>(),
+        ok_plan: rpc_plan::<()>(),
+        err_plan: rpc_plan::<()>(),
         doc: None,
     }))
 });
@@ -103,9 +75,9 @@ static ECHO_DESC: Lazy<&'static MethodDescriptor> = Lazy::new(|| {
         method_name: "echo",
         args: &[],
         return_shape: <String as Facet>::SHAPE,
-        args_plan: Box::leak(Box::new(RpcPlan::for_type::<String, Tx<()>, Rx<()>>())),
-        ok_plan: Box::leak(Box::new(RpcPlan::for_type::<String, Tx<()>, Rx<()>>())),
-        err_plan: Box::leak(Box::new(RpcPlan::for_type::<(), Tx<()>, Rx<()>>())),
+        args_plan: rpc_plan::<String>(),
+        ok_plan: rpc_plan::<String>(),
+        err_plan: rpc_plan::<()>(),
         doc: None,
     }))
 });
@@ -150,20 +122,18 @@ impl ServiceDispatcher for StreamingService {
             // echo(message: String) -> String
             METHOD_ECHO => dispatch_call::<String, String, (), _, _>(
                 &cx,
-                payload,
+                Payload(payload),
                 registry,
-                &STRING_ARGS_PLAN,
-                *STRING_RESPONSE_PLAN,
+                *ECHO_DESC,
                 |input: String| async move { Ok(input) },
             ),
 
             // sum(numbers: Rx<i32>) -> i64
             METHOD_SUM => dispatch_call::<Rx<i32>, i64, (), _, _>(
                 &cx,
-                payload,
+                Payload(payload),
                 registry,
-                &RX_I32_ARGS_PLAN,
-                *I64_RESPONSE_PLAN,
+                *SUM_DESC,
                 |mut numbers: Rx<i32>| async move {
                     let mut total: i64 = 0;
                     while let Ok(Some(n)) = numbers.recv().await {
@@ -176,10 +146,9 @@ impl ServiceDispatcher for StreamingService {
             // generate(count: u32, output: Tx<i32>)
             METHOD_GENERATE => dispatch_call::<(u32, Tx<i32>), (), (), _, _>(
                 &cx,
-                payload,
+                Payload(payload),
                 registry,
-                &U32_TX_I32_ARGS_PLAN,
-                *UNIT_RESPONSE_PLAN,
+                *GENERATE_DESC,
                 |(count, output): (u32, Tx<i32>)| async move {
                     for i in 0..count as i32 {
                         let _ = output.send(&i).await;
@@ -191,10 +160,9 @@ impl ServiceDispatcher for StreamingService {
             // transform(input: Rx<String>, output: Tx<String>)
             METHOD_TRANSFORM => dispatch_call::<(Rx<String>, Tx<String>), (), (), _, _>(
                 &cx,
-                payload,
+                Payload(payload),
                 registry,
-                &RX_STRING_TX_STRING_ARGS_PLAN,
-                *UNIT_RESPONSE_PLAN,
+                *TRANSFORM_DESC,
                 |(mut input, output): (Rx<String>, Tx<String>)| async move {
                     while let Ok(Some(s)) = input.recv().await {
                         let _ = output.send(&s).await;

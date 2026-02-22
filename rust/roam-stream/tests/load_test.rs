@@ -24,33 +24,6 @@ use roam_types::{MethodId, Payload};
 use tokio::net::{UnixListener, UnixStream};
 
 // ============================================================================
-// RPC Plans
-// ============================================================================
-
-static UNIT_ARGS_PLAN: Lazy<RpcPlan> =
-    Lazy::new(|| RpcPlan::for_type::<(), roam_core::Tx<()>, roam_core::Rx<()>>());
-static U32_RESPONSE_PLAN: Lazy<&'static RpcPlan> = Lazy::new(|| {
-    Box::leak(Box::new(RpcPlan::for_type::<
-        u32,
-        roam_core::Tx<()>,
-        roam_core::Rx<()>,
-    >()))
-});
-
-static U32_ARGS_PLAN: Lazy<RpcPlan> =
-    Lazy::new(|| RpcPlan::for_type::<u32, roam_core::Tx<()>, roam_core::Rx<()>>());
-
-static STRING_ARGS_PLAN: Lazy<RpcPlan> =
-    Lazy::new(|| RpcPlan::for_type::<String, roam_core::Tx<()>, roam_core::Rx<()>>());
-static STRING_RESPONSE_PLAN: Lazy<&'static RpcPlan> = Lazy::new(|| {
-    Box::leak(Box::new(RpcPlan::for_type::<
-        String,
-        roam_core::Tx<()>,
-        roam_core::Rx<()>,
-    >()))
-});
-
-// ============================================================================
 // Test Service with Fast and Slow Methods
 // ============================================================================
 
@@ -91,7 +64,7 @@ static INSTANT_DESC: Lazy<&'static MethodDescriptor> = Lazy::new(|| {
         args: &[],
         return_shape: <u32 as Facet>::SHAPE,
         args_plan: Box::leak(Box::new(RpcPlan::for_type::<
-            u32,
+            (),
             roam_core::Tx<()>,
             roam_core::Rx<()>,
         >())),
@@ -277,20 +250,18 @@ impl ServiceDispatcher for TestService {
             // instant() -> u32 - returns immediately
             METHOD_INSTANT => dispatch_call::<(), u32, (), _, _>(
                 &cx,
-                payload,
+                Payload(payload),
                 registry,
-                &UNIT_ARGS_PLAN,
-                *U32_RESPONSE_PLAN,
+                *INSTANT_DESC,
                 |_: ()| async move { Ok(42) },
             ),
 
             // fast(n: u32) -> u32 - sleeps 1-5ms
             METHOD_FAST => dispatch_call::<u32, u32, (), _, _>(
                 &cx,
-                payload,
+                Payload(payload),
                 registry,
-                &U32_ARGS_PLAN,
-                *U32_RESPONSE_PLAN,
+                *FAST_DESC,
                 |n: u32| async move {
                     tokio::time::sleep(Duration::from_millis(1 + (n % 5) as u64)).await;
                     Ok(n * 2)
@@ -300,10 +271,9 @@ impl ServiceDispatcher for TestService {
             // medium(n: u32) -> u32 - sleeps 10-30ms
             METHOD_MEDIUM => dispatch_call::<u32, u32, (), _, _>(
                 &cx,
-                payload,
+                Payload(payload),
                 registry,
-                &U32_ARGS_PLAN,
-                *U32_RESPONSE_PLAN,
+                *MEDIUM_DESC,
                 |n: u32| async move {
                     tokio::time::sleep(Duration::from_millis(10 + (n % 20) as u64)).await;
                     Ok(n * 3)
@@ -313,10 +283,9 @@ impl ServiceDispatcher for TestService {
             // slow(n: u32) -> u32 - sleeps 50-100ms
             METHOD_SLOW => dispatch_call::<u32, u32, (), _, _>(
                 &cx,
-                payload,
+                Payload(payload),
                 registry,
-                &U32_ARGS_PLAN,
-                *U32_RESPONSE_PLAN,
+                *SLOW_DESC,
                 |n: u32| async move {
                     tokio::time::sleep(Duration::from_millis(50 + (n % 50) as u64)).await;
                     Ok(n * 4)
@@ -326,10 +295,9 @@ impl ServiceDispatcher for TestService {
             // very_slow(n: u32) -> u32 - sleeps 100-200ms
             METHOD_VERY_SLOW => dispatch_call::<u32, u32, (), _, _>(
                 &cx,
-                payload,
+                Payload(payload),
                 registry,
-                &U32_ARGS_PLAN,
-                *U32_RESPONSE_PLAN,
+                *VERY_SLOW_DESC,
                 |n: u32| async move {
                     tokio::time::sleep(Duration::from_millis(100 + (n % 100) as u64)).await;
                     Ok(n * 5)
@@ -339,10 +307,9 @@ impl ServiceDispatcher for TestService {
             // echo(s: String) -> String
             METHOD_ECHO => dispatch_call::<String, String, (), _, _>(
                 &cx,
-                payload,
+                Payload(payload),
                 registry,
-                &STRING_ARGS_PLAN,
-                *STRING_RESPONSE_PLAN,
+                *ECHO_DESC,
                 |s: String| async move { Ok(s) },
             ),
 

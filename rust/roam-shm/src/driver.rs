@@ -1668,7 +1668,6 @@ impl MultiPeerHostDriver {
                     .unwrap();
 
                 // Create connection state
-                // r[impl core.conn.dispatcher-custom]
                 // Use the dispatcher provided by the initiator
                 let conn_state = VirtualConnectionState::new(
                     conn_id,
@@ -1730,7 +1729,6 @@ impl MultiPeerHostDriver {
                 let initial_credit = u32::MAX;
 
                 // Create root connection state
-                // r[impl core.conn.dispatcher-default]
                 // Root uses None for dispatcher - it uses the peer's dispatcher
                 let root_conn = VirtualConnectionState::new(
                     ConnectionId::ROOT,
@@ -2075,7 +2073,6 @@ impl MultiPeerHostDriver {
                         .unwrap();
 
                     // Create connection state for the new virtual connection
-                    // r[impl core.conn.dispatcher-custom]
                     // Use the dispatcher provided by the initiator
                     let conn_state = VirtualConnectionState::new(
                         conn_id,
@@ -2290,7 +2287,6 @@ impl MultiPeerHostDriver {
         // Build context for dispatch
         let cx = Context::new(conn_id, request_id, method_id, metadata, channels);
 
-        // r[impl core.conn.dispatcher] - Use connection-specific dispatcher if available
         let dispatcher: &dyn ServiceDispatcher = if let Some(ref conn_dispatcher) = conn.dispatcher
         {
             conn_dispatcher.as_ref()

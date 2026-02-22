@@ -9,11 +9,15 @@
 //!
 //! Usage: spawned via SpawnTicket::spawn(), receives args automatically
 
+use facet::Facet;
 use once_cell::sync::Lazy;
-use roam_core::{ChannelRegistry, Context, RpcPlan, Rx, ServiceDispatcher, Tx, dispatch_call};
+use roam_core::{
+    ChannelRegistry, Context, MethodDescriptor, RpcPlan, Rx, ServiceDispatcher, Tx, dispatch_call,
+};
 use roam_shm::driver::establish_guest;
 use roam_shm::spawn::{SpawnArgs, die_with_parent};
 use roam_shm::transport::ShmGuestTransport;
+use roam_types::{MethodId, Payload};
 use std::pin::Pin;
 
 // ============================================================================
@@ -37,6 +41,67 @@ static U32_TX_I32_ARGS_PLAN: Lazy<RpcPlan> =
 static UNIT_RESPONSE_PLAN: Lazy<&'static RpcPlan> =
     Lazy::new(|| Box::leak(Box::new(RpcPlan::for_type::<(), (), ()>())));
 
+const METHOD_ECHO: MethodId = MethodId(1);
+const METHOD_ADD: MethodId = MethodId(2);
+const METHOD_SUM: MethodId = MethodId(3);
+const METHOD_GENERATE: MethodId = MethodId(4);
+
+static ECHO_DESC: Lazy<&'static MethodDescriptor> = Lazy::new(|| {
+    Box::leak(Box::new(MethodDescriptor {
+        id: METHOD_ECHO,
+        service_name: "Test",
+        method_name: "echo",
+        args: &[],
+        return_shape: <String as Facet>::SHAPE,
+        args_plan: &STRING_ARGS_PLAN,
+        ok_plan: *STRING_RESPONSE_PLAN,
+        err_plan: *UNIT_RESPONSE_PLAN,
+        doc: None,
+    }))
+});
+
+static ADD_DESC: Lazy<&'static MethodDescriptor> = Lazy::new(|| {
+    Box::leak(Box::new(MethodDescriptor {
+        id: METHOD_ADD,
+        service_name: "Test",
+        method_name: "add",
+        args: &[],
+        return_shape: <i32 as Facet>::SHAPE,
+        args_plan: &I32_I32_ARGS_PLAN,
+        ok_plan: *I32_RESPONSE_PLAN,
+        err_plan: *UNIT_RESPONSE_PLAN,
+        doc: None,
+    }))
+});
+
+static SUM_DESC: Lazy<&'static MethodDescriptor> = Lazy::new(|| {
+    Box::leak(Box::new(MethodDescriptor {
+        id: METHOD_SUM,
+        service_name: "Test",
+        method_name: "sum",
+        args: &[],
+        return_shape: <i64 as Facet>::SHAPE,
+        args_plan: &RX_I32_ARGS_PLAN,
+        ok_plan: *I64_RESPONSE_PLAN,
+        err_plan: *UNIT_RESPONSE_PLAN,
+        doc: None,
+    }))
+});
+
+static GENERATE_DESC: Lazy<&'static MethodDescriptor> = Lazy::new(|| {
+    Box::leak(Box::new(MethodDescriptor {
+        id: METHOD_GENERATE,
+        service_name: "Test",
+        method_name: "generate",
+        args: &[],
+        return_shape: <() as Facet>::SHAPE,
+        args_plan: &U32_TX_I32_ARGS_PLAN,
+        ok_plan: *UNIT_RESPONSE_PLAN,
+        err_plan: *UNIT_RESPONSE_PLAN,
+        doc: None,
+    }))
+});
+
 /// Test service matching the one in driver.rs tests
 #[derive(Clone)]
 struct TestService;
@@ -56,28 +121,25 @@ impl ServiceDispatcher for TestService {
             // Echo method: returns the input unchanged
             1 => dispatch_call::<String, String, (), _, _>(
                 &cx,
-                payload,
+                Payload(payload),
                 registry,
-                &STRING_ARGS_PLAN,
-                *STRING_RESPONSE_PLAN,
+                *ECHO_DESC,
                 |input: String| async move { Ok(input) },
             ),
             // Add method: adds two numbers
             2 => dispatch_call::<(i32, i32), i32, (), _, _>(
                 &cx,
-                payload,
+                Payload(payload),
                 registry,
-                &I32_I32_ARGS_PLAN,
-                *I32_RESPONSE_PLAN,
+                *ADD_DESC,
                 |(a, b): (i32, i32)| async move { Ok(a + b) },
             ),
             // Sum method: client streams numbers, server returns sum
             3 => dispatch_call::<Rx<i32>, i64, (), _, _>(
                 &cx,
-                payload,
+                Payload(payload),
                 registry,
-                &RX_I32_ARGS_PLAN,
-                *I64_RESPONSE_PLAN,
+                *SUM_DESC,
                 |mut input: Rx<i32>| async move {
                     let mut sum: i64 = 0;
                     while let Ok(Some(value)) = input.recv().await {
@@ -89,10 +151,9 @@ impl ServiceDispatcher for TestService {
             // Generate method: server streams numbers back to client
             4 => dispatch_call::<(u32, Tx<i32>), (), (), _, _>(
                 &cx,
-                payload,
+                Payload(payload),
                 registry,
-                &U32_TX_I32_ARGS_PLAN,
-                *UNIT_RESPONSE_PLAN,
+                *GENERATE_DESC,
                 |(count, output): (u32, Tx<i32>)| async move {
                     for i in 0..count {
                         output.send(&(i as i32)).await.ok();

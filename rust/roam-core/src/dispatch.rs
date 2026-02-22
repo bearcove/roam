@@ -6,7 +6,7 @@
 //! - [`ServiceDispatcher`] trait - implemented by generated service dispatchers
 //! - [`RoutedDispatcher`] - routes to different dispatchers by method ID
 
-use std::sync::Arc;
+use std::{future::Future, pin::Pin, sync::Arc};
 
 use facet::Facet;
 use facet_core::{PtrConst, PtrMut, PtrUninit};
@@ -244,23 +244,21 @@ impl Clone for Context {
 /// The `channels` parameter contains channel IDs from the Request message framing.
 /// These are patched into the deserialized args before binding channels.
 ///
-/// **IMPORTANT**: Create `ARGS_PLAN` and `RESPONSE_PLAN` statics in your generated
-/// dispatch code (one per endpoint), NOT inside a generic function, then pass them here.
+/// Pass the method's descriptor so dispatch can use its precomputed plans.
 #[allow(unsafe_code)]
 pub fn dispatch_call<A, R, E, F, Fut>(
     cx: &Context,
-    payload: Vec<u8>,
+    payload: Payload,
     registry: &mut ChannelRegistry,
-    args_plan: &RpcPlan,
-    response_plan: &'static RpcPlan,
+    method_descriptor: &'static MethodDescriptor,
     handler: F,
-) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'static>>
+) -> Pin<Box<dyn Future<Output = ()> + Send + 'static>>
 where
     A: Facet<'static> + Send,
     R: Facet<'static> + Send,
     E: Facet<'static> + Send,
     F: FnOnce(A) -> Fut + Send + 'static,
-    Fut: std::future::Future<Output = Result<R, E>> + Send + 'static,
+    Fut: Future<Output = Result<R, E>> + Send + 'static,
 {
     let conn_id = cx.conn_id;
     let request_id = cx.request_id;
@@ -274,8 +272,8 @@ where
     let prepare_result = unsafe {
         prepare_sync(
             args_slot.as_mut_ptr().cast(),
-            args_plan,
-            &payload,
+            method_descriptor.args_plan,
+            &payload.0,
             &cx.channels,
             registry,
         )
@@ -293,12 +291,10 @@ where
     // SAFETY: prepare_sync succeeded, so args_slot is initialized
     let args = unsafe { args_slot.assume_init() };
 
-    let dispatch_ctx = registry.dispatch_context();
-
     // Use task_local scope so roam::channel() creates bound channels.
     // This is critical: unlike thread_local, task_local won't leak to other
     // tasks that happen to run on the same worker thread.
-    Box::pin(DISPATCH_CONTEXT.scope(dispatch_ctx, async move {
+    Box::pin(async move {
         match handler(args).await {
             Ok(ref ok_result) => {
                 // Use non-generic send_ok_response via SendPeek
@@ -306,7 +302,14 @@ where
                 // and we don't mutate it while the Peek exists
                 let peek = facet::Peek::new(ok_result);
                 let send_peek = unsafe { SendPeek::new(peek) };
-                send_ok_response(send_peek, response_plan, &task_tx, conn_id, request_id).await;
+                send_ok_response(
+                    send_peek,
+                    method_descriptor.ok_plan,
+                    &task_tx,
+                    conn_id,
+                    request_id,
+                )
+                .await;
             }
             Err(ref user_error) => {
                 // Use non-generic send_error_response via SendPeek
@@ -317,71 +320,7 @@ where
                 send_error_response(send_peek, &task_tx, conn_id, request_id).await;
             }
         }
-    }))
-}
-
-/// Dispatch helper for infallible methods (those that return `T` instead of `Result<T, E>`).
-///
-/// Same as `dispatch_call` but for handlers that cannot fail at the application level.
-/// Requires `args_plan` and `response_plan` - create these as statics in non-generic code.
-#[allow(unsafe_code)]
-pub fn dispatch_call_infallible<A, R, F, Fut>(
-    cx: &Context,
-    payload: Vec<u8>,
-    registry: &mut ChannelRegistry,
-    args_plan: &RpcPlan,
-    response_plan: &'static RpcPlan,
-    handler: F,
-) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'static>>
-where
-    A: Facet<'static> + Send,
-    R: Facet<'static> + Send,
-    F: FnOnce(A) -> Fut + Send + 'static,
-    Fut: std::future::Future<Output = R> + Send + 'static,
-{
-    let conn_id = cx.conn_id;
-    let request_id = cx.request_id;
-
-    // Use MaybeUninit to avoid heap allocation for args.
-    // Deserialization happens via non-generic prepare_sync.
-    let mut args_slot = std::mem::MaybeUninit::<A>::uninit();
-
-    // SAFETY: args_slot is properly aligned and sized for A.
-    // prepare_sync will initialize it on success.
-    let prepare_result = unsafe {
-        prepare_sync(
-            args_slot.as_mut_ptr().cast(),
-            args_plan,
-            &payload,
-            &cx.channels,
-            registry,
-        )
-    };
-
-    let task_tx = registry.driver_tx();
-
-    // Handle prepare errors - this is non-generic
-    if let Err(e) = prepare_result {
-        return Box::pin(async move {
-            send_prepare_error(e, &task_tx, conn_id, request_id).await;
-        });
-    }
-
-    // SAFETY: prepare_sync succeeded, so args_slot is initialized
-    let args = unsafe { args_slot.assume_init() };
-    let dispatch_ctx = registry.dispatch_context();
-
-    // Use task_local scope so roam::channel() creates bound channels.
-    Box::pin(DISPATCH_CONTEXT.scope(dispatch_ctx, async move {
-        let result = handler(args).await;
-
-        // Use non-generic send_ok_response via SendPeek
-        // SAFETY: R is Send (from where clause), result outlives this scope,
-        // and we don't mutate it while the Peek exists
-        let peek = facet::Peek::new(&result);
-        let send_peek = unsafe { SendPeek::new(peek) };
-        send_ok_response(send_peek, response_plan, &task_tx, conn_id, request_id).await;
-    }))
+    })
 }
 
 /// Send an "unknown method" error response.
@@ -390,7 +329,7 @@ where
 pub fn dispatch_unknown_method(
     cx: &Context,
     registry: &mut ChannelRegistry,
-) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'static>> {
+) -> Pin<Box<dyn Future<Output = ()> + Send + 'static>> {
     let conn_id = cx.conn_id;
     let request_id = cx.request_id;
     let task_tx = registry.driver_tx();
@@ -911,7 +850,7 @@ pub trait ServiceDispatcher: Send + Sync {
         cx: Context,
         payload: Vec<u8>,
         registry: &mut ChannelRegistry,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'static>>;
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + 'static>>;
 }
 
 // ============================================================================
@@ -972,7 +911,7 @@ where
         cx: Context,
         payload: Vec<u8>,
         registry: &mut ChannelRegistry,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'static>> {
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + 'static>> {
         if self.primary_methods.contains(&cx.method_id()) {
             self.primary.dispatch(cx, payload, registry)
         } else {

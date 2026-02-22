@@ -782,7 +782,7 @@ impl VarSlotPool {
     }
 
     /// Get the number of extents for a size class (for diagnostics).
-    pub(crate) fn extent_count(&self, class_idx: usize) -> u32 {
+    pub fn extent_count(&self, class_idx: usize) -> u32 {
         if class_idx >= self.classes.len() {
             return 0;
         }

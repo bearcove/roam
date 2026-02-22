@@ -23,23 +23,9 @@ use roam_core::{
 use roam_stream::{
     ConnectError, Connector, HandshakeConfig, RetryPolicy, accept, connect, connect_with_policy,
 };
-use roam_types::MethodId;
+use roam_types::{MethodId, Payload};
 use std::sync::Mutex;
 use tokio::net::TcpStream;
-
-// ============================================================================
-// RPC Plans
-// ============================================================================
-
-static STRING_ARGS_PLAN: Lazy<RpcPlan> =
-    Lazy::new(|| RpcPlan::for_type::<String, roam_core::Tx<()>, roam_core::Rx<()>>());
-static STRING_RESPONSE_PLAN: Lazy<&'static RpcPlan> = Lazy::new(|| {
-    Box::leak(Box::new(RpcPlan::for_type::<
-        String,
-        roam_core::Tx<()>,
-        roam_core::Rx<()>,
-    >()))
-});
 
 // ============================================================================
 // Method Descriptors
@@ -53,14 +39,14 @@ static DESC_1: Lazy<&'static MethodDescriptor> = Lazy::new(|| {
         service_name: "Test",
         method_name: "test",
         args: &[],
-        return_shape: <() as Facet>::SHAPE,
+        return_shape: <String as Facet>::SHAPE,
         args_plan: Box::leak(Box::new(RpcPlan::for_type::<
-            (),
+            String,
             roam_core::Tx<()>,
             roam_core::Rx<()>,
         >())),
         ok_plan: Box::leak(Box::new(RpcPlan::for_type::<
-            (),
+            String,
             roam_core::Tx<()>,
             roam_core::Rx<()>,
         >())),
@@ -79,14 +65,14 @@ static DESC_999: Lazy<&'static MethodDescriptor> = Lazy::new(|| {
         service_name: "Test",
         method_name: "test",
         args: &[],
-        return_shape: <() as Facet>::SHAPE,
+        return_shape: <String as Facet>::SHAPE,
         args_plan: Box::leak(Box::new(RpcPlan::for_type::<
-            (),
+            String,
             roam_core::Tx<()>,
             roam_core::Rx<()>,
         >())),
         ok_plan: Box::leak(Box::new(RpcPlan::for_type::<
-            (),
+            String,
             roam_core::Tx<()>,
             roam_core::Rx<()>,
         >())),
@@ -130,10 +116,9 @@ impl ServiceDispatcher for TestService {
             // Echo method
             METHOD_1 => dispatch_call::<String, String, (), _, _>(
                 &cx,
-                payload,
+                Payload(payload),
                 registry,
-                &STRING_ARGS_PLAN,
-                *STRING_RESPONSE_PLAN,
+                *DESC_1,
                 |input: String| async move { Ok(input) },
             ),
             _ => dispatch_unknown_method(&cx, registry),

@@ -91,7 +91,8 @@ impl<C: Caller> Caller for TracingCaller<C> {
         args: &mut T,
         mut metadata: roam_types::Metadata,
     ) -> Result<ResponseData, TransportError> {
-        let (trace_id, parent_span_id) = roam_core::CURRENT_EXTENSIONS
+        // [FIXME] get rid of CURRENT_EXTENSIONS, just pass things by argument, like descriptor, args, and metadata
+        let (trace_id) = roam_core::CURRENT_EXTENSIONS
             .try_with(|ext| {
                 ext.get::<CurrentTrace>()
                     .map(|tc| (tc.trace_id.clone(), Some(tc.span_id.clone())))

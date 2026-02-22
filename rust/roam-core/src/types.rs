@@ -240,19 +240,6 @@ impl ChannelRegistry {
         self.current_request_id = request_id;
     }
 
-    /// Get the dispatch context for response channel binding.
-    ///
-    /// Used by dispatch methods to set up task-local context so
-    /// `roam::channel()` can create bound channels. The context should
-    /// be passed to `DISPATCH_CONTEXT.scope()` in the async block.
-    pub fn dispatch_context(&self) -> DispatchContext {
-        DispatchContext {
-            conn_id: self.conn_id,
-            channel_ids: self.response_channel_ids.clone(),
-            driver_tx: self.driver_tx.clone(),
-        }
-    }
-
     /// Get a clone of the driver message sender.
     ///
     /// Used by codegen to spawn tasks that send Data/Close/Response messages.

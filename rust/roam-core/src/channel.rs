@@ -34,20 +34,7 @@ use crate::{CHANNEL_SIZE, ChannelId, DriverMessage, IncomingChannelMessage, get_
 /// ```
 pub fn channel<T: 'static>() -> (Tx<T>, Rx<T>) {
     let (sender, receiver) = crate::runtime::channel("roam_channel", CHANNEL_SIZE);
-
-    // Check if we're in a dispatch context - if so, create bound channels
-    if let Some(ctx) = get_dispatch_context() {
-        let channel_id = ctx.channel_ids.next();
-        debug!(channel_id = %channel_id, "roam::channel() creating bound channel pair");
-
-        (
-            Tx::bound(ctx.conn_id, channel_id, sender, ctx.driver_tx.clone()),
-            Rx::bound(channel_id, receiver),
-        )
-    } else {
-        trace!("roam::channel() creating unbound channel pair (no dispatch context)");
-        (Tx::unbound(sender), Rx::unbound(receiver))
-    }
+    (Tx::unbound(sender), Rx::unbound(receiver))
 }
 
 // ============================================================================
