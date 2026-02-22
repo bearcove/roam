@@ -6,6 +6,7 @@
 //! shm[verify shm.host.poll-peers]
 //! shm[verify shm.topology.max-guests]
 
+use roam_core::MethodId;
 use roam_shm::guest::ShmGuest;
 use roam_shm::host::{PollResult, ShmHost};
 use roam_shm::layout::SegmentConfig;
@@ -13,7 +14,7 @@ use roam_shm::msg::ShmMsg;
 use roam_shm::msg_type;
 
 fn make_data_msg(seq: u32, payload: Vec<u8>) -> ShmMsg {
-    ShmMsg::new(msg_type::DATA, seq, 0, payload)
+    ShmMsg::new(msg_type::DATA, seq, MethodId(0), payload)
 }
 
 #[test]

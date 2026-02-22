@@ -5,6 +5,7 @@
 //! shm[verify shm.file.create]
 //! shm[verify shm.file.attach]
 
+use roam_core::MethodId;
 use roam_shm::msg::ShmMsg;
 use roam_shm::{AddPeerOptions, PollResult, SegmentConfig, ShmGuest, ShmHost, SpawnArgs, msg_type};
 

@@ -12,6 +12,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
+use roam_core::MethodId;
 use roam_shm::AddPeerOptions;
 use roam_shm::guest::{AttachError, SendError, ShmGuest};
 use roam_shm::host::{PollResult, ShmHost};
@@ -201,6 +202,8 @@ fn test_guest_crash_triggers_death_callback() {
         -1 => panic!("fork failed"),
         0 => {
             // Child: attach and then crash without graceful detach
+
+            use roam_core::MethodId;
             let spawn_args = roam_shm::spawn::SpawnArgs::from_args(&args).unwrap();
             let mut guest = ShmGuest::attach_with_ticket(&spawn_args).unwrap();
 
@@ -295,6 +298,8 @@ fn test_sigkill_triggers_death_detection() {
         -1 => panic!("fork failed"),
         0 => {
             // Child: attach and wait to be killed
+
+            use roam_core::MethodId;
             let spawn_args = roam_shm::spawn::SpawnArgs::from_args(&args).unwrap();
             let mut guest = ShmGuest::attach_with_ticket(&spawn_args).unwrap();
 

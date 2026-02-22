@@ -98,6 +98,7 @@ pub struct ShmHost {
 /// Host-side state for a single guest.
 pub(crate) struct GuestState {
     /// Human-readable name for debugging
+    #[allow(dead_code)]
     pub(crate) name: Option<String>,
 
     /// Last observed epoch

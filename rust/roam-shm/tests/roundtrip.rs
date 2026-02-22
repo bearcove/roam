@@ -3,6 +3,7 @@
 //! shm[verify shm.topology.hub]
 //! shm[verify shm.topology.hub.calls]
 
+use roam_core::MethodId;
 use roam_shm::guest::ShmGuest;
 use roam_shm::host::{PollResult, ShmHost};
 use roam_shm::layout::SegmentConfig;
@@ -11,12 +12,12 @@ use roam_shm::msg_type;
 
 /// Create a simple request message with payload.
 fn make_request(id: u32, payload: &[u8]) -> ShmMsg {
-    ShmMsg::new(msg_type::REQUEST, id, 0, payload.to_vec())
+    ShmMsg::new(msg_type::REQUEST, id, MethodId(0), payload.to_vec())
 }
 
 /// Create a response message.
 fn make_response(id: u32, payload: &[u8]) -> ShmMsg {
-    ShmMsg::new(msg_type::RESPONSE, id, 0, payload.to_vec())
+    ShmMsg::new(msg_type::RESPONSE, id, MethodId(0), payload.to_vec())
 }
 
 /// shm[verify shm.guest.attach]
@@ -155,7 +156,7 @@ fn large_payload_via_slot() {
     // Create a payload larger than inline capacity (32 bytes)
     let large_payload: Vec<u8> = (0..1000).map(|i| (i % 256) as u8).collect();
 
-    let msg = ShmMsg::new(msg_type::DATA, 999, 0, large_payload.clone());
+    let msg = ShmMsg::new(msg_type::DATA, 999, MethodId(0), large_payload.clone());
 
     // Guest sends large message
     guest.send(&msg).unwrap();
@@ -270,7 +271,7 @@ fn slot_reclamation_guest_to_host() {
     // This should work because host frees slots after consuming
     for i in 0..20u32 {
         // Guest sends
-        let msg = ShmMsg::new(msg_type::DATA, i, 0, large_payload.clone());
+        let msg = ShmMsg::new(msg_type::DATA, i, MethodId(0), large_payload.clone());
         guest.send(&msg).unwrap();
 
         // Host consumes (and frees slot)
@@ -299,7 +300,7 @@ fn slot_reclamation_host_to_guest() {
     // Send more messages than we have slots
     for i in 0..20u32 {
         // Host sends
-        let msg = ShmMsg::new(msg_type::DATA, i, 0, large_payload.clone());
+        let msg = ShmMsg::new(msg_type::DATA, i, MethodId(0), large_payload.clone());
         host.send(peer_id, &msg).unwrap();
 
         // Guest consumes (and frees slot)
