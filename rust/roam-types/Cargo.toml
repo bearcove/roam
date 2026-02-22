@@ -13,6 +13,7 @@ description = "Base types used by roam crates"
 rustdoc-args = ["--html-in-header", "arborium-header.html"]
 
 [dependencies]
+bitflags.workspace = true
 facet.workspace = true
 facet-core.workspace = true
 facet-path.workspace = true

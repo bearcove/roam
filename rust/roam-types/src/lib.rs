@@ -28,3 +28,6 @@ pub use message::*;
 
 mod connectivity;
 pub use connectivity::*;
+
+mod metadata;
+pub use metadata::*;

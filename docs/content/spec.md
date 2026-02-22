@@ -6,7 +6,7 @@ weight = 10
 
 # Introduction
 
-*This is roam specification v5.0.0, last updated February 22, 2026. It
+*This is roam specification v7.0.0, last updated February 22, 2026. It
 canonically lives at <https://github.com/bearcove/roam> — where you can get the
 latest version.*
 
