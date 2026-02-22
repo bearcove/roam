@@ -8,8 +8,10 @@
 //! Layer names and trait names are intended to match:
 //!
 //! - **Link**: transports move opaque [`Payload`] units between peers.
+//! - **Packet**: reliable, ordered delivery of `Payload` over a `Link`, with
+//!   seq/ack and replay for resumption.
 //! - **Codec**: serialization between [`crate::Message`] and [`Payload`].
-//! - **Wire**: a schema-blind wrapper over `Link` that sends/receives `Message`.
+//! - **Wire**: message IO on top of `Packet + Codec` (policy-blind).
 //! - **Session**: the protocol state machine (handshake, resume, routing, etc.).
 //! - **Client**: generated service clients built on top of `Session`.
 
@@ -72,6 +74,79 @@ pub trait LinkReceiver: Send + 'static {
     async fn recv(&mut self) -> io::Result<Option<Payload>>;
 }
 
+/// Packet sequence number (per direction).
+///
+/// This sequence space is used to implement:
+/// - replay after reconnect
+/// - QUIC-style ACK ranges (SACK)
+/// - bounded buffering with backpressure (no silent drop)
+///
+/// Note: this is an API sketch; the exact representation is not fixed here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct PacketSeq(pub u32);
+
+/// One inclusive ACK range `[start, end]`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct AckRange {
+    pub start: PacketSeq,
+    pub end: PacketSeq,
+}
+
+/// QUIC-style ACK ranges.
+///
+/// The ranges MUST be non-overlapping and ordered by `start`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AckRanges(pub Vec<AckRange>);
+
+/// Reliable, ordered delivery of [`Payload`] units.
+///
+/// `Packet` sits immediately above [`Link`]. It is responsible for:
+/// - attaching to a `Link` and emitting/consuming transport `Payload` units
+/// - adding sequence numbers
+/// - generating/processing ACK ranges (SACK)
+/// - replaying unacked outbound payloads after reconnect
+/// - deduplicating inbound payloads
+/// - producing an in-order stream of payloads for upper layers
+///
+/// `Packet` is intentionally policy-blind: it does not understand roam calls,
+/// channels, or dispatch. It only provides exactly-once, in-order delivery of
+/// opaque payload units to upper layers.
+pub trait Packet {
+    type Sender: PacketSender;
+    type Receiver: PacketReceiver;
+
+    fn split(self) -> (Self::Sender, Self::Receiver);
+}
+
+pub trait PacketSender: Send + 'static {
+    type Permit<'a>: PacketSendPermit
+    where
+        Self: 'a;
+
+    #[allow(async_fn_in_trait)]
+    async fn reserve(&self) -> io::Result<Self::Permit<'_>>;
+
+    #[allow(async_fn_in_trait)]
+    async fn close(self) -> io::Result<()>
+    where
+        Self: Sized;
+}
+
+pub trait PacketSendPermit {
+    /// Enqueue exactly one payload into the reserved capacity.
+    fn send(self, payload: Payload);
+}
+
+pub trait PacketReceiver: Send + 'static {
+    /// Receive the next in-order payload.
+    ///
+    /// This layer MUST NOT yield payloads out of order. If the underlying
+    /// transport reorders or drops, the packet layer MUST buffer/replay until
+    /// order is restored or the link is deemed failed.
+    #[allow(async_fn_in_trait)]
+    async fn recv(&mut self) -> io::Result<Option<Payload>>;
+}
+
 /// Message serialization and deserialization.
 ///
 /// This is the only layer that understands the schema of `Message` at the
@@ -92,7 +167,7 @@ pub trait Codec: Send + Sync + 'static {
 /// This layer is protocol-message-shaped but schema-blind: it moves
 /// `crate::Message` values without owning any call/session policy.
 ///
-/// A typical implementation wraps a `Link` and a `Codec`.
+/// A typical implementation wraps a `Packet` and a `Codec`.
 pub trait Wire {
     type Sender: WireSender;
     type Receiver: WireReceiver;
@@ -128,10 +203,10 @@ pub trait WireReceiver: Send + 'static {
 /// If a session is constructed from a single already-established `Link`, it
 /// cannot reconnect unless it also has a `Dialer`.
 pub trait Dialer: Send + Sync + 'static {
-    type Wire: Wire;
+    type Link: Link;
 
     #[allow(async_fn_in_trait)]
-    async fn dial(&self) -> io::Result<Self::Wire>;
+    async fn dial(&self) -> io::Result<Self::Link>;
 }
 
 /// Whether the session is acting as initiator (dialing) or acceptor (accepting).
@@ -153,21 +228,21 @@ pub enum Reconnect {
 /// This is a *shape*, not a full implementation: the actual state machine lives
 /// in `roam-runtime`.
 #[derive(Debug)]
-pub struct SessionBuilder<W, D> {
+pub struct SessionBuilder<C, L, D> {
     role: SessionRole,
     reconnect: Reconnect,
-    wire: W,
-    initial_wire: Option<W>,
+    codec: C,
+    initial_link: Option<L>,
     dialer: Option<D>,
 }
 
-impl<W, D> SessionBuilder<W, D> {
-    pub fn new(role: SessionRole, wire: W) -> Self {
+impl<C, L, D> SessionBuilder<C, L, D> {
+    pub fn new(role: SessionRole, codec: C) -> Self {
         Self {
             role,
             reconnect: Reconnect::Disabled,
-            wire,
-            initial_wire: None,
+            codec,
+            initial_link: None,
             dialer: None,
         }
     }
@@ -177,8 +252,8 @@ impl<W, D> SessionBuilder<W, D> {
         self
     }
 
-    pub fn wire_instance(mut self, wire: W) -> Self {
-        self.initial_wire = Some(wire);
+    pub fn link(mut self, link: L) -> Self {
+        self.initial_link = Some(link);
         self
     }
 
@@ -187,8 +262,8 @@ impl<W, D> SessionBuilder<W, D> {
         self
     }
 
-    pub fn wire(&self) -> &W {
-        &self.wire
+    pub fn codec(&self) -> &C {
+        &self.codec
     }
 
     pub fn role(&self) -> SessionRole {
@@ -205,6 +280,6 @@ impl<W, D> SessionBuilder<W, D> {
 /// The real session handle will live in `roam-runtime` and expose call/dispatch
 /// APIs. This exists so we can discuss type parameters and builder ergonomics.
 #[derive(Debug)]
-pub struct SessionHandle<W, D> {
-    _phantom: core::marker::PhantomData<(W, D)>,
+pub struct SessionHandle<C, L, D> {
+    _phantom: core::marker::PhantomData<(C, L, D)>,
 }
