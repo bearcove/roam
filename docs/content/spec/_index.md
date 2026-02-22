@@ -67,11 +67,17 @@ described in the surrounding rules.
 
 ```rust
 // Conceptual newtypes used by this specification.
-pub struct ConnectionId(pub u64);
-pub struct SessionId(pub u64);
+pub struct SessionId(pub u32);
+pub struct ConnectionId(pub u32);
 
-// Link-scoped correlation for Connect/Accept/Reject/Resume.
-pub struct ConnectId(pub u32);
+/// Parity selects a partition of the u32 ID space.
+///
+/// Odd IDs: 1, 3, 5, ...
+/// Even IDs: 2, 4, 6, ...
+pub enum Parity {
+    Odd,
+    Even,
+}
 
 // Call- and channel-scoped identifiers (unified with SHM).
 pub struct RequestId(pub u32);
@@ -102,39 +108,35 @@ A **transport** is a mechanism for communication (TCP, WebSocket, SHM, etc.).
 A **link** is an instance of a transport between two **peers** — the actual
 connection over which messages flow.
 
-A link carries one or more **sessions**. A session is an independent
-communication context with its own call and channel state (request ID spaces,
-channel ID space, dispatcher, flow-control state).
+A link carries exactly one **session**. A session is the stable, resumable
+communication context with its own call and channel state (connections, request
+and channel ID spaces, dispatcher assignments, flow-control state).
 
-On a given link, a session is addressed by a link-local `conn_id`. If the link
-fails and the session is resumed, the resumed session is assigned a new
-`conn_id` on the new link.
+A session multiplexes one or more **connections** identified by a `conn_id`.
+Connection 0 is created implicitly when the link is established.
 
 > r[core.link]
 >
 > A link is a bidirectional communication channel between two peers,
-> established via a specific transport. The link carries virtual
-> connection attachments for sessions, each identified by a link-local
-> `conn_id` (`ConnectionId`).
+> established via a specific transport. The link carries exactly one
+> roam Session.
 
 > r[core.link.connection-zero]
 >
 > Connection 0 is established implicitly when the link is created.
 > Both peers can immediately send messages on connection 0 after the
-> Hello exchange.
+> Hello/HelloYourself exchange.
 
 > r[core.session]
 >
 > Each session has a stable `session_id` (`SessionId`) that identifies the
 > logical session across reconnects. A `session_id` is paired with a
 > `resume_token` (`ResumeToken`) which is required to resume the session after
-> a link failure. The `session_id` is not carried on every message; after
-> resumption, the session is referenced by its (new) `conn_id` on that link.
-
-For peer-to-peer transports, one peer is the **initiator** (opened the
-link) and the other is the **acceptor**. This distinction affects
-ID allocation but not capabilities — either peer can initiate calls or
-open new connections.
+> a link failure.
+>
+> When a session is resumed on a new link, the session's connection IDs and
+> all request/channel ID spaces continue; only the underlying transport link
+> changes.
 
 ## Virtual Connections
 
@@ -144,9 +146,9 @@ a separate upstream connection, preserving session identity.
 
 > r[core.conn.open]
 >
-> A peer opens a new connection by sending a `Connect` message with a
-> `connect_id`. The remote peer responds with `Accept` (providing the
-> new `conn_id`) or `Reject`.
+> A peer opens a new connection by allocating a fresh `conn_id` and sending
+> `Connect` on that `conn_id`. The remote peer responds with `Accept` or
+> `Reject` on the same `conn_id`.
 
 > r[core.conn.accept-required]
 >
@@ -156,9 +158,21 @@ a separate upstream connection, preserving session identity.
 
 > r[core.conn.id-allocation]
 >
-> Connection IDs are allocated by the **acceptor** of the `Connect`
-> request (the peer receiving Connect, not the link acceptor).
-> IDs MUST be unique within the link and MUST NOT be 0.
+> Connection IDs are allocated by the peer opening the connection (the sender
+> of `Connect`). A `conn_id` MUST NOT be 0 and MUST NOT be reused within a
+> session.
+
+> r[core.conn.id-allocation.parity]
+>
+> Connection IDs greater than 0 are partitioned by parity (odd/even) so both
+> peers can open connections concurrently without collisions:
+>
+> - Each peer has a session-level `Parity` negotiated during Hello.
+> - A peer MUST allocate only `conn_id > 0` values matching its session
+>   parity.
+> - If a peer receives `Connect` using a `conn_id > 0` that matches the
+>   receiver's session parity, it MUST treat it as a protocol error (send
+>   Goodbye on connection 0 and close the link).
 
 > r[core.conn.only-root-accepts]
 >
@@ -186,7 +200,7 @@ a separate upstream connection, preserving session identity.
 | Message | Sender | Meaning |
 |---------|--------|---------|
 | **Connect** | either | Request to open a new virtual connection |
-| **Accept** | receiver of Connect | Connection accepted, here is the `conn_id` |
+| **Accept** | receiver of Connect | Connection accepted |
 | **Reject** | receiver of Connect | Connection refused (not listening) |
 
 ## Calls
@@ -206,6 +220,13 @@ A **call** is a request/response exchange identified by a `request_id`
 > its own `RequestId` sequence for the calls it initiates on a connection.
 > When initiating calls, a peer MUST allocate Request IDs by incrementing a
 > `u32` counter modulo 2^32 (wrapping).
+
+> r[core.call.request-id.parity]
+>
+> Within a given connection, each peer has an assigned `Parity`. When
+> initiating calls on that connection, a peer MUST allocate `RequestId` values
+> matching its parity partition (odd if the peer's parity is Odd; even if the
+> peer's parity is Even).
 
 ### Call Messages
 
@@ -281,13 +302,8 @@ Channel IDs must be unique within a connection (`r[channeling.id.uniqueness]`).
 ID 0 is reserved (`r[channeling.id.zero-reserved]`). The **caller** allocates
 all channel IDs for a call (`r[channeling.allocation.caller]`).
 
-For peer-to-peer transports, the **link initiator** uses odd IDs (1, 3, 5, ...)
-and the **link acceptor** uses even IDs (2, 4, 6, ...). This applies to all
-virtual connections on the link. See `r[channeling.id.parity]` for details.
-
-Note: "Initiator" and "acceptor" refer to who opened the link, not who is
-calling whom. If the link initiator calls, they use odd IDs. If the link
-acceptor calls back, they use even IDs.
+For peer-to-peer transports, channel ID allocation is governed by the
+connection's negotiated `Parity`. See `r[channeling.id.parity]` for details.
 
 ### Channels and Calls
 
@@ -1048,29 +1064,22 @@ on which variant is passed.
 
 > r[channeling.id.parity]
 >
-> For peer-to-peer transports, the **link initiator** (who opened the link)
-> MUST allocate odd channel IDs (1, 3, 5, ...). The **link acceptor** MUST
-> allocate even channel IDs (2, 4, 6, ...). This prevents collisions when
-> both peers make concurrent calls.
-
-> r[channeling.id.parity.virtual]
+> Each connection has a negotiated `Parity` that partitions `ChannelId` values
+> between the two peers.
 >
-> For virtual connections (opened via `Connect`/`Accept`), the parity rule
-> is inherited from the link: the link initiator uses odd IDs on all
-> connections, and the link acceptor uses even IDs on all connections.
-> This is independent of who sent the `Connect` request.
-
-Note: "Initiator" and "acceptor" refer to who opened the link, not who is
-calling whom or who opened the virtual connection. If the link initiator
-calls with a Tx and Rx, both use odd IDs (e.g., tx=1, rx=3). If the link
-acceptor calls back, they use even IDs (e.g., tx=2, rx=4).
+> When initiating a call on a connection, the caller MUST allocate all
+> `ChannelId` values for that call from the caller's parity partition for that
+> connection (odd if the caller's parity is Odd; even if it is Even).
+>
+> This prevents collisions when both peers make concurrent calls on the same
+> connection.
 
 ## Call Lifecycle with Channels
 
 ### Caller Channeling (Tx): `sum(numbers: Tx<u32>) -> u32`
 
 ```
-Caller (initiator)                         Callee (acceptor)
+Caller                                  Callee
     |                                          |
     |-- Request(sum, tx=1) ------------------->|
     |-- Data(channel=1, 10) ------------------>|
@@ -1083,7 +1092,7 @@ Caller (initiator)                         Callee (acceptor)
 ### Callee Channeling (Rx): `range(n, output: Rx<u32>)`
 
 ```
-Caller (initiator)                         Callee (acceptor)
+Caller                                  Callee
     |                                          |
     |-- Request(range, n=3, rx=1) ------------>|
     |                                          |
@@ -1096,7 +1105,7 @@ Caller (initiator)                         Callee (acceptor)
 ### Bidirectional: `pipe(input: Tx, output: Rx)`
 
 ```
-Caller (initiator)                         Callee (acceptor)
+Caller                                  Callee
     |                                          |
     |-- Request(pipe, tx=1, rx=3) ------------>|
     |-- Data(channel=1, "a") ----------------->|
@@ -1360,19 +1369,15 @@ built on messages exchanged between peers.
 
 ```rust
 enum Message {
-    // Link control (no conn_id - applies to entire link)
+    // Link handshake (no conn_id)
     Hello(Hello),
+    HelloYourself(HelloYourself),
     
-    // Virtual connection control
-    Connect { connect_id: ConnectId, metadata: Metadata },
-    Accept { connect_id: ConnectId, conn_id: ConnectionId, session_id: SessionId, resume_token: ResumeToken, metadata: Metadata },
-    Reject { connect_id: ConnectId, reason: String, metadata: Metadata },
+    // Virtual connection control (conn_id > 0)
+    Connect { conn_id: ConnectionId, parity: Parity, metadata: Metadata },
+    Accept { conn_id: ConnectionId, metadata: Metadata },
+    Reject { conn_id: ConnectionId, reason: String, metadata: Metadata },
 
-    // Virtual connection resumption (after link failure)
-    Resume { connect_id: ConnectId, session_id: SessionId, resume_token: ResumeToken, metadata: Metadata },
-    Resumed { connect_id: ConnectId, conn_id: ConnectionId, metadata: Metadata },
-    ResumeReject { connect_id: ConnectId, reason: String, metadata: Metadata },
-    
     // Connection control (conn_id scoped)
     Goodbye { conn_id: ConnectionId, reason: String },
     
@@ -1393,11 +1398,12 @@ enum Message {
 
 > r[message.conn-id]
 >
-> All messages except `Hello`, `Connect`, `Accept`, `Reject`, `Resume`,
-> `Resumed`, and `ResumeReject` include a `conn_id` field identifying which
-> virtual connection they belong to.
-> Messages with an unknown `conn_id` MUST be handled as a protocol error
-> (send Goodbye on connection 0 and close the link).
+> All messages except `Hello` and `HelloYourself` include a `conn_id` field
+> identifying which connection they belong to.
+>
+> If a peer receives a message with an unknown `conn_id`, it MUST treat it as a
+> protocol error (send Goodbye on connection 0 and close the link), except that
+> `Connect` is permitted to introduce a new `conn_id` (see `r[message.connect.conn-id]`).
 
 Messages are [^POSTCARD]-encoded. The enum discriminant identifies the message
 type, and each variant contains only the fields it needs.
@@ -1420,34 +1426,57 @@ type, and each variant contains only the fields it needs.
 
 > r[message.hello.timing]
 >
-> Both peers MUST send a Hello message immediately after connection
-> establishment, before any other message.
+> The link initiator MUST send `Hello` immediately after link establishment,
+> before any other message.
+>
+> The link acceptor MUST wait to receive `Hello` before sending
+> `HelloYourself`.
 
 > r[message.hello.structure]
 >
-> Hello is an enum to allow future versions.
+> `Hello` and `HelloYourself` are enums to allow future versions.
 
 > r[message.hello.unknown-version]
 >
-> If a peer receives a Hello with an unknown variant, it MUST send a
-> Goodbye message (with reason containing `message.hello.unknown-version`)
-> and close the connection.
+> If a peer receives `Hello` or `HelloYourself` with an unknown variant, it
+> MUST send a Goodbye message (with reason containing
+> `message.hello.unknown-version`) and close the link.
 
 > r[message.hello.ordering]
 >
-> A peer MUST NOT send any message other than Hello until it has both
-> sent and received Hello.
+> The initiator MUST NOT send any message other than `Hello` until it has
+> received `HelloYourself`.
+>
+> The acceptor MUST NOT send any message other than `HelloYourself` until it
+> has received `Hello`.
+
+Hello and HelloYourself are versioned to allow future negotiation changes:
 
 ```rust
 enum Hello {
-    V4 {
-        max_payload_size: u32,
-        initial_channel_credit: u32,
-    },
-    V5 {
+    V6 {
         max_payload_size: u32,
         initial_channel_credit: u32,
         max_concurrent_requests: u32,
+        parity: Parity,
+        resume: Option<(SessionId, ResumeToken)>,
+    },
+}
+
+enum ResumeStatus {
+    Resumed,
+    Fresh,
+    Rejected { reason: String },
+}
+
+enum HelloYourself {
+    V6 {
+        max_payload_size: u32,
+        initial_channel_credit: u32,
+        max_concurrent_requests: u32,
+        resume_status: ResumeStatus,
+        session_id: SessionId,
+        resume_token: ResumeToken,
     },
 }
 ```
@@ -1460,7 +1489,7 @@ enum Hello {
 
 > r[message.hello.negotiation]
 >
-> The effective limits for a connection are the minimum of both peers'
+> The effective limits for a session are the minimum of both peers'
 > advertised values.
 
 > r[message.hello.enforcement]
@@ -1469,22 +1498,46 @@ enum Hello {
 > negotiated `max_payload_size`, it MUST send a Goodbye message
 > (reason: `message.hello.enforcement`) and close the link.
 
+> r[message.hello.parity]
+>
+> `Hello` includes a session-level `parity` used for allocating `ConnectionId`
+> values greater than 0 and for allocating Request/Channel IDs on connection 0.
+>
+> - The initiator chooses `parity` and sends it in `Hello`.
+> - The acceptor MUST use the opposite parity.
+>
+> If `Hello.resume` is present and resumption succeeds, the acceptor MUST set
+> `HelloYourself.resume_status = Resumed` and MUST set `HelloYourself.session_id`
+> to the resumed session ID.
+>
+> If `Hello.resume` is present and resumption fails, the acceptor MUST set
+> `HelloYourself.resume_status = Rejected { reason }` and MUST start a fresh
+> session (a new `session_id` and `resume_token`) reflected in HelloYourself.
+>
+> If `Hello.resume` is absent, the acceptor MUST set
+> `HelloYourself.resume_status = Fresh` and MUST start a fresh session.
+
+> r[message.hello.resume-token.rotate]
+>
+> The acceptor MUST generate a fresh `resume_token` from a cryptographically
+> secure random source for every `HelloYourself`, and MUST treat it as a secret
+> capability required to resume the session after a link failure.
+
 ### Connect / Accept / Reject
 
 These messages manage virtual connections on a link.
 
 ```rust
-Connect { connect_id: ConnectId, metadata: Metadata }
-Accept { connect_id: ConnectId, conn_id: ConnectionId, session_id: SessionId, resume_token: ResumeToken, metadata: Metadata }
-Reject { connect_id: ConnectId, reason: String, metadata: Metadata }
+Connect { conn_id: ConnectionId, parity: Parity, metadata: Metadata }
+Accept { conn_id: ConnectionId, metadata: Metadata }
+Reject { conn_id: ConnectionId, reason: String, metadata: Metadata }
 ```
 
 > r[message.connect.initiate]
 >
 > Either peer MAY send `Connect` to request a new virtual connection.
-> The `connect_id` is used to correlate the response (Accept or Reject).
-> Connect IDs are scoped to the (link, initiator) and are independent of
-> RPC request IDs.
+> The connection is identified by the `conn_id` carried in the message, which
+> MUST be unused in the session.
 
 > r[message.connect.metadata]
 >
@@ -1492,29 +1545,32 @@ Reject { connect_id: ConnectId, reason: String, metadata: Metadata }
 > tracing context, or application-specific data. The same metadata
 > limits apply as for RPC calls (see `r[call.metadata.limits]`).
 
-> r[message.connect.id]
+> r[message.connect.conn-id]
 >
-> Connect IDs MUST be unique among in-flight Connect requests initiated
-> by the same peer on the link.
+> The `conn_id` used for a Connect MUST be greater than 0 and MUST match the
+> sender's session-level parity (see `r[core.conn.id-allocation.parity]`).
+
+> r[message.connect.parity]
+>
+> `Connect.parity` assigns the sender's parity for `RequestId` and `ChannelId`
+> allocation inside that connection. The receiver MUST use the opposite parity
+> inside that connection.
+
+> r[message.connect.state]
+>
+> Before `Accept` is received, the sender MUST NOT send any message other than
+> `Connect` on the new `conn_id`.
 
 > r[message.accept.response]
 >
 > If the peer is listening for incoming connections (via
 > `take_incoming_connections()` on connection 0), it responds with
-> `Accept`, providing:
-> - a newly allocated `conn_id` for use on this link
-> - a stable `session_id` and `resume_token` for resuming after link failure
-> The new connection is immediately usable.
-
-> r[message.accept.resume-token]
->
-> The `resume_token` MUST be generated from a cryptographically secure
-> random source and MUST be treated as a secret capability.
+> `Accept`. The new connection is immediately usable.
 
 > r[message.accept.metadata]
 >
-> Accept metadata MAY include server-assigned session information,
-> connection-specific configuration, or tracing context.
+> Accept metadata MAY include connection-specific configuration or tracing
+> context.
 
 > r[message.reject.response]
 >
@@ -1531,36 +1587,8 @@ Reject { connect_id: ConnectId, reason: String, metadata: Metadata }
 > r[message.connect.timeout]
 >
 > If no Accept or Reject is received within a reasonable time,
-> implementations MAY treat the Connect as failed. The `connect_id` is
-> "burned" and MUST NOT be reused.
-
-### Resume / Resumed / ResumeReject
-
-These messages resume a previously accepted `session_id` after a link failure.
-
-```rust
-Resume { connect_id: ConnectId, session_id: SessionId, resume_token: ResumeToken, metadata: Metadata }
-Resumed { connect_id: ConnectId, conn_id: ConnectionId, metadata: Metadata }
-ResumeReject { connect_id: ConnectId, reason: String, metadata: Metadata }
-```
-
-> r[message.resume.initiate]
->
-> Either peer MAY send `Resume` to request resuming an existing session.
-> The peer MUST provide the `session_id` and `resume_token` it received in
-> the original `Accept`.
-
-> r[message.resume.accept]
->
-> If resumption succeeds, the peer MUST respond with `Resumed`, providing a
-> fresh `conn_id` for use on this link, bound to the resumed session.
-
-> r[message.resume.state]
->
-> After `Resumed`, both peers MUST continue the resumed session's call and
-> channel state: RequestId and ChannelId spaces continue (they do not reset),
-> and in-flight calls/channels MUST be completed exactly-once using `CallAck`
-> and channel `Ack`.
+> implementations MAY treat the Connect as failed. The `conn_id` MUST NOT be
+> reused.
 
 ### Goodbye
 
@@ -1825,16 +1853,17 @@ These examples illustrate protocol behavior on byte-stream transports.
 | Initiator |                                           | Acceptor  |
 '-----+-----'                                           '-----+-----'
       |                                                       |
-      |          [Hello exchange on transport]                |
+      |-------- Hello(parity=Odd, resume=...) --------------->|
+      |<------- HelloYourself(resume_status=...) -------------|
       |                                                       |
-      |-------- Connect { connect_id=1 } -------------------->|
+      |-------- Connect { conn_id=1, parity=Odd } ----------->|
       |                                                       |
       |          .---------------------------------.          |
       |          | Acceptor is listening          |           |
       |          | (called take_incoming_conns)   |           |
       |          '---------------------------------'          |
       |                                                       |
-      |<------- Accept { connect_id=1, conn_id=1 } -----------|
+      |<------- Accept { conn_id=1 } -------------------------|
       |                                                       |
       |          .---------------------------------.          |
       |          | Connection 1 now usable        |           |
@@ -1852,13 +1881,13 @@ These examples illustrate protocol behavior on byte-stream transports.
 | Initiator |                                           | Acceptor  |
 '-----+-----'                                           '-----+-----'
       |                                                       |
-      |-------- Connect { connect_id=1 } -------------------->|
+      |-------- Connect { conn_id=1, parity=Odd } ----------->|
       |                                                       |
       |          .---------------------------------.          |
       |          | Acceptor is NOT listening      |           |
       |          '---------------------------------'          |
       |                                                       |
-      |<------- Reject { connect_id=1 } ----------------------|
+      |<------- Reject { conn_id=1 } -------------------------|
       |                                                       |
       |          .---------------------------------.          |
       |          | Connection refused             |           |
@@ -1880,8 +1909,8 @@ multiple downstream clients to separate upstream virtual connections.
      |                      |<===== transport ==|  (single TCP conn)
      |                      |                   |
      |<-- ws1 connected --->|                   |
-     |                      |-- Connect{id=1} ->|
-     |                      |<- Accept{id=1,c=1}|  (conn 1 for browser1)
+     |                      |-- Connect{c=1} -->|
+     |                      |<- Accept{c=1} ----|  (conn 1 for browser1)
      |                      |                   |
      |<-- ws2 connected --->|                   |
      |                      |-- Connect{id=2} ->|

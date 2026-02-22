@@ -367,35 +367,37 @@ pub trait TransportConnector {
 >   the SHM ring/queue is full, the SHM producer task awaits. `permit.send` MUST
 >   NOT block.
 
-## Link Runtime
+## Session
 
-> rs[layer.link-runtime]
+> rs[layer.session]
 >
-> The link runtime owns protocol state machine concerns over a live link:
-> - hello/negotiation for link-level limits
-> - virtual-connection lifecycle (`Connect`/`Accept`/`Reject`/`Goodbye`)
+> The session layer owns all roam protocol state machine concerns over a live
+> link:
+> - Hello/HelloYourself handshake (limits negotiation, session resume, parity)
+> - connection lifecycle (`Connect`/`Accept`/`Reject`/`Goodbye`)
 > - request/response correlation by `(conn_id, request_id)`
-> - channel message routing (`Data`/`Close`/`Reset`/`Credit`)
+> - channel message routing (`Data`/`Ack`/`Close`/`Reset`/`Credit`)
+> - transparent resumption after link failure (exactly-once replay/dedup)
 > - protocol violation handling and error mapping
 
-> rs[layer.link-runtime.shutdown]
+> rs[layer.session.shutdown]
 >
 > Protocol-level shutdown behavior (including when/why to send `Goodbye`) is
-> owned by the link runtime, not by the transport/link abstraction.
+> owned by the session layer, not by the transport/link abstraction.
 
-> rs[layer.link-runtime.interface]
+> rs[layer.session.interface]
 >
-> Rust MUST provide one primary link-runtime interface that consumes a
-> `Link`, exposes root virtual-connection call capability, exposes incoming
-> virtual-connection requests, and runs the receive/send loop.
+> Rust MUST provide one primary session interface that consumes a `Link`,
+> exposes root-connection call capability, exposes incoming connection
+> requests, and runs the receive/send loop.
 
 ```rust
-pub trait LinkRuntime {
-    type IncomingVirtualConnections;
+pub trait Session {
+    type IncomingConnections;
 
-    fn root(&self) -> VirtualConnectionHandle;
-    fn incoming(&mut self) -> &mut Self::IncomingVirtualConnections;
-    fn run(self) -> impl Future<Output = Result<(), LinkError>>;
+    fn root(&self) -> ConnectionHandle;
+    fn incoming(&mut self) -> &mut Self::IncomingConnections;
+    fn run(self) -> impl Future<Output = Result<(), SessionError>>;
 }
 ```
 
@@ -403,7 +405,7 @@ pub trait LinkRuntime {
 
 > rs[layer.flow-control.owner]
 >
-> Channel flow control is owned by the link runtime, not by generated clients
+> Channel flow control is owned by the session layer, not by generated clients
 > and not by method-specific call code.
 
 > rs[layer.flow-control.rules]
@@ -421,7 +423,7 @@ pub trait LinkRuntime {
 
 > rs[layer.flow-control.interface]
 >
-> Rust MUST define a dedicated flow-control trait used by the link runtime.
+> Rust MUST define a dedicated flow-control trait used by the session layer.
 
 ```rust
 pub trait FlowControl {
@@ -449,6 +451,12 @@ pub trait FlowControl {
 > rs[layer.call-runtime.interface]
 >
 > Rust MUST define one primary call-runtime interface for typed method calls.
+
+> rs[layer.call-runtime.single-codepath]
+>
+> Rust MUST implement exactly one call/dispatch codepath for every method,
+> always using the channel-aware request representation. The "simple" case is
+> `channels.len() == 0`.
 
 ## Generated Clients
 
@@ -480,7 +488,7 @@ pub trait FlowControl {
 
 > rs[reconnect.owner]
 >
-> Automatic reconnection and call retry are owned by reconnecting link-runtime
+> Automatic reconnection and session resume are owned by session
 > implementations (not by generated service clients).
 
 > rs[reconnect.new-link]
@@ -488,10 +496,19 @@ pub trait FlowControl {
 > Reconnection creates a new link instance. It does not resume the previous
 > link instance.
 
-> rs[reconnect.state-reset]
+> rs[reconnect.resume]
 >
-> On reconnect, link-scoped runtime state resets (request/channel id spaces,
-> root virtual connection state, and channel routing tables).
+> After a link failure, a reconnecting session implementation MUST establish a
+> new link and MUST attempt to resume the existing session using the
+> Hello/HelloYourself handshake as specified by the main spec.
+>
+> If resumption succeeds, the session MUST preserve all connection IDs and all
+> request/channel ID spaces, and MUST complete in-flight calls/channels
+> exactly-once using `CallAck` and channel `Ack` rules from the main spec.
+>
+> If resumption fails, the session MUST surface a terminal session-lost error
+> to user-visible handles (calls and channels) that depended on the old
+> session.
 
 > rs[reconnect.trigger]
 >
@@ -515,13 +532,9 @@ pub trait FlowControl {
 
 > rs[reconnect.inflight.channels]
 >
-> Channels on a failed link are terminated with that link.
-
-> rs[reconnect.no-channel-resume]
->
-> Implementations MUST NOT transparently resume an existing channel stream
-> across reconnect. If recovery is desired, the call must be restarted and
-> new channels established on the new link.
+> Channels on a failed link MUST be resumed and completed exactly-once if the
+> session is resumed successfully. If the session cannot be resumed, channels
+> MUST fail with a session-lost error.
 
 ## Channel Binding
 
@@ -755,7 +768,7 @@ the main spec (`r[call.request.channels]`, `r[call.request.channels.schema-drive
 
 The `#[roam::service]` proc macro MUST reject methods where `Tx<T>` or `Rx<T>`
 appear inside the error type `E` of `Result<T, E>`, enforcing
-`rs[streaming.error-no-streams]` from the main specification.
+`r[channeling.error-no-channels]` from the main specification.
 
 # RoamError
 
