@@ -19,6 +19,7 @@ use roam_core::{
     ServiceDispatcher, Tx, channel, dispatch_call, dispatch_unknown_method,
 };
 use roam_stream::{Connector, HandshakeConfig, NoDispatcher, accept, connect};
+use roam_types::{MethodId, Payload};
 use tokio::net::TcpStream;
 
 // ============================================================================
@@ -127,10 +128,10 @@ impl StreamingService {
     }
 }
 
-const METHOD_ECHO: u64 = 1;
-const METHOD_SUM: u64 = 2;
-const METHOD_GENERATE: u64 = 3;
-const METHOD_TRANSFORM: u64 = 4;
+const METHOD_ECHO: MethodId = MethodId(1);
+const METHOD_SUM: MethodId = MethodId(2);
+const METHOD_GENERATE: MethodId = MethodId(3);
+const METHOD_TRANSFORM: MethodId = MethodId(4);
 
 impl ServiceDispatcher for StreamingService {
     fn service_descriptor(&self) -> &'static roam_core::ServiceDescriptor {
@@ -145,7 +146,7 @@ impl ServiceDispatcher for StreamingService {
     ) -> Pin<Box<dyn std::future::Future<Output = ()> + Send + 'static>> {
         self.call_count.fetch_add(1, Ordering::SeqCst);
 
-        match cx.method_id().0 {
+        match cx.method_id() {
             // echo(message: String) -> String
             METHOD_ECHO => dispatch_call::<String, String, (), _, _>(
                 &cx,
@@ -285,12 +286,12 @@ async fn start_proxy(backend_addr: SocketAddr) -> (SocketAddr, tokio::task::Join
 }
 
 /// Decode a typed result from raw response bytes.
-fn decode_result<T, E>(response: Vec<u8>) -> Result<T, RoamError<E>>
+fn decode_result<T, E>(response: Payload) -> Result<T, RoamError<E>>
 where
     T: for<'a> facet::Facet<'a>,
     E: for<'a> facet::Facet<'a>,
 {
-    facet_postcard::from_slice::<Result<T, RoamError<E>>>(&response).unwrap()
+    facet_postcard::from_slice::<Result<T, RoamError<E>>>(&response.0).unwrap()
 }
 
 // ============================================================================

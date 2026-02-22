@@ -155,6 +155,7 @@ fn channeling_generate_server_to_client() {
 
         // Allocate channel ID (odd = initiator)
         let channel_id: u64 = 1;
+        let channel_id_wire = ChannelId(channel_id);
         let count: u32 = 5;
 
         // Send Request with (count, channel_id)
@@ -162,11 +163,11 @@ fn channeling_generate_server_to_client() {
             .map_err(|e| format!("postcard args: {e}"))?;
         let req = Message::Request {
             conn_id: roam_types::ConnectionId::ROOT,
-            request_id: 1,
+            request_id: RequestId(1),
             method_id,
             metadata: metadata_empty(),
-            channels: vec![channel_id],
-            payload: req_payload,
+            channels: vec![channel_id_wire],
+            payload: Payload(req_payload),
         };
         io.send(&req).await.map_err(|e| e.to_string())?;
 
@@ -188,19 +189,19 @@ fn channeling_generate_server_to_client() {
 
             match msg {
                 Message::Data { channel_id: sid, payload, .. } => {
-                    if sid != channel_id {
+                    if sid != channel_id_wire {
                         return Err(format!("unexpected channel_id {sid}, expected {channel_id}"));
                     }
                     // Data must arrive BEFORE Response
                     if got_response {
                         return Err("received Data after Response - protocol violation".to_string());
                     }
-                    let n: i32 = facet_postcard::from_slice(&payload)
+                    let n: i32 = facet_postcard::from_slice(&payload.0)
                         .map_err(|e| format!("postcard data: {e}"))?;
                     received.push(n);
                 }
                 Message::Close { channel_id: sid, .. } => {
-                    if sid != channel_id {
+                    if sid != channel_id_wire {
                         return Err(format!("close channel_id mismatch: {sid}"));
                     }
                     // Close must arrive BEFORE Response
@@ -210,7 +211,7 @@ fn channeling_generate_server_to_client() {
                     got_close = true;
                 }
                 Message::Response { request_id, .. } => {
-                    if request_id != 1 {
+                    if request_id != RequestId(1) {
                         return Err(format!("response request_id mismatch: {request_id}"));
                     }
                     // Response must come AFTER all Data and Close
@@ -254,17 +255,19 @@ fn channeling_transform_bidirectional() {
         // Allocate channel IDs (odd = initiator)
         let input_channel_id: u64 = 1;
         let output_channel_id: u64 = 3;
+        let input_channel_id_wire = ChannelId(input_channel_id);
+        let output_channel_id_wire = ChannelId(output_channel_id);
 
         // Send Request with (input_channel_id, output_channel_id)
         let req_payload = facet_postcard::to_vec(&(input_channel_id, output_channel_id))
             .map_err(|e| format!("postcard args: {e}"))?;
         let req = Message::Request {
             conn_id: roam_types::ConnectionId::ROOT,
-            request_id: 1,
+            request_id: RequestId(1),
             method_id,
             metadata: metadata_empty(),
-            channels: vec![input_channel_id, output_channel_id],
-            payload: req_payload,
+            channels: vec![input_channel_id_wire, output_channel_id_wire],
+            payload: Payload(req_payload),
         };
         io.send(&req).await.map_err(|e| e.to_string())?;
 
@@ -278,8 +281,8 @@ fn channeling_transform_bidirectional() {
                 .map_err(|e| format!("postcard data: {e}"))?;
             io.send(&Message::Data {
                 conn_id: roam_types::ConnectionId::ROOT,
-                channel_id: input_channel_id,
-                payload: data_payload,
+                channel_id: input_channel_id_wire,
+                payload: Payload(data_payload),
             })
             .await
             .map_err(|e| e.to_string())?;
@@ -297,12 +300,12 @@ fn channeling_transform_bidirectional() {
                     payload,
                     ..
                 } => {
-                    if channel_id != output_channel_id {
+                    if channel_id != output_channel_id_wire {
                         return Err(format!(
-                            "unexpected channel_id {channel_id}, expected {output_channel_id}"
+                            "unexpected channel_id {channel_id}, expected {output_channel_id_wire}"
                         ));
                     }
-                    let s: String = facet_postcard::from_slice(&payload)
+                    let s: String = facet_postcard::from_slice(&payload.0)
                         .map_err(|e| format!("postcard data: {e}"))?;
                     received.push(s);
                 }
@@ -313,7 +316,7 @@ fn channeling_transform_bidirectional() {
         // Close input channel
         io.send(&Message::Close {
             conn_id: roam_types::ConnectionId::ROOT,
-            channel_id: input_channel_id,
+            channel_id: input_channel_id_wire,
         })
         .await
         .map_err(|e| e.to_string())?;
@@ -331,7 +334,7 @@ fn channeling_transform_bidirectional() {
 
             match msg {
                 Message::Close { channel_id, .. } => {
-                    if channel_id != output_channel_id {
+                    if channel_id != output_channel_id_wire {
                         return Err(format!(
                             "close channel_id mismatch: {channel_id}, expected {output_channel_id}"
                         ));
@@ -339,7 +342,7 @@ fn channeling_transform_bidirectional() {
                     got_close = true;
                 }
                 Message::Response { request_id, .. } => {
-                    if request_id != 1 {
+                    if request_id != RequestId(1) {
                         return Err(format!("response request_id mismatch: {request_id}"));
                     }
                     got_response = true;

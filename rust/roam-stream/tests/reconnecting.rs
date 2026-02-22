@@ -23,6 +23,7 @@ use roam_core::{
 use roam_stream::{
     ConnectError, Connector, HandshakeConfig, RetryPolicy, accept, connect, connect_with_policy,
 };
+use roam_types::MethodId;
 use std::sync::Mutex;
 use tokio::net::TcpStream;
 
@@ -44,9 +45,11 @@ static STRING_RESPONSE_PLAN: Lazy<&'static RpcPlan> = Lazy::new(|| {
 // Method Descriptors
 // ============================================================================
 
+const METHOD_1: MethodId = MethodId(1);
+
 static DESC_1: Lazy<&'static MethodDescriptor> = Lazy::new(|| {
     Box::leak(Box::new(MethodDescriptor {
-        id: 1,
+        id: METHOD_1,
         service_name: "Test",
         method_name: "test",
         args: &[],
@@ -72,7 +75,7 @@ static DESC_1: Lazy<&'static MethodDescriptor> = Lazy::new(|| {
 
 static DESC_999: Lazy<&'static MethodDescriptor> = Lazy::new(|| {
     Box::leak(Box::new(MethodDescriptor {
-        id: 999,
+        id: MethodId(999),
         service_name: "Test",
         method_name: "test",
         args: &[],
@@ -123,9 +126,9 @@ impl ServiceDispatcher for TestService {
     ) -> Pin<Box<dyn std::future::Future<Output = ()> + Send + 'static>> {
         self.call_count.fetch_add(1, Ordering::SeqCst);
 
-        match cx.method_id().0 {
+        match cx.method_id() {
             // Echo method
-            1 => dispatch_call::<String, String, (), _, _>(
+            METHOD_1 => dispatch_call::<String, String, (), _, _>(
                 &cx,
                 payload,
                 registry,
@@ -232,7 +235,7 @@ async fn test_basic_call() {
     let payload = facet_postcard::to_vec(&"hello".to_string()).unwrap();
     let response = client.call_raw(*DESC_1, payload).await.unwrap();
     let result: Result<String, roam_core::RoamError<()>> =
-        facet_postcard::from_slice(&response).unwrap();
+        facet_postcard::from_slice(&response.0).unwrap();
 
     assert_eq!(result.unwrap(), "hello");
 }
@@ -251,7 +254,7 @@ async fn test_unknown_method_not_reconnect() {
     let payload = facet_postcard::to_vec(&"test".to_string()).unwrap();
     let response = client.call_raw(*DESC_999, payload).await.unwrap();
     let result: Result<String, roam_core::RoamError<()>> =
-        facet_postcard::from_slice(&response).unwrap();
+        facet_postcard::from_slice(&response.0).unwrap();
 
     // Should get UnknownMethod error, not a reconnect error
     assert!(matches!(result, Err(roam_core::RoamError::UnknownMethod)));
@@ -344,7 +347,7 @@ async fn test_concurrent_callers() {
             let payload = facet_postcard::to_vec(&msg).unwrap();
             let response = client.call_raw(*DESC_1, payload).await.unwrap();
             let result: Result<String, roam_core::RoamError<()>> =
-                facet_postcard::from_slice(&response).unwrap();
+                facet_postcard::from_slice(&response.0).unwrap();
             assert_eq!(result.unwrap(), msg);
         });
         handles.push(handle);
@@ -418,7 +421,7 @@ async fn test_reconnect_after_initial_failure() {
     let payload = facet_postcard::to_vec(&"hello".to_string()).unwrap();
     let response = client.call_raw(*DESC_1, payload).await.unwrap();
     let result: Result<String, roam_core::RoamError<()>> =
-        facet_postcard::from_slice(&response).unwrap();
+        facet_postcard::from_slice(&response.0).unwrap();
 
     assert_eq!(result.unwrap(), "hello");
 
@@ -437,20 +440,25 @@ async fn test_generated_client_binds_response_channels() {
 
     let mut response = Rx::<u32>::try_from(700u64).unwrap();
     assert!(response.receiver.is_none());
-    let rx_u32_plan = RpcPlan::for_type::<Rx<u32>>();
-    Caller::bind_response_channels(&client, &mut response, &rx_u32_plan, &[700u64]);
+    let rx_u32_plan = RpcPlan::for_type::<Rx<u32>, roam_core::Tx<()>, roam_core::Rx<()>>();
+    Caller::bind_response_channels(
+        &client,
+        &mut response,
+        &rx_u32_plan,
+        &[roam_types::ChannelId(700)],
+    );
     assert!(response.receiver.is_some());
 
     let mut response_by_plan = Rx::<u32>::try_from(701u64).unwrap();
     assert!(response_by_plan.receiver.is_none());
-    let plan = RpcPlan::for_type::<Rx<u32>>();
+    let plan = RpcPlan::for_type::<Rx<u32>, roam_core::Tx<()>, roam_core::Rx<()>>();
     // SAFETY: response_by_plan points to a valid Rx<u32>, matching plan.
     unsafe {
         Caller::bind_response_channels_by_plan(
             &client,
             (&raw mut response_by_plan).cast::<()>(),
             &plan,
-            &[701u64],
+            &[roam_types::ChannelId(701)],
         );
     }
     assert!(response_by_plan.receiver.is_some());

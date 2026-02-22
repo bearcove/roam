@@ -1,7 +1,7 @@
 macro_rules! declare_u64_id {
     ($(#[$meta:meta])* $name:ident) => {
         $(#[$meta])*
-        #[derive(Facet, PartialEq, Eq, Hash, Debug, Clone, Copy)]
+        #[derive(Facet, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Clone, Copy)]
         #[repr(transparent)]
         #[facet(transparent)]
         pub struct $name(pub u64);

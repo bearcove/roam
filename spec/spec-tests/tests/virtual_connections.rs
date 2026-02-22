@@ -10,7 +10,7 @@
 
 use std::time::Duration;
 
-use roam_types::{ConnectionId, Hello, Message, MetadataValue};
+use roam_types::{ConnectionId, Hello, Message, MetadataValue, Payload, RequestId};
 use spec_tests::harness::{accept_subject, accept_subject_with_options, our_hello, run_async};
 use spec_tests::testbed::method_id;
 
@@ -61,7 +61,7 @@ fn connect_rejected_when_not_listening() {
         // r[verify message.connect.initiate]
         // r[verify message.connect.request-id]
         let connect_msg = Message::Connect {
-            request_id: 1,
+            request_id: RequestId(1),
             metadata: metadata_empty(),
         };
         io.send(&connect_msg).await.map_err(|e| e.to_string())?;
@@ -77,7 +77,7 @@ fn connect_rejected_when_not_listening() {
             Message::Reject {
                 request_id, reason, ..
             } => {
-                if request_id != 1 {
+                if request_id != RequestId(1) {
                     return Err(format!("request_id mismatch: expected 1, got {request_id}"));
                 }
                 // Reason should indicate not listening
@@ -112,7 +112,7 @@ fn connect_accept_flow() {
 
         // Send Connect request
         io.send(&Message::Connect {
-            request_id: 1,
+            request_id: RequestId(1),
             metadata: metadata_empty(),
         })
         .await
@@ -131,7 +131,7 @@ fn connect_accept_flow() {
                 conn_id,
                 ..
             } => {
-                if request_id != 1 {
+                if request_id != RequestId(1) {
                     return Err(format!("request_id mismatch: expected 1, got {request_id}"));
                 }
                 // conn_id should be non-zero (0 is reserved for root)
@@ -163,7 +163,7 @@ fn multiple_virtual_connections() {
 
         // Open multiple virtual connections
         let mut conn_ids = Vec::new();
-        for request_id in 1..=3 {
+        for request_id in [RequestId(1), RequestId(2), RequestId(3)] {
             io.send(&Message::Connect {
                 request_id,
                 metadata: metadata_empty(),
@@ -220,7 +220,7 @@ fn virtual_connection_goodbye_independence() {
 
         // Open two virtual connections
         let mut conn_ids = Vec::new();
-        for request_id in 1..=2 {
+        for request_id in [RequestId(1), RequestId(2)] {
             io.send(&Message::Connect {
                 request_id,
                 metadata: metadata_empty(),
@@ -253,11 +253,11 @@ fn virtual_connection_goodbye_independence() {
         // Root connection should still work
         io.send(&Message::Request {
             conn_id: ConnectionId::ROOT,
-            request_id: 100,
+            request_id: RequestId(100),
             method_id: method_id::echo(),
             metadata: metadata_empty(),
             channels: vec![],
-            payload: facet_postcard::to_vec(&("still working".to_string(),)).unwrap(),
+            payload: Payload(facet_postcard::to_vec(&("still working".to_string(),)).unwrap()),
         })
         .await
         .map_err(|e| e.to_string())?;
@@ -271,7 +271,7 @@ fn virtual_connection_goodbye_independence() {
         match response {
             Message::Response {
                 conn_id,
-                request_id: 100,
+                request_id: RequestId(100),
                 ..
             } => {
                 if !conn_id.is_root() {
@@ -301,7 +301,7 @@ fn connect_message_structure() {
 
         // Send Connect with metadata
         let connect_msg = Message::Connect {
-            request_id: 42,
+            request_id: RequestId(42),
             metadata: vec![
                 (
                     "auth".to_string(),
@@ -322,7 +322,7 @@ fn connect_message_structure() {
 
         match response {
             Message::Accept { request_id, .. } | Message::Reject { request_id, .. } => {
-                if request_id != 42 {
+                if request_id != RequestId(42) {
                     return Err(format!(
                         "request_id mismatch: expected 42, got {request_id}"
                     ));
@@ -389,7 +389,7 @@ fn connect_request_id_echoed_in_reject() {
         complete_hello_handshake(&mut io).await?;
 
         // Send multiple Connect requests with different request_ids
-        for request_id in [100, 200, 300] {
+        for request_id in [RequestId(100), RequestId(200), RequestId(300)] {
             io.send(&Message::Connect {
                 request_id,
                 metadata: metadata_empty(),
@@ -420,7 +420,7 @@ fn connect_request_id_echoed_in_reject() {
 
         // Verify all request_ids were echoed (order may vary)
         received_ids.sort();
-        if received_ids != vec![100, 200, 300] {
+        if received_ids != vec![RequestId(100), RequestId(200), RequestId(300)] {
             return Err(format!(
                 "expected request_ids [100, 200, 300], got {received_ids:?}"
             ));
@@ -444,11 +444,11 @@ fn goodbye_processed_gracefully() {
         // Send a request on the root connection
         io.send(&Message::Request {
             conn_id: ConnectionId::ROOT,
-            request_id: 1,
+            request_id: RequestId(1),
             method_id: method_id::echo(),
             metadata: metadata_empty(),
             channels: vec![],
-            payload: facet_postcard::to_vec(&("hello".to_string(),)).unwrap(),
+            payload: Payload(facet_postcard::to_vec(&("hello".to_string(),)).unwrap()),
         })
         .await
         .map_err(|e| e.to_string())?;
@@ -461,7 +461,10 @@ fn goodbye_processed_gracefully() {
             .ok_or_else(|| "expected response".to_string())?;
 
         match response {
-            Message::Response { request_id: 1, .. } => {}
+            Message::Response {
+                request_id: RequestId(1),
+                ..
+            } => {}
             other => return Err(format!("expected Response for request 1, got {other:?}")),
         }
 
@@ -494,11 +497,11 @@ fn messages_on_root_connection() {
         // Send Request on connection 0 (root)
         io.send(&Message::Request {
             conn_id: ConnectionId::ROOT,
-            request_id: 1,
+            request_id: RequestId(1),
             method_id: method_id::echo(),
             metadata: metadata_empty(),
             channels: vec![],
-            payload: facet_postcard::to_vec(&("test message".to_string(),)).unwrap(),
+            payload: Payload(facet_postcard::to_vec(&("test message".to_string(),)).unwrap()),
         })
         .await
         .map_err(|e| e.to_string())?;
@@ -539,7 +542,7 @@ fn goodbye_on_nonexistent_connection_ignored() {
         // Send Goodbye on connection 42 which doesn't exist
         // The subject should ignore this since the connection was never opened
         io.send(&Message::Goodbye {
-            conn_id: ConnectionId::new(42),
+            conn_id: ConnectionId(42),
             reason: "closing nonexistent".to_string(),
         })
         .await
@@ -548,11 +551,11 @@ fn goodbye_on_nonexistent_connection_ignored() {
         // Connection should still be alive - try a request on root
         io.send(&Message::Request {
             conn_id: ConnectionId::ROOT,
-            request_id: 1,
+            request_id: RequestId(1),
             method_id: method_id::echo(),
             metadata: metadata_empty(),
             channels: vec![],
-            payload: facet_postcard::to_vec(&("still alive".to_string(),)).unwrap(),
+            payload: Payload(facet_postcard::to_vec(&("still alive".to_string(),)).unwrap()),
         })
         .await
         .map_err(|e| e.to_string())?;
@@ -565,7 +568,10 @@ fn goodbye_on_nonexistent_connection_ignored() {
             .ok_or_else(|| "expected response - link should still be alive".to_string())?;
 
         match response {
-            Message::Response { request_id: 1, .. } => {}
+            Message::Response {
+                request_id: RequestId(1),
+                ..
+            } => {}
             Message::Goodbye { conn_id, reason } => {
                 // If subject closes the link due to protocol violation, that's also acceptable
                 // behavior for a Goodbye on nonexistent connection

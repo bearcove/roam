@@ -16,10 +16,11 @@ use roam_shm::host::ShmHost;
 use roam_shm::layout::SegmentConfig;
 use roam_shm::peer::PeerId;
 use roam_shm::transport::ShmGuestTransport;
+use roam_types::MethodId;
 
 static DESC_999: LazyLock<&'static MethodDescriptor> = LazyLock::new(|| {
     Box::leak(Box::new(MethodDescriptor {
-        id: 999,
+        id: MethodId(999),
         service_name: "Test",
         method_name: "test",
         args: &[],
@@ -33,7 +34,7 @@ static DESC_999: LazyLock<&'static MethodDescriptor> = LazyLock::new(|| {
 
 static DESC_1: LazyLock<&'static MethodDescriptor> = LazyLock::new(|| {
     Box::leak(Box::new(MethodDescriptor {
-        id: 1,
+        id: MethodId(1),
         service_name: "Test",
         method_name: "test",
         args: &[],
@@ -47,7 +48,7 @@ static DESC_1: LazyLock<&'static MethodDescriptor> = LazyLock::new(|| {
 
 static DESC_2: LazyLock<&'static MethodDescriptor> = LazyLock::new(|| {
     Box::leak(Box::new(MethodDescriptor {
-        id: 2,
+        id: MethodId(2),
         service_name: "Test",
         method_name: "test",
         args: &[],

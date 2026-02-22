@@ -334,6 +334,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use roam_types::{Payload, RequestId};
     use std::process::Command;
     use std::time::Duration;
     use tokio::io::{AsyncWriteExt, duplex};
@@ -359,10 +360,10 @@ mod tests {
             .collect();
         let msg = Message::Response {
             conn_id: roam_types::ConnectionId::ROOT,
-            request_id: 42,
+            request_id: RequestId(42),
             metadata: vec![],
             channels: vec![],
-            payload,
+            payload: Payload(payload),
         };
 
         let (left, right) = duplex(256 * 1024);
@@ -443,7 +444,7 @@ mod tests {
                 "test",
                 &Message::Cancel {
                     conn_id: roam_types::ConnectionId::ROOT,
-                    request_id: 1,
+                    request_id: RequestId(1),
                 },
             );
             WIRE_SPY_BYTES_ONLY.store(true, Ordering::Relaxed);
@@ -486,10 +487,10 @@ mod tests {
     async fn message_transport_last_decoded_tracks_last_payload() {
         let msg = Message::Response {
             conn_id: roam_types::ConnectionId::ROOT,
-            request_id: 7,
+            request_id: RequestId(7),
             metadata: vec![],
             channels: vec![],
-            payload: vec![1, 2, 3, 4],
+            payload: Payload(vec![1, 2, 3, 4]),
         };
         let postcard = facet_postcard::to_vec(&msg).unwrap();
 

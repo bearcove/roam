@@ -20,6 +20,7 @@ use roam_core::{
     dispatch_call, dispatch_unknown_method,
 };
 use roam_stream::{Connector, HandshakeConfig, accept, connect};
+use roam_types::{MethodId, Payload};
 use tokio::net::{UnixListener, UnixStream};
 
 // ============================================================================
@@ -71,12 +72,12 @@ impl TestService {
     }
 }
 
-const METHOD_INSTANT: u64 = 1;
-const METHOD_FAST: u64 = 2;
-const METHOD_MEDIUM: u64 = 3;
-const METHOD_SLOW: u64 = 4;
-const METHOD_VERY_SLOW: u64 = 5;
-const METHOD_ECHO: u64 = 6;
+const METHOD_INSTANT: MethodId = MethodId(1);
+const METHOD_FAST: MethodId = MethodId(2);
+const METHOD_MEDIUM: MethodId = MethodId(3);
+const METHOD_SLOW: MethodId = MethodId(4);
+const METHOD_VERY_SLOW: MethodId = MethodId(5);
+const METHOD_ECHO: MethodId = MethodId(6);
 
 // ============================================================================
 // Method Descriptors
@@ -272,7 +273,7 @@ impl ServiceDispatcher for TestService {
     ) -> Pin<Box<dyn std::future::Future<Output = ()> + Send + 'static>> {
         self.call_count.fetch_add(1, Ordering::SeqCst);
 
-        match cx.method_id().0 {
+        match cx.method_id() {
             // instant() -> u32 - returns immediately
             METHOD_INSTANT => dispatch_call::<(), u32, (), _, _>(
                 &cx,
@@ -399,12 +400,12 @@ async fn start_server(
     Ok((path, handle))
 }
 
-fn decode_result<T, E>(response: Vec<u8>) -> Result<T, RoamError<E>>
+fn decode_result<T, E>(response: Payload) -> Result<T, RoamError<E>>
 where
     T: for<'a> facet::Facet<'a>,
     E: for<'a> facet::Facet<'a>,
 {
-    facet_postcard::from_slice::<Result<T, RoamError<E>>>(&response).unwrap()
+    facet_postcard::from_slice::<Result<T, RoamError<E>>>(&response.0).unwrap()
 }
 
 // ============================================================================

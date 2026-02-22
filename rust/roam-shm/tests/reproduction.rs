@@ -1,4 +1,5 @@
 use facet_testhelpers::test;
+use roam_types::MethodId;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::LazyLock;
@@ -11,7 +12,7 @@ use roam_shm::layout::SegmentConfig;
 
 static DESC_1: LazyLock<&'static MethodDescriptor> = LazyLock::new(|| {
     Box::leak(Box::new(MethodDescriptor {
-        id: 1,
+        id: MethodId(1),
         service_name: "Test",
         method_name: "test",
         args: &[],
@@ -37,7 +38,7 @@ static DESC_1: LazyLock<&'static MethodDescriptor> = LazyLock::new(|| {
 
 static DESC_2: LazyLock<&'static MethodDescriptor> = LazyLock::new(|| {
     Box::leak(Box::new(MethodDescriptor {
-        id: 2,
+        id: MethodId(2),
         service_name: "Test",
         method_name: "test",
         args: &[],
@@ -63,7 +64,7 @@ static DESC_2: LazyLock<&'static MethodDescriptor> = LazyLock::new(|| {
 
 static DESC_3: LazyLock<&'static MethodDescriptor> = LazyLock::new(|| {
     Box::leak(Box::new(MethodDescriptor {
-        id: 3,
+        id: MethodId(3),
         service_name: "Test",
         method_name: "test",
         args: &[],

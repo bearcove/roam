@@ -12,7 +12,7 @@ use roam_shm::msg::ShmMsg;
 use roam_shm::peer::PeerId;
 use roam_shm::transport::{message_to_shm_msg, shm_msg_to_message};
 use roam_shm::{AddPeerOptions, ShmHost, msg_type};
-use roam_types::{ConnectionId, Message};
+use roam_types::{ChannelId, ConnectionId, Message, MethodId, Payload, RequestId};
 use shm_primitives::Doorbell;
 use spec_proto::{
     Canvas, Color, LookupError, MathError, Person, Point, Rectangle, Shape, Testbed,
@@ -631,20 +631,20 @@ async fn rust_host_shm_driver_interop_with_swift_guest() {
 
     let req1 = Message::Request {
         conn_id: ConnectionId::ROOT,
-        request_id: 901,
-        method_id: 1,
+        request_id: RequestId(901),
+        method_id: MethodId(1),
         metadata: vec![],
         channels: vec![],
-        payload: b"hello".to_vec(),
+        payload: Payload(b"hello".to_vec()),
     };
 
     let req2 = Message::Request {
         conn_id: ConnectionId::ROOT,
-        request_id: 902,
-        method_id: 2,
+        request_id: RequestId(902),
+        method_id: MethodId(2),
         metadata: vec![],
-        channels: vec![77],
-        payload: 77u64.to_le_bytes().to_vec(),
+        channels: vec![ChannelId(77)],
+        payload: Payload(77u64.to_le_bytes().to_vec()),
     };
 
     let mut sent1 = false;
@@ -691,11 +691,11 @@ async fn rust_host_shm_driver_interop_with_swift_guest() {
                     ..
                 } => {
                     assert_eq!(conn_id, ConnectionId::ROOT);
-                    if request_id == 901 {
-                        assert_eq!(payload, b"swift-driver:hello");
+                    if request_id == RequestId(901) {
+                        assert_eq!(payload.0, b"swift-driver:hello");
                         got_resp1 = true;
-                    } else if request_id == 902 {
-                        assert_eq!(payload, b"channel-ok");
+                    } else if request_id == RequestId(902) {
+                        assert_eq!(payload.0, b"channel-ok");
                         got_resp2 = true;
                     }
                 }
@@ -705,8 +705,8 @@ async fn rust_host_shm_driver_interop_with_swift_guest() {
                     payload,
                 } => {
                     assert_eq!(conn_id, ConnectionId::ROOT);
-                    assert_eq!(channel_id, 77);
-                    assert_eq!(payload, b"swift-channel");
+                    assert_eq!(channel_id, ChannelId(77));
+                    assert_eq!(payload.0, b"swift-channel");
                     got_data = true;
                 }
                 Message::Close {
@@ -714,7 +714,7 @@ async fn rust_host_shm_driver_interop_with_swift_guest() {
                     channel_id,
                 } => {
                     assert_eq!(conn_id, ConnectionId::ROOT);
-                    assert_eq!(channel_id, 77);
+                    assert_eq!(channel_id, ChannelId(77));
                     got_close = true;
                 }
                 other => panic!("unexpected message from driver interop: {other:?}"),
