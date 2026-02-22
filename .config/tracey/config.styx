@@ -64,30 +64,6 @@ specs (
     }
 
     {
-        name multistream
-        include (docs/content/multistream-spec/**/*.md)
-        impls (
-            {
-                name rust
-                include (rust/**/*.rs)
-                exclude (target/**)
-            }
-        )
-    }
-
-    {
-        name reconnect
-        include (docs/content/reconnecting-client-spec/**/*.md)
-        impls (
-            {
-                name rust
-                include (crates/**/*.rs)
-                exclude (target/**)
-            }
-        )
-    }
-
-    {
         name http
         include (docs/content/http-spec/**/*.md)
         impls (

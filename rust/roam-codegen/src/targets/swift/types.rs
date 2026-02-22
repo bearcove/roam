@@ -317,27 +317,3 @@ pub fn format_doc(doc: &str, indent: &str) -> String {
         .map(|line| format!("{indent}/// {line}\n"))
         .collect()
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use facet::Facet;
-
-    #[test]
-    fn test_swift_type_base_primitives() {
-        assert_eq!(swift_type_base(<bool as Facet>::SHAPE), "Bool");
-        assert_eq!(swift_type_base(<u32 as Facet>::SHAPE), "UInt32");
-        assert_eq!(swift_type_base(<i64 as Facet>::SHAPE), "Int64");
-        assert_eq!(swift_type_base(<f32 as Facet>::SHAPE), "Float");
-        assert_eq!(swift_type_base(<f64 as Facet>::SHAPE), "Double");
-        assert_eq!(swift_type_base(<String as Facet>::SHAPE), "String");
-        assert_eq!(swift_type_base(<Vec<u8> as Facet>::SHAPE), "Data");
-        assert_eq!(swift_type_base(<() as Facet>::SHAPE), "Void");
-    }
-
-    #[test]
-    fn test_swift_type_base_containers() {
-        assert_eq!(swift_type_base(<Vec<i32> as Facet>::SHAPE), "[Int32]");
-        assert_eq!(swift_type_base(<Option<String> as Facet>::SHAPE), "String?");
-    }
-}

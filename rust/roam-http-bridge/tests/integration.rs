@@ -11,7 +11,7 @@ use std::net::SocketAddr;
 use axum::Router;
 use futures_util::{SinkExt, StreamExt};
 use roam_http_bridge::{BridgeRouter, GenericBridgeService};
-use roam_stream::{Connector, HandshakeConfig, NoDispatcher, accept, connect};
+use roam_stream::{Connector, accept, connect};
 use spec_proto::{
     LookupError, MathError, Person, Testbed, TestbedDispatcher, testbed_service_descriptor,
 };

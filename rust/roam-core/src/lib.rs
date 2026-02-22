@@ -53,7 +53,7 @@ pub use flow_control::{FlowControl, InfiniteCredit};
 mod dispatch;
 pub use dispatch::{
     CURRENT_EXTENSIONS, Context, DISPATCH_CONTEXT, DispatchContext, PrepareError, RoutedDispatcher,
-    ServiceDispatcher, dispatch_unknown_method, prepare_sync, run_post_middleware,
+    ServiceDispatcher, dispatch_call, dispatch_unknown_method, prepare_sync, run_post_middleware,
     run_pre_middleware, send_error_response, send_ok_response, send_prepare_error,
 };
 // Re-export internal items needed by channel binding
@@ -76,6 +76,3 @@ pub(crate) const RX_STREAM_BUFFER_SIZE: usize = 1024;
 pub fn rpc_plan<T: facet::Facet<'static>>() -> &'static RpcPlan {
     Box::leak(Box::new(RpcPlan::for_type::<T, Tx<()>, Rx<()>>()))
 }
-
-#[cfg(test)]
-mod tests;

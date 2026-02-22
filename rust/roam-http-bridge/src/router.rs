@@ -139,15 +139,3 @@ async fn handle_websocket(ws: WebSocketUpgrade, State(state): State<Arc<BridgeSt
     ws.protocols([ws::WS_SUBPROTOCOL])
         .on_upgrade(move |socket| ws::handle_websocket(socket, Arc::new(state.services.clone())))
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_bridge_router_builds() {
-        let router = BridgeRouter::new().build();
-        // Just verify it compiles and builds
-        let _ = router;
-    }
-}

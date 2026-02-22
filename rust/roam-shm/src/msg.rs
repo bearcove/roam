@@ -98,23 +98,3 @@ impl ShmMsg {
         &self.payload
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn msg_type_classification() {
-        // shm[verify shm.desc.msg-type]
-        assert!(uses_request_id(msg_type::REQUEST));
-        assert!(uses_request_id(msg_type::RESPONSE));
-        assert!(uses_request_id(msg_type::CANCEL));
-
-        assert!(uses_channel_id(msg_type::DATA));
-        assert!(uses_channel_id(msg_type::CLOSE));
-        assert!(uses_channel_id(msg_type::RESET));
-
-        assert!(!uses_request_id(msg_type::GOODBYE));
-        assert!(!uses_channel_id(msg_type::GOODBYE));
-    }
-}

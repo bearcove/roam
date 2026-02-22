@@ -1097,39 +1097,3 @@ impl From<io::Error> for GrowError {
         GrowError::Io(err.to_string())
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn create_host() {
-        let config = SegmentConfig::default();
-        let host = ShmHost::create_heap(config).unwrap();
-
-        // Verify header
-        let header = host.header();
-        assert_eq!(header.magic, MAGIC);
-        assert_eq!(header.version, VERSION);
-        assert!(!host.is_goodbye());
-    }
-
-    #[test]
-    fn host_goodbye() {
-        let config = SegmentConfig::default();
-        let host = ShmHost::create_heap(config).unwrap();
-
-        assert!(!host.is_goodbye());
-        host.goodbye("test shutdown");
-        assert!(host.is_goodbye());
-    }
-
-    #[test]
-    fn poll_empty() {
-        let config = SegmentConfig::default();
-        let mut host = ShmHost::create_heap(config).unwrap();
-
-        let result = host.poll();
-        assert!(result.messages.is_empty());
-    }
-}

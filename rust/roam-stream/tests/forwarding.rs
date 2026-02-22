@@ -15,11 +15,11 @@ use std::time::Duration;
 use facet::Facet;
 use once_cell::sync::Lazy;
 use roam_core::{
-    ChannelRegistry, Context, ForwardingDispatcher, MethodDescriptor, RoamError, Rx,
-    ServiceDispatcher, Tx, channel, dispatch_call, dispatch_unknown_method, rpc_plan,
+    ChannelRegistry, Context, ForwardingDispatcher, HandshakeConfig, NoDispatcher, RoamError, Rx,
+    ServiceDispatcher, Tx, channel, dispatch_unknown_method, rpc_plan,
 };
-use roam_stream::{Connector, HandshakeConfig, NoDispatcher, accept, connect};
-use roam_types::{MethodId, Payload};
+use roam_stream::{Connector, accept, connect};
+use roam_types::{MethodDescriptor, MethodId, Payload};
 use tokio::net::TcpStream;
 
 // ============================================================================
@@ -106,7 +106,7 @@ const METHOD_GENERATE: MethodId = MethodId(3);
 const METHOD_TRANSFORM: MethodId = MethodId(4);
 
 impl ServiceDispatcher for StreamingService {
-    fn service_descriptor(&self) -> &'static roam_core::ServiceDescriptor {
+    fn service_descriptor(&self) -> &'static roam_types::ServiceDescriptor {
         &roam_types::ServiceDescriptor::EMPTY
     }
 

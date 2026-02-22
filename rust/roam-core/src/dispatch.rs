@@ -257,7 +257,7 @@ impl Clone for Context {
 ///
 /// Pass the method's descriptor so dispatch can use its precomputed plans.
 #[allow(unsafe_code)]
-pub(crate) fn dispatch_call<A, R, E, F, Fut>(
+pub fn dispatch_call<A, R, E, F, Fut>(
     cx: &Context,
     payload: Payload,
     registry: &mut ChannelRegistry,
@@ -799,7 +799,7 @@ pub(crate) fn collect_channel_ids_with_plan(
 /// The `plan` should be created once per type as a static in non-generic code.
 ///
 /// r[impl call.request.channels] - Collects channel IDs in declaration order for the Request.
-pub(crate) fn collect_channel_ids<T: Facet<'static>>(args: &T, plan: &RpcPlan) -> Vec<ChannelId> {
+pub fn collect_channel_ids<T: Facet<'static>>(args: &T, plan: &RpcPlan) -> Vec<ChannelId> {
     let peek = facet::Peek::new(args);
     collect_channel_ids_with_plan(peek, plan)
 }

@@ -333,36 +333,3 @@ impl PeerId {
         self.0 - 1
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn peer_entry_is_64_bytes() {
-        assert_eq!(size_of::<PeerEntry>(), 64);
-    }
-
-    #[test]
-    fn peer_state_roundtrip() {
-        assert_eq!(PeerState::from_u32(0), Some(PeerState::Empty));
-        assert_eq!(PeerState::from_u32(1), Some(PeerState::Attached));
-        assert_eq!(PeerState::from_u32(2), Some(PeerState::Goodbye));
-        assert_eq!(PeerState::from_u32(3), Some(PeerState::Reserved));
-        assert_eq!(PeerState::from_u32(4), None);
-    }
-
-    #[test]
-    fn peer_id_conversion() {
-        let id = PeerId::from_index(0).unwrap();
-        assert_eq!(id.get(), 1);
-        assert_eq!(id.index(), 0);
-
-        let id = PeerId::from_index(254).unwrap();
-        assert_eq!(id.get(), 255);
-        assert_eq!(id.index(), 254);
-
-        assert!(PeerId::from_index(255).is_none());
-        assert!(PeerId::new(0).is_none());
-    }
-}

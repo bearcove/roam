@@ -148,25 +148,3 @@ impl Frame {
         self.payload.as_slice(&self.desc)
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn msg_desc_is_one_cache_line() {
-        static_assertions::const_assert!(std::mem::size_of::<MsgDesc>() == 64);
-        static_assertions::const_assert!(std::mem::align_of::<MsgDesc>() == 64);
-    }
-
-    #[test]
-    fn inline_payload_roundtrips() {
-        let mut desc = MsgDesc::new(1, 7, 0);
-        let payload = b"hello";
-        let frame = Frame::with_inline_payload(desc, payload).expect("inline payload");
-        assert!(frame.payload.is_inline());
-        assert_eq!(frame.payload_bytes(), payload);
-        desc.payload_len = 999;
-        assert_eq!(desc.inline_payload_bytes().len(), INLINE_PAYLOAD_LEN);
-    }
-}

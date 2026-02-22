@@ -59,27 +59,77 @@ This section defines transport-agnostic semantics that all roam
 implementations MUST follow. Transport bindings (networked, SHM) encode
 these concepts differently but preserve the same meaning.
 
+## Identifiers
+
+This specification uses small, typed identifiers. Unless otherwise stated,
+all identifiers are scoped to a specific link or virtual connection as
+described in the surrounding rules.
+
+```rust
+// Conceptual newtypes used by this specification.
+pub struct ConnectionId(pub u64);
+pub struct SessionId(pub u64);
+
+// Link-scoped correlation for Connect/Accept/Reject/Resume.
+pub struct ConnectId(pub u32);
+
+// Call- and channel-scoped identifiers (unified with SHM).
+pub struct RequestId(pub u32);
+pub struct ChannelId(pub u32);
+
+pub struct MethodId(pub u64);
+
+// Channel sequencing for exactly-once delivery.
+pub struct Seq(pub u64);
+
+pub struct Payload(pub Vec<u8>);
+
+// Opaque capability used to authorize resuming a SessionId.
+pub struct ResumeToken(pub [u8; 16]);
+
+// Call acknowledgements use a QUIC-style SACK representation.
+pub struct CallAckRange {
+    /// Count of unacknowledged RequestIds between this block and the previous one.
+    pub gap: u32,
+    /// Count of acknowledged RequestIds in this block.
+    pub len: u32,
+}
+```
+
 ## Transports, Links, and Connections
 
 A **transport** is a mechanism for communication (TCP, WebSocket, SHM, etc.).
 A **link** is an instance of a transport between two **peers** — the actual
 connection over which messages flow.
 
-A link carries one or more **virtual connections**. Each connection is an
-independent communication context with its own request ID space, channel ID
-space, and dispatcher.
+A link carries one or more **sessions**. A session is an independent
+communication context with its own call and channel state (request ID spaces,
+channel ID space, dispatcher, flow-control state).
+
+On a given link, a session is addressed by a link-local `conn_id`. If the link
+fails and the session is resumed, the resumed session is assigned a new
+`conn_id` on the new link.
 
 > r[core.link]
 >
 > A link is a bidirectional communication channel between two peers,
 > established via a specific transport. The link carries virtual
-> connections, each identified by a `conn_id` (u64).
+> connection attachments for sessions, each identified by a link-local
+> `conn_id` (`ConnectionId`).
 
 > r[core.link.connection-zero]
 >
 > Connection 0 is established implicitly when the link is created.
 > Both peers can immediately send messages on connection 0 after the
 > Hello exchange.
+
+> r[core.session]
+>
+> Each session has a stable `session_id` (`SessionId`) that identifies the
+> logical session across reconnects. A `session_id` is paired with a
+> `resume_token` (`ResumeToken`) which is required to resume the session after
+> a link failure. The `session_id` is not carried on every message; after
+> resumption, the session is referenced by its (new) `conn_id` on that link.
 
 For peer-to-peer transports, one peer is the **initiator** (opened the
 link) and the other is the **acceptor**. This distinction affects
@@ -95,7 +145,7 @@ a separate upstream connection, preserving session identity.
 > r[core.conn.open]
 >
 > A peer opens a new connection by sending a `Connect` message with a
-> `request_id`. The remote peer responds with `Accept` (providing the
+> `connect_id`. The remote peer responds with `Accept` (providing the
 > new `conn_id`) or `Reject`.
 
 > r[core.conn.accept-required]
@@ -119,15 +169,15 @@ a separate upstream connection, preserving session identity.
 > r[core.conn.lifecycle]
 >
 > A virtual connection is closed when either peer sends `Goodbye` on
-> that connection. Closing a connection terminates all in-flight calls
-> and channels on that connection.
+> that connection. Closing a session terminates all in-flight calls and
+> channels on that session and prevents future resumption.
 
 > r[core.conn.independence]
 >
 > Virtual connections are independent. An error or closure on one
 > connection does not affect other connections on the same link.
 > Each connection has its own:
-> - Request ID space (IDs are unique per-connection, not per-link)
+> - Request ID spaces (one per caller on the connection)
 > - Channel ID space
 > - Dispatcher (service handler)
 
@@ -141,7 +191,8 @@ a separate upstream connection, preserving session identity.
 
 ## Calls
 
-A **call** is a request/response exchange identified by a `request_id` (u64).
+A **call** is a request/response exchange identified by a `request_id`
+(`RequestId`).
 
 > r[core.call]
 >
@@ -151,8 +202,10 @@ A **call** is a request/response exchange identified by a `request_id` (u64).
 
 > r[core.call.request-id]
 >
-> Request IDs MUST be unique within a connection. Implementations
-> SHOULD use a monotonically increasing counter starting at 1.
+> Request IDs are scoped to the (connection, caller). Each peer maintains
+> its own `RequestId` sequence for the calls it initiates on a connection.
+> When initiating calls, a peer MUST allocate Request IDs by incrementing a
+> `u32` counter modulo 2^32 (wrapping).
 
 ### Call Messages
 
@@ -201,10 +254,14 @@ The following abstract messages relate to channels:
 
 | Message | Sender | Meaning |
 |---------|--------|---------|
-| **Data** | channel sender | Deliver one value of type `T` |
+| **Data** | channel sender | Deliver one value of type `T` (sequenced) |
+| **Ack** | channel receiver | Acknowledge receipt of Data up to a sequence number |
 | **Close** | caller (for Push) | End of channel (no more Data from caller) |
 | **Reset** | either peer | Abort the channel immediately |
 | **Credit** | receiver | Grant permission to send more bytes |
+
+Ack supports exactly-once delivery and transparent reconnection by allowing a
+sender to retransmit unacknowledged Data after a disconnect.
 
 For `Tx<T>` (caller→callee), the caller sends Close when done sending.
 After sending Close, the caller MUST NOT send more Data on that channel.
@@ -301,7 +358,15 @@ See the [Metadata](#metadata-1) section for complete details.
 ## Idempotency
 
 Connection failures create uncertainty: did the server process the request
-before the connection dropped? Nonces enable safe retries across any transport.
+before the connection dropped?
+
+If a session is successfully resumed (`r[core.session]`, `r[message.resume.initiate]`),
+peers can provide exactly-once behavior for calls and channels using `CallAck`
+and channel `Ack`.
+
+Nonces are an optional, transport-agnostic mechanism for idempotency across
+session loss (e.g. server restart, session expiry, or implementations that do
+not support resumption).
 
 > r[core.nonce]
 >
@@ -374,15 +439,15 @@ before the connection dropped? Nonces enable safe retries across any transport.
 > r[core.nonce.reconnect]
 >
 > Auto-reconnecting client implementations (see Reconnecting Client
-> Specification) SHOULD automatically attach nonces to requests and
+> Specification) MAY automatically attach nonces to requests and
 > reuse them on retry. This makes reconnection transparent to callers.
 
 > r[core.nonce.channels]
 >
 > Nonces apply to the initial Request that establishes channels.
-> Channel state (data sent/received, credit) is not preserved across
-> reconnection. Applications requiring resumable streams should implement
-> checkpointing at the application level.
+> If a session is resumed, channel streams are resumed using channel `seq`
+> and `Ack` (`r[core.channel]`, Channel Messages table). If a session is not
+> resumed, channels are terminated with the failed link.
 
 ## Topologies
 
@@ -478,7 +543,6 @@ message (citing the violated rule) and closes the connection. Everything
 on this connection is torn down. Examples:
   * Data/Close/Reset on an unknown channel ID
   * Data after Close
-  * Duplicate in-flight request ID
 
 # RPC Calls
 
@@ -489,25 +553,95 @@ This section specifies the complete lifecycle.
 
 > r[call.request-id.uniqueness]
 >
-> A request ID (u64) MUST be unique within a connection. Implementations
-> SHOULD use a monotonically increasing counter starting at 1.
+> Request IDs are scoped to the (connection, caller). Each peer maintains
+> its own `RequestId` sequence for the calls it initiates on a connection.
 
-> r[call.request-id.duplicate-detection]
+> r[call.request-id.allocation]
 >
-> If a peer receives a Request with a `request_id` that matches an
-> existing in-flight request, it MUST send a Goodbye message (reason:
-> `call.request-id.duplicate-detection`) and close the connection.
+> When initiating calls, a peer MUST allocate Request IDs by incrementing a
+> `u32` counter modulo 2^32 (wrapping).
 
-> r[call.request-id.in-flight]
+> r[call.request-id.liveness]
 >
-> A request is "in-flight" from when the Request message is sent until
-> the corresponding Response message is received.
+> A request is "live" from when the Request message is sent until the caller
+> has received the corresponding Response and the caller has acknowledged it
+> with `CallAck` (`r[call.ack]`).
 
-> r[call.request-id.cancel-still-in-flight]
+> r[call.request-id.no-reuse-while-live]
 >
-> Sending a Cancel message does NOT remove a request from in-flight status.
-> The request remains in-flight until a Response is received (which may be
-> a `Cancelled` error, a completed result, or any other response).
+> A caller MUST NOT reuse a live `RequestId` for a different logical call.
+> Reusing a live RequestId is a connection error.
+
+> r[call.request-id.duplicate-is-retry]
+>
+> If a callee receives a Request whose `request_id` matches a live request
+> it has already received from that caller, it MUST treat it as a retry:
+> it MUST NOT execute the method handler a second time, and it MUST ensure
+> the caller eventually receives exactly one Response for that `request_id`.
+
+> r[call.request-id.wrap-window]
+>
+> Because `RequestId` wraps modulo 2^32, implementations MUST bound the live
+> request window to be strictly less than 2^31. The negotiated
+> `max_concurrent_requests` limit (`r[flow.request.concurrent-limit]`) MUST be
+> enforced as part of this bound.
+
+> r[call.request-id.serial-order]
+>
+> When an implementation needs to compare or advance `RequestId` values, it
+> MUST use serial number arithmetic modulo 2^32: for two `u32` values `a` and
+> `b`, `a` is considered "after" `b` if `(a - b) mod 2^32` is in `1..2^31`.
+
+> r[call.request-id.cancel-still-live]
+>
+> Sending a Cancel message does NOT remove a request from live status. The
+> request remains live until a Response is received and acknowledged.
+
+## Call Acknowledgement (CallAck)
+
+The callee may need to retain per-request state (deduplication and/or cached
+Responses) so that retries across link failure can be handled exactly-once.
+`CallAck` allows the caller to confirm receipt of Responses so the callee can
+forget completed calls, enabling bounded memory and safe `RequestId` wrap.
+
+> r[call.ack]
+>
+> After receiving a Response for a call it initiated, the caller MUST send
+> `CallAck` to the callee, acknowledging that Response.
+
+> r[call.ack.only-after-response]
+>
+> A caller MUST NOT acknowledge a `RequestId` unless it has received the
+> corresponding Response.
+
+> r[call.ack.sack]
+>
+> `CallAck` MUST use a QUIC-style SACK representation: it acknowledges a set of
+> `RequestId` values (for requests initiated by the caller on that connection).
+> The set is encoded as:
+> - `largest`: the largest acknowledged RequestId in serial order
+> - `first_len`: a length (>= 1) of the first contiguous acknowledged block
+>   ending at `largest`
+> - `ranges`: additional blocks, each described by `(gap, len)` where:
+>   - `gap` (>= 1) is the count of unacknowledged RequestIds between blocks
+>   - `len` (>= 1) is the count of acknowledged RequestIds in the block
+>
+> Blocks are interpreted by repeatedly applying `wrapping_sub` on the underlying
+> `u32` values. Serial ordering uses `r[call.request-id.serial-order]`.
+
+> r[call.ack.largest-monotonic]
+>
+> For a given (connection, caller), the `largest` value in `CallAck` messages
+> MUST advance monotonically in the caller's RequestId serial order. A callee
+> MUST accept duplicate `CallAck` messages.
+
+> r[call.ack.effect]
+>
+> After a callee has received `CallAck` acknowledging a given RequestId, it MAY
+> forget any cached Response and deduplication state for that call. If the
+> callee later receives a retry Request for an already-acknowledged RequestId,
+> it MAY treat it as a new call (it is the caller's responsibility to not retry
+> after acknowledging).
 
 For channeling methods, the Request/Response exchange negotiates channels,
 but those channels have their own lifecycle independent of the call. See
@@ -523,11 +657,11 @@ A Request contains:
 
 ```rust
 Request {
-    request_id: u64,
-    method_id: u64,
+    request_id: RequestId,
+    method_id: MethodId,
     metadata: Metadata,
-    channels: Vec<u64>,  // Channel IDs used by this call, in declaration order
-    payload: Vec<u8>,  // [^POSTCARD]-encoded arguments
+    channels: Vec<ChannelId>,  // Channel IDs used by this call, in declaration order
+    payload: Payload,  // [^POSTCARD]-encoded arguments
 }
 ```
 
@@ -565,9 +699,9 @@ A Response contains:
 
 ```rust
 Response {
-    request_id: u64,
+    request_id: RequestId,
     metadata: Metadata,
-    payload: Vec<u8>,  // [^POSTCARD]-encoded Result<T, RoamError<E>>
+    payload: Payload,  // [^POSTCARD]-encoded Result<T, RoamError<E>>
 }
 ```
 
@@ -794,7 +928,7 @@ The complete lifecycle of an RPC call:
 
 ```rust
 Cancel {
-    request_id: u64,  // The request to cancel
+    request_id: RequestId,  // The request to cancel
 }
 ```
 
@@ -813,7 +947,7 @@ Cancel {
 > r[call.cancel.no-response-required]
 >
 > The caller MUST NOT wait indefinitely for a response after sending Cancel.
-> Implementations SHOULD use a timeout after which the caller considers the
+> Implementations MAY use a timeout after which the caller considers the
 > request cancelled locally, even without a response.
 
 ## Pipelining
@@ -1119,7 +1253,7 @@ own independent credit counter starting at this value.
 
 ```rust
 Credit {
-    channel_id: u64,
+    channel_id: ChannelId,
     bytes: u32,  // additional bytes granted
 }
 ```
@@ -1136,7 +1270,7 @@ Credit {
 
 > r[flow.channel.credit-prompt]
 >
-> Credit messages SHOULD be processed in receive order without intentional
+> Credit messages MUST be processed in receive order without intentional
 > delay. Starving Credit processing can cause unnecessary stalls.
 
 ### Consuming Credit
@@ -1230,30 +1364,38 @@ enum Message {
     Hello(Hello),
     
     // Virtual connection control
-    Connect { request_id: u64, metadata: Metadata },
-    Accept { request_id: u64, conn_id: u64, metadata: Metadata },
-    Reject { request_id: u64, reason: String, metadata: Metadata },
+    Connect { connect_id: ConnectId, metadata: Metadata },
+    Accept { connect_id: ConnectId, conn_id: ConnectionId, session_id: SessionId, resume_token: ResumeToken, metadata: Metadata },
+    Reject { connect_id: ConnectId, reason: String, metadata: Metadata },
+
+    // Virtual connection resumption (after link failure)
+    Resume { connect_id: ConnectId, session_id: SessionId, resume_token: ResumeToken, metadata: Metadata },
+    Resumed { connect_id: ConnectId, conn_id: ConnectionId, metadata: Metadata },
+    ResumeReject { connect_id: ConnectId, reason: String, metadata: Metadata },
     
     // Connection control (conn_id scoped)
-    Goodbye { conn_id: u64, reason: String },
+    Goodbye { conn_id: ConnectionId, reason: String },
     
     // RPC (conn_id scoped)
-    Request { conn_id: u64, request_id: u64, method_id: u64, metadata: Metadata, channels: Vec<u64>, payload: Vec<u8> },
-    Response { conn_id: u64, request_id: u64, metadata: Metadata, payload: Vec<u8> },
-    Cancel { conn_id: u64, request_id: u64 },
+    Request { conn_id: ConnectionId, request_id: RequestId, method_id: MethodId, metadata: Metadata, channels: Vec<ChannelId>, payload: Payload },
+    Response { conn_id: ConnectionId, request_id: RequestId, metadata: Metadata, payload: Payload },
+    Cancel { conn_id: ConnectionId, request_id: RequestId },
+    CallAck { conn_id: ConnectionId, largest: RequestId, first_len: u32, ranges: Vec<CallAckRange> },
     
     // Channels (conn_id scoped)
-    Data { conn_id: u64, channel_id: u64, payload: Vec<u8> },
-    Close { conn_id: u64, channel_id: u64 },
-    Reset { conn_id: u64, channel_id: u64 },
-    Credit { conn_id: u64, channel_id: u64, bytes: u32 },
+    Data { conn_id: ConnectionId, channel_id: ChannelId, seq: Seq, payload: Payload },
+    Ack { conn_id: ConnectionId, channel_id: ChannelId, seq: Seq },
+    Close { conn_id: ConnectionId, channel_id: ChannelId },
+    Reset { conn_id: ConnectionId, channel_id: ChannelId },
+    Credit { conn_id: ConnectionId, channel_id: ChannelId, bytes: u32 },
 }
 ```
 
 > r[message.conn-id]
 >
-> All messages except `Hello`, `Connect`, `Accept`, and `Reject` include
-> a `conn_id` field identifying which virtual connection they belong to.
+> All messages except `Hello`, `Connect`, `Accept`, `Reject`, `Resume`,
+> `Resumed`, and `ResumeReject` include a `conn_id` field identifying which
+> virtual connection they belong to.
 > Messages with an unknown `conn_id` MUST be handled as a protocol error
 > (send Goodbye on connection 0 and close the link).
 
@@ -1332,16 +1474,17 @@ enum Hello {
 These messages manage virtual connections on a link.
 
 ```rust
-Connect { request_id: u64, metadata: Metadata }
-Accept { request_id: u64, conn_id: u64, metadata: Metadata }
-Reject { request_id: u64, reason: String, metadata: Metadata }
+Connect { connect_id: ConnectId, metadata: Metadata }
+Accept { connect_id: ConnectId, conn_id: ConnectionId, session_id: SessionId, resume_token: ResumeToken, metadata: Metadata }
+Reject { connect_id: ConnectId, reason: String, metadata: Metadata }
 ```
 
 > r[message.connect.initiate]
 >
 > Either peer MAY send `Connect` to request a new virtual connection.
-> The `request_id` is used to correlate the response (Accept or Reject).
-> Connect request IDs are scoped to the link, not to any connection.
+> The `connect_id` is used to correlate the response (Accept or Reject).
+> Connect IDs are scoped to the (link, initiator) and are independent of
+> RPC request IDs.
 
 > r[message.connect.metadata]
 >
@@ -1349,17 +1492,24 @@ Reject { request_id: u64, reason: String, metadata: Metadata }
 > tracing context, or application-specific data. The same metadata
 > limits apply as for RPC calls (see `r[call.metadata.limits]`).
 
-> r[message.connect.request-id]
+> r[message.connect.id]
 >
-> Connect `request_id`s MUST be unique among in-flight Connect requests
-> on the link. They are independent of RPC request IDs.
+> Connect IDs MUST be unique among in-flight Connect requests initiated
+> by the same peer on the link.
 
 > r[message.accept.response]
 >
 > If the peer is listening for incoming connections (via
 > `take_incoming_connections()` on connection 0), it responds with
-> `Accept`, providing the newly allocated `conn_id`. The new connection
-> is immediately usable.
+> `Accept`, providing:
+> - a newly allocated `conn_id` for use on this link
+> - a stable `session_id` and `resume_token` for resuming after link failure
+> The new connection is immediately usable.
+
+> r[message.accept.resume-token]
+>
+> The `resume_token` MUST be generated from a cryptographically secure
+> random source and MUST be treated as a secret capability.
 
 > r[message.accept.metadata]
 >
@@ -1374,15 +1524,43 @@ Reject { request_id: u64, reason: String, metadata: Metadata }
 
 > r[message.reject.reason]
 >
-> The `reason` field SHOULD describe why the connection was rejected.
+> The `reason` field MAY describe why the connection was rejected.
 > Common reasons include: "not listening", "unauthorized", "rate limited".
 > Metadata MAY provide additional structured rejection information.
 
 > r[message.connect.timeout]
 >
 > If no Accept or Reject is received within a reasonable time,
-> implementations SHOULD treat the Connect as failed. The `request_id`
-> is "burned" and MUST NOT be reused.
+> implementations MAY treat the Connect as failed. The `connect_id` is
+> "burned" and MUST NOT be reused.
+
+### Resume / Resumed / ResumeReject
+
+These messages resume a previously accepted `session_id` after a link failure.
+
+```rust
+Resume { connect_id: ConnectId, session_id: SessionId, resume_token: ResumeToken, metadata: Metadata }
+Resumed { connect_id: ConnectId, conn_id: ConnectionId, metadata: Metadata }
+ResumeReject { connect_id: ConnectId, reason: String, metadata: Metadata }
+```
+
+> r[message.resume.initiate]
+>
+> Either peer MAY send `Resume` to request resuming an existing session.
+> The peer MUST provide the `session_id` and `resume_token` it received in
+> the original `Accept`.
+
+> r[message.resume.accept]
+>
+> If resumption succeeds, the peer MUST respond with `Resumed`, providing a
+> fresh `conn_id` for use on this link, bound to the resumed session.
+
+> r[message.resume.state]
+>
+> After `Resumed`, both peers MUST continue the resumed session's call and
+> channel state: RequestId and ChannelId spaces continue (they do not reset),
+> and in-flight calls/channels MUST be completed exactly-once using `CallAck`
+> and channel `Ack`.
 
 ### Goodbye
 
@@ -1390,7 +1568,7 @@ Goodbye closes a virtual connection. The `conn_id` field specifies which
 connection to close.
 
 ```rust
-Goodbye { conn_id: u64, reason: String }
+Goodbye { conn_id: ConnectionId, reason: String }
 ```
 
 > r[message.goodbye.send]
@@ -1418,10 +1596,11 @@ Goodbye { conn_id: u64, reason: String }
 > A peer MAY send Goodbye with an empty reason for graceful shutdown
 > (not due to an error). This is the normal way to close a connection.
 
-### Request / Response / Cancel
+### Request / Response / Cancel / CallAck
 
 `Request` initiates an RPC call. `Response` returns the result. `Cancel`
-requests that the callee stop processing a request.
+requests that the callee stop processing a request. `CallAck` acknowledges
+receipt of Responses so the callee can forget completed calls.
 
 The `request_id` correlates requests with responses, enabling multiple
 calls to be in flight simultaneously (pipelining).
@@ -1429,6 +1608,11 @@ calls to be in flight simultaneously (pipelining).
 ### Data / Close / Reset
 
 `Data` carries payload bytes on a channel, identified by `channel_id`.
+Each `Data` message carries a monotonically increasing `seq` number that is
+scoped to `(conn_id, channel_id)`. `Ack` acknowledges receipt of `Data` up to a
+sequence number, enabling retransmission of unacknowledged `Data` after
+disconnect for exactly-once delivery.
+
 `Close` signals end-of-channel — the sender is done (see `r[core.channel.close]`).
 `Reset` forcefully terminates a channel.
 
@@ -1643,14 +1827,14 @@ These examples illustrate protocol behavior on byte-stream transports.
       |                                                       |
       |          [Hello exchange on transport]                |
       |                                                       |
-      |-------- Connect { request_id=1 } -------------------->|
+      |-------- Connect { connect_id=1 } -------------------->|
       |                                                       |
       |          .---------------------------------.          |
       |          | Acceptor is listening          |           |
       |          | (called take_incoming_conns)   |           |
       |          '---------------------------------'          |
       |                                                       |
-      |<------- Accept { request_id=1, conn_id=1 } -----------|
+      |<------- Accept { connect_id=1, conn_id=1 } -----------|
       |                                                       |
       |          .---------------------------------.          |
       |          | Connection 1 now usable        |           |
@@ -1668,13 +1852,13 @@ These examples illustrate protocol behavior on byte-stream transports.
 | Initiator |                                           | Acceptor  |
 '-----+-----'                                           '-----+-----'
       |                                                       |
-      |-------- Connect { request_id=1 } -------------------->|
+      |-------- Connect { connect_id=1 } -------------------->|
       |                                                       |
       |          .---------------------------------.          |
       |          | Acceptor is NOT listening      |           |
       |          '---------------------------------'          |
       |                                                       |
-      |<------- Reject { request_id=1 } ----------------------|
+      |<------- Reject { connect_id=1 } ----------------------|
       |                                                       |
       |          .---------------------------------.          |
       |          | Connection refused             |           |

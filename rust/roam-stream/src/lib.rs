@@ -7,44 +7,6 @@
 //!
 //! For message-based transports (like WebSocket) that already provide framing,
 //! use `roam_core` directly - it has the Driver and accept_framed/connect_framed.
-//!
-//! # Example (Accepted connection)
-//!
-//! ```ignore
-//! use roam_stream::{accept, HandshakeConfig};
-//! use tokio::net::TcpListener;
-//!
-//! let listener = TcpListener::bind("127.0.0.1:9000").await?;
-//! let (stream, _) = listener.accept().await?;
-//!
-//! let (handle, driver) = accept(stream, HandshakeConfig::default(), dispatcher).await?;
-//! tokio::spawn(driver.run());
-//!
-//! let client = MyServiceClient::new(handle);
-//! let response = client.echo("hello").await?;
-//! ```
-//!
-//! # Example (Initiated connection with reconnection)
-//!
-//! ```ignore
-//! use roam_stream::{connect, Connector, HandshakeConfig, NoDispatcher};
-//! use tokio::net::TcpStream;
-//!
-//! struct MyConnector { addr: String }
-//!
-//! impl Connector for MyConnector {
-//!     type Transport = TcpStream;
-//!     async fn connect(&self) -> io::Result<TcpStream> {
-//!         TcpStream::connect(&self.addr).await
-//!     }
-//! }
-//!
-//! let connector = MyConnector { addr: "127.0.0.1:9000".into() };
-//! let client = connect(connector, HandshakeConfig::default(), NoDispatcher);
-//!
-//! let service = MyServiceClient::new(client);
-//! let response = service.echo("hello").await?;
-//! ```
 
 mod driver;
 mod framing;

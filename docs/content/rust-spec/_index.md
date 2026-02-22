@@ -74,12 +74,16 @@ This section is prescriptive: it defines the target Rust architecture.
 > Each layer MUST correspond to one primary Rust trait boundary. Layer
 > responsibilities MUST NOT leak across trait boundaries.
 
-## Transports
+## Link
 
 > rs[layer.transport]
 >
-> The transport layer is responsible only for moving roam `Payload` values
-> and transport-specific framing/signaling.
+> Concrete transport implementations are responsible only for moving roam
+> `Payload` values and performing transport-specific framing/signaling.
+>
+> In Rust, these concrete transport implementations are exposed to the rest of
+> the stack exclusively via the `Link` trait below (there is no separate
+> higher-level "transport layer" beyond `Link`).
 
 > rs[layer.link.interface]
 >
@@ -89,12 +93,12 @@ This section is prescriptive: it defines the target Rust architecture.
 
 ```rust
 pub trait Link {
-    type Sender: LinkSender;
-    type Receiver: LinkReceiver;
+    type Sender: LinkSender + Send + 'static;
+    type Receiver: LinkReceiver + Send + 'static;
     fn split(self) -> (Self::Sender, Self::Receiver);
 }
 
-pub trait LinkSender {
+pub trait LinkSender: Send + 'static {
     type Permit<'a>: LinkSendPermit
     where
         Self: 'a;
@@ -121,7 +125,7 @@ pub trait LinkSendPermit {
     fn send(self, payload: Payload);
 }
 
-pub trait LinkReceiver {
+pub trait LinkReceiver: Send + 'static {
     async fn recv(&mut self) -> io::Result<Option<Payload>>;
 }
 ```
@@ -132,6 +136,71 @@ pub trait LinkReceiver {
 > Rust runtimes above `Link` MUST serialize `Message` to `Payload` before
 > sending and MUST deserialize `Payload` back to `Message` after `recv`.
 > For Rust, this serialization MUST use postcard.
+
+## Codec
+
+> rs[layer.codec.owner]
+>
+> Rust MUST define a dedicated **codec** layer above `Link` that owns
+> serialization and deserialization between roam `Message` and `Payload`.
+> For Rust, this serialization MUST use postcard.
+>
+> The codec layer exists to make the `Link` boundary mechanically enforceable:
+> `Link` remains payload-opaque (`rs[layer.link.blind]`), while all knowledge of
+> the `Message` type lives strictly above it.
+
+> rs[layer.codec.interface]
+>
+> Rust MUST provide one primary codec trait boundary that consumes a `Link` and
+> exposes a typed interface for sending and receiving `T: Facet` values, with
+> the same split sender/receiver model and the same permit-based backpressure
+> semantics. The roam runtime uses this codec interface with `T = Message`.
+>
+> The codec layer MUST NOT introduce additional outbound buffering beyond what
+> the underlying `Link` already provides; it reuses `LinkSender::reserve` and
+> `LinkSendPermit::send` to preserve fairness and ordering guarantees.
+
+```rust
+pub trait Codec {
+    type Sender: CodecSender;
+    type Receiver: CodecReceiver;
+    fn split(self) -> (Self::Sender, Self::Receiver);
+}
+
+pub trait CodecSender {
+    type Permit<'a>: CodecSendPermit
+    where
+        Self: 'a;
+
+    async fn reserve(&self) -> io::Result<Self::Permit<'_>>;
+
+    async fn close(self) -> io::Result<()>
+    where
+        Self: Sized;
+}
+
+pub trait CodecSendPermit {
+    fn send<T: Facet>(self, value: T);
+}
+
+pub trait CodecReceiver {
+    async fn recv<T: Facet>(&mut self) -> io::Result<Option<T>>;
+}
+```
+
+> rs[layer.codec.blind]
+>
+> The codec layer is protocol-blind above serialization:
+> it MUST NOT implement request correlation, channel routing, flow control,
+> reconnect/retry, virtual-connection logic, or any other roam semantics.
+> Those behaviors belong to higher runtime layers.
+
+> rs[layer.codec.errors]
+>
+> If deserialization fails, `recv` MUST return `Err(...)` (an I/O-like error)
+> and the higher runtime layers MUST treat the link as failed (as with any
+> other inbound framing error). The codec layer MUST NOT attempt recovery by
+> skipping bytes or re-synchronizing within a link.
 
 > rs[layer.link.permits]
 >
@@ -157,9 +226,14 @@ pub trait LinkReceiver {
 > - `LinkReceiver::recv` MUST await until one inbound `Payload` is available
 >   (`Ok(Some(payload))`), the inbound direction closes cleanly (`Ok(None)`), or
 >   an I/O/framing error occurs (`Err(...)`).
+> - `LinkReceiver::recv` is single-consumer: it MUST NOT be awaited concurrently
+>   by multiple tasks.
 > - `LinkSender::close` MUST stop handing out new permits, MUST drain/flush all
 >   already-enqueued payload bytes, then MUST perform transport-level outbound
 >   close (or return `Err(...)` if drain/flush/close fails).
+> - `LinkSender::close` MUST NOT begin while there exist outstanding permits
+>   derived from that sender. (In Rust, this is enforced by the permit borrowing
+>   the sender and `close` consuming it.)
 >   The purpose of `close` is to let higher layers shut down a link without
 >   losing already-enqueued outbound bytes; it does not perform any roam-level
 >   shutdown.

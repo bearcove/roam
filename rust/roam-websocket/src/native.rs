@@ -181,7 +181,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use roam_stream::NoDispatcher;
+    use roam_core::NoDispatcher;
     use tokio::net::TcpListener;
     use tokio_tungstenite::{accept_async, connect_async};
 

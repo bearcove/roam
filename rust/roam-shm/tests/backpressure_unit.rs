@@ -5,9 +5,7 @@
 
 use facet_testhelpers::test;
 use roam_core::MethodId;
-use roam_shm::host::ShmHost;
-use roam_shm::layout::SegmentConfig;
-use roam_shm::msg::ShmMsg;
+use roam_shm::{SegmentConfig, ShmHost, ShmMsg};
 
 /// Returns a config with a tiny slot pool to provoke exhaustion quickly.
 fn tiny_slot_config() -> SegmentConfig {
