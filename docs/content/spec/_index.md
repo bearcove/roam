@@ -182,9 +182,10 @@ type level, roam provides `Tx<T>` and `Rx<T>` to indicate direction.
 > `Rx<T>` represents data flowing from **callee to caller** (output).
 > Each has exactly one sender and one receiver.
 
-On the wire, both `Tx<T>` and `Rx<T>` serialize as a `channel_id`
-(u64). The direction is determined by the type, not the ID.
-See `r[channeling.type]` for details.
+On the wire, `Tx<T>` and `Rx<T>` are schema-level markers for channeling.
+Channel IDs are carried out-of-band in Request/Response `channels` (and in
+channel messages like Data/Close/Credit). The direction is determined by the
+type, not the ID. See `r[channeling.type]` and `r[call.request.channels]`.
 
 > r[core.channel.return-forbidden]
 >
@@ -841,7 +842,9 @@ channels.
 > r[channeling.type]
 >
 > `Tx<T>` and `Rx<T>` are roam-provided types recognized by the
-> `#[roam::service]` macro. On the wire, both serialize as a `u64` channel ID.
+> `#[roam::service]` macro. Channel IDs are carried out-of-band in Request/Response
+> `channels` (`r[call.request.channels]`). The Request payload MUST NOT contain
+> channel ID information (`r[channeling.allocation.caller]`).
 
 > r[channeling.caller-pov]
 >
@@ -887,9 +890,12 @@ on which variant is passed.
 > r[channeling.allocation.caller]
 >
 > The **caller** allocates ALL channel IDs (both Tx and Rx). Channel IDs
-> are listed in the Request's `channels` field (see `r[call.request.channels]`)
-> and also serialized within `Tx<T>`/`Rx<T>` values in the payload.
+> are listed in the Request's `channels` field (see `r[call.request.channels]`),
+> in declaration order.
 > The callee does not allocate any IDs.
+>
+> The Request payload MUST NOT contain channel ID information. `Tx<T>` and
+> `Rx<T>` values in the payload MUST be encoded as unit placeholders.
 >
 > On the server side, implementations MUST use the channel IDs from the
 > `channels` field as authoritative, patching them into deserialized args
