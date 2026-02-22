@@ -78,32 +78,30 @@ pub trait LinkReceiver: Send + 'static {
 ///
 /// This sequence space is used to implement:
 /// - replay after reconnect
-/// - QUIC-style ACK ranges (SACK)
+/// - cumulative ACK (highest delivered sequence)
 /// - bounded buffering with backpressure (no silent drop)
 ///
 /// Note: this is an API sketch; the exact representation is not fixed here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct PacketSeq(pub u32);
 
-/// One inclusive ACK range `[start, end]`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct AckRange {
-    pub start: PacketSeq,
-    pub end: PacketSeq,
-}
-
-/// QUIC-style ACK ranges.
+/// Cumulative ACK: all packets up to (and including) `max_delivered` have been
+/// delivered to the upper layer.
 ///
-/// The ranges MUST be non-overlapping and ordered by `start`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AckRanges(pub Vec<AckRange>);
+/// This is intentionally cumulative (not SACK/ranges) to keep the packet layer
+/// simple. Transports that can reorder may still buffer internally, but the
+/// packet layer only reports contiguous delivery progress.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct PacketAck {
+    pub max_delivered: PacketSeq,
+}
 
 /// Reliable, ordered delivery of [`Payload`] units.
 ///
 /// `Packet` sits immediately above [`Link`]. It is responsible for:
 /// - attaching to a `Link` and emitting/consuming transport `Payload` units
 /// - adding sequence numbers
-/// - generating/processing ACK ranges (SACK)
+/// - generating/processing cumulative ACKs
 /// - replaying unacked outbound payloads after reconnect
 /// - deduplicating inbound payloads
 /// - producing an in-order stream of payloads for upper layers
