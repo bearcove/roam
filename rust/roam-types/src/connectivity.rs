@@ -152,8 +152,20 @@ pub trait Codec: Send + Sync + 'static {
         &self,
         plan: &TypePlanCore,
         value: facet::Peek<'_, '_>,
-        out: &mut Vec<u8>,
+        out: &mut dyn io::Write,
     ) -> Result<(), Self::EncodeError>;
+
+    /// Decode into an existing allocation using a precomputed plan.
+    ///
+    /// # Safety
+    /// `out_ptr` must point to valid uninitialized storage for `plan.root()`.
+    /// On error, the codec MUST NOT leak partially-initialized allocations.
+    unsafe fn decode_into_by_plan(
+        &self,
+        plan: &TypePlanCore,
+        payload: &[u8],
+        out_ptr: *mut u8,
+    ) -> Result<(), Self::DecodeError>;
 
     fn decode_by_plan<T: Facet<'static>>(
         &self,
