@@ -104,9 +104,9 @@ pub struct SelfRef<T> {
 enum Backing {
     /// Heap-allocated buffer (TCP read, BipBuffer copy-out for small messages).
     Boxed(Box<[u8]>),
-    /// SHM VarSlot, pinned in shared memory.
+    // SHM VarSlot, pinned in shared memory:
     // VarSlot(Arc<VarSlot>),
-    /// Memory-mapped file region.
+    // Memory-mapped file region:
     // Mmap(Arc<MmapRegion>),
 }
 
