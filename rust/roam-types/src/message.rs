@@ -9,12 +9,12 @@ use facet::{Facet, PtrConst, Shape};
 
 /// Protocol message.
 #[derive(Debug, Clone, PartialEq, Eq, Facet)]
-pub struct Message {
+pub struct Message<'payload> {
     /// Connection ID: 0 for control messages (Hello, HelloYourself)
     connection_id: ConnectionId,
 
     /// Message payload
-    payload: MessagePayload,
+    payload: MessagePayload<'payload>,
 }
 
 /// Whether a peer will use odd or even IDs for requests and channels
@@ -118,7 +118,7 @@ structstruck::strike! {
         /// Respond to a request
         Response(struct Response<'payload> {
             /// Request ID of the request being responded to.
-            request_id: RequestId,
+            pub request_id: RequestId,
 
             /// Channel IDs for streams in the response, in return type declaration order.
             pub channels: Vec<ChannelId>,
@@ -132,7 +132,11 @@ structstruck::strike! {
 
         /// Cancel processing of a request.
         Cancel(struct Cancel {
-            request_id: RequestId,
+            /// Request ID of the request being canceled.
+            pub request_id: RequestId,
+
+            /// Reason for cancellation
+            pub reason: String,
         }),
 
         // ========================================================================
@@ -143,30 +147,30 @@ structstruck::strike! {
         /// implicitly by calls.
         Data(struct Data<'payload> {
             /// Channel ID (unique per-connection) for the channel to send data on.
-            channel_id: ChannelId,
+            pub channel_id: ChannelId,
 
             /// Payload to send on the channel.
-            payload: Payload<'payload>,
+            pub payload: Payload<'payload>,
         }),
 
         /// Close a channel — sent by the initiator when they're gracefully done
         /// with a channel.
         Close(struct Close {
             /// Channel ID (unique per-connection) for the channel to close.
-            channel_id: ChannelId,
+            pub channel_id: ChannelId,
 
             /// Reason for closing the channel.
-            reason: String,
+            pub reason: String,
         }),
 
         /// Reset a channel — sent by the acceptor when they would like the initiator
         /// to please, stop sending items through.
         Reset(struct Reset {
             /// Channel ID (unique per-connection) for the channel to reset.
-            channel_id: ChannelId,
+            pub channel_id: ChannelId,
 
             /// Reason for resetting the channel.
-            reason: String,
+            pub reason: String,
         }),
     }
 }
