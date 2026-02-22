@@ -25,3 +25,6 @@ pub use requests::*;
 
 mod wire;
 pub use wire::*;
+
+mod connectivity;
+pub use connectivity::*;

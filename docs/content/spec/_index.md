@@ -171,11 +171,13 @@ pub enum Parity {
 pub struct RequestId(pub u32);
 pub struct ChannelId(pub u32);
 
+// Blake3 Hash of various things about the method
 pub struct MethodId(pub u64);
 
 // Channel sequencing for exactly-once delivery.
 pub struct Seq(pub u64);
 
+// Opaque byte slice, postcard-serialized
 pub struct Payload(pub Vec<u8>);
 
 // Opaque capability used to authorize resuming a SessionId.
@@ -185,6 +187,7 @@ pub struct ResumeToken(pub [u8; 16]);
 pub struct CallAckRange {
     /// Count of unacknowledged RequestIds between this block and the previous one.
     pub gap: u32,
+    
     /// Count of acknowledged RequestIds in this block.
     pub len: u32,
 }
@@ -1376,7 +1379,7 @@ Hello and HelloYourself are versioned to allow future negotiation changes:
 
 ```rust
 enum Hello {
-    V6 {
+    V7 {
         max_payload_size: u32,
         max_concurrent_requests: u32,
         parity: Parity,
@@ -1391,7 +1394,7 @@ enum ResumeStatus {
 }
 
 enum HelloYourself {
-    V6 {
+    V7 {
         max_payload_size: u32,
         max_concurrent_requests: u32,
         resume_status: ResumeStatus,
