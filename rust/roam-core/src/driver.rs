@@ -2185,10 +2185,10 @@ mod tests {
         driver
             .handle_message(Message::Response {
                 conn_id: ConnectionId::ROOT,
-                request_id: 9001,
+                request_id: RequestId(9001),
                 metadata: vec![],
                 channels: vec![],
-                payload: vec![7, 7, 7],
+                payload: Payload(vec![7, 7, 7]),
             })
             .await
             .expect("dropped response receiver should not be fatal");

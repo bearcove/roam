@@ -8,7 +8,7 @@
 use std::time::Duration;
 
 use facet::Facet;
-use roam_types::{Hello, Message, MetadataValue};
+use roam_types::{ChannelId, Hello, Message, MetadataValue, Payload, RequestId};
 use std::convert::Infallible;
 
 use spec_tests::harness::{accept_subject, our_hello, run_async};
@@ -71,11 +71,11 @@ fn channeling_sum_client_to_server() {
             facet_postcard::to_vec(&(channel_id,)).map_err(|e| format!("postcard args: {e}"))?;
         let req = Message::Request {
             conn_id: roam_types::ConnectionId::ROOT,
-            request_id: 1,
+            request_id: RequestId(1),
             method_id,
             metadata: metadata_empty(),
-            channels: vec![channel_id],
-            payload: req_payload,
+            channels: vec![ChannelId(channel_id)],
+            payload: Payload(req_payload),
         };
         io.send(&req).await.map_err(|e| e.to_string())?;
 
@@ -85,8 +85,8 @@ fn channeling_sum_client_to_server() {
                 facet_postcard::to_vec(&n).map_err(|e| format!("postcard data: {e}"))?;
             io.send(&Message::Data {
                 conn_id: roam_types::ConnectionId::ROOT,
-                channel_id,
-                payload: data_payload,
+                channel_id: ChannelId(channel_id),
+                payload: Payload(data_payload),
             })
             .await
             .map_err(|e| e.to_string())?;
@@ -95,7 +95,7 @@ fn channeling_sum_client_to_server() {
         // Send Close to end the channel
         io.send(&Message::Close {
             conn_id: roam_types::ConnectionId::ROOT,
-            channel_id,
+            channel_id: ChannelId(channel_id),
         })
         .await
         .map_err(|e| e.to_string())?;
@@ -113,7 +113,7 @@ fn channeling_sum_client_to_server() {
                 payload,
                 ..
             } => {
-                if request_id != 1 {
+                if request_id != RequestId(1) {
                     return Err(format!("response request_id mismatch: {request_id}"));
                 }
                 payload
@@ -123,7 +123,7 @@ fn channeling_sum_client_to_server() {
         };
 
         let decoded: Result<i64, RoamError<Infallible>> =
-            facet_postcard::from_slice(&payload).map_err(|e| format!("postcard resp: {e}"))?;
+            facet_postcard::from_slice(&payload.0).map_err(|e| format!("postcard resp: {e}"))?;
 
         match decoded {
             Ok(sum) => {

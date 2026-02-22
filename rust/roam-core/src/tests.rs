@@ -6,20 +6,20 @@ use super::*;
 #[test]
 fn channel_id_allocator_initiator_uses_odd_ids() {
     let alloc = ChannelIdAllocator::new(Role::Initiator);
-    assert_eq!(alloc.next(), 1);
-    assert_eq!(alloc.next(), 3);
-    assert_eq!(alloc.next(), 5);
-    assert_eq!(alloc.next(), 7);
+    assert_eq!(alloc.next(), ChannelId(1));
+    assert_eq!(alloc.next(), ChannelId(3));
+    assert_eq!(alloc.next(), ChannelId(5));
+    assert_eq!(alloc.next(), ChannelId(7));
 }
 
 // r[verify channeling.id.parity]
 #[test]
 fn channel_id_allocator_acceptor_uses_even_ids() {
     let alloc = ChannelIdAllocator::new(Role::Acceptor);
-    assert_eq!(alloc.next(), 2);
-    assert_eq!(alloc.next(), 4);
-    assert_eq!(alloc.next(), 6);
-    assert_eq!(alloc.next(), 8);
+    assert_eq!(alloc.next(), ChannelId(2));
+    assert_eq!(alloc.next(), ChannelId(4));
+    assert_eq!(alloc.next(), ChannelId(6));
+    assert_eq!(alloc.next(), ChannelId(8));
 }
 
 // r[verify channeling.holder-semantics]
@@ -60,13 +60,13 @@ fn test_registry() -> ChannelRegistry {
 async fn data_after_close_is_rejected() {
     let mut registry = test_registry();
     let (tx, _rx) = crate::runtime::channel("test", 10);
-    registry.register_incoming(42, tx);
+    registry.register_incoming(ChannelId(42), tx);
 
     // Close the channel
-    registry.close(42);
+    registry.close(ChannelId(42));
 
     // Data after close should fail
-    let result = registry.route_data(42, b"data".to_vec()).await;
+    let result = registry.route_data(ChannelId(42), b"data".to_vec()).await;
     assert_eq!(result, Err(ChannelError::DataAfterClose));
 }
 
@@ -78,10 +78,15 @@ async fn channel_registry_routes_data_to_registered_channel() {
 
     // Register a channel
     let (tx, mut rx) = crate::runtime::channel("test", 10);
-    registry.register_incoming(42, tx);
+    registry.register_incoming(ChannelId(42), tx);
 
     // Data to registered channel should succeed
-    assert!(registry.route_data(42, b"hello".to_vec()).await.is_ok());
+    assert!(
+        registry
+            .route_data(ChannelId(42), b"hello".to_vec())
+            .await
+            .is_ok()
+    );
 
     // Should receive the data
     assert_eq!(
@@ -90,7 +95,12 @@ async fn channel_registry_routes_data_to_registered_channel() {
     );
 
     // Data to unregistered channel should fail
-    assert!(registry.route_data(999, b"nope".to_vec()).await.is_err());
+    assert!(
+        registry
+            .route_data(ChannelId(999), b"nope".to_vec())
+            .await
+            .is_err()
+    );
 }
 
 // r[verify channeling.close]
@@ -98,13 +108,16 @@ async fn channel_registry_routes_data_to_registered_channel() {
 async fn channel_registry_close_terminates_channel() {
     let mut registry = test_registry();
     let (tx, mut rx) = crate::runtime::channel("test", 10);
-    registry.register_incoming(42, tx);
+    registry.register_incoming(ChannelId(42), tx);
 
     // Send some data
-    registry.route_data(42, b"data1".to_vec()).await.unwrap();
+    registry
+        .route_data(ChannelId(42), b"data1".to_vec())
+        .await
+        .unwrap();
 
     // Close the channel
-    registry.close(42);
+    registry.close(ChannelId(42));
 
     // Should still receive buffered data
     assert_eq!(
@@ -116,7 +129,7 @@ async fn channel_registry_close_terminates_channel() {
     assert_eq!(rx.recv().await, Some(IncomingChannelMessage::Close));
 
     // Channel no longer registered
-    assert!(!registry.contains(42));
+    assert!(!registry.contains(ChannelId(42)));
 }
 
 #[tokio::test]
@@ -125,7 +138,7 @@ async fn channel_registry_drop_does_not_emit_explicit_close() {
     let mut registry = ChannelRegistry::new(task_tx);
 
     let (tx, mut rx) = crate::runtime::channel("test", 10);
-    registry.register_incoming(42, tx);
+    registry.register_incoming(ChannelId(42), tx);
     drop(registry);
 
     // Registry teardown drops sender; this is distinct from peer Close.
@@ -292,18 +305,18 @@ async fn tunnel_close_propagates() {
 #[test]
 fn collect_channel_ids_simple_tx() {
     let tx: Tx<i32> = Tx::try_from(42u64).unwrap();
-    let plan = RpcPlan::for_type::<Tx<i32>>();
+    let plan = RpcPlan::for_type::<Tx<i32>, Tx<()>, Rx<()>>();
     let ids = collect_channel_ids(&tx, &plan);
-    assert_eq!(ids, vec![42]);
+    assert_eq!(ids, vec![ChannelId(42)]);
 }
 
 // r[verify call.request.channels]
 #[test]
 fn collect_channel_ids_simple_rx() {
     let rx: Rx<i32> = Rx::try_from(99u64).unwrap();
-    let plan = RpcPlan::for_type::<Rx<i32>>();
+    let plan = RpcPlan::for_type::<Rx<i32>, Tx<()>, Rx<()>>();
     let ids = collect_channel_ids(&rx, &plan);
-    assert_eq!(ids, vec![99]);
+    assert_eq!(ids, vec![ChannelId(99)]);
 }
 
 // r[verify call.request.channels]
@@ -312,9 +325,9 @@ fn collect_channel_ids_tuple() {
     let rx: Rx<String> = Rx::try_from(10u64).unwrap();
     let tx: Tx<String> = Tx::try_from(20u64).unwrap();
     let args = (rx, tx);
-    let plan = RpcPlan::for_type::<(Rx<String>, Tx<String>)>();
+    let plan = RpcPlan::for_type::<(Rx<String>, Tx<String>), Tx<()>, Rx<()>>();
     let ids = collect_channel_ids(&args, &plan);
-    assert_eq!(ids, vec![10, 20]);
+    assert_eq!(ids, vec![ChannelId(10), ChannelId(20)]);
 }
 
 // r[verify call.request.channels]
@@ -332,9 +345,9 @@ fn collect_channel_ids_nested_in_struct() {
         output: Tx::try_from(200u64).unwrap(),
         count: 5,
     };
-    let plan = RpcPlan::for_type::<StreamArgs>();
+    let plan = RpcPlan::for_type::<StreamArgs, Tx<()>, Rx<()>>();
     let ids = collect_channel_ids(&args, &plan);
-    assert_eq!(ids, vec![100, 200]);
+    assert_eq!(ids, vec![ChannelId(100), ChannelId(200)]);
 }
 
 // r[verify call.request.channels]
@@ -342,16 +355,16 @@ fn collect_channel_ids_nested_in_struct() {
 fn collect_channel_ids_option_some() {
     let tx: Tx<i32> = Tx::try_from(55u64).unwrap();
     let args: Option<Tx<i32>> = Some(tx);
-    let plan = RpcPlan::for_type::<Option<Tx<i32>>>();
+    let plan = RpcPlan::for_type::<Option<Tx<i32>>, Tx<()>, Rx<()>>();
     let ids = collect_channel_ids(&args, &plan);
-    assert_eq!(ids, vec![55]);
+    assert_eq!(ids, vec![ChannelId(55)]);
 }
 
 // r[verify call.request.channels]
 #[test]
 fn collect_channel_ids_option_none() {
     let args: Option<Tx<i32>> = None;
-    let plan = RpcPlan::for_type::<Option<Tx<i32>>>();
+    let plan = RpcPlan::for_type::<Option<Tx<i32>>, Tx<()>, Rx<()>>();
     let ids = collect_channel_ids(&args, &plan);
     assert!(ids.is_empty());
 }
@@ -363,7 +376,7 @@ fn collect_channel_ids_vec() {
     let tx2: Tx<i32> = Tx::try_from(2u64).unwrap();
     let tx3: Tx<i32> = Tx::try_from(3u64).unwrap();
     let args: Vec<Tx<i32>> = vec![tx1, tx2, tx3];
-    let plan = RpcPlan::for_type::<Vec<Tx<i32>>>();
+    let plan = RpcPlan::for_type::<Vec<Tx<i32>>, Tx<()>, Rx<()>>();
     let ids = collect_channel_ids(&args, &plan);
     assert!(ids.is_empty());
 }
@@ -386,16 +399,16 @@ fn collect_channel_ids_deeply_nested() {
             channel: Tx::try_from(777u64).unwrap(),
         },
     };
-    let plan = RpcPlan::for_type::<Outer>();
+    let plan = RpcPlan::for_type::<Outer, Tx<()>, Rx<()>>();
     let ids = collect_channel_ids(&args, &plan);
-    assert_eq!(ids, vec![777]);
+    assert_eq!(ids, vec![ChannelId(777)]);
 }
 
 // r[verify call.request.channels]
 #[test]
 fn collect_channel_ids_large_bytes_payload_is_empty() {
     let args = vec![0xABu8; 512 * 1024];
-    let plan = RpcPlan::for_type::<Vec<u8>>();
+    let plan = RpcPlan::for_type::<Vec<u8>, Tx<()>, Rx<()>>();
     let ids = collect_channel_ids(&args, &plan);
     assert!(ids.is_empty());
 }
@@ -413,9 +426,9 @@ fn collect_channel_ids_large_bytes_payload_with_channel() {
         payload: vec![0xCDu8; 512 * 1024],
         channel: Tx::try_from(4242u64).unwrap(),
     };
-    let plan = RpcPlan::for_type::<ResponseLike>();
+    let plan = RpcPlan::for_type::<ResponseLike, Tx<()>, Rx<()>>();
     let ids = collect_channel_ids(&args, &plan);
-    assert_eq!(ids, vec![4242]);
+    assert_eq!(ids, vec![ChannelId(4242)]);
 }
 
 // r[verify call.request.channels]
@@ -436,9 +449,12 @@ fn collect_channel_ids_enum_all_active_fields() {
         right: Tx::try_from(33u64).unwrap(),
     };
 
-    let plan = RpcPlan::for_type::<Multi>();
-    assert_eq!(collect_channel_ids(&pair, &plan), vec![11]);
-    assert_eq!(collect_channel_ids(&struct_variant, &plan), vec![22, 33]);
+    let plan = RpcPlan::for_type::<Multi, Tx<()>, Rx<()>>();
+    assert_eq!(collect_channel_ids(&pair, &plan), vec![ChannelId(11)]);
+    assert_eq!(
+        collect_channel_ids(&struct_variant, &plan),
+        vec![ChannelId(22), ChannelId(33)]
+    );
     assert!(collect_channel_ids(&Multi::Unit, &plan).is_empty());
 }
 
@@ -465,9 +481,9 @@ fn collect_channel_ids_array_tuple_and_map_coverage() {
         bytes: [0u8; 16],
     };
 
-    let plan = RpcPlan::for_type::<Complex>();
+    let plan = RpcPlan::for_type::<Complex, Tx<()>, Rx<()>>();
     let ids = collect_channel_ids(&value, &plan);
-    assert_eq!(ids, vec![100]);
+    assert_eq!(ids, vec![ChannelId(100)]);
 }
 
 // r[verify call.request.channels]
@@ -496,7 +512,7 @@ fn collect_channel_ids_shared_shape_branches_not_order_sensitive() {
         },
     };
 
-    let plan = RpcPlan::for_type::<Root>();
+    let plan = RpcPlan::for_type::<Root, Tx<()>, Rx<()>>();
     let ids = collect_channel_ids(&value, &plan);
-    assert_eq!(ids, vec![5, 6]);
+    assert_eq!(ids, vec![ChannelId(5), ChannelId(6)]);
 }

@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use roam_types::{Hello, Message, MetadataValue};
+use roam_types::{ChannelId, Hello, Message, MetadataValue, MethodId, Payload, RequestId};
 use spec_tests::harness::{accept_subject, our_hello, run_async};
 use tokio::io::AsyncWriteExt;
 
@@ -157,11 +157,11 @@ fn rpc_payload_over_max_triggers_goodbye() {
         // Send an oversized Request payload (17 bytes).
         let req = Message::Request {
             conn_id: roam_types::ConnectionId::ROOT,
-            request_id: 1,
-            method_id: 1,
+            request_id: RequestId(1),
+            method_id: MethodId(1),
             metadata: metadata_empty(),
             channels: vec![],
-            payload: vec![0u8; 17],
+            payload: Payload(vec![0u8; 17]),
         };
         io.send(&req).await.map_err(|e| e.to_string())?;
 
@@ -218,7 +218,7 @@ fn channel_id_zero_triggers_goodbye() {
         // Violate channel-id=0 reserved.
         io.send(&Message::Close {
             conn_id: roam_types::ConnectionId::ROOT,
-            channel_id: 0,
+            channel_id: ChannelId(0),
         })
         .await
         .map_err(|e| e.to_string())?;
@@ -276,8 +276,8 @@ fn channel_unknown_id_triggers_goodbye() {
         // (Channel ID 42 was never established via Request/Response)
         io.send(&Message::Data {
             conn_id: roam_types::ConnectionId::ROOT,
-            channel_id: 42,
-            payload: vec![0u8; 4],
+            channel_id: ChannelId(42),
+            payload: Payload(vec![0u8; 4]),
         })
         .await
         .map_err(|e| e.to_string())?;
@@ -333,8 +333,8 @@ fn channel_data_id_zero_triggers_goodbye() {
         // Send Data with channel_id=0 (reserved).
         io.send(&Message::Data {
             conn_id: roam_types::ConnectionId::ROOT,
-            channel_id: 0,
-            payload: vec![0u8; 4],
+            channel_id: ChannelId(0),
+            payload: Payload(vec![0u8; 4]),
         })
         .await
         .map_err(|e| e.to_string())?;

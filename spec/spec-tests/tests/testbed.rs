@@ -3,7 +3,7 @@ use std::time::Duration;
 use facet::Facet;
 use roam_hash::method_id_from_detail;
 use roam_schema::{ArgDetail, MethodDetail};
-use roam_types::{Hello, Message, MetadataValue};
+use roam_types::{ChannelId, Hello, Message, MetadataValue, MethodId, Payload, RequestId};
 use spec_proto::MathError;
 use spec_tests::harness::{accept_subject, our_hello, run_async};
 use spec_tests::testbed::method_id;
@@ -69,8 +69,8 @@ fn metadata_empty() -> Vec<(String, MetadataValue, u64)> {
 
 /// Verify hardcoded IDs match computed IDs.
 fn ensure_expected_ids() {
-    assert_eq!(compute_method_id("echo"), method_id::echo());
-    assert_eq!(compute_method_id("reverse"), method_id::reverse());
+    assert_eq!(compute_method_id("echo"), method_id::echo().0);
+    assert_eq!(compute_method_id("reverse"), method_id::reverse().0);
 }
 
 // r[verify call.initiate] - Call initiated by sending Request message
@@ -108,11 +108,11 @@ fn rpc_echo_roundtrip() {
             .map_err(|e| format!("postcard args: {e}"))?;
         let req = Message::Request {
             conn_id: roam_types::ConnectionId::ROOT,
-            request_id: 1,
+            request_id: RequestId(1),
             method_id: method_id::echo(),
             metadata: metadata_empty(),
             channels: vec![],
-            payload: req_payload,
+            payload: Payload(req_payload),
         };
         io.send(&req).await.map_err(|e| e.to_string())?;
 
@@ -128,7 +128,7 @@ fn rpc_echo_roundtrip() {
                 payload,
                 ..
             } => {
-                if request_id != 1 {
+                if request_id != RequestId(1) {
                     return Err(format!("response request_id mismatch: {request_id}"));
                 }
                 payload
@@ -138,7 +138,7 @@ fn rpc_echo_roundtrip() {
         };
 
         let decoded: Result<String, RoamError<Infallible>> =
-            facet_postcard::from_slice(&payload).map_err(|e| format!("postcard resp: {e}"))?;
+            facet_postcard::from_slice(&payload.0).map_err(|e| format!("postcard resp: {e}"))?;
 
         match decoded {
             Ok(s) => {
@@ -178,11 +178,11 @@ fn rpc_user_error_roundtrip() {
             facet_postcard::to_vec(&(10i64, 0i64)).map_err(|e| format!("postcard args: {e}"))?;
         let req = Message::Request {
             conn_id: roam_types::ConnectionId::ROOT,
-            request_id: 100,
-            method_id: divide_method_id,
+            request_id: RequestId(100),
+            method_id: MethodId(divide_method_id),
             metadata: metadata_empty(),
             channels: vec![],
-            payload: req_payload,
+            payload: Payload(req_payload),
         };
         io.send(&req).await.map_err(|e| e.to_string())?;
 
@@ -198,7 +198,7 @@ fn rpc_user_error_roundtrip() {
                 payload,
                 ..
             } => {
-                if request_id != 100 {
+                if request_id != RequestId(100) {
                     return Err(format!("response request_id mismatch: {request_id}"));
                 }
                 payload
@@ -209,7 +209,7 @@ fn rpc_user_error_roundtrip() {
 
         // The response should be Result<i64, RoamError<MathError>> = Err(User(DivisionByZero))
         let decoded: Result<i64, RoamErrorWithUser<MathError>> =
-            facet_postcard::from_slice(&payload).map_err(|e| format!("postcard resp: {e}"))?;
+            facet_postcard::from_slice(&payload.0).map_err(|e| format!("postcard resp: {e}"))?;
 
         match decoded {
             Ok(v) => {
@@ -256,11 +256,11 @@ fn rpc_unknown_method_returns_unknownmethod_error() {
             .map_err(|e| format!("postcard args: {e}"))?;
         let req = Message::Request {
             conn_id: roam_types::ConnectionId::ROOT,
-            request_id: 2,
-            method_id: 0xdeadbeef,
+            request_id: RequestId(2),
+            method_id: MethodId(0xdeadbeef),
             metadata: metadata_empty(),
             channels: vec![],
-            payload: req_payload,
+            payload: Payload(req_payload),
         };
         io.send(&req).await.map_err(|e| e.to_string())?;
 
@@ -276,7 +276,7 @@ fn rpc_unknown_method_returns_unknownmethod_error() {
                 payload,
                 ..
             } => {
-                if request_id != 2 {
+                if request_id != RequestId(2) {
                     return Err(format!("response request_id mismatch: {request_id}"));
                 }
                 payload
@@ -286,7 +286,7 @@ fn rpc_unknown_method_returns_unknownmethod_error() {
         };
 
         let decoded: Result<String, RoamError<Infallible>> =
-            facet_postcard::from_slice(&payload).map_err(|e| format!("postcard resp: {e}"))?;
+            facet_postcard::from_slice(&payload.0).map_err(|e| format!("postcard resp: {e}"))?;
 
         match decoded {
             Ok(v) => return Err(format!("expected Err(UnknownMethod), got Ok({v:?})")),
@@ -321,11 +321,11 @@ fn rpc_invalid_payload_returns_invalidpayload_error() {
         // Send request with invalid payload (random bytes, not valid postcard).
         let req = Message::Request {
             conn_id: roam_types::ConnectionId::ROOT,
-            request_id: 3,
+            request_id: RequestId(3),
             method_id: method_id::echo(),
             metadata: metadata_empty(),
             channels: vec![],
-            payload: vec![0xff, 0xff, 0xff, 0xff], // Invalid postcard data
+            payload: Payload(vec![0xff, 0xff, 0xff, 0xff]), // Invalid postcard data
         };
         io.send(&req).await.map_err(|e| e.to_string())?;
 
@@ -341,7 +341,7 @@ fn rpc_invalid_payload_returns_invalidpayload_error() {
                 payload,
                 ..
             } => {
-                if request_id != 3 {
+                if request_id != RequestId(3) {
                     return Err(format!("response request_id mismatch: {request_id}"));
                 }
                 payload
@@ -351,7 +351,7 @@ fn rpc_invalid_payload_returns_invalidpayload_error() {
         };
 
         let decoded: Result<String, RoamError<Infallible>> =
-            facet_postcard::from_slice(&payload).map_err(|e| format!("postcard resp: {e}"))?;
+            facet_postcard::from_slice(&payload.0).map_err(|e| format!("postcard resp: {e}"))?;
 
         match decoded {
             Ok(v) => return Err(format!("expected Err(InvalidPayload), got Ok({v:?})")),
@@ -393,17 +393,17 @@ fn rpc_pipelining_multiple_requests() {
                 .map_err(|e| format!("postcard args: {e}"))?;
             let req = Message::Request {
                 conn_id: roam_types::ConnectionId::ROOT,
-                request_id: (i + 10) as u64, // Use 10, 11, 12 to distinguish from other tests
+                request_id: RequestId((i + 10) as u64), // Use 10, 11, 12 to distinguish from other tests
                 method_id: method_id::echo(),
                 metadata: metadata_empty(),
                 channels: vec![],
-                payload: req_payload,
+                payload: Payload(req_payload),
             };
             io.send(&req).await.map_err(|e| e.to_string())?;
         }
 
         // Collect all 3 responses (may arrive in any order).
-        let mut responses: std::collections::HashMap<u64, String> =
+        let mut responses: std::collections::HashMap<RequestId, String> =
             std::collections::HashMap::new();
         for _ in 0..3 {
             let resp = io
@@ -419,7 +419,7 @@ fn rpc_pipelining_multiple_requests() {
                     ..
                 } => {
                     let decoded: Result<String, RoamError<Infallible>> =
-                        facet_postcard::from_slice(&payload)
+                        facet_postcard::from_slice(&payload.0)
                             .map_err(|e| format!("postcard resp: {e}"))?;
                     match decoded {
                         Ok(s) => {
@@ -434,7 +434,7 @@ fn rpc_pipelining_multiple_requests() {
 
         // Verify all 3 responses received with correct correlation.
         for (i, msg) in messages.iter().enumerate() {
-            let request_id = (i + 10) as u64;
+            let request_id = RequestId((i + 10) as u64);
             match responses.get(&request_id) {
                 Some(s) if s == *msg => {}
                 Some(s) => {
