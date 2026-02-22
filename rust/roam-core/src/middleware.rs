@@ -283,7 +283,7 @@ pub trait Middleware: Send + Sync {
 ///
 /// Useful as a default or for testing.
 #[derive(Debug, Clone, Copy, Default)]
-pub struct NoopMiddleware;
+pub(crate) struct NoopMiddleware;
 
 impl Middleware for NoopMiddleware {
     fn pre<'a>(
@@ -298,7 +298,7 @@ impl Middleware for NoopMiddleware {
 /// Compose multiple middleware into a single middleware.
 ///
 /// Middleware runs in order: first middleware added runs first.
-pub struct MiddlewareStack {
+pub(crate) struct MiddlewareStack {
     layers: Vec<Arc<dyn Middleware>>,
 }
 

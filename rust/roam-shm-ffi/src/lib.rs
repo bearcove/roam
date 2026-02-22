@@ -7,8 +7,8 @@
 use core::ffi::c_void;
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
-use roam_shm::layout::SizeClass;
-use roam_shm::var_slot_pool::{VarSlotHandle, VarSlotPool};
+use roam_shm::SizeClass;
+use roam_shm::{VarSlotHandle, VarSlotPool};
 use shm_primitives::Region;
 use shm_primitives::bipbuf::{BIPBUF_HEADER_SIZE, BipBufHeader, BipBufRaw};
 

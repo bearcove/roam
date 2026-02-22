@@ -8,11 +8,11 @@ use std::sync::Arc;
 use std::collections::HashMap;
 use std::sync::LazyLock;
 
-use roam_types::{MethodId, Payload};
+use roam_types::{MethodDescriptor, MethodId, Payload, RpcPlan, ServiceDescriptor};
 
 use crate::{
     ChannelRegistry, ConnectionHandle, Context, DriverMessage, IncomingChannelMessage,
-    MethodDescriptor, RpcPlan, ServiceDescriptor, ServiceDispatcher, TransportError,
+    ServiceDispatcher, TransportError,
 };
 
 /// Get or create a `&'static MethodDescriptor` for forwarding a given method.
@@ -92,7 +92,7 @@ impl Clone for ForwardingDispatcher {
 }
 
 impl ServiceDispatcher for ForwardingDispatcher {
-    fn service_descriptor(&self) -> &'static crate::ServiceDescriptor {
+    fn service_descriptor(&self) -> &'static ServiceDescriptor {
         &ServiceDescriptor::EMPTY
     }
 
@@ -453,7 +453,7 @@ impl Clone for LateBoundForwarder {
 }
 
 impl ServiceDispatcher for LateBoundForwarder {
-    fn service_descriptor(&self) -> &'static crate::ServiceDescriptor {
+    fn service_descriptor(&self) -> &'static ServiceDescriptor {
         &ServiceDescriptor::EMPTY
     }
 

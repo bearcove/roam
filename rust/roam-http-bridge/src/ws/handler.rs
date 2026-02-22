@@ -9,9 +9,9 @@ use std::sync::Arc;
 use axum::extract::ws::{Message, WebSocket};
 use facet_core::{Def, Shape};
 use futures_util::{SinkExt, StreamExt};
-use roam_core::{IncomingChannelMessage, MethodDescriptor, ResponseData, TransportError};
+use roam_core::{IncomingChannelMessage, ResponseData, TransportError};
 use roam_schema::{contains_channels, is_rx, is_tx};
-use roam_types::{ChannelId, Payload};
+use roam_types::{ChannelId, MethodDescriptor, Payload};
 
 use crate::{BridgeError, BridgeService, ProtocolErrorKind};
 

@@ -704,7 +704,7 @@ impl<'a> ShmHostGuestTransport<'a> {
 // Implement MessageTransport for ShmGuestTransport
 mod async_transport {
     use super::*;
-    use roam_stream::MessageTransport;
+    use roam_core::MessageTransport;
     use std::time::Duration;
 
     impl MessageTransport for ShmGuestTransport {

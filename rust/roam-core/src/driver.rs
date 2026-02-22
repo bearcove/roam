@@ -39,11 +39,11 @@ use facet::Facet;
 use crate::runtime::{Mutex, Receiver, channel, sleep, spawn, spawn_with_abort};
 use crate::{
     ChannelError, ChannelRegistry, ConnectionHandle, Context, DriverMessage, MessageTransport,
-    ResponseData, RoamError, Role, RpcPlan, ServiceDispatcher, TransportError,
+    ResponseData, RoamError, Role, ServiceDispatcher, TransportError,
 };
 use roam_types::{
-    ChannelId, ConnectionId, Hello, Message, Metadata, MetadataValue, MethodId, Payload, RequestId,
-    ServiceDescriptor, validate_metadata,
+    ChannelId, ConnectionId, Hello, Message, Metadata, MetadataValue, MethodDescriptor, MethodId,
+    Payload, RequestId, RpcPlan, ServiceDescriptor, validate_metadata,
 };
 
 /// Negotiated connection parameters after Hello exchange.
@@ -447,7 +447,7 @@ where
     /// Make a raw RPC call with automatic reconnection.
     pub async fn call_raw(
         &self,
-        descriptor: &'static crate::MethodDescriptor,
+        descriptor: &'static MethodDescriptor,
         payload: Vec<u8>,
     ) -> Result<Payload, ConnectError> {
         let mut last_error: Option<io::Error> = None;
@@ -513,7 +513,7 @@ where
 {
     async fn call_with_metadata<T: Facet<'static> + Send>(
         &self,
-        descriptor: &'static crate::MethodDescriptor,
+        descriptor: &'static MethodDescriptor,
         args: &mut T,
         metadata: Metadata,
     ) -> Result<ResponseData, TransportError> {
@@ -592,7 +592,7 @@ where
     #[allow(unsafe_code)]
     fn call_with_metadata_by_plan(
         &self,
-        descriptor: &'static crate::MethodDescriptor,
+        descriptor: &'static MethodDescriptor,
         args_ptr: crate::SendPtr,
         metadata: Metadata,
     ) -> impl std::future::Future<Output = Result<ResponseData, TransportError>> {
@@ -659,7 +659,7 @@ where
     unsafe fn bind_response_channels_by_plan(
         &self,
         response_ptr: *mut (),
-        response_plan: &crate::RpcPlan,
+        response_plan: &RpcPlan,
         channels: &[ChannelId],
     ) {
         // Same as bind_response_channels - this is a no-op for FramedClient.
@@ -1871,7 +1871,7 @@ where
 pub struct NoDispatcher;
 
 impl ServiceDispatcher for NoDispatcher {
-    fn service_descriptor(&self) -> &'static crate::ServiceDescriptor {
+    fn service_descriptor(&self) -> &'static ServiceDescriptor {
         &ServiceDescriptor::EMPTY
     }
 

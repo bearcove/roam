@@ -1,9 +1,9 @@
 use facet::Facet;
-use roam_types::{ChannelId, ConnectionId, Metadata, MethodId, Payload, RequestId};
+use roam_types::{ChannelId, ChannelKind, ConnectionId, Metadata, MethodId, Payload, RequestId};
 
+use crate::channel::{DriverTxSlot, ReceiverSlot};
 use crate::{
-    ChannelError, ConnectionHandle, DispatchContext, DriverTxSlot, RX_STREAM_BUFFER_SIZE,
-    ReceiverSlot, ServiceDispatcher, TransportError,
+    ChannelError, ConnectionHandle, RX_STREAM_BUFFER_SIZE, ServiceDispatcher, TransportError,
     runtime::{OneshotSender, Sender},
 };
 use std::sync::{
@@ -471,11 +471,11 @@ impl ChannelRegistry {
             };
             match poke.at_path_mut(&loc.path) {
                 Ok(channel_poke) => match loc.kind {
-                    crate::ChannelKind::Rx => {
+                    ChannelKind::Rx => {
                         trace!("bind_channels_with_plan: found Rx");
                         self.bind_rx_channel(channel_poke);
                     }
-                    crate::ChannelKind::Tx => {
+                    ChannelKind::Tx => {
                         trace!("bind_channels_with_plan: found Tx");
                         self.bind_tx_channel(channel_poke);
                     }

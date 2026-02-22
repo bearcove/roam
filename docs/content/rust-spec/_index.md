@@ -340,3 +340,124 @@ match client.get_user(id).await {
     // ...
 }
 ```
+
+# Rust Runtime Layering
+
+This section defines Rust implementation layering in terms of Messages,
+connections, virtual connections, and channels.
+
+## Terms and Definitions
+
+> rs[term.transport]
+>
+> A **transport** is a mechanism that sends and receives roam `Message`
+> values between peers.
+
+> rs[term.connection]
+>
+> A **connection** is a concrete instantiation of a transport between two peers
+> (called a "link" in the main specification; see `r[core.link]`).
+
+> rs[term.virtual-connection]
+>
+> A **virtual connection** is a `conn_id`-scoped communication context
+> multiplexed on top of a connection (`r[core.link]`, `r[core.conn.independence]`).
+
+> rs[term.channel]
+>
+> A **channel** is a directional `channel_id`-scoped data path within a virtual
+> connection. `Tx<T>` and `Rx<T>` are Rust-level handles over that protocol
+> mechanism (`r[channeling.type]`, `r[channeling.allocation.caller]`).
+
+## Layer Responsibilities
+
+> rs[layer.generated-client]
+>
+> Generated Rust service clients are typed API stubs. They own method
+> descriptors and typed argument construction, and MUST NOT own connection I/O,
+> reconnect/retry control flow, or channel protocol mechanics.
+
+> rs[client.nongeneric]
+>
+> Generated Rust service clients SHOULD expose non-generic concrete types.
+> Runtime polymorphism, when needed, is an internal runtime concern.
+
+> rs[layer.call-runtime]
+>
+> The Rust call runtime owns the typed-to-message boundary:
+> - argument encoding into Request payload (`r[call.request.payload-encoding]`)
+> - schema-driven channel ID collection for Request.channels
+>   (`r[call.request.channels]`, `r[call.request.channels.schema-driven]`)
+> - response decoding (`r[call.response.encoding]`)
+> - response-side `Rx<T>` binding
+
+> rs[layer.connection-runtime]
+>
+> The Rust connection runtime owns virtual-connection call execution:
+> send Request, correlate Response by `request_id`, and map transport failures
+> to transport errors.
+
+> rs[layer.transport]
+>
+> Transport adapters own transport-specific mechanics only:
+> - message transports: each transport message carries one roam `Message`
+>   (`r[transport.message.one-to-one]`)
+> - byte streams: length-prefix bytes and decode/encode to roam `Message`
+>   (`r[transport.bytestream.length-prefix]`)
+> - shm: shared-memory signaling/buffer mechanics
+
+## What a Call Entails (Rust)
+
+> rs[call.steps]
+>
+> A Rust call path MUST perform:
+> 1. Encode typed args as Request payload tuple
+> 2. Collect all channel IDs from args using schema-driven traversal
+> 3. Send Request with `method_id`, `metadata`, `channels`, and `payload`
+> 4. Correlate Response by `request_id`
+> 5. Decode `Result<T, RoamError<E>>` from response payload
+> 6. Bind response `Rx<T>` handles using response channels + method schema
+
+## Reconnection and Retry Ownership
+
+> rs[reconnect.owner]
+>
+> Automatic reconnection and call retry are owned by reconnecting connection
+> runtime implementations (not by generated service clients).
+
+> rs[reconnect.trigger]
+>
+> Reconnect/retry behavior MUST follow reconnect-spec rules:
+> - trigger on transport failures (`r[reconnect.trigger.transport]`)
+> - do NOT trigger on RPC-level errors (`r[reconnect.trigger.not-rpc]`)
+> - apply retry policy/backoff (`r[reconnect.policy]`, `r[reconnect.policy.backoff]`)
+> - preserve shared/single-reconnect concurrency semantics
+>   (`r[reconnect.concurrency.shared]`, `r[reconnect.concurrency.single-reconnect]`)
+
+> rs[retry.semantic]
+>
+> Retry means re-issuing the same logical call after reconnect due to transport
+> failure. This is transport-failure recovery behavior, not application-level
+> retry policy.
+
+## Channel Binding Ownership
+
+> rs[channel.binding.request]
+>
+> Request-side channel ownership is caller-side and schema-driven
+> (`r[channeling.allocation.caller]`, `r[call.request.channels.schema-driven]`).
+
+> rs[channel.binding.server]
+>
+> On dispatch, Rust MUST treat Request.channels as authoritative and patch IDs
+> into deserialized args before binding streams (`r[channeling.allocation.caller]`).
+
+> rs[channel.binding.response]
+>
+> On the caller side, Rust MUST bind response `Rx<T>` handles after decoding
+> a successful response, using response channel IDs and method schema.
+
+> rs[channel.binding.transport-agnostic]
+>
+> Channel binding semantics are transport-agnostic and MUST be identical across
+> message, byte-stream, and shm transports.

@@ -17,11 +17,11 @@ use facet_reflect::Partial;
 
 use roam_types::{
     ArgDescriptor, ChannelId, ConnectionId, Metadata, MethodDescriptor, MethodId, Payload,
-    RequestId, ServiceDescriptor,
+    RequestId, RpcPlan, ServiceDescriptor,
 };
 
 use crate::{
-    ChannelIdAllocator, ChannelRegistry, DriverMessage, Extensions, Middleware, Rejection, RpcPlan,
+    ChannelIdAllocator, ChannelRegistry, DriverMessage, Extensions, Middleware, Rejection,
     SendPeek, runtime::Sender,
 };
 
@@ -43,14 +43,30 @@ pub struct DispatchContext {
     pub(crate) driver_tx: Sender<DriverMessage>,
 }
 
-roam_task_local::task_local! {
-    /// Task-local dispatch context. Using task_local instead of thread_local
-    /// is critical: thread_local can leak across different async tasks that
-    /// happen to run on the same worker thread, causing channel binding bugs.
-    ///
-    /// This is public for use by generated dispatchers.
-    pub static DISPATCH_CONTEXT: DispatchContext;
+impl DispatchContext {
+    pub fn new(
+        conn_id: roam_types::ConnectionId,
+        channel_ids: Arc<ChannelIdAllocator>,
+        driver_tx: Sender<DriverMessage>,
+    ) -> Self {
+        Self {
+            conn_id,
+            channel_ids,
+            driver_tx,
+        }
+    }
+}
 
+roam_task_local::task_local! {
+    /// Task-local dispatch context (used to bind response channels created in handlers).
+    pub static DISPATCH_CONTEXT: DispatchContext;
+}
+
+pub(crate) fn get_dispatch_context() -> Option<DispatchContext> {
+    DISPATCH_CONTEXT.try_with(|cx| cx.clone()).ok()
+}
+
+roam_task_local::task_local! {
     /// Task-local extensions from the current request context.
     ///
     /// This allows code running inside a handler (including `Caller` implementations
@@ -59,11 +75,6 @@ roam_task_local::task_local! {
     ///
     /// Generated dispatchers scope this around the handler call.
     pub static CURRENT_EXTENSIONS: Extensions;
-}
-
-/// Get the current dispatch context, if any.
-pub(crate) fn get_dispatch_context() -> Option<DispatchContext> {
-    DISPATCH_CONTEXT.try_with(|ctx| ctx.clone()).ok()
 }
 
 // ============================================================================
@@ -246,7 +257,7 @@ impl Clone for Context {
 ///
 /// Pass the method's descriptor so dispatch can use its precomputed plans.
 #[allow(unsafe_code)]
-pub fn dispatch_call<A, R, E, F, Fut>(
+pub(crate) fn dispatch_call<A, R, E, F, Fut>(
     cx: &Context,
     payload: Payload,
     registry: &mut ChannelRegistry,
@@ -488,7 +499,7 @@ pub unsafe fn prepare_sync(
 /// - On success, the memory at `ptr` will be initialized with the deserialized value
 /// - On error, the memory at `ptr` may be partially initialized and MUST NOT be read
 #[allow(unsafe_code)]
-pub unsafe fn deserialize_into(
+pub(crate) unsafe fn deserialize_into(
     ptr: *mut (),
     type_plan: &Arc<facet_reflect::TypePlanCore>,
     payload: &[u8],
@@ -528,7 +539,7 @@ pub unsafe fn deserialize_into(
 ///
 /// - `args_ptr` must point to valid, initialized memory matching the plan's shape
 #[allow(unsafe_code)]
-pub unsafe fn patch_channel_ids_with_plan(
+pub(crate) unsafe fn patch_channel_ids_with_plan(
     args_ptr: *mut (),
     plan: &RpcPlan,
     channels: &[ChannelId],
@@ -750,7 +761,10 @@ pub async fn send_prepare_error(
 }
 
 /// Collect channel IDs from a Peek value using a precomputed RpcPlan.
-pub fn collect_channel_ids_with_plan(peek: facet::Peek<'_, '_>, plan: &RpcPlan) -> Vec<ChannelId> {
+pub(crate) fn collect_channel_ids_with_plan(
+    peek: facet::Peek<'_, '_>,
+    plan: &RpcPlan,
+) -> Vec<ChannelId> {
     let mut ids = Vec::new();
     for loc in plan.channel_locations {
         match peek.at_path(&loc.path) {
@@ -785,7 +799,7 @@ pub fn collect_channel_ids_with_plan(peek: facet::Peek<'_, '_>, plan: &RpcPlan) 
 /// The `plan` should be created once per type as a static in non-generic code.
 ///
 /// r[impl call.request.channels] - Collects channel IDs in declaration order for the Request.
-pub fn collect_channel_ids<T: Facet<'static>>(args: &T, plan: &RpcPlan) -> Vec<ChannelId> {
+pub(crate) fn collect_channel_ids<T: Facet<'static>>(args: &T, plan: &RpcPlan) -> Vec<ChannelId> {
     let peek = facet::Peek::new(args);
     collect_channel_ids_with_plan(peek, plan)
 }
@@ -797,7 +811,11 @@ pub fn collect_channel_ids<T: Facet<'static>>(args: &T, plan: &RpcPlan) -> Vec<C
 ///
 /// The `plan` should be created once per type as a static in non-generic code.
 #[allow(unsafe_code)]
-pub fn patch_channel_ids<T: Facet<'static>>(args: &mut T, plan: &RpcPlan, channels: &[ChannelId]) {
+pub(crate) fn patch_channel_ids<T: Facet<'static>>(
+    args: &mut T,
+    plan: &RpcPlan,
+    channels: &[ChannelId],
+) {
     trace!(channels = ?channels, "patch_channel_ids: patching channels");
     let args_ptr = args as *mut T as *mut ();
     unsafe { patch_channel_ids_with_plan(args_ptr, plan, channels) };

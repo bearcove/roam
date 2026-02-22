@@ -359,7 +359,7 @@ fn generate_dispatcher(parsed: &ServiceTrait, roam: &TokenStream2) -> TokenStrea
         #[derive(Clone)]
         pub struct #dispatcher_name<H> {
             handler: H,
-            middleware: Vec<std::sync::Arc<dyn #roam::session::Middleware>>,
+            middleware: Vec<::std::sync::Arc<dyn #roam::session::Middleware>>,
         }
 
         impl<H> #dispatcher_name<H>
@@ -575,7 +575,7 @@ fn generate_dispatch_method(
             let handler = self.handler.clone();
             let middleware = self.middleware.clone();
             let driver_tx = registry.driver_tx();
-            let dispatch_ctx = registry.dispatch_context();
+            let response_channel_ids = registry.response_channel_ids();
             let channels = cx.channels.clone();
             let conn_id = cx.conn_id;
             let request_id = cx.request_id;
@@ -603,7 +603,7 @@ fn generate_dispatch_method(
             // SAFETY: args are fully initialized after prepare_sync
             let args: #tuple_type = unsafe { args_slot.assume_init_read() };
 
-            Box::pin(#roam::session::DISPATCH_CONTEXT.scope(dispatch_ctx, async move {
+            Box::pin(async move {
                 let mut cx = cx;
                 cx.args = desc.args;
 
@@ -641,25 +641,25 @@ fn generate_dispatch_method(
                 }
 
                 // 5. Log, destructure args, call handler
-                // Scope CURRENT_EXTENSIONS so code inside the handler (like TracingCaller)
-                // can access extensions set by middleware.
-                use #roam::facet_pretty::FacetPretty;
                 #args_binding
-                // Instant::now() panics on wasm32-unknown-unknown
-                #[cfg(not(target_arch = "wasm32"))]
-                let _handler_start = std::time::Instant::now();
-                let result = #roam::session::CURRENT_EXTENSIONS.scope(
-                    cx.extensions.clone(),
-                    handler.#method_name(&cx, #args_call)
+
+                let dispatch_cx = #roam::session::DispatchContext::new(
+                    conn_id,
+                    response_channel_ids,
+                    driver_tx.clone(),
+                );
+
+                let result = #roam::session::DISPATCH_CONTEXT.scope(
+                    dispatch_cx,
+                    #roam::session::CURRENT_EXTENSIONS.scope(
+                        cx.extensions.clone(),
+                        handler.#method_name(&cx, #args_call)
+                    ),
                 ).await;
-                #[cfg(not(target_arch = "wasm32"))]
-                let _handler_elapsed = _handler_start.elapsed();
-                #[cfg(target_arch = "wasm32")]
-                let _handler_elapsed = std::time::Duration::ZERO;
 
                 // 6. Send response
                 #send_response
-            }))
+            })
         }
     }
 }

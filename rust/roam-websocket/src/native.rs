@@ -4,12 +4,12 @@ use std::io;
 use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
-use roam_core::MessageTransport;
-use roam_stream::{
-    ConnectionError, ConnectionHandle, Driver, FramedClient, HandshakeConfig, Message,
-    MessageConnector, RetryPolicy, ServiceDispatcher, accept_framed, connect_framed,
+use roam_core::{
+    ConnectionError, ConnectionHandle, Driver, FramedClient, HandshakeConfig, MessageConnector,
+    MessageTransport, RetryPolicy, ServiceDispatcher, accept_framed, connect_framed,
     connect_framed_with_policy,
 };
+use roam_types::Message;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::tungstenite::protocol::Message as WsMessage;
@@ -71,9 +71,10 @@ where
 
     /// Receive a message with timeout.
     async fn recv_timeout(&mut self, timeout: Duration) -> io::Result<Option<Message>> {
-        moire::time::timeout(timeout, self.recv())
-            .await
-            .unwrap_or(Ok(None))
+        match moire::time::timeout(timeout, self.recv()).await {
+            Ok(res) => res,
+            Err(_) => Ok(None),
+        }
     }
 
     /// Receive a message (blocking until one arrives or connection closes).

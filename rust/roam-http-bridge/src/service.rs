@@ -6,8 +6,9 @@
 use std::collections::HashMap;
 
 use facet_core::Shape;
-use roam_core::{ConnectionHandle, MethodDescriptor, ServiceDescriptor};
+use roam_core::ConnectionHandle;
 use roam_schema::contains_channels;
+use roam_types::{MethodDescriptor, ServiceDescriptor};
 
 use crate::{
     BoxFuture, BridgeError, BridgeMetadata, BridgeResponse, BridgeService, ProtocolErrorKind,

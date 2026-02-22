@@ -64,25 +64,22 @@
 #[macro_use]
 mod macros;
 
-pub mod channel;
-pub mod layout;
-pub mod msg;
-pub mod peer;
-pub mod var_slot_pool;
+mod channel;
+mod layout;
+mod msg;
+mod peer;
+mod var_slot_pool;
 
-pub mod auditable;
-pub mod bootstrap;
-pub mod cleanup;
-pub mod driver;
-pub mod guest;
-pub mod host;
-pub mod spawn;
-pub mod transport;
+mod auditable;
+mod bootstrap;
+mod cleanup;
+mod driver;
+mod guest;
+mod host;
+mod spawn;
+mod transport;
 
 // Re-export key types
-pub use channel::{
-    ChannelEntry, ChannelIdAllocator, ChannelState, FlowControl, RequestIdAllocator,
-};
 pub use layout::{
     HEADER_SIZE, MAGIC, SegmentConfig, SegmentHeader, SegmentLayout, SizeClass, VERSION,
 };
@@ -93,10 +90,8 @@ pub use var_slot_pool::{SizeClassHeader, VarFreeError, VarSlotHandle, VarSlotPoo
 // Re-export FileCleanup from shm-primitives
 pub use shm_primitives::FileCleanup;
 
-pub use auditable::dump_all_channels;
-pub use host::{PollResult, ShmHost};
-
-pub use guest::ShmGuest;
+pub use guest::{AttachError, SendError as GuestSendError, ShmGuest};
+pub use host::{GrowError, PollResult, SendError as HostSendError, ShmHost};
 
 pub use transport::{
     ConvertError, ShmGuestTransport, ShmHostGuestTransport, message_to_shm_msg, shm_msg_to_message,
@@ -106,6 +101,15 @@ pub use spawn::{
     AddPeerOptions, DeathCallback, SpawnArgs, SpawnArgsError, SpawnTicket, die_with_parent,
 };
 
+pub use bootstrap::{
+    BootstrapError, BootstrapTicket, SessionId, SessionIdError, SessionPaths, unix,
+};
+pub use driver::{
+    IncomingConnection, IncomingConnectionResponse, IncomingConnections, MultiPeerHostDriver,
+    MultiPeerHostDriverBuilder, MultiPeerHostDriverHandle, ShmConnectionError, ShmDriver,
+    ShmNegotiated, establish_guest, establish_multi_peer_host,
+};
+
 /// Handshake is implicit via segment header.
 ///
 /// shm[impl shm.handshake]
@@ -113,9 +117,9 @@ pub use spawn::{
 ///
 /// SHM does not use Hello messages. The segment header fields serve as the
 /// host's unilateral configuration. Guests accept these values by attaching.
-pub const fn _handshake_is_implicit() {}
+pub(crate) const fn _handshake_is_implicit() {}
 
 /// Payload encoding is postcard.
 ///
 /// shm[impl shm.payload.encoding]
-pub const fn _payload_encoding_is_postcard() {}
+pub(crate) const fn _payload_encoding_is_postcard() {}

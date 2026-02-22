@@ -14,11 +14,11 @@
 //! shm[impl shm.handshake]
 //! shm[impl shm.flow.no-credit-message]
 
+use roam_core::MessageTransport;
 use roam_core::{
     ChannelError, ChannelRegistry, ConnectError, ConnectionHandle, Context, DriverMessage,
     ResponseData, Role, ServiceDispatcher, TransportError,
 };
-use roam_stream::MessageTransport;
 use roam_types::{ChannelId, ConnectionId, Message, MethodId, Payload, RequestId};
 use std::collections::HashMap;
 use std::sync::Arc;

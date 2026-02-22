@@ -5,7 +5,7 @@ use roam_frame::{
     SHM_FRAME_HEADER_SIZE, SLOT_REF_FRAME_SIZE, ShmFrameHeader, SlotRef, encode_inline_frame,
     encode_slot_ref_frame,
 };
-use roam_shm::layout::{HEADER_SIZE, MAGIC, SegmentConfig, VERSION};
+use roam_shm::{HEADER_SIZE, MAGIC, SegmentConfig, SizeClass, VERSION};
 use std::fs;
 use std::path::Path;
 
@@ -42,7 +42,7 @@ fn main() {
         inline_threshold: 256,
         max_channels: 8,
         heartbeat_interval: 1_000_000,
-        var_slot_classes: vec![roam_shm::layout::SizeClass::new(1024, 4)],
+        var_slot_classes: vec![SizeClass::new(1024, 4)],
         file_cleanup: shm_primitives::FileCleanup::Manual,
     };
     let layout = config.layout().expect("layout should be valid");

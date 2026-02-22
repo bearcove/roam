@@ -7,12 +7,15 @@ use facet::Facet;
 
 use facet_core::PtrMut;
 
-use roam_types::{ChannelId, ConnectionId, Metadata, Payload, RequestId};
+use roam_types::{
+    ChannelId, ChannelKind, ConnectionId, Metadata, MethodDescriptor, Payload, RequestId, RpcPlan,
+};
 
+use crate::channel::{ReceiverSlot, SenderSlot};
+use crate::dispatch::patch_channel_ids;
 use crate::{
     ChannelError, ChannelIdAllocator, ChannelRegistry, DriverMessage, IncomingChannelMessage,
-    RX_STREAM_BUFFER_SIZE, ReceiverSlot, ResponseData, SenderSlot, ServiceDispatcher,
-    TransportError, patch_channel_ids, runtime::oneshot,
+    RX_STREAM_BUFFER_SIZE, ResponseData, ServiceDispatcher, TransportError, runtime::oneshot,
 };
 use crate::{
     Role,
@@ -26,7 +29,7 @@ use crate::{
 /// Generates unique request IDs for a connection.
 ///
 /// r[impl call.request-id.uniqueness] - monotonically increasing counter starting at 1
-pub struct RequestIdGenerator {
+pub(crate) struct RequestIdGenerator {
     next: AtomicU32,
 }
 
@@ -192,7 +195,7 @@ impl ConnectionHandle {
     /// The descriptor contains all precomputed plans and method metadata.
     pub async fn call<T: Facet<'static>>(
         &self,
-        descriptor: &'static crate::MethodDescriptor,
+        descriptor: &'static MethodDescriptor,
         args: &mut T,
     ) -> Result<ResponseData, TransportError> {
         let args_ptr = args as *mut T as *mut ();
@@ -216,7 +219,7 @@ impl ConnectionHandle {
     #[track_caller]
     pub unsafe fn call_with_metadata_by_plan(
         &self,
-        descriptor: &'static crate::MethodDescriptor,
+        descriptor: &'static MethodDescriptor,
         args_ptr: *mut (),
         metadata: Metadata,
     ) -> impl std::future::Future<Output = Result<ResponseData, TransportError>> + Send + '_ {
@@ -239,10 +242,10 @@ impl ConnectionHandle {
             };
             match poke.at_path_mut(&loc.path) {
                 Ok(channel_poke) => match loc.kind {
-                    crate::ChannelKind::Rx => {
+                    ChannelKind::Rx => {
                         self.bind_rx_channel(channel_poke, &mut drains);
                     }
-                    crate::ChannelKind::Tx => {
+                    ChannelKind::Tx => {
                         self.bind_tx_channel(channel_poke);
                     }
                 },
@@ -369,7 +372,7 @@ impl ConnectionHandle {
     /// Note: For channeled calls, use `call()` which handles channel binding.
     pub async fn call_raw(
         &self,
-        descriptor: &'static crate::MethodDescriptor,
+        descriptor: &'static MethodDescriptor,
         payload: Vec<u8>,
     ) -> Result<Payload, TransportError> {
         self.call_raw_full(descriptor, Vec::new(), Vec::new(), payload, None)
@@ -383,7 +386,7 @@ impl ConnectionHandle {
     /// Returns ResponseData so caller can handle response channels.
     pub(crate) async fn call_raw_with_channels(
         &self,
-        descriptor: &'static crate::MethodDescriptor,
+        descriptor: &'static MethodDescriptor,
         channels: Vec<ChannelId>,
         payload: Vec<u8>,
         args_debug: Option<String>,
@@ -397,7 +400,7 @@ impl ConnectionHandle {
     /// Returns the raw response payload bytes.
     pub async fn call_raw_with_metadata(
         &self,
-        descriptor: &'static crate::MethodDescriptor,
+        descriptor: &'static MethodDescriptor,
         payload: Vec<u8>,
         metadata: Metadata,
     ) -> Result<Payload, TransportError> {
@@ -411,7 +414,7 @@ impl ConnectionHandle {
     /// Returns ResponseData containing the payload and any response channel IDs.
     async fn call_raw_full(
         &self,
-        descriptor: &'static crate::MethodDescriptor,
+        descriptor: &'static MethodDescriptor,
         metadata: Metadata,
         channels: Vec<ChannelId>,
         payload: Vec<u8>,
@@ -432,7 +435,7 @@ impl ConnectionHandle {
     #[allow(clippy::too_many_arguments)]
     async fn call_raw_full_with_drains(
         &self,
-        descriptor: &'static crate::MethodDescriptor,
+        descriptor: &'static MethodDescriptor,
         metadata: Metadata,
         channels: Vec<ChannelId>,
         payload: Vec<u8>,
@@ -695,7 +698,7 @@ impl ConnectionHandle {
     pub fn bind_response_channels<T: Facet<'static>>(
         &self,
         response: &mut T,
-        plan: &crate::RpcPlan,
+        plan: &RpcPlan,
         channels: &[ChannelId],
     ) {
         // Patch channel IDs from Response.channels into the deserialized response.
@@ -713,15 +716,11 @@ impl ConnectionHandle {
     ///
     /// - `response_ptr` must point to valid, initialized memory matching the plan's shape
     #[allow(unsafe_code)]
-    unsafe fn bind_response_channels_with_plan(
-        &self,
-        response_ptr: *mut (),
-        plan: &crate::RpcPlan,
-    ) {
+    unsafe fn bind_response_channels_with_plan(&self, response_ptr: *mut (), plan: &RpcPlan) {
         let shape = plan.type_plan.root().shape;
         for loc in plan.channel_locations {
             // Only Rx needs binding in responses
-            if loc.kind != crate::ChannelKind::Rx {
+            if loc.kind != ChannelKind::Rx {
                 continue;
             }
             let poke = unsafe {
@@ -780,7 +779,7 @@ impl ConnectionHandle {
     pub unsafe fn bind_response_channels_by_plan(
         &self,
         response_ptr: *mut (),
-        response_plan: &crate::RpcPlan,
+        response_plan: &RpcPlan,
         channels: &[ChannelId],
     ) {
         // Patch channel IDs from Response.channels into the deserialized response.
@@ -796,8 +795,8 @@ impl ConnectionHandle {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::MethodDescriptor;
     use facet::Facet;
+    use roam_types::MethodDescriptor;
     use roam_types::MethodId;
     use std::sync::LazyLock;
     use std::time::Duration;

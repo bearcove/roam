@@ -5,12 +5,14 @@
 //! Canonical definitions live in `docs/content/spec/_index.md`,
 //! `docs/content/rust-spec/_index.md`, and `docs/content/shm-spec/_index.md`.
 
+use roam_types::RpcPlan;
+
 #[macro_use]
 mod macros;
 
-pub mod driver;
+mod driver;
 pub mod runtime;
-pub mod transport;
+mod transport;
 
 pub use driver::{
     ConnectError, ConnectionError, Driver, FramedClient, HandshakeConfig, IncomingConnection,
@@ -19,55 +21,55 @@ pub use driver::{
 };
 pub use transport::MessageTransport;
 
-pub use roam_frame::{Frame, MsgDesc, OwnedMessage, Payload};
-
 mod connection_handle;
-pub use connection_handle::*;
+pub use connection_handle::ConnectionHandle;
 
 mod caller;
-pub use caller::*;
+pub use caller::{CallFuture, Caller, SendPtr};
 
 mod errors;
-pub use errors::*;
+pub use errors::{
+    BorrowedCallResult, CallError, CallResult, ChannelError, ClientError, DecodeError,
+    DispatchError, RoamError, TransportError,
+};
 
 mod types;
-pub use types::*;
+pub use types::{
+    ChannelIdAllocator, ChannelRegistry, DriverMessage, IncomingChannelMessage, ResponseData, Role,
+};
 
 mod channel;
-pub use channel::*;
+pub use channel::{Rx, RxError, Tx, TxError, channel};
 
 mod tunnel;
-pub use tunnel::*;
+pub use tunnel::{
+    DEFAULT_TUNNEL_CHUNK_SIZE, Tunnel, pump_read_to_tx, pump_rx_to_write, tunnel_pair,
+    tunnel_stream,
+};
 
 mod flow_control;
-pub use flow_control::*;
+pub use flow_control::{FlowControl, InfiniteCredit};
 
 mod dispatch;
-pub use dispatch::*;
+pub use dispatch::{
+    CURRENT_EXTENSIONS, Context, DISPATCH_CONTEXT, DispatchContext, PrepareError, RoutedDispatcher,
+    ServiceDispatcher, dispatch_unknown_method, prepare_sync, run_post_middleware,
+    run_pre_middleware, send_error_response, send_ok_response, send_prepare_error,
+};
 // Re-export internal items needed by channel binding
 pub(crate) use dispatch::get_dispatch_context;
 
 mod forwarding;
-pub use forwarding::*;
+pub use forwarding::{ForwardingDispatcher, LateBoundForwarder, LateBoundHandle};
 
 mod extensions;
-pub use extensions::*;
+pub use extensions::Extensions;
 
 mod middleware;
-pub use middleware::*;
-
-pub use facet_reflect::TypePlanCore;
-// [FIXME] re-exports are evil, let's not.
-pub use roam_types::{
-    ArgDescriptor, ChannelId, ChannelKind, ConnectionId, Metadata, MethodDescriptor, MethodId,
-    RequestId, RpcPlan, ServiceDescriptor,
-};
+pub use middleware::{MethodOutcome, Middleware, Rejection, RejectionCode, SendPeek};
 
 pub(crate) const CHANNEL_SIZE: usize = 1024;
 pub(crate) const RX_STREAM_BUFFER_SIZE: usize = 1024;
-
-/// Re-export `Infallible` for use as the error type in infallible methods.
-pub use std::convert::Infallible;
 
 /// Build an [`RpcPlan`] for type `T`, defaulting the `Tx` and `Rx` channel
 /// type parameters to `Tx::<()>` / `Rx::<()>`.

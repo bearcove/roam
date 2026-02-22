@@ -3,12 +3,9 @@ use std::marker::PhantomData;
 use facet::Facet;
 use facet_core::PtrUninit;
 
-use roam_types::{ChannelId, Metadata};
+use roam_types::{ChannelId, Metadata, MethodDescriptor, RpcPlan};
 
-use crate::{
-    CallError, ConnectionHandle, DecodeError, MethodDescriptor, ResponseData, RoamError, RpcPlan,
-    TransportError,
-};
+use crate::{CallError, ConnectionHandle, DecodeError, ResponseData, RoamError, TransportError};
 
 /// A raw pointer wrapper that is `Send` and `Sync`.
 ///
@@ -361,7 +358,7 @@ impl_into_future!();
 /// It handles the wire format: `[0] + value_bytes` for Ok, `[1, discriminant] + error_bytes` for Err.
 ///
 /// Returns `Result<T, CallError<E>>` with the decoded value or error.
-pub fn decode_response<T: Facet<'static>, E: Facet<'static>>(
+pub(crate) fn decode_response<T: Facet<'static>, E: Facet<'static>>(
     payload: &[u8],
 ) -> Result<T, CallError<E>> {
     if payload.is_empty() {
@@ -402,7 +399,7 @@ pub fn decode_response<T: Facet<'static>, E: Facet<'static>>(
 /// over the user error type.
 #[doc(hidden)]
 #[derive(Debug)]
-pub enum DecodeOutcome {
+pub(crate) enum DecodeOutcome {
     /// Ok variant was deserialized successfully into the provided pointer.
     Ok,
     /// User error was deserialized successfully into the provided error pointer.
@@ -442,7 +439,7 @@ pub enum DecodeOutcome {
 /// - On other outcomes, neither pointer is initialized
 #[doc(hidden)]
 #[allow(unsafe_code)]
-pub unsafe fn decode_response_into(
+pub(crate) unsafe fn decode_response_into(
     payload: &[u8],
     ok_ptr: *mut (),
     ok_plan: &RpcPlan,

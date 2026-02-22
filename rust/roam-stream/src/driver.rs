@@ -20,7 +20,7 @@ use roam_core::{
     Caller, ConnectError, ConnectionError, ConnectionHandle, HandshakeConfig, ResponseData,
     RetryPolicy, SendPtr, ServiceDispatcher, TransportError,
 };
-use roam_types::{ChannelId, Metadata, Payload};
+use roam_types::{ChannelId, Metadata, MethodDescriptor, Payload, RpcPlan};
 
 /// A factory that creates new byte-stream connections on demand.
 ///
@@ -222,7 +222,7 @@ where
     /// Make a raw RPC call with automatic reconnection.
     pub async fn call_raw(
         &self,
-        descriptor: &'static roam_core::MethodDescriptor,
+        descriptor: &'static MethodDescriptor,
         payload: Vec<u8>,
     ) -> Result<Payload, ConnectError> {
         let mut last_error: Option<io::Error> = None;
@@ -288,7 +288,7 @@ where
 {
     async fn call_with_metadata<T: Facet<'static> + Send>(
         &self,
-        descriptor: &'static roam_core::MethodDescriptor,
+        descriptor: &'static MethodDescriptor,
         args: &mut T,
         metadata: Metadata,
     ) -> Result<ResponseData, TransportError> {
@@ -353,7 +353,7 @@ where
     fn bind_response_channels<R: Facet<'static>>(
         &self,
         response: &mut R,
-        plan: &roam_core::RpcPlan,
+        plan: &RpcPlan,
         channels: &[ChannelId],
     ) {
         let handle = self.current_handle.lock().as_ref().cloned();
@@ -370,7 +370,7 @@ where
     #[allow(unsafe_code)]
     fn call_with_metadata_by_plan(
         &self,
-        descriptor: &'static roam_core::MethodDescriptor,
+        descriptor: &'static MethodDescriptor,
         args_ptr: SendPtr,
         metadata: Metadata,
     ) -> impl std::future::Future<Output = Result<ResponseData, TransportError>> {
@@ -438,7 +438,7 @@ where
     unsafe fn bind_response_channels_by_plan(
         &self,
         response_ptr: *mut (),
-        response_plan: &roam_core::RpcPlan,
+        response_plan: &RpcPlan,
         channels: &[ChannelId],
     ) {
         let handle = self.current_handle.lock().as_ref().cloned();

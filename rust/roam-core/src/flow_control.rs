@@ -2,7 +2,7 @@
 // Flow Control
 // ============================================================================
 
-use crate::ChannelId;
+use roam_types::ChannelId;
 
 /// Abstraction for stream flow control mechanism.
 ///

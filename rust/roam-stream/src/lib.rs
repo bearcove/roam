@@ -54,21 +54,3 @@ pub use driver::{Client, Connector, accept, connect, connect_with_policy};
 
 // length-prefixed framing
 pub use framing::LengthPrefixedFramed;
-// Re-export types that moved to roam-session (backwards compat)
-pub use roam_core::{
-    ConnectError, ConnectionError, Driver, FramedClient, HandshakeConfig, IncomingConnection,
-    IncomingConnections, MessageConnector, MessageTransport, Negotiated, NoDispatcher, RetryPolicy,
-    accept_framed, connect_framed, connect_framed_with_policy, initiate_framed,
-};
-
-// Re-export session types for convenience
-pub use roam_core::{
-    CallError, Caller, ChannelIdAllocator, ChannelRegistry, ConnectionHandle, Role,
-    ServiceDispatcher, TransportError,
-};
-
-// Re-export wire types for convenience
-pub use roam_types::{Hello, Message};
-
-// Re-export tokio IO traits for convenience
-pub use tokio::io::{AsyncRead, AsyncWrite};

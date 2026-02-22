@@ -8,7 +8,8 @@ use std::marker::PhantomData;
 use facet::Facet;
 
 use crate::runtime::{Receiver, Sender};
-use crate::{CHANNEL_SIZE, ChannelId, DriverMessage, IncomingChannelMessage, get_dispatch_context};
+use crate::{CHANNEL_SIZE, DriverMessage, IncomingChannelMessage, get_dispatch_context};
+use roam_types::{ChannelId, Payload};
 
 /// Create an unbound channel pair for channeled RPC.
 ///
@@ -33,8 +34,56 @@ use crate::{CHANNEL_SIZE, ChannelId, DriverMessage, IncomingChannelMessage, get_
 /// let sum = fut.await?;
 /// ```
 pub fn channel<T: 'static>() -> (Tx<T>, Rx<T>) {
-    let (sender, receiver) = crate::runtime::channel("roam_channel", CHANNEL_SIZE);
-    (Tx::unbound(sender), Rx::unbound(receiver))
+    if let Some(cx) = get_dispatch_context() {
+        let conn_id = cx.conn_id;
+        let channel_id = cx.channel_ids.next();
+        let driver_tx = cx.driver_tx;
+
+        let (sender, mut receiver) = crate::runtime::channel("roam_dispatch_channel", CHANNEL_SIZE);
+
+        crate::runtime::spawn("roam_dispatch_channel_drain", async move {
+            while let Some(msg) = receiver.recv().await {
+                match msg {
+                    IncomingChannelMessage::Data(bytes) => {
+                        if driver_tx
+                            .send(DriverMessage::Data {
+                                conn_id,
+                                channel_id,
+                                payload: Payload(bytes),
+                            })
+                            .await
+                            .is_err()
+                        {
+                            break;
+                        }
+                    }
+                    IncomingChannelMessage::Close => break,
+                }
+            }
+
+            let _ = driver_tx
+                .send(DriverMessage::Close {
+                    conn_id,
+                    channel_id,
+                })
+                .await;
+        });
+
+        let mut tx = Tx::unbound(sender);
+        tx.conn_id = conn_id;
+        tx.channel_id = channel_id;
+
+        // Response channels are returned to the peer; locally they are "hollow".
+        let rx = Rx {
+            channel_id,
+            receiver: ReceiverSlot::empty(),
+            _marker: PhantomData,
+        };
+        (tx, rx)
+    } else {
+        let (sender, receiver) = crate::runtime::channel("roam_channel", CHANNEL_SIZE);
+        (Tx::unbound(sender), Rx::unbound(receiver))
+    }
 }
 
 // ============================================================================
@@ -48,34 +97,34 @@ pub fn channel<T: 'static>() -> (Tx<T>, Rx<T>) {
 /// `Tx<T>` arguments and register them with the channel registry.
 #[derive(Facet)]
 #[facet(opaque)]
-pub struct SenderSlot {
+pub(crate) struct SenderSlot {
     /// The optional sender. Public within crate for `Tx::send()` access.
     pub(crate) inner: Option<Sender<IncomingChannelMessage>>,
 }
 
 impl SenderSlot {
     /// Create a slot containing a sender.
-    pub fn new(tx: Sender<IncomingChannelMessage>) -> Self {
+    pub(crate) fn new(tx: Sender<IncomingChannelMessage>) -> Self {
         Self { inner: Some(tx) }
     }
 
     /// Create an empty slot.
-    pub fn empty() -> Self {
+    pub(crate) fn empty() -> Self {
         Self { inner: None }
     }
 
     /// Take the sender out of the slot, leaving it empty.
-    pub fn take(&mut self) -> Option<Sender<IncomingChannelMessage>> {
+    pub(crate) fn take(&mut self) -> Option<Sender<IncomingChannelMessage>> {
         self.inner.take()
     }
 
     /// Check if the slot contains a sender.
-    pub fn is_some(&self) -> bool {
+    pub(crate) fn is_some(&self) -> bool {
         self.inner.is_some()
     }
 
     /// Check if the slot is empty.
-    pub fn is_none(&self) -> bool {
+    pub(crate) fn is_none(&self) -> bool {
         self.inner.is_none()
     }
 
@@ -83,7 +132,7 @@ impl SenderSlot {
     ///
     /// Used by `ChannelRegistry::bind_channels` to hydrate a deserialized `Tx<T>`
     /// with an actual channel sender.
-    pub fn set(&mut self, tx: Sender<IncomingChannelMessage>) {
+    pub(crate) fn set(&mut self, tx: Sender<IncomingChannelMessage>) {
         self.inner = Some(tx);
     }
 }
@@ -99,34 +148,34 @@ impl SenderSlot {
 /// directly to the connection driver.
 #[derive(Facet)]
 #[facet(opaque)]
-pub struct DriverTxSlot {
+pub(crate) struct DriverTxSlot {
     /// The optional sender. Public within crate for `Tx::send()` access.
     pub(crate) inner: Option<Sender<DriverMessage>>,
 }
 
 impl DriverTxSlot {
     /// Create a slot containing a task sender.
-    pub fn new(tx: Sender<DriverMessage>) -> Self {
+    pub(crate) fn new(tx: Sender<DriverMessage>) -> Self {
         Self { inner: Some(tx) }
     }
 
     /// Create an empty slot.
-    pub fn empty() -> Self {
+    pub(crate) fn empty() -> Self {
         Self { inner: None }
     }
 
     /// Take the sender out of the slot, leaving it empty.
-    pub fn take(&mut self) -> Option<Sender<DriverMessage>> {
+    pub(crate) fn take(&mut self) -> Option<Sender<DriverMessage>> {
         self.inner.take()
     }
 
     /// Check if the slot contains a sender.
-    pub fn is_some(&self) -> bool {
+    pub(crate) fn is_some(&self) -> bool {
         self.inner.is_some()
     }
 
     /// Check if the slot is empty.
-    pub fn is_none(&self) -> bool {
+    pub(crate) fn is_none(&self) -> bool {
         self.inner.is_none()
     }
 
@@ -134,12 +183,12 @@ impl DriverTxSlot {
     ///
     /// Used by `ChannelRegistry::bind_channels` to hydrate a deserialized `Tx<T>`
     /// with the connection's driver message channel.
-    pub fn set(&mut self, tx: Sender<DriverMessage>) {
+    pub(crate) fn set(&mut self, tx: Sender<DriverMessage>) {
         self.inner = Some(tx);
     }
 
     /// Clone the sender if present.
-    pub fn clone_inner(&self) -> Option<Sender<DriverMessage>> {
+    pub(crate) fn clone_inner(&self) -> Option<Sender<DriverMessage>> {
         self.inner.clone()
     }
 }
@@ -170,19 +219,19 @@ impl DriverTxSlot {
 #[facet(proxy = u32)]
 pub struct Tx<T: 'static> {
     /// The connection ID this channel belongs to.
-    pub conn_id: roam_types::ConnectionId,
+    pub(crate) conn_id: roam_types::ConnectionId,
 
     /// The unique channel ID for this channel.
     /// Public so Connection can poke it when binding channels.
-    pub channel_id: ChannelId,
+    pub(crate) channel_id: ChannelId,
 
     /// Channel sender for outgoing data (client-side mode).
     /// Used when Tx is created via `roam::channel()`.
-    pub sender: SenderSlot,
+    pub(crate) sender: SenderSlot,
 
     /// Direct driver message sender (server-side mode).
     /// Used when Tx is hydrated by `ChannelRegistry::bind_channels`.
-    pub driver_tx: DriverTxSlot,
+    pub(crate) driver_tx: DriverTxSlot,
 
     /// Phantom data for the element type.
     #[facet(opaque)]
@@ -224,7 +273,7 @@ impl<T: 'static> TryFrom<u32> for Tx<T> {
 
 impl<T: 'static> Tx<T> {
     /// Create a new Tx handle with the given ID and sender (client-side mode).
-    pub fn new(channel_id: ChannelId, tx: Sender<IncomingChannelMessage>) -> Self {
+    pub(crate) fn new(channel_id: ChannelId, tx: Sender<IncomingChannelMessage>) -> Self {
         Self {
             conn_id: roam_types::ConnectionId::ROOT,
             channel_id,
@@ -238,7 +287,7 @@ impl<T: 'static> Tx<T> {
     ///
     /// Used by `roam::channel()` to create a pair before binding.
     /// Connection will poke the channel_id and conn_id when binding.
-    pub fn unbound(tx: Sender<IncomingChannelMessage>) -> Self {
+    pub(crate) fn unbound(tx: Sender<IncomingChannelMessage>) -> Self {
         Self {
             conn_id: roam_types::ConnectionId::ROOT,
             channel_id: ChannelId(0),
@@ -252,7 +301,7 @@ impl<T: 'static> Tx<T> {
     ///
     /// Used by `roam::channel()` when called during dispatch to create
     /// response channels that can send Data directly over the wire.
-    pub fn bound(
+    pub(crate) fn bound(
         conn_id: roam_types::ConnectionId,
         channel_id: ChannelId,
         tx: Sender<IncomingChannelMessage>,
@@ -411,34 +460,34 @@ impl std::error::Error for TxError {}
 /// `Rx<T>` arguments and register them with the channel registry.
 #[derive(Facet)]
 #[facet(opaque)]
-pub struct ReceiverSlot {
+pub(crate) struct ReceiverSlot {
     /// The optional receiver. Public within crate for `Rx::recv()` access.
     pub(crate) inner: Option<Receiver<IncomingChannelMessage>>,
 }
 
 impl ReceiverSlot {
     /// Create a slot containing a receiver.
-    pub fn new(rx: Receiver<IncomingChannelMessage>) -> Self {
+    pub(crate) fn new(rx: Receiver<IncomingChannelMessage>) -> Self {
         Self { inner: Some(rx) }
     }
 
     /// Create an empty slot.
-    pub fn empty() -> Self {
+    pub(crate) fn empty() -> Self {
         Self { inner: None }
     }
 
     /// Take the receiver out of the slot, leaving it empty.
-    pub fn take(&mut self) -> Option<Receiver<IncomingChannelMessage>> {
+    pub(crate) fn take(&mut self) -> Option<Receiver<IncomingChannelMessage>> {
         self.inner.take()
     }
 
     /// Check if the slot contains a receiver.
-    pub fn is_some(&self) -> bool {
+    pub(crate) fn is_some(&self) -> bool {
         self.inner.is_some()
     }
 
     /// Check if the slot is empty.
-    pub fn is_none(&self) -> bool {
+    pub(crate) fn is_none(&self) -> bool {
         self.inner.is_none()
     }
 
@@ -446,7 +495,7 @@ impl ReceiverSlot {
     ///
     /// Used by `ChannelRegistry::bind_channels` to hydrate a deserialized `Rx<T>`
     /// with an actual channel receiver.
-    pub fn set(&mut self, rx: Receiver<IncomingChannelMessage>) {
+    pub(crate) fn set(&mut self, rx: Receiver<IncomingChannelMessage>) {
         self.inner = Some(rx);
     }
 }
@@ -472,11 +521,11 @@ impl ReceiverSlot {
 pub struct Rx<T: 'static> {
     /// The unique channel ID for this channel.
     /// Public so Connection can poke it when binding channels.
-    pub channel_id: ChannelId,
+    pub(crate) channel_id: ChannelId,
 
     /// Channel receiver for incoming data.
     /// Uses ReceiverSlot so it's pokeable (can .take() via Poke).
-    pub receiver: ReceiverSlot,
+    pub(crate) receiver: ReceiverSlot,
 
     /// Phantom data for the element type.
     #[facet(opaque)]
@@ -515,7 +564,7 @@ impl<T: 'static> TryFrom<u32> for Rx<T> {
 
 impl<T: 'static> Rx<T> {
     /// Create a new Rx handle with the given ID and receiver.
-    pub fn new(channel_id: ChannelId, rx: Receiver<IncomingChannelMessage>) -> Self {
+    pub(crate) fn new(channel_id: ChannelId, rx: Receiver<IncomingChannelMessage>) -> Self {
         Self {
             channel_id,
             receiver: ReceiverSlot::new(rx),
@@ -527,7 +576,7 @@ impl<T: 'static> Rx<T> {
     ///
     /// Used by `roam::channel()` to create a pair before binding.
     /// Connection will poke the channel_id when binding.
-    pub fn unbound(rx: Receiver<IncomingChannelMessage>) -> Self {
+    pub(crate) fn unbound(rx: Receiver<IncomingChannelMessage>) -> Self {
         Self {
             channel_id: ChannelId(0),
             receiver: ReceiverSlot::new(rx),
@@ -540,7 +589,7 @@ impl<T: 'static> Rx<T> {
     /// Used by `roam::channel()` when called during dispatch to create
     /// response channels. The channel_id will be serialized and sent to
     /// the client, who will bind a receiver for incoming Data.
-    pub fn bound(channel_id: ChannelId, rx: Receiver<IncomingChannelMessage>) -> Self {
+    pub(crate) fn bound(channel_id: ChannelId, rx: Receiver<IncomingChannelMessage>) -> Self {
         Self {
             channel_id,
             receiver: ReceiverSlot::new(rx),
