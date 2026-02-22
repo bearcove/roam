@@ -346,7 +346,7 @@ type level, roam provides `Tx<T>` and `Rx<T>` to indicate direction.
 
 On the wire, `Tx<T>` and `Rx<T>` are schema-level markers for channeling.
 Channel IDs are carried out-of-band in Request/Response `channels` (and in
-channel messages like Data/Close/Credit). The direction is determined by the
+channel messages like Data/Close). The direction is determined by the
 type, not the ID. See `r[channeling.type]` and `r[call.request.channels]`.
 
 > r[core.channel.return-forbidden]
@@ -367,7 +367,6 @@ The following abstract messages relate to channels:
 | **Ack** | channel receiver | Acknowledge receipt of Data up to a sequence number |
 | **Close** | caller (for Push) | End of channel (no more Data from caller) |
 | **Reset** | either peer | Abort the channel immediately |
-| **Credit** | receiver | Grant permission to send more bytes |
 
 Ack supports exactly-once delivery and transparent reconnection by allowing a
 sender to retransmit unacknowledged Data after a disconnect.
@@ -382,7 +381,6 @@ See `r[channeling.lifecycle.response-closes-pulls]`.
 
 Reset forcefully terminates a channel. After sending or receiving Reset,
 both peers MUST discard any pending data and consider it dead.
-Any outstanding credit is lost. See `r[channeling.reset]` for details.
 
 ### Channel ID Allocation
 
@@ -435,19 +433,6 @@ Examples: duplicate request ID, data after Close, unknown channel ID.
 >
 > The Goodbye reason MUST contain the rule ID that was violated
 > (e.g., `core.channel.close`), optionally followed by context.
-
-## Flow Control
-
-Channels use credit-based flow control (`r[flow.channel.credit-based]`). A sender
-MUST NOT send data exceeding the receiver's granted credit. Credit is measured
-in bytes (`r[flow.channel.byte-accounting]`). Initial credit is established at
-connection setup (`r[flow.channel.initial-credit]`).
-
-The receiver grants additional credit via Credit messages
-(`r[flow.channel.credit-grant]`). If a sender exceeds granted credit, this is
-a connection error (`r[flow.channel.credit-overrun]`).
-
-See the [Flow Control](#flow-control-1) section for complete details.
 
 ## Metadata
 
@@ -1276,16 +1261,12 @@ Caller                                  Callee
 > r[channeling.reset.effect]
 >
 > Upon receiving Reset, the peer MUST consider the channel terminated.
-> Any further Data, Close, or Credit messages for that ID MUST be ignored
+> Any further Data, Close messages for that ID MUST be ignored
 > (they may arrive due to race conditions).
-
-> r[channeling.reset.credit]
->
-> When a channel is reset, any outstanding credit is lost.
 
 > r[channeling.unknown]
 >
-> If a peer receives a channel message (Data, Close, Reset, Credit) with a
+> If a peer receives a channel message (Data, Close, Reset) with a
 > `channel_id` that was never opened, it MUST send a Goodbye message
 > (reason: `channeling.unknown`) and close the connection.
 
@@ -1334,7 +1315,6 @@ enum Message {
     Ack { conn_id: ConnectionId, channel_id: ChannelId, seq: Seq },
     Close { conn_id: ConnectionId, channel_id: ChannelId },
     Reset { conn_id: ConnectionId, channel_id: ChannelId },
-    Credit { conn_id: ConnectionId, channel_id: ChannelId, bytes: u32 },
 }
 ```
 
@@ -1398,7 +1378,6 @@ Hello and HelloYourself are versioned to allow future negotiation changes:
 enum Hello {
     V6 {
         max_payload_size: u32,
-        initial_channel_credit: u32,
         max_concurrent_requests: u32,
         parity: Parity,
         resume: Option<(SessionId, ResumeToken)>,
@@ -1414,7 +1393,6 @@ enum ResumeStatus {
 enum HelloYourself {
     V6 {
         max_payload_size: u32,
-        initial_channel_credit: u32,
         max_concurrent_requests: u32,
         resume_status: ResumeStatus,
         session_id: SessionId,
@@ -1426,7 +1404,6 @@ enum HelloYourself {
 | Field | Description |
 |-------|-------------|
 | `max_payload_size` | Maximum bytes in a Request/Response payload |
-| `initial_channel_credit` | Bytes of credit each channel starts with |
 | `max_concurrent_requests` | Maximum in-flight requests per connection |
 
 > r[message.hello.negotiation]
