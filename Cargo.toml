@@ -31,6 +31,7 @@ members = [
   # "rust/wasm-browser-tests",
 
   "rust/roam-types",
+  "rust/roam-core",
 ]
 exclude = ["fuzz"]
 

@@ -190,6 +190,29 @@ impl<T: 'static + Facet<'static>> SelfRef<T> {
     }
 }
 
+impl<T: 'static> SelfRef<T> {
+    /// Transform the contained value, keeping the same backing storage.
+    ///
+    /// Useful for projecting through wrapper types:
+    /// `SelfRef<Packet<T>>` → `SelfRef<T>` by extracting the inner item.
+    ///
+    /// The closure receives the old value by move and returns the new value.
+    /// Any references the new value holds into the backing storage (inherited
+    /// from fields of `T`) remain valid — the backing is preserved.
+    pub fn map<U: 'static>(mut self, f: impl FnOnce(T) -> U) -> SelfRef<U> {
+        // SAFETY: we take both fields via ManuallyDrop::take, then forget
+        // self to prevent its Drop impl from double-dropping them.
+        let value = unsafe { ManuallyDrop::take(&mut self.value) };
+        let backing = unsafe { ManuallyDrop::take(&mut self.backing) };
+        core::mem::forget(self);
+
+        SelfRef {
+            value: ManuallyDrop::new(f(value)),
+            backing: ManuallyDrop::new(backing),
+        }
+    }
+}
+
 impl<T: 'static> core::ops::Deref for SelfRef<T> {
     type Target = T;
     fn deref(&self) -> &T {
@@ -216,11 +239,29 @@ impl<T: 'static> core::ops::Deref for SelfRef<T> {
 ///
 /// Composable: `ReliableLink` wraps `Link<Packet<T>, C>` and itself implements
 /// `Link<T, C>`, hiding the packet layer from everything above.
-pub trait Link<T, C: Codec> {
+pub trait Link<T: 'static, C: Codec> {
     type Tx: LinkTx<T, C>;
     type Rx: LinkRx<T, C>;
 
     fn split(self) -> (Self::Tx, Self::Rx);
+}
+
+/// A [`Link`] assembled from pre-split Tx and Rx halves.
+///
+/// Used when the halves were split earlier (e.g. the acceptor split a raw
+/// link to read Hello from Rx) and need to be passed as a `Link` again.
+pub struct SplitLink<Tx, Rx> {
+    pub tx: Tx,
+    pub rx: Rx,
+}
+
+impl<T: 'static, C: Codec, Tx: LinkTx<T, C>, Rx: LinkRx<T, C>> Link<T, C> for SplitLink<Tx, Rx> {
+    type Tx = Tx;
+    type Rx = Rx;
+
+    fn split(self) -> (Tx, Rx) {
+        (self.tx, self.rx)
+    }
 }
 
 /// Sending half of a [`Link`].
@@ -258,7 +299,7 @@ pub trait LinkTxPermit<T, C: Codec> {
 ///
 /// Yields [`SelfRef<T>`]: decoded value + backing storage.
 /// Single-consumer (`&mut self`).
-pub trait LinkRx<T, C: Codec>: Send + 'static {
+pub trait LinkRx<T: 'static, C: Codec>: Send + 'static {
     /// Transport-specific error type (IO errors, decode errors, framing
     /// errors, peer death, etc.).
     type Error: std::error::Error + Send + Sync + 'static;
@@ -316,6 +357,7 @@ pub struct ReliableHello {
 /// The first packet on a new connection MUST be `Hello` (seq=0).
 /// All subsequent packets are `Data`.
 #[derive(Facet, Debug, Clone)]
+#[repr(u8)]
 pub enum Packet<T> {
     /// Reliability handshake (first packet, seq=0).
     Hello(ReliableHello),
@@ -332,6 +374,21 @@ pub enum Packet<T> {
 // LinkSource
 // ---------------------------------------------------------------------------
 
+/// A raw link bundled with the peer's Hello (if already consumed).
+///
+/// Used as the payload for [`LinkSource`]. The `peer_hello` field
+/// distinguishes client from server:
+///
+/// - **Client** (`peer_hello = None`): the Dialer connected but no Hello
+///   was exchanged yet. `ReliableLink` does the full Hello exchange.
+/// - **Server** (`peer_hello = Some(hello)`): the acceptor already read
+///   the client's Hello (needed for routing). `ReliableLink` only sends
+///   its own Hello response.
+pub struct Attachment<L> {
+    pub link: L,
+    pub peer_hello: Option<ReliableHello>,
+}
+
 /// Source of replacement [`Link`] values for [`ReliableLink`].
 ///
 /// Client and server differ only in how a replacement link arrives:
@@ -344,73 +401,33 @@ pub enum Packet<T> {
 ///
 /// `ReliableLink` is generic over this trait — same seq/ack/replay logic
 /// regardless of which side initiated the connection.
-pub trait LinkSource<T, C: Codec>: Send + 'static {
+pub trait LinkSource<T: 'static, C: Codec>: Send + 'static {
     type Link: Link<Packet<T>, C>;
 
     #[allow(async_fn_in_trait)]
-    async fn next_link(&mut self) -> std::io::Result<Self::Link>;
+    async fn next_link(&mut self) -> std::io::Result<Attachment<Self::Link>>;
 }
 
-// ---------------------------------------------------------------------------
-// ReliableLink
-// ---------------------------------------------------------------------------
-//
-// struct ReliableLink<T, C, S>
-// where
-//     C: Codec,
-//     S: LinkSource<T, C>,
-// {
-//     source: S,
-//     current_tx: <S::Link as Link<Packet<T>, C>>::Tx,
-//     current_rx: <S::Link as Link<Packet<T>, C>>::Rx,
-//     tx_seq: PacketSeq,
-//     rx_seq: PacketSeq,
-//     replay_buffer: VecDeque<...>,
-//     ...
-// }
-//
-// impl<T, C, S> Link<T, C> for ReliableLink<T, C, S> { ... }
-//
-// Generic over T — doesn't know what T is.
-// Understands Packet: assigns seq, processes acks, buffers for replay,
-// deduplicates inbound. On link failure, calls source.next_link() to
-// obtain a replacement, exchanges Hello, replays unacked packets.
-//
-// Upper layers see Link<T, C>. Packet is invisible.
+// ReliableLink and ReliableAcceptor are implemented in `roam-core`.
 
 // ---------------------------------------------------------------------------
-// ReliableAcceptor (server-side router)
+// SessionAcceptor
 // ---------------------------------------------------------------------------
-//
-// struct ReliableAcceptor<T, C, L>
-// where
-//     C: Codec,
-//     L: Link<Packet<T>, C>,
-// {
-//     sessions: HashMap<ResumeKey, mpsc::Sender<L>>,
-//     ...
-// }
-//
-// The server's accept loop hands each new raw connection to
-// ReliableAcceptor::ingest(raw_link):
-//
-// 1. Read the first Packet::Hello from the raw link.
-// 2. Extract the ResumeKey.
-// 3. If resume_key matches an existing session:
-//    push the raw link into that session's mpsc::Sender<L>.
-//    The corresponding ReliableLink is sitting on its LinkSource
-//    (channel receiver) waiting for this.
-// 4. If resume_key is None (new session):
-//    assign a ResumeKey, create a new ReliableLink with a channel-based
-//    LinkSource, yield the new session upward.
-//
-// User code:
-//
-//     loop {
-//         let session = acceptor.accept().await;
-//         tokio::spawn(handle(session));
-//         // reconnects are routed internally, never surface here
-//     }
+
+/// Yields new sessions from inbound connections.
+///
+/// Both plain listeners (SHM) and [`ReliableAcceptor`](struct@crate::ReliableAcceptor)
+/// implement this. User code calls [`accept`](Self::accept) in a loop and
+/// gets back a `Link<Message, C>` ready to hand to `Session::new`.
+///
+/// Reconnects (for reliable transports) are handled internally and never
+/// surface through `accept` — only genuinely new sessions appear.
+pub trait SessionAcceptor<C: Codec> {
+    type Link: Link<crate::Message, C>;
+
+    #[allow(async_fn_in_trait)]
+    async fn accept(&mut self) -> std::io::Result<Self::Link>;
+}
 
 // ---------------------------------------------------------------------------
 // Session
@@ -425,40 +442,3 @@ pub enum SessionRole {
     Initiator,
     Acceptor,
 }
-
-// Session knows Message concretely but is generic over the Link.
-//
-// Link<T, C> is asymmetric by definition: it sends T and receives
-// SelfRef<T>. So L: Link<Message, C> means:
-// - L::Tx sends Message
-// - L::Rx yields SelfRef<Message>
-//
-//     struct Session<L, C>
-//     where
-//         C: Codec,
-//         L: Link<crate::Message, C>,
-//     {
-//         tx: L::Tx,
-//         rx: L::Rx,
-//         role: SessionRole,
-//         ...
-//     }
-//
-// Session does not know or care about reliability. Whether L is a raw SHM
-// link, a ReliableLink over TCP, or anything else is invisible. Session
-// sends Message, receives SelfRef<Message>, runs the protocol state
-// machine (handshake, connections, request correlation, channels).
-//
-// Construction:
-//
-// - SHM (no reliability needed):
-//     Session::new(shm_link, role)
-//
-// - TCP client:
-//     let reliable = ReliableLink::new(dialer, ...);
-//     Session::new(reliable, Initiator)
-//
-// - TCP server (via ReliableAcceptor):
-//     let session = acceptor.accept().await;
-//     // internally: ReliableAcceptor created a ReliableLink with a
-//     // channel-based LinkSource, wrapped it in Session(Acceptor)
