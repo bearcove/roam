@@ -15,17 +15,28 @@ pub struct Message {
     payload: MessagePayload,
 }
 
+/// Whether a peer will use odd or even IDs for requests and channels
+/// on a given conection.
+pub enum Parity {
+    Odd,
+    Even,
+}
+
 structstruck::strike! {
     #[repr(u8)]
-    #[derive(Debug, Clone, PartialEq, Eq, Facet)]
+    #[structstruck::each[derive(Debug, Clone, PartialEq, Eq, Facet)]]
     pub enum MessagePayload {
         // ========================================================================
         // Handshake
         // ========================================================================
+
         /// Sent by initiator to acceptor as the first message
         Hello(struct Hello {
             /// Must be equal to 7
             version: u32,
+
+            /// Parity claimed by the initiator
+            parity: Parity,
 
             /// Metadata associated with the connection.
             metadata: Metadata,
@@ -38,45 +49,43 @@ structstruck::strike! {
         }),
 
         // ========================================================================
-        // Virtual connection control
+        // Connection control
         // ========================================================================
-        /// Request a new virtual connection.
+
+        /// Request a new virtual connection. This is sent on the desired connection
+        /// ID, even though it doesn't exist yet.
         Connect(struct ConnectPayload {
-            request_id: RequestId,
+            /// Metadata associated with the connection.
             metadata: Metadata,
         }),
 
-        /// Accept a virtual connection request.
+        /// Accept a virtual connection request — sent on the connection ID requested.
         Accept(struct AcceptPayload {
-            request_id: RequestId,
-            conn_id: ConnectionId,
+            /// Metadata associated with the connection.
             metadata: Metadata,
         }),
 
-        /// Reject a virtual connection request.
+        /// Reject a virtual connection request — sent on the connection ID requested.
         Reject(struct RejectPayload {
-            request_id: RequestId,
+            /// Why the connection was rejected.
             reason: String,
-            metadata: Metadata,
         }),
 
-        // ========================================================================
-        // Connection control (conn_id scoped)
-        // ========================================================================
         /// Close a virtual connection.
         /// Goodbye on conn 0 closes entire link.
         Goodbye(struct GoodbyePayload {
-            conn_id: ConnectionId,
+            /// Why the connection was closed.
             reason: String,
         }),
 
         // ========================================================================
-        // RPC (conn_id scoped)
+        // RPC
         // ========================================================================
-        /// Request carries metadata key-value pairs.
-        /// Unknown keys are ignored.
+
+        /// Perform a request (or a "call")
         Request(struct RequestPayload {
-            conn_id: ConnectionId,
+            /// Unique (connection-wide) identifier of the request, allocated by
+            /// the caller.
             request_id: RequestId,
             method_id: MethodId,
             metadata: Metadata,
@@ -126,9 +135,3 @@ structstruck::strike! {
         }),
     }
 }
-
-/// Spec v7 Hello
-
-
-/// Sent as a response to Hello
-pub

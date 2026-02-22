@@ -89,14 +89,16 @@ shared memory; but a roam connection sits several layers above a "TCP connection
 
 ```mermaid
 graph TD
-    A["🔗 Link\n(Memory, stdio, TCP, Unix sockets,\nNamed pipes, WebSocket, SHM)"]
-    B["📦 Conduit\n(Serialization / Deserialization\nvia postcard — bare or stable)"]
-    C["🔄 Session\n(Durable set of connections,\nrequest state machine, resumable)"]
-    D["🔌 Connections\n(Namespace for request/channel IDs,\nroot connection ID=0 always open)"]
-    E["📨 Requests/Channels\n(RPC calls and streaming channels)"]
+    A["Link (Memory, stdio, TCP, Unix sockets, Named pipes, WebSocket, SHM)"]
+    B["Conduit (Serialization / Deserialization via postcard — bare or stable)"]
+    C["Session (Durable set of connections, request state machine, resumable)"]
+    D["Connections (Namespace for request/channel IDs, root connection ID=0 always open)"]
+    E["Requests/Channels (RPC calls and streaming channels)"]
 
     A --> B --> C --> D --> E
 ```
+
+
 
 Connections are the fourth layer in the roam connectivity model. First, we need to
 establish a **Link** with the other peer: typically by accepting a TCP/Unix socket

@@ -8,6 +8,7 @@ specs (
             {
                 name rust
                 include (rust/**/*.rs)
+                exclude (rust-legacy/**/*.rs)
             }
         )
     }
