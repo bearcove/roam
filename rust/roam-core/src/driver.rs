@@ -1111,7 +1111,6 @@ where
                 dispatcher,
             } => {
                 // r[impl message.connect.initiate]
-                // r[impl message.connect.request-id]
                 // r[impl message.connect.metadata]
                 // Store pending connect request
                 self.pending_connects.insert(
@@ -1379,7 +1378,6 @@ where
             }
         };
 
-        // r[impl call.request-id.duplicate-detection]
         if conn.in_flight_server_requests.contains_key(&request_id) {
             return Err(self.goodbye("call.request-id.duplicate-detection").await);
         }

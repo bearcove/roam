@@ -1,196 +1,329 @@
-//! Connectivity-layer API sketches.
+//! Connectivity-layer sketch (CL variant).
 //!
-//! This module is intentionally "runtime-agnostic": it does not pick an async
-//! runtime (Tokio, async-std, etc.). It also does not implement any protocol
-//! state machine; it only defines the trait boundaries we want the Rust stack
-//! to converge on.
+//! Design:
 //!
-//! Layer names and trait names are intended to match:
-//!
-//! - **Link**: transports move *typed values* between peers, applying
-//!   backpressure via permits. Transports are generic over the value type and
-//!   do not need to "know" what that type is beyond generic bounds.
-//! - **ReliableLink**: provides reliable, ordered delivery and resumption for a
-//!   `Link<T>` by wrapping items in [`Packet<T>`] internally (sequence numbers
-//!   and acknowledgements). The `Packet<T>` envelope is an implementation
-//!   detail below the reliability boundary; upper layers see only `T`.
-//! - **Codec**: serialization and deserialization used by `Link` to write/read
-//!   values directly into/from transport storage (socket buffers, SHM regions,
-//!   etc.). The concrete `Codec` (postcard) is chosen by higher layers; `Link`
-//!   stays generic over it.
-//! - **Session**: the protocol state machine (handshake, resume, routing, etc.).
-//! - **Client**: generated service clients built on top of `Session`.
+//! - **Link\<T, C\>**: bidirectional transport, generic over item type `T` and
+//!   codec `C`. Transports (TCP, WS, SHM) implement this generically — they
+//!   don't know what `T` is.
+//! - **Asymmetric IO**: send `T`, receive [`SelfRef<T>`] (decoded value +
+//!   refcounted backing storage for zero-copy).
+//! - **Packet\<T\>**: wire frame struct (seq + ack + T). Implementation detail
+//!   of `ReliableLink` — upper layers never see it.
+//! - **ReliableLink**: wraps `Link<Packet<T>, C>`, strips packet framing,
+//!   exposes `Link<T, C>` with transparent reconnect + replay.
+//! - **Codec**: plan-driven, scatter-gather encode, unsafe `decode_into`. Not
+//!   generic over `T`. TypeErasedValue plan delegation is expanded by the codec
+//!   into Skeleton + BorrowedBlob parts during traversal.
+//! - **Session**: knows `Message` concretely, generic over the `Link`.
+
+#![allow(unsafe_code)]
 
 use facet::Facet;
-use facet_reflect::TypePlanCore;
-use std::io;
+use std::mem::ManuallyDrop;
 
-/// A bidirectional established transport between two peers.
+// ---------------------------------------------------------------------------
+// Codec
+// ---------------------------------------------------------------------------
+
+/// A chunk of encoded output from [`Codec::encode_scatter`].
+pub enum EncodedPart<'a> {
+    /// Small skeleton bytes (struct layout, varint prefixes, seq/ack metadata).
+    /// Owned by the codec's traversal.
+    Skeleton(smallvec::SmallVec<[u8; 64]>),
+
+    /// Reference to existing large data in the source value (e.g. the contents
+    /// of a `Vec<u8>` field). Borrowed from the value being encoded — valid for
+    /// lifetime `'a`.
+    BorrowedBlob(&'a [u8]),
+}
+
+/// Plan-driven serialization and deserialization.
 ///
-/// A transport (TCP, WebSocket, SHM, etc.) implements this trait to expose an
-/// already-established pipe of items.
+/// A single codec instance (e.g. `PostcardCodec`) handles any `T: Facet` via
+/// precomputed [`facet::TypePlanCore`].
 ///
-/// A `Link` is owned by the protocol runtime task (the `Session` layer); user
-/// code should generally not interact with `Link` directly.
-pub trait Link<TxItem, RxItem, C>
-where
-    TxItem: for<'a> Facet<'a>,
-    RxItem: for<'a> Facet<'a>,
-    C: Codec,
-{
-    type Tx: LinkTx<TxItem>;
-    type Rx: LinkRx<RxItem>;
+/// Not generic over `T`: the plan carries the type information.
+pub trait Codec: Send + Sync + 'static {
+    type EncodeError: std::error::Error + Send + Sync + 'static;
+    type DecodeError: std::error::Error + Send + Sync + 'static;
+
+    /// Scatter-gather encode: serialize a value into a list of parts.
+    ///
+    /// The codec traverses the value (via [`facet_reflect::Peek`]), serializes
+    /// small fields into [`EncodedPart::Skeleton`] chunks, and records
+    /// references to large byte slices as [`EncodedPart::BorrowedBlob`].
+    ///
+    /// Returns the total encoded size (sum of all parts). The caller uses
+    /// this to reserve space in the destination (BipBuffer, VarSlot, etc.),
+    /// then writes the parts sequentially. One traversal, large blobs copied
+    /// once directly from source to destination.
+    ///
+    /// `value` is a [`facet_reflect::Peek`] — a safe handle carrying both the
+    /// pointer and the type's shape. No raw pointer / plan mismatch possible.
+    ///
+    /// For TypeErasedValue fields (plan-delegation), the codec expands them
+    /// into Skeleton + BorrowedBlob parts during traversal — no special part
+    /// kind needed.
+    fn encode_scatter<'a>(
+        &self,
+        value: facet_reflect::Peek<'a, 'a>,
+        parts: &mut Vec<EncodedPart<'a>>,
+    ) -> Result<usize, Self::EncodeError>;
+
+    /// Decode bytes into uninitialized memory using a precomputed plan.
+    ///
+    /// # Safety
+    ///
+    /// - `out` must be valid, aligned, and properly-sized for `plan`'s root shape.
+    /// - On error, the codec MUST clean up any partially-initialized fields
+    ///   (via facet's [`facet_reflect::Partial`] or equivalent).
+    unsafe fn decode_into(
+        &self,
+        plan: &facet::TypePlanCore,
+        bytes: &[u8],
+        out: facet_core::PtrUninit,
+    ) -> Result<(), Self::DecodeError>;
+}
+
+// ---------------------------------------------------------------------------
+// SelfRef
+// ---------------------------------------------------------------------------
+
+/// A decoded value `T` that may borrow from its own backing storage.
+///
+/// Transports decode into storage they own (heap buffer, VarSlot, mmap).
+/// `SelfRef` keeps that storage alive so `T` can safely borrow from it
+/// (via Facet's `'static` lifetime + variance guarantee).
+///
+/// Uses `ManuallyDrop` + custom `Drop` to guarantee drop order: value is
+/// dropped before backing, so borrowed references in `T` remain valid
+/// through `T`'s drop.
+///
+/// `T` must be covariant in any lifetime parameters (checked at construction
+/// via facet's variance tracking).
+pub struct SelfRef<T: 'static> {
+    /// The decoded value, potentially borrowing from `backing`.
+    value: ManuallyDrop<T>,
+
+    /// Backing storage keeping decoded bytes alive.
+    backing: ManuallyDrop<Backing>,
+}
+
+/// Backing storage for a [`SelfRef`].
+enum Backing {
+    /// Heap-allocated buffer (TCP read, BipBuffer copy-out for small messages).
+    Boxed(Box<[u8]>),
+    // SHM VarSlot, pinned in shared memory:
+    // VarSlot(Arc<VarSlot>),
+    // Memory-mapped file region:
+    // Mmap(Arc<MmapRegion>),
+}
+
+impl Backing {
+    /// Access the backing bytes.
+    fn as_bytes(&self) -> &[u8] {
+        match self {
+            Backing::Boxed(b) => b,
+        }
+    }
+}
+
+impl<T: 'static> Drop for SelfRef<T> {
+    fn drop(&mut self) {
+        // Drop value first (it may borrow from backing), then backing.
+        unsafe {
+            ManuallyDrop::drop(&mut self.value);
+            ManuallyDrop::drop(&mut self.backing);
+        }
+    }
+}
+
+impl<T: 'static + Facet<'static>> SelfRef<T> {
+    /// Construct a `SelfRef` from backing storage and a builder.
+    ///
+    /// The builder receives a `&'static [u8]` view of the backing bytes —
+    /// sound because the backing is heap-allocated (stable address) and
+    /// dropped after the value.
+    ///
+    /// Panics if `T` is not covariant (lifetime cannot safely shrink).
+    pub fn try_new<E>(
+        backing: Backing,
+        builder: impl FnOnce(&'static [u8]) -> Result<T, E>,
+    ) -> Result<Self, E> {
+        let variance = T::SHAPE.computed_variance();
+        assert!(
+            variance.can_shrink(),
+            "SelfRef<T> requires T to be covariant. Type {:?} has variance {:?}",
+            T::SHAPE.type_identifier,
+            variance
+        );
+
+        // Create a 'static slice from the backing bytes.
+        // Sound because:
+        // - Backing is heap-allocated (stable address)
+        // - We drop value before backing (custom Drop impl)
+        let bytes: &'static [u8] = unsafe {
+            let b = backing.as_bytes();
+            std::slice::from_raw_parts(b.as_ptr(), b.len())
+        };
+
+        let value = builder(bytes)?;
+
+        Ok(Self {
+            value: ManuallyDrop::new(value),
+            backing: ManuallyDrop::new(backing),
+        })
+    }
+
+    /// Infallible variant of [`try_new`](Self::try_new).
+    pub fn new(backing: Backing, builder: impl FnOnce(&'static [u8]) -> T) -> Self {
+        Self::try_new(backing, |bytes| {
+            Ok::<_, std::convert::Infallible>(builder(bytes))
+        })
+        .unwrap_or_else(|e: std::convert::Infallible| match e {})
+    }
+}
+
+impl<T: 'static> core::ops::Deref for SelfRef<T> {
+    type Target = T;
+    fn deref(&self) -> &T {
+        &self.value
+    }
+}
+
+// No `into_inner()` — T may borrow from backing. Use Deref instead.
+// No `DerefMut` — mutating T could invalidate borrowed references.
+
+// ---------------------------------------------------------------------------
+// Link
+// ---------------------------------------------------------------------------
+
+/// Bidirectional transport of `T` values using codec `C`.
+///
+/// Transports implement this generically — a TCP link doesn't know whether
+/// `T` is `Message`, `Packet<Message>`, or anything else. It just encodes `T`
+/// via `C` into its write buffer and decodes from its read buffer.
+///
+/// **Asymmetric by definition**: [`LinkTx`] sends `T`, [`LinkRx`] yields
+/// [`SelfRef<T>`]. So `Link<Message, C>` means Tx sends `Message` and Rx
+/// yields `SelfRef<Message>`.
+///
+/// Composable: `ReliableLink` wraps `Link<Packet<T>, C>` and itself implements
+/// `Link<T, C>`, hiding the packet layer from everything above.
+pub trait Link<T, C: Codec> {
+    type Tx: LinkTx<T, C>;
+    type Rx: LinkRx<T, C>;
 
     fn split(self) -> (Self::Tx, Self::Rx);
 }
 
-/// Sending side of a [`Link`].
+/// Sending half of a [`Link`].
 ///
-/// Backpressure is expressed via `reserve()`: a successful reserve grants
-/// capacity for exactly one item and yields a [`LinkTxPermit`].
-pub trait LinkTx<T>: Send + 'static {
-    type Permit<'a>: LinkTxPermit<T>
+/// Permit-based backpressure: `reserve()` awaits capacity for one item.
+pub trait LinkTx<T, C: Codec>: Send + 'static {
+    type Permit<'a>: LinkTxPermit<T, C>
     where
         Self: 'a;
 
-    /// Wait for outbound capacity for exactly one payload and reserve it for
-    /// the caller.
+    /// Reserve capacity for exactly one item.
     ///
-    /// Cancellation of `reserve()` MUST NOT leak capacity; if reservation
-    /// succeeds, dropping the returned permit MUST return that capacity.
+    /// Cancellation MUST NOT leak capacity. Dropping a permit without calling
+    /// `send()` MUST return that capacity.
     #[allow(async_fn_in_trait)]
-    async fn reserve(&self) -> io::Result<Self::Permit<'_>>;
+    async fn reserve(&self) -> std::io::Result<Self::Permit<'_>>;
 
-    /// Request a graceful close of the outbound direction.
-    ///
-    /// This consumes `self` so it cannot be called twice.
+    /// Graceful close of the outbound direction. Consumes self.
     #[allow(async_fn_in_trait)]
-    async fn close(self) -> io::Result<()>
+    async fn close(self) -> std::io::Result<()>
     where
         Self: Sized;
 }
 
-/// A permit for sending exactly one item.
+/// Permit for sending exactly one item. MUST NOT block (beyond encoding).
 ///
-/// This MUST NOT block: backpressure happens at `reserve()`, not at `send()`.
-pub trait LinkTxPermit<T> {
-    fn send(self, item: T);
+/// The permit knows the codec `C` and can return typed encode errors.
+/// Note: "send never blocks" still holds — encoding can *fail*, but it
+/// does not await or apply backpressure. Backpressure is at `reserve()`.
+pub trait LinkTxPermit<T, C: Codec> {
+    fn send(self, item: T) -> Result<(), C::EncodeError>;
 }
 
-/// Receiving side of a [`Link`].
+/// Receiving half of a [`Link`].
 ///
-/// `recv` is single-consumer: it takes `&mut self`. Higher layers that need
-/// fanout MUST implement it above the `Link` boundary.
-pub trait LinkRx<T>: Send + 'static {
+/// Yields [`SelfRef<T>`]: decoded value + backing storage.
+/// Single-consumer (`&mut self`).
+pub trait LinkRx<T, C: Codec>: Send + 'static {
+    /// Transport-specific error type (IO errors, decode errors, framing
+    /// errors, peer death, etc.).
+    type Error: std::error::Error + Send + Sync + 'static;
+
+    /// Receive the next item.
     #[allow(async_fn_in_trait)]
-    async fn recv(&mut self) -> io::Result<Option<T>>;
+    async fn recv(&mut self) -> Result<Option<SelfRef<T>>, Self::Error>;
 }
+
+// ---------------------------------------------------------------------------
+// Packet (struct, not trait — internal to ReliableLink)
+// ---------------------------------------------------------------------------
 
 /// Packet sequence number (per direction).
-///
-/// This sequence space is used to implement:
-/// - replay after reconnect
-/// - cumulative ACK (highest delivered sequence)
-/// - bounded buffering with backpressure (no silent drop)
-///
-/// Note: this is an API sketch; the exact representation is not fixed here.
 #[derive(Facet, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(transparent)]
 #[facet(transparent)]
 pub struct PacketSeq(pub u32);
 
-/// Cumulative ACK: all packets up to (and including) `max_delivered` have been
+/// Cumulative ACK: all packets up to `max_delivered` (inclusive) have been
 /// delivered to the upper layer.
-///
-/// This is intentionally cumulative (not SACK/ranges) to keep the packet layer
-/// simple. Transports that can reorder may still buffer internally, but the
-/// packet layer only reports contiguous delivery progress.
 #[derive(Facet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct PacketAck {
     pub max_delivered: PacketSeq,
 }
 
-/// A packet envelope around one item.
+/// Wire frame: seq/ack metadata wrapping a payload of type `T`.
 ///
-/// This is what the packet layer sends on the wire. Making this generic over
-/// `T` lets the packet layer avoid "double serialization": a transport can
-/// encode `Packet<T>` directly in one pass.
-#[derive(Facet, Debug, Clone, PartialEq, Eq)]
+/// Serialized atomically by the codec in one pass — no intermediate buffer.
+/// Only exists inside `ReliableLink`; upper layers see `T` directly.
+#[derive(Facet, Debug, Clone)]
 pub struct Packet<T> {
     pub seq: PacketSeq,
     pub ack: Option<PacketAck>,
     pub item: T,
 }
 
-/// Sketch: a reliability wrapper that strips the `Packet<T>` envelope.
-///
-/// The reliability layer is generic over `T`: it understands `Packet` (seq/ack,
-/// replay, dedup) but remains blind to `T` itself.
-///
-/// The wrapped link typically transports `Packet<T>` values, while the exposed
-/// link transports `T` values.
-#[derive(Debug)]
-pub struct ReliableLink<L, T, C> {
-    _inner: L,
-    _phantom: core::marker::PhantomData<(T, C)>,
-}
+// ---------------------------------------------------------------------------
+// ReliableLink (concept, not implemented here)
+// ---------------------------------------------------------------------------
+//
+// struct ReliableLink<T, C: Codec> { ... }
+//
+// impl<T, C: Codec> Link<T, C> for ReliableLink<T, C> { ... }
+//
+// Wraps a Link<Packet<T>, C>. Generic over T — doesn't know what T is.
+// Understands Packet: assigns seq, processes acks, buffers for replay,
+// deduplicates inbound. On reconnect (via Dialer), establishes a new
+// underlying Link<Packet<T>, C> and replays unacked packets.
+//
+// Upper layers see Link<T, C>. Packet is invisible.
 
-/// Message serialization and deserialization.
+// ---------------------------------------------------------------------------
+// Dialer
+// ---------------------------------------------------------------------------
+
+/// Source of new [`Link`] values for reconnect.
 ///
-/// A codec is selected by higher layers (typically postcard for any `T: Facet`)
-/// and used by [`Link`] implementations to encode and decode values.
-///
-/// This is intentionally an API sketch. The concrete design is expected to:
-/// - support plan-driven encode/decode via [`TypePlanCore`] (prepared statement)
-/// - support encode directly into transport-owned buffers (SHM bipbuffer,
-///   varslots, socket buffers) without intermediate staging buffers when possible
-pub trait Codec: Send + Sync + 'static {
-    type EncodeError: std::error::Error + Send + Sync + 'static;
-    type DecodeError: std::error::Error + Send + Sync + 'static;
-
-    fn encode_by_plan(
-        &self,
-        plan: &TypePlanCore,
-        value: facet::Peek<'_, '_>,
-        out: &mut dyn io::Write,
-    ) -> Result<(), Self::EncodeError>;
-
-    /// Decode into an existing allocation using a precomputed plan.
-    ///
-    /// # Safety
-    /// `out_ptr` must point to valid uninitialized storage for `plan.root()`.
-    /// On error, the codec MUST NOT leak partially-initialized allocations.
-    unsafe fn decode_into_by_plan(
-        &self,
-        plan: &TypePlanCore,
-        payload: &[u8],
-        out_ptr: *mut u8,
-    ) -> Result<(), Self::DecodeError>;
-
-    fn decode_by_plan<T: Facet<'static>>(
-        &self,
-        plan: &TypePlanCore,
-        payload: &[u8],
-    ) -> Result<T, Self::DecodeError>;
-}
-
-/// A source of new [`Link`] values (used for reconnect-capable initiators).
-///
-/// If a session is constructed from a single already-established `Link`, it
-/// cannot reconnect unless it also has a `Dialer`.
-pub trait Dialer<TxItem, RxItem, C>: Send + Sync + 'static
-where
-    TxItem: for<'a> Facet<'a>,
-    RxItem: for<'a> Facet<'a>,
-    C: Codec,
-{
-    type Link: Link<TxItem, RxItem, C>;
+/// Used by `ReliableLink` to establish replacement links after failure.
+pub trait Dialer<T, C: Codec>: Send + Sync + 'static {
+    type Link: Link<T, C>;
 
     #[allow(async_fn_in_trait)]
-    async fn dial(&self) -> io::Result<Self::Link>;
+    async fn dial(&self) -> std::io::Result<Self::Link>;
 }
 
-/// Whether the session is acting as initiator (dialing) or acceptor (accepting).
+// ---------------------------------------------------------------------------
+// Session types
+// ---------------------------------------------------------------------------
+
+/// Whether the session is acting as initiator or acceptor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SessionRole {
     Initiator,
@@ -204,57 +337,28 @@ pub enum Reconnect {
     Enabled,
 }
 
-/// A sketch of a `Session` builder.
-///
-/// This is a *shape*, not a full implementation: the actual state machine lives
-/// in `roam-runtime`.
-#[derive(Debug)]
-pub struct SessionBuilder<L, D> {
-    role: SessionRole,
-    reconnect: Reconnect,
-    initial_link: Option<L>,
-    dialer: Option<D>,
-}
-
-impl<L, D> SessionBuilder<L, D> {
-    pub fn new(role: SessionRole) -> Self {
-        Self {
-            role,
-            reconnect: Reconnect::Disabled,
-            initial_link: None,
-            dialer: None,
-        }
-    }
-
-    pub fn reconnect(mut self, reconnect: Reconnect) -> Self {
-        self.reconnect = reconnect;
-        self
-    }
-
-    pub fn link(mut self, link: L) -> Self {
-        self.initial_link = Some(link);
-        self
-    }
-
-    pub fn dialer(mut self, dialer: D) -> Self {
-        self.dialer = Some(dialer);
-        self
-    }
-
-    pub fn role(&self) -> SessionRole {
-        self.role
-    }
-
-    pub fn reconnect_policy(&self) -> Reconnect {
-        self.reconnect
-    }
-}
-
-/// Placeholder "built" session type, for API-shape discussion.
-///
-/// The real session handle will live in `roam-runtime` and expose call/dispatch
-/// APIs. This exists so we can discuss type parameters and builder ergonomics.
-#[derive(Debug)]
-pub struct SessionHandle<L, D> {
-    _phantom: core::marker::PhantomData<(L, D)>,
-}
+// ---------------------------------------------------------------------------
+// Session (shape)
+// ---------------------------------------------------------------------------
+//
+// Session knows Message concretely but is generic over the Link.
+//
+// Note: `Link<T, C>` is asymmetric by definition: it sends `T` and receives
+// `SelfRef<T>`. So `L: Link<Message, C>` means:
+// - `L::Tx` sends `Message`
+// - `L::Rx` yields `SelfRef<Message>`
+//
+//     struct Session<L, C>
+//     where
+//         C: Codec,
+//         L: Link<crate::Message, C>,
+//     {
+//         tx: L::Tx,
+//         rx: L::Rx,
+//         role: SessionRole,
+//         ...
+//     }
+//
+// Whether L is raw SHM, TCP + ReliableLink, or anything else is invisible.
+// Session sends Message, receives SelfRef<Message>, runs the protocol
+// state machine (handshake, connections, request correlation, channels).

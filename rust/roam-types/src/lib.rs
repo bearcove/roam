@@ -23,8 +23,8 @@ pub use services::*;
 mod requests;
 pub use requests::*;
 
-mod wire;
-pub use wire::*;
+mod message;
+pub use message::*;
 
 mod connectivity;
 pub use connectivity::*;

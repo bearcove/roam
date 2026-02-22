@@ -1,34 +1,35 @@
 [workspace]
 resolver = "2"
 members = [
-  "rust/roam",
-  "rust/roam-frame",
-  "rust/roam-core",
-  "rust/roam-hash",
-  "rust/roam-schema",
-  "rust/roam-shm",
-  "rust/roam-shm-ffi",
-  "rust/roam-codegen",
-  "rust/roam-macros",
-  "rust/roam-macros-parse",
-  "rust/roam-stream",
-  "rust/roam-memory",
-  "rust/roam-local",
-  "rust/roam-fdpass",
-  "rust/roam-websocket",
-  "rust/subject-rust",
-  "rust/shm-primitives",
-  "rust/ur-taking-me-with-you",
-  "rust/roam-task-local",
-  # Compliance suite
-  "spec/spec-proto",
-  "spec/spec-tests",
-  # xtask
-  "xtask",
-  # Peer server for TypeScript browser tests
-  "typescript/peer-server",
-  # Wasm browser tests
-  "rust/wasm-browser-tests",
+  # "rust/roam",
+  # "rust/roam-frame",
+  # "rust/roam-core",
+  # "rust/roam-hash",
+  # "rust/roam-schema",
+  # "rust/roam-shm",
+  # "rust/roam-shm-ffi",
+  # "rust/roam-codegen",
+  # "rust/roam-macros",
+  # "rust/roam-macros-parse",
+  # "rust/roam-stream",
+  # "rust/roam-memory",
+  # "rust/roam-local",
+  # "rust/roam-fdpass",
+  # "rust/roam-websocket",
+  # "rust/subject-rust",
+  # "rust/shm-primitives",
+  # "rust/ur-taking-me-with-you",
+  # "rust/roam-task-local",
+  # # Compliance suite
+  # "spec/spec-proto",
+  # "spec/spec-tests",
+  # # xtask
+  # "xtask",
+  # # Peer server for TypeScript browser tests
+  # "typescript/peer-server",
+  # # Wasm browser tests
+  # "rust/wasm-browser-tests",
+
   "rust/roam-types",
 ]
 exclude = ["fuzz"]
@@ -94,6 +95,8 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 static_assertions = "1.1.0"
 ulid = "1"
+
+smallvec = "1.15.1"
 
 # [patch."https://github.com/facet-rs/facet"]
 # facet = { path = "../facet/facet" }

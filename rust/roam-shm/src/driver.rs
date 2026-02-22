@@ -759,7 +759,6 @@ where
         };
 
         // Duplicate detection
-        // r[impl call.request-id.duplicate-detection]
         if conn.in_flight_server_requests.contains_key(&request_id) {
             return Err(self
                 .goodbye(
@@ -2242,7 +2241,6 @@ impl MultiPeerHostDriver {
         };
 
         // Duplicate detection
-        // r[impl call.request-id.duplicate-detection]
         if conn.in_flight_server_requests.contains_key(&request_id) {
             return Err(self
                 .goodbye(
