@@ -2,8 +2,10 @@
 //!
 //! Canonical definitions live in `docs/content/spec/_index.md` and `docs/content/shm-spec/_index.md`.
 
+use std::marker::PhantomData;
+
 use crate::{ChannelId, ConnectionId, Metadata, MethodId, RequestId};
-use facet::Facet;
+use facet::{Facet, PtrConst, Shape};
 
 /// Protocol message.
 #[derive(Debug, Clone, PartialEq, Eq, Facet)]
@@ -16,36 +18,48 @@ pub struct Message {
 }
 
 /// Whether a peer will use odd or even IDs for requests and channels
-/// on a given conection.
+/// on a given connection.
+#[derive(Debug, Clone, PartialEq, Eq, Facet)]
+#[repr(u8)]
 pub enum Parity {
     Odd,
     Even,
 }
 
+impl Parity {
+    /// Returns the opposite parity.
+    pub fn other(&self) -> Self {
+        match self {
+            Parity::Odd => Parity::Even,
+            Parity::Even => Parity::Odd,
+        }
+    }
+}
+
 structstruck::strike! {
     #[repr(u8)]
     #[structstruck::each[derive(Debug, Clone, PartialEq, Eq, Facet)]]
-    pub enum MessagePayload {
+    pub enum MessagePayload<'payload> {
         // ========================================================================
         // Handshake
         // ========================================================================
 
         /// Sent by initiator to acceptor as the first message
-        Hello(struct Hello {
+        Hello(pub struct Hello {
             /// Must be equal to 7
-            version: u32,
+            pub version: u32,
 
-            /// Parity claimed by the initiator
-            parity: Parity,
+            /// Parity claimed by the initiator — acceptor will take the other
+            pub parity: Parity,
 
             /// Metadata associated with the connection.
-            metadata: Metadata,
+            pub metadata: Metadata,
         }),
 
         /// Sent by acceptor back to initiator
-        HelloYourself(struct HelloYourself {
+        HelloYourself(pub struct HelloYourself {
             /// You can _also_ have metadata if you want.
-            metadata: Metadata,
+            pub metadata: Metadata,
         }),
 
         // ========================================================================
@@ -54,28 +68,28 @@ structstruck::strike! {
 
         /// Request a new virtual connection. This is sent on the desired connection
         /// ID, even though it doesn't exist yet.
-        Connect(struct ConnectPayload {
+        Connect(pub struct Connect {
             /// Metadata associated with the connection.
-            metadata: Metadata,
+            pub metadata: Metadata,
         }),
 
         /// Accept a virtual connection request — sent on the connection ID requested.
-        Accept(struct AcceptPayload {
+        Accept(pub struct Accept {
             /// Metadata associated with the connection.
-            metadata: Metadata,
+            pub metadata: Metadata,
         }),
 
         /// Reject a virtual connection request — sent on the connection ID requested.
-        Reject(struct RejectPayload {
+        Reject(pub struct Reject {
             /// Why the connection was rejected.
-            reason: String,
+            pub reason: String,
         }),
 
         /// Close a virtual connection.
         /// Goodbye on conn 0 closes entire link.
-        Goodbye(struct GoodbyePayload {
+        Goodbye(pub struct Goodbye {
             /// Why the connection was closed.
-            reason: String,
+            pub reason: String,
         }),
 
         // ========================================================================
@@ -83,55 +97,89 @@ structstruck::strike! {
         // ========================================================================
 
         /// Perform a request (or a "call")
-        Request(struct RequestPayload {
-            /// Unique (connection-wide) identifier of the request, allocated by
-            /// the caller.
-            request_id: RequestId,
-            method_id: MethodId,
-            metadata: Metadata,
+        Request(pub struct Request<'payload> {
+            /// Unique (connection-wide) request identifier, caller-allocated (as per parity)
+            pub request_id: RequestId,
 
-            /// Channel IDs used by this call, in argument declaration order.
-            channels: Vec<ChannelId>,
+            /// Unique method identifier, hash of fully qualified name + args etc.
+            pub method_id: MethodId,
 
-            payload: Payload,
+            /// Argument tuple
+            pub args: Payload<'payload>,
+
+            /// Channel identifiers, allocated by the caller, that are passed as part
+            /// of the arguments.
+            pub channels: Vec<ChannelId>,
+
+            /// Metadata associated with this call
+            pub metadata: Metadata,
         }),
 
-        /// r[impl core.metadata] - Response carries metadata key-value pairs.
-        /// r[impl call.metadata.unknown] - Unknown keys are ignored.
-        Response(struct ResponsePayload {
-            conn_id: ConnectionId,
+        /// Respond to a request
+        Response(struct Response<'payload> {
+            /// Request ID of the request being responded to.
             request_id: RequestId,
-            metadata: Metadata,
+
             /// Channel IDs for streams in the response, in return type declaration order.
-            /// Client uses these to bind receivers for incoming Data messages.
-            channels: Vec<ChannelId>,
-            payload: Payload,
+            pub channels: Vec<ChannelId>,
+
+            /// Return value
+            pub payload: Payload<'payload>,
+
+            /// Arbitrary response metadata
+            pub metadata: Metadata,
         }),
 
-        /// r[impl call.cancel.message] - Cancel message requests callee stop processing.
-        /// r[impl call.cancel.no-response-required] - Caller should timeout, not wait indefinitely.
-        Cancel(struct CancelPayload {
-            conn_id: ConnectionId,
+        /// Cancel processing of a request.
+        Cancel(struct Cancel {
             request_id: RequestId,
         }),
 
         // ========================================================================
-        // Channels (conn_id scoped)
+        // Channels
         // ========================================================================
-        Data(struct DataPayload {
-            conn_id: ConnectionId,
+
+        /// Send an item on a channel. Channels are not "opened", they are created
+        /// implicitly by calls.
+        Data(struct Data<'payload> {
+            /// Channel ID (unique per-connection) for the channel to send data on.
             channel_id: ChannelId,
-            payload: Payload,
+
+            /// Payload to send on the channel.
+            payload: Payload<'payload>,
         }),
 
-        Close(struct ClosePayload {
-            conn_id: ConnectionId,
+        /// Close a channel — sent by the initiator when they're gracefully done
+        /// with a channel.
+        Close(struct Close {
+            /// Channel ID (unique per-connection) for the channel to close.
             channel_id: ChannelId,
+
+            /// Reason for closing the channel.
+            reason: String,
         }),
 
-        Reset(struct ResetPayload {
-            conn_id: ConnectionId,
+        /// Reset a channel — sent by the acceptor when they would like the initiator
+        /// to please, stop sending items through.
+        Reset(struct Reset {
+            /// Channel ID (unique per-connection) for the channel to reset.
             channel_id: ChannelId,
+
+            /// Reason for resetting the channel.
+            reason: String,
         }),
     }
+}
+
+/// A payload — arguments for a request, or return type for a response
+#[derive(Debug, PartialEq, Eq, Facet, Clone)]
+#[repr(u8)]
+#[facet(opaque)]
+pub enum Payload<'payload> {
+    // Borrowed from somewhere, type-erased, still enough to serialize
+    Borrowed {
+        ptr: PtrConst,
+        shape: &'static Shape,
+        _phantom2: PhantomData<&'payload ()>,
+    },
 }
