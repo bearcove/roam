@@ -25,9 +25,18 @@ This section is prescriptive: it defines the target Rust architecture.
 >
 > Example: `Request { conn_id: 0, request_id: 42, ... }`.
 
+> rs[term.payload]
+>
+> A **Payload** is one opaque binary unit moved by a link.
+> In Rust this is `roam_types::Payload` (a `#[repr(transparent)]` wrapper over
+> `Vec<u8>`): uninterpreted bytes at the link boundary.
+>
+> Example: the postcard encoding of one `Message`, or the raw bytes carried in
+> a WebSocket binary message.
+
 > rs[term.transport]
 >
-> A **transport** is a mechanism that sends and receives roam `Message`
+> A **transport** is a mechanism that sends and receives roam `Payload`
 > values between peers.
 >
 > Example: TCP byte stream, WebSocket message transport, or SHM transport.
@@ -62,21 +71,21 @@ This section is prescriptive: it defines the target Rust architecture.
 
 > rs[layer.trait-boundaries]
 >
-> Each layer SHOULD correspond to one primary Rust trait boundary. Layer
+> Each layer MUST correspond to one primary Rust trait boundary. Layer
 > responsibilities MUST NOT leak across trait boundaries.
 
 ## Transports
 
 > rs[layer.transport]
 >
-> The transport layer is responsible only for moving roam `Message` values
+> The transport layer is responsible only for moving roam `Payload` values
 > and transport-specific framing/signaling.
 
 > rs[layer.link.interface]
 >
 > Rust MUST provide one shared **link** interface for all transports
 > (stream, framed, shm), with a split sender/receiver model for roam
-> `Message` values.
+> `Payload` values.
 
 ```rust
 pub trait Link {
@@ -86,89 +95,93 @@ pub trait Link {
 }
 
 pub trait LinkSender {
-    async fn send(&mut self, msg: &Message) -> io::Result<()>;
-    async fn close(&mut self) -> io::Result<()>;
+    type Permit<'a>: LinkSendPermit
+    where
+        Self: 'a;
+
+    /// Wait for outbound capacity for exactly one payload and reserve it for
+    /// the caller.
+    ///
+    /// Cancellation of `reserve` MUST NOT leak capacity; if reservation
+    /// succeeds, dropping the returned permit MUST return that capacity.
+    async fn reserve(&self) -> io::Result<Self::Permit<'_>>;
+
+    /// Request a graceful close of the outbound direction.
+    ///
+    /// This consumes `self` so it cannot be called twice.
+    async fn close(self) -> io::Result<()>
+    where
+        Self: Sized;
+}
+
+pub trait LinkSendPermit {
+    /// Enqueue exactly one payload into the reserved capacity.
+    ///
+    /// This MUST NOT block: backpressure happens at `reserve`, not at `send`.
+    fn send(self, payload: Payload);
 }
 
 pub trait LinkReceiver {
-    async fn recv(&mut self) -> io::Result<Option<Message>>;
+    async fn recv(&mut self) -> io::Result<Option<Payload>>;
 }
 ```
 
-> rs[layer.link.concurrent]
+> rs[layer.link.serialization]
 >
-> Transports MUST support concurrent send and receive on the same link.
-> One execution context MUST be able to send while another receives on the
-> same link, without violating ordering or message integrity.
+> `Message` ↔ `Payload` serialization is NOT owned by `Link`.
+> Rust runtimes above `Link` MUST serialize `Message` to `Payload` before
+> sending and MUST deserialize `Payload` back to `Message` after `recv`.
+> For Rust, this serialization MUST use postcard.
 
-> rs[layer.link.backpressure]
+> rs[layer.link.permits]
 >
-> `LinkSender::send` MUST complete in exactly one of two ways:
-> - `Ok(())` only after exactly one whole roam `Message` has been accepted by
->   the transport boundary (never a partial message)
-> - `Err(...)` if acceptance fails
+> Link outbound buffering and backpressure MUST be permit-based:
 >
-> It MUST NOT report success before whole-message acceptance.
+> - `LinkSender::reserve` MUST await until outbound capacity for exactly one
+>   payload is available, then reserve it for the caller by returning a permit.
+>   Capacity reservation MUST be FIFO-fair: if multiple tasks call `reserve`,
+>   permits MUST be handed out in the order reservations were requested.
+>   Cancelling a `reserve` call MUST forfeit the caller's place in that FIFO
+>   order, but MUST NOT leak capacity.
+>
+> - `LinkSendPermit::send` MUST enqueue exactly one payload into the reserved
+>   capacity and MUST NOT block.
+>
+> - Dropping a permit without calling `send` MUST release the reserved capacity
+>   back to the link.
+>
+> - A link MUST have an internal outbound buffer (queue) with finite capacity.
+>   This buffer is what permits reserve.
+>
+> Link receive and close behavior:
+> - `LinkReceiver::recv` MUST await until one inbound `Payload` is available
+>   (`Ok(Some(payload))`), the inbound direction closes cleanly (`Ok(None)`), or
+>   an I/O/framing error occurs (`Err(...)`).
+> - `LinkSender::close` MUST stop handing out new permits, MUST drain/flush all
+>   already-enqueued payload bytes, then MUST perform transport-level outbound
+>   close (or return `Err(...)` if drain/flush/close fails).
+>   The purpose of `close` is to let higher layers shut down a link without
+>   losing already-enqueued outbound bytes; it does not perform any roam-level
+>   shutdown.
+>
+> Concurrency, ordering, and loss:
+> - Link implementations MUST support concurrent send and receive on the same
+>   link (one task reserving/sending while another receives).
+> - Link implementations MUST preserve payload ordering per direction.
+> - Link implementations MUST NOT duplicate or silently drop enqueued payloads.
 
-> rs[layer.link.recv]
+> rs[layer.link.blind]
 >
-> `LinkReceiver::recv` MUST await until:
-> - a complete roam `Message` is available (`Ok(Some(msg))`)
-> - the transport closes cleanly (`Ok(None)`)
-> - an I/O/protocol error occurs (`Err(...)`)
-
-> rs[layer.link.close]
->
-> `LinkSender::close` closes the sender's outbound transport direction:
-> - no new outbound `send` is accepted after close succeeds
-> - it MUST drain/flush all already-accepted outbound data before reporting
->   `Ok(())` (or return `Err(...)` if drain/flush fails)
-> - close is transport-level only (not protocol-level)
-
-> rs[layer.link.close.messages]
->
-> `LinkSender::close` MUST NOT synthesize roam protocol messages. In
-> particular, it MUST NOT emit `Goodbye`, `Close`, `Reset`, or any other
-> protocol-level message on behalf of higher layers.
-
-> rs[layer.link.close.idempotent]
->
-> `LinkSender::close` MUST be idempotent. Calling it more than once MUST NOT
-> send additional protocol data and MUST return `Ok(())`.
-
-> rs[layer.link.close.after]
->
-> After successful `LinkSender::close`, subsequent `send` calls on that sender
-> MUST fail.
-
-> rs[layer.link.ordering]
->
-> Transports MUST preserve message ordering per direction on a link.
-> Implementations MUST NOT duplicate or silently drop successfully sent
-> messages.
-
-> rs[layer.link.buffering]
->
-> If a transport buffers internally, that buffering MUST remain transparent to
-> higher layers: observable behavior must be equivalent to an ordered stream of
-> discrete roam `Message` values with no duplication or silent loss.
-
-> rs[layer.link.no-channeling]
->
-> Transports MUST NOT own call/channel protocol semantics (request correlation,
-> channel binding, flow-control policy); those belong to link and call runtimes.
-
-> rs[layer.link.semantic-blind]
->
-> Transport/link implementations are message-semantic-agnostic: they move
-> serialized `Message` values and enforce framing/ordering, but MUST NOT make
-> decisions based on RPC semantics (method IDs, request lifecycle, channel
-> lifecycle, or protocol-level reasons).
+> `Link` is protocol-blind: it MUST treat payload bytes as opaque and MUST NOT
+> make decisions based on roam semantics (method IDs, request lifecycle, channel
+> lifecycle, etc.). Transport-specific framing/signaling is allowed, but roam
+> protocol behavior is not.
 
 > rs[layer.link.connector]
 >
-> Reconnecting link runtimes SHOULD depend on a transport-agnostic connector
-> interface that yields fresh `Link` instances.
+> Rust MUST provide a transport-agnostic connector interface that yields fresh
+> `Link` instances. Any component that needs to (re)establish links MUST depend
+> on this interface.
 
 ```rust
 pub trait TransportConnector {
@@ -181,18 +194,104 @@ pub trait TransportConnector {
 >
 > Stream transports (for example: TCP, Unix sockets) MUST use 4-byte
 > little-endian length-prefix framing (`r[transport.bytestream.length-prefix]`).
-> Each frame payload MUST be postcard encoding of one roam `Message`.
+> Each frame payload MUST carry exactly one roam `Payload`.
+>
+> Stream outbound queuing and draining entail:
+> - `reserve` awaits queue capacity (in-process buffer).
+> - `permit.send(payload)` enqueues one payload into that queue.
+> - a stream writer task drains the queue in order:
+>   - compute 4-byte little-endian length prefix for `payload.0.len()`
+>   - write `len_prefix || payload_bytes` to the byte stream in order
+>   - if the OS/socket cannot currently accept the full write, await until it can
+>   - if an I/O error occurs, the link enters a failed state and subsequent
+>     `reserve` MUST return `Err(...)`.
+>
+> Stream `recv` entails:
+> - read exactly 4 bytes to obtain the length prefix
+> - read exactly that many bytes into a new `Payload`
+> - if the remote cleanly closes before a full prefix/payload is read, return
+>   `Ok(None)` (end-of-stream)
+> - if the stream ends mid-frame, return `Err(...)`
+>
+> Stream `close` entails:
+> - flush any user-space buffered bytes for previously-enqueued payloads
+> - then perform a half-close of the outbound stream direction (for example:
+>   `shutdown(SHUT_WR)`), while leaving inbound receive possible until the peer
+>   closes or an error occurs
+>
+> Stream buffering and backpressure entail:
+> - buffering:
+>   - in-process outbound queue (finite) is required by `rs[layer.link.permits]`
+>   - OS socket send/receive buffers and user-space read/write buffers are also
+>     part of the transport
+> - backpressure: when the outbound queue is full, `reserve` MUST await; when
+>   the OS socket send buffer is full, the writer task awaits; payloads MUST NOT
+>   be dropped to relieve pressure.
 
 > rs[layer.transport.framed]
 >
 > Framed transports (for example: WebSocket) MUST map one transport frame to
-> one roam `Message` (`r[transport.message.one-to-one]`), with postcard payload.
+> one roam `Payload` (`r[transport.message.one-to-one]`).
+>
+> Framed outbound queuing and draining entail:
+> - `reserve` awaits queue capacity (in-process buffer).
+> - `permit.send(payload)` enqueues one payload into that queue.
+> - a framed writer task drains the queue in order and submits exactly one
+>   transport frame per payload, carrying exactly `payload.0` bytes.
+> - if the framed sink reports an error, the link enters a failed state and
+>   subsequent `reserve` MUST return `Err(...)`.
+>
+> Framed `recv` entails:
+> - await exactly one inbound transport frame
+> - return its bytes as one `Payload`
+> - if the transport indicates a clean close, return `Ok(None)`
+>
+> Framed `close` entails:
+> - flush any already-enqueued outbound frames
+> - then perform the framed transport's graceful close procedure (for example:
+>   WebSocket close handshake), without emitting any roam payloads on its own
+>
+> Framed buffering and backpressure entail:
+> - buffering:
+>   - in-process outbound queue (finite) is required by `rs[layer.link.permits]`
+>   - frame queues and internal codec buffers are part of the framed transport
+> - backpressure: when the outbound queue is full, `reserve` MUST await; when
+>   the framed sink is not ready, the writer task awaits. `permit.send` MUST NOT
+>   block.
 
 > rs[layer.transport.shm]
 >
 > SHM transport MUST preserve the same link/virtual-connection semantics.
-> Message encoding stays postcard-based, but transport signaling/buffering is
-> SHM-specific.
+> Transport signaling/buffering is SHM-specific.
+>
+> SHM outbound queuing and draining entail:
+> - `reserve` awaits queue capacity (in-process buffer).
+> - `permit.send(payload)` enqueues one payload into that queue.
+> - an SHM producer task drains the queue in order:
+>   - copy payload bytes into exactly one outbound SHM slot/entry
+>   - publish/signal availability to the peer
+>   - if there is no SHM slot capacity, await until capacity is available
+>   - if an SHM error occurs, the link enters a failed state and subsequent
+>     `reserve` MUST return `Err(...)`.
+>
+> SHM `recv` entails:
+> - await a signal indicating an inbound slot/entry is available
+> - consume exactly one entry and copy its bytes into one `Payload`
+> - if the peer has closed and no further entries remain, return `Ok(None)`
+>
+> SHM `close` entails:
+> - publish a transport-level "producer closed" state for the outbound direction
+> - wake any blocked receivers as required by the SHM transport design
+> - ensure no additional outbound entries are published after close begins
+>
+> SHM buffering and backpressure entail:
+> - buffering:
+>   - in-process outbound queue (finite) is required by `rs[layer.link.permits]`
+>   - bounded SHM rings/queues are also transport buffers; each entry is exactly
+>     one payload
+> - backpressure: when the outbound queue is full, `reserve` MUST await; when
+>   the SHM ring/queue is full, the SHM producer task awaits. `permit.send` MUST
+>   NOT block.
 
 ## Link Runtime
 
@@ -248,7 +347,7 @@ pub trait LinkRuntime {
 
 > rs[layer.flow-control.interface]
 >
-> Rust SHOULD define a dedicated flow-control trait used by the link runtime.
+> Rust MUST define a dedicated flow-control trait used by the link runtime.
 
 ```rust
 pub trait FlowControl {
@@ -275,7 +374,7 @@ pub trait FlowControl {
 
 > rs[layer.call-runtime.interface]
 >
-> Rust SHOULD define one primary call-runtime interface for typed method calls.
+> Rust MUST define one primary call-runtime interface for typed method calls.
 
 ## Generated Clients
 
@@ -288,7 +387,7 @@ pub trait FlowControl {
 
 > rs[client.nongeneric]
 >
-> Generated Rust service clients SHOULD expose non-generic concrete types.
+> Generated Rust service clients MUST expose non-generic concrete types.
 > Runtime polymorphism, when needed, is an internal runtime concern.
 
 ## What a Call Entails (Rust)
@@ -669,7 +768,7 @@ impl HealthServiceClient {
 
 > rs[client.protocol-mismatch.diagnostics]
 >
-> Generated Rust clients SHOULD provide transparent protocol-mismatch
+> Generated Rust clients MUST provide transparent protocol-mismatch
 > diagnostics on `RoamError::UnknownMethod` and `RoamError::InvalidPayload`.
 > This can involve additional RPC exchanges (for example, introspection calls
 > to discover available methods/signatures) before surfacing the final error.
