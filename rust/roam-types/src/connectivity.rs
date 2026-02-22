@@ -116,7 +116,7 @@ pub struct SelfRef<T: 'static> {
 }
 
 /// Backing storage for a [`SelfRef`].
-enum Backing {
+pub enum Backing {
     /// Heap-allocated buffer (TCP read, BipBuffer copy-out for small messages).
     Boxed(Box<[u8]>),
     // SHM VarSlot, pinned in shared memory:
