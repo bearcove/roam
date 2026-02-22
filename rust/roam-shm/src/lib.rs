@@ -57,10 +57,9 @@
 //! }
 //! ```
 //!
-//! # Spec Coverage
-//!
-//! shm[impl shm.scope]
-//! shm[impl shm.architecture]
+
+// shm[impl shm.scope]
+// shm[impl shm.architecture]
 
 #[macro_use]
 mod macros;
@@ -82,8 +81,7 @@ pub mod transport;
 
 // Re-export key types
 pub use channel::{
-    ChannelEntry, ChannelId, ChannelIdAllocator, ChannelState, FlowControl, RequestId,
-    RequestIdAllocator,
+    ChannelEntry, ChannelIdAllocator, ChannelState, FlowControl, RequestIdAllocator,
 };
 pub use layout::{
     HEADER_SIZE, MAGIC, SegmentConfig, SegmentHeader, SegmentLayout, SizeClass, VERSION,

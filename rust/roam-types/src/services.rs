@@ -67,9 +67,9 @@ impl std::fmt::Debug for MethodDescriptor {
     }
 }
 
-declare_u64_id!(
-    /// A unique method identifier — hash of service name, method na me, arg shapes, return shape
-    MethodId
+declare_id!(
+    /// A unique method identifier — hash of service name, method name, arg shapes, return shape
+    MethodId, u64
 );
 
 /// Descriptor for a single RPC method argument.

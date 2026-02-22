@@ -3,6 +3,8 @@
 //! Variable-length frames written into BipBuffer rings. Each frame has
 //! a 24-byte header followed by either inline payload or a slot reference.
 
+use roam_types::MethodId;
+
 /// SHM frame header size in bytes.
 pub const SHM_FRAME_HEADER_SIZE: usize = 24;
 
@@ -37,7 +39,7 @@ pub struct ShmFrameHeader {
     pub msg_type: u8,
     pub flags: u8,
     pub id: u32,
-    pub method_id: u64,
+    pub method_id: MethodId,
     pub payload_len: u32,
 }
 
@@ -50,7 +52,7 @@ impl ShmFrameHeader {
         buf[5] = self.flags;
         buf[6..8].copy_from_slice(&0u16.to_le_bytes()); // reserved
         buf[8..12].copy_from_slice(&self.id.to_le_bytes());
-        buf[12..20].copy_from_slice(&self.method_id.to_le_bytes());
+        buf[12..20].copy_from_slice(&self.method_id.0.to_le_bytes());
         buf[20..24].copy_from_slice(&self.payload_len.to_le_bytes());
     }
 
@@ -67,9 +69,9 @@ impl ShmFrameHeader {
             flags: buf[5],
             // buf[6..8] reserved
             id: u32::from_le_bytes([buf[8], buf[9], buf[10], buf[11]]),
-            method_id: u64::from_le_bytes([
+            method_id: MethodId(u64::from_le_bytes([
                 buf[12], buf[13], buf[14], buf[15], buf[16], buf[17], buf[18], buf[19],
-            ]),
+            ])),
             payload_len: u32::from_le_bytes([buf[20], buf[21], buf[22], buf[23]]),
         })
     }
@@ -143,7 +145,7 @@ fn align4(n: u32) -> u32 {
 pub fn encode_inline_frame(
     msg_type: u8,
     id: u32,
-    method_id: u64,
+    method_id: MethodId,
     payload: &[u8],
     buf: &mut [u8],
 ) -> usize {
@@ -178,7 +180,7 @@ pub fn encode_inline_frame(
 pub fn encode_slot_ref_frame(
     msg_type: u8,
     id: u32,
-    method_id: u64,
+    method_id: MethodId,
     payload_len: u32,
     slot_ref: &SlotRef,
     buf: &mut [u8],
@@ -224,7 +226,7 @@ mod tests {
             msg_type: 1,
             flags: 0,
             id: 42,
-            method_id: 0xDEAD_BEEF_CAFE_1234,
+            method_id: MethodId(0xDEAD_BEEF_CAFE_1234),
             payload_len: 24,
         };
 
@@ -253,7 +255,7 @@ mod tests {
     fn inline_frame_roundtrip() {
         let mut buf = [0u8; 256];
         let payload = b"hello, world!";
-        let total = encode_inline_frame(1, 99, 0x1234_5678, payload, &mut buf);
+        let total = encode_inline_frame(1, 99, MethodId(0x1234_5678), payload, &mut buf);
 
         let header = ShmFrameHeader::read_from(&buf).unwrap();
         assert_eq!(header.total_len, total as u32);
@@ -261,7 +263,7 @@ mod tests {
         assert_eq!(header.flags, 0);
         assert!(!header.has_slot_ref());
         assert_eq!(header.id, 99);
-        assert_eq!(header.method_id, 0x1234_5678);
+        assert_eq!(header.method_id, MethodId(0x1234_5678));
         assert_eq!(header.payload_len, 13);
 
         // Payload follows header
@@ -281,7 +283,7 @@ mod tests {
             slot_idx: 17,
             slot_generation: 3,
         };
-        let total = encode_slot_ref_frame(4, 5, 0, 4096, &slot_ref, &mut buf);
+        let total = encode_slot_ref_frame(4, 5, MethodId(0), 4096, &slot_ref, &mut buf);
 
         assert_eq!(total, SLOT_REF_FRAME_SIZE);
 
@@ -319,7 +321,7 @@ mod tests {
     #[test]
     fn empty_payload_frame() {
         let mut buf = [0u8; 64];
-        let total = encode_inline_frame(3, 1, 0, &[], &mut buf);
+        let total = encode_inline_frame(3, 1, MethodId(0), &[], &mut buf);
         assert_eq!(total, 24); // align4(24 + 0) = 24
 
         let header = ShmFrameHeader::read_from(&buf).unwrap();

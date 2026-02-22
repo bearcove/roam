@@ -2442,6 +2442,7 @@ dependencies = [
  "bytes",
  "facet",
  "facet-postcard",
+ "roam-types",
  "static_assertions",
 ]
 

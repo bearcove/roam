@@ -2,6 +2,8 @@
 //!
 //! Defines the message type values used in the `MsgDesc.msg_type` field.
 
+use roam_types::MethodId;
+
 /// Message type constants.
 ///
 /// shm[impl shm.desc.msg-type]
@@ -72,15 +74,16 @@ pub const fn msg_type_name(msg_type: u8) -> &'static str {
 #[derive(Debug, Clone)]
 pub struct ShmMsg {
     pub msg_type: u8,
+    /// RequestId or ChannelId depending on msg_type (see `uses_request_id`/`uses_channel_id`).
     pub id: u32,
-    pub method_id: u64,
+    pub method_id: MethodId,
     pub payload: Vec<u8>,
 }
 
 impl ShmMsg {
     /// Create a new ShmMsg.
     #[inline]
-    pub fn new(msg_type: u8, id: u32, method_id: u64, payload: Vec<u8>) -> Self {
+    pub fn new(msg_type: u8, id: u32, method_id: MethodId, payload: Vec<u8>) -> Self {
         Self {
             msg_type,
             id,

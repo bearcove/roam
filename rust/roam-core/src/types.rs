@@ -8,7 +8,7 @@ use crate::{
 };
 use std::sync::{
     Arc,
-    atomic::{AtomicU64, Ordering},
+    atomic::{AtomicU32, Ordering},
 };
 
 /// Event delivered to channel receivers.
@@ -39,7 +39,7 @@ pub enum Role {
 /// r[impl channeling.id.uniqueness] - IDs are unique within a connection.
 /// r[impl channeling.id.parity] - Initiator uses odd, Acceptor uses even.
 pub struct ChannelIdAllocator {
-    next: AtomicU64,
+    next: AtomicU32,
 }
 
 impl ChannelIdAllocator {
@@ -50,7 +50,7 @@ impl ChannelIdAllocator {
             Role::Acceptor => 2,  // even: 2, 4, 6, ...
         };
         Self {
-            next: AtomicU64::new(start),
+            next: AtomicU32::new(start),
         }
     }
 

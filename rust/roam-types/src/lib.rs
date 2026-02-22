@@ -1,10 +1,10 @@
-macro_rules! declare_u64_id {
-    ($(#[$meta:meta])* $name:ident) => {
+macro_rules! declare_id {
+    ($(#[$meta:meta])* $name:ident, $inner:ty) => {
         $(#[$meta])*
         #[derive(Facet, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Clone, Copy)]
         #[repr(transparent)]
         #[facet(transparent)]
-        pub struct $name(pub u64);
+        pub struct $name(pub $inner);
 
         impl ::std::fmt::Display for $name {
             fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {

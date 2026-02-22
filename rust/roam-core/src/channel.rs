@@ -168,7 +168,7 @@ impl DriverTxSlot {
 ///
 /// # Facet Implementation
 ///
-/// Uses `#[facet(proxy = u64)]` so that:
+/// Uses `#[facet(proxy = u32)]` so that:
 /// - `channel_id` is pokeable (Connection can walk args and set channel IDs)
 /// - Serializes as just a `u64` on the wire
 /// - `T` is exposed as a type parameter for codegen introspection
@@ -180,7 +180,7 @@ impl DriverTxSlot {
 /// - **Server side**: `task_tx` holds a direct channel to the connection driver.
 ///   `ChannelRegistry::bind_channels` sets this, and `send()` writes `DriverMessage::Data`.
 #[derive(Facet)]
-#[facet(proxy = u64)]
+#[facet(proxy = u32)]
 pub struct Tx<T: 'static> {
     /// The connection ID this channel belongs to.
     pub conn_id: roam_types::ConnectionId,
@@ -202,27 +202,27 @@ pub struct Tx<T: 'static> {
     _marker: PhantomData<T>,
 }
 
-/// Serialization: `&Tx<T>` -> u64 (extracts channel_id)
+/// Serialization: `&Tx<T>` -> u32 (extracts channel_id)
 ///
 /// Uses TryFrom rather than From because facet's proxy mechanism requires TryFrom.
 #[allow(clippy::infallible_try_from)]
-impl<T: 'static> TryFrom<&Tx<T>> for u64 {
+impl<T: 'static> TryFrom<&Tx<T>> for u32 {
     type Error = Infallible;
     fn try_from(tx: &Tx<T>) -> Result<Self, Self::Error> {
         Ok(tx.channel_id.0)
     }
 }
 
-/// Deserialization: u64 -> `Tx<T>` (creates a "hollow" Tx)
+/// Deserialization: u32 -> `Tx<T>` (creates a "hollow" Tx)
 ///
 /// Both sender slots are empty - the real sender gets set up by Connection
 /// after deserialization when it binds the channel.
 ///
 /// Uses TryFrom rather than From because facet's proxy mechanism requires TryFrom.
 #[allow(clippy::infallible_try_from)]
-impl<T: 'static> TryFrom<u64> for Tx<T> {
+impl<T: 'static> TryFrom<u32> for Tx<T> {
     type Error = Infallible;
-    fn try_from(channel_id: u64) -> Result<Self, Self::Error> {
+    fn try_from(channel_id: u32) -> Result<Self, Self::Error> {
         // Create a hollow Tx - no actual sender, Connection will bind later
         // conn_id will be set when binding
         Ok(Tx {
@@ -472,7 +472,7 @@ impl ReceiverSlot {
 ///
 /// # Facet Implementation
 ///
-/// Uses `#[facet(proxy = u64)]` so that:
+/// Uses `#[facet(proxy = u32)]` so that:
 /// - `channel_id` is pokeable (Connection can walk args and set channel IDs)
 /// - Serializes as just a `u64` on the wire
 /// - `T` is exposed as a type parameter for codegen introspection
@@ -481,7 +481,7 @@ impl ReceiverSlot {
 /// can use `Poke::get_mut::<ReceiverSlot>()` to `.take()` the receiver and register
 /// it with the channel registry.
 #[derive(Facet)]
-#[facet(proxy = u64)]
+#[facet(proxy = u32)]
 pub struct Rx<T: 'static> {
     /// The unique channel ID for this channel.
     /// Public so Connection can poke it when binding channels.
@@ -496,27 +496,27 @@ pub struct Rx<T: 'static> {
     _marker: PhantomData<T>,
 }
 
-/// Serialization: `&Rx<T>` -> u64 (extracts channel_id)
+/// Serialization: `&Rx<T>` -> u32 (extracts channel_id)
 ///
 /// Uses TryFrom rather than From because facet's proxy mechanism requires TryFrom.
 #[allow(clippy::infallible_try_from)]
-impl<T: 'static> TryFrom<&Rx<T>> for u64 {
+impl<T: 'static> TryFrom<&Rx<T>> for u32 {
     type Error = Infallible;
     fn try_from(rx: &Rx<T>) -> Result<Self, Self::Error> {
         Ok(rx.channel_id.0)
     }
 }
 
-/// Deserialization: u64 -> `Rx<T>` (creates a "hollow" Rx)
+/// Deserialization: u32 -> `Rx<T>` (creates a "hollow" Rx)
 ///
 /// The receiver is a placeholder - the real receiver gets set up by Connection
 /// after deserialization when it binds the channel.
 ///
 /// Uses TryFrom rather than From because facet's proxy mechanism requires TryFrom.
 #[allow(clippy::infallible_try_from)]
-impl<T: 'static> TryFrom<u64> for Rx<T> {
+impl<T: 'static> TryFrom<u32> for Rx<T> {
     type Error = Infallible;
-    fn try_from(channel_id: u64) -> Result<Self, Self::Error> {
+    fn try_from(channel_id: u32) -> Result<Self, Self::Error> {
         // Create a hollow Rx - no actual receiver, Connection will bind later
         Ok(Rx {
             channel_id: ChannelId(channel_id),

@@ -181,59 +181,9 @@ impl Default for FlowControl {
     }
 }
 
-/// Channel ID type (u32 in SHM).
-///
-/// shm[impl shm.id.channel-id]
-/// shm[impl shm.id.channel-scope]
-///
-/// [TODO] migrate to roam-types ChannelId? reconcile those somehow
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct ChannelId(u32);
+use roam_types::{ChannelId, RequestId};
 
-impl ChannelId {
-    /// Reserved channel ID (not usable).
-    pub const RESERVED: Self = Self(0);
-
-    /// Create a new channel ID.
-    ///
-    /// Returns None if the value is 0 (reserved).
-    #[inline]
-    pub fn new(value: u32) -> Option<Self> {
-        if value == 0 { None } else { Some(Self(value)) }
-    }
-
-    /// Get the raw channel ID value.
-    #[inline]
-    pub fn get(self) -> u32 {
-        self.0
-    }
-
-    /// Check if this is a host-allocated channel ID (even).
-    ///
-    /// shm[impl shm.id.channel-parity]
-    #[inline]
-    pub fn is_host_allocated(self) -> bool {
-        self.0.is_multiple_of(2)
-    }
-
-    /// Check if this is a guest-allocated channel ID (odd).
-    ///
-    /// shm[impl shm.id.channel-parity]
-    #[inline]
-    pub fn is_guest_allocated(self) -> bool {
-        self.0 % 2 == 1
-    }
-
-    /// Get the table index for this channel ID.
-    ///
-    /// shm[impl shm.flow.channel-table-indexing]
-    #[inline]
-    pub fn table_index(self) -> usize {
-        self.0 as usize
-    }
-}
-
-/// Channel ID allocator.
+/// Channel ID allocator (SHM-specific, bounded).
 ///
 /// shm[impl shm.id.channel-parity]
 #[derive(Debug)]
@@ -274,28 +224,7 @@ impl ChannelIdAllocator {
     }
 }
 
-/// Request ID type (u32 in SHM).
-///
-/// shm[impl shm.id.request-id]
-/// shm[impl shm.id.request-scope]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct RequestId(u32);
-
-impl RequestId {
-    /// Create a new request ID.
-    #[inline]
-    pub fn new(value: u32) -> Self {
-        Self(value)
-    }
-
-    /// Get the raw request ID value.
-    #[inline]
-    pub fn get(self) -> u32 {
-        self.0
-    }
-}
-
-/// Request ID allocator.
+/// Request ID allocator (SHM-specific).
 #[derive(Debug)]
 pub struct RequestIdAllocator {
     next: u32,
@@ -392,21 +321,21 @@ mod tests {
     #[test]
     fn channel_id_allocator_host() {
         let mut alloc = ChannelIdAllocator::for_host(10);
-        assert_eq!(alloc.allocate().unwrap().get(), 2);
-        assert_eq!(alloc.allocate().unwrap().get(), 4);
-        assert_eq!(alloc.allocate().unwrap().get(), 6);
-        assert_eq!(alloc.allocate().unwrap().get(), 8);
+        assert_eq!(alloc.allocate().unwrap().0, 2);
+        assert_eq!(alloc.allocate().unwrap().0, 4);
+        assert_eq!(alloc.allocate().unwrap().0, 6);
+        assert_eq!(alloc.allocate().unwrap().0, 8);
         assert!(alloc.allocate().is_none()); // 10 >= max
     }
 
     #[test]
     fn channel_id_allocator_guest() {
         let mut alloc = ChannelIdAllocator::for_guest(10);
-        assert_eq!(alloc.allocate().unwrap().get(), 1);
-        assert_eq!(alloc.allocate().unwrap().get(), 3);
-        assert_eq!(alloc.allocate().unwrap().get(), 5);
-        assert_eq!(alloc.allocate().unwrap().get(), 7);
-        assert_eq!(alloc.allocate().unwrap().get(), 9);
+        assert_eq!(alloc.allocate().unwrap().0, 1);
+        assert_eq!(alloc.allocate().unwrap().0, 3);
+        assert_eq!(alloc.allocate().unwrap().0, 5);
+        assert_eq!(alloc.allocate().unwrap().0, 7);
+        assert_eq!(alloc.allocate().unwrap().0, 9);
         assert!(alloc.allocate().is_none()); // 11 >= max
     }
 }

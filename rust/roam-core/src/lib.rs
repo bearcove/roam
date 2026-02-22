@@ -57,6 +57,7 @@ mod middleware;
 pub use middleware::*;
 
 pub use facet_reflect::TypePlanCore;
+// [FIXME] re-exports are evil, let's not.
 pub use roam_types::{
     ArgDescriptor, ChannelId, ChannelKind, ConnectionId, Metadata, MethodDescriptor, MethodId,
     RequestId, RpcPlan, ServiceDescriptor,

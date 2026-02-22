@@ -1,6 +1,6 @@
 use std::sync::{
     Arc,
-    atomic::{AtomicU64, Ordering},
+    atomic::{AtomicU32, Ordering},
 };
 
 use facet::Facet;
@@ -27,14 +27,14 @@ use crate::{
 ///
 /// r[impl call.request-id.uniqueness] - monotonically increasing counter starting at 1
 pub struct RequestIdGenerator {
-    next: AtomicU64,
+    next: AtomicU32,
 }
 
 impl RequestIdGenerator {
     /// Create a new generator starting at 1.
     pub fn new() -> Self {
         Self {
-            next: AtomicU64::new(1),
+            next: AtomicU32::new(1),
         }
     }
 
