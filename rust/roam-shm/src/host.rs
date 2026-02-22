@@ -81,12 +81,16 @@ pub struct ShmHost {
     /// Backing memory (heap or mmap)
     #[allow(dead_code)]
     backing: ShmBacking,
+
     /// Path to segment file (for cross-process use)
     path: Option<PathBuf>,
+
     /// Region view into backing memory
     region: Region,
+
     /// Computed layout
     layout: SegmentLayout,
+
     /// Per-guest state tracked by the host
     pub(crate) guests: HashMap<PeerId, GuestState>,
 }
@@ -95,14 +99,19 @@ pub struct ShmHost {
 pub(crate) struct GuestState {
     /// Human-readable name for debugging
     pub(crate) name: Option<String>,
+
     /// Last observed epoch
     pub(crate) last_epoch: u32,
+
     /// VarSlotPool handles we've allocated for messages to this guest
     pub(crate) pending_slots: Vec<VarSlotHandle>,
+
     /// Host's doorbell for this peer (if spawned via add_peer)
     pub(crate) doorbell: Option<Doorbell>,
+
     /// Death callback (if registered via add_peer)
     pub(crate) on_death: Option<DeathCallback>,
+
     /// Whether we've already notified death for this peer
     pub(crate) death_notified: bool,
 }

@@ -616,7 +616,6 @@ where
                 // Handle response to our outgoing Connect request
                 if let Some(pending) = self.pending_connects.remove(&request_id) {
                     // Create connection state for the new virtual connection
-                    // r[impl core.conn.dispatcher-custom]
                     // Use the dispatcher provided by the initiator
                     let conn_state = VirtualConnectionState::new(
                         conn_id,
@@ -801,7 +800,6 @@ where
         // Build context for dispatch
         let cx = Context::new(conn_id, request_id, method_id, metadata, channels);
 
-        // r[impl core.conn.dispatcher] - Use connection-specific dispatcher if available
         let dispatcher: &dyn ServiceDispatcher = if let Some(ref conn_dispatcher) = conn.dispatcher
         {
             conn_dispatcher.as_ref()
@@ -1587,7 +1585,7 @@ impl MultiPeerHostDriver {
                     trace!("MultiPeerHostDriver: poll returned {} messages", result.messages.len());
 
                     // Ring doorbells for guests whose G2H ring bytes were consumed.
-                    // Per r[shm.wakeup.producer-wait], the consumer (host) must signal
+                    // Per shm[shm.wakeup.producer-wait], the consumer (host) must signal
                     // the doorbell after releasing bytes so guests blocked on RingFull
                     // can retry. ring_consumed_from is a superset of slots_freed_for.
                     for consumed_peer_id in &result.ring_consumed_from {

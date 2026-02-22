@@ -167,7 +167,6 @@ export interface MessageGoodbye {
  *
  * r[impl core.metadata] - Request carries metadata key-value pairs.
  * r[impl call.metadata.unknown] - Unknown keys are ignored.
- * r[impl channeling.request.channels] - Channel IDs listed explicitly for proxy support.
  */
 export interface MessageRequest {
   tag: "Request";

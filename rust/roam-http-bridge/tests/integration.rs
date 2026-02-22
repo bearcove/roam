@@ -587,8 +587,6 @@ async fn test_websocket_unknown_method() {
 }
 
 /// Test multiple concurrent WebSocket RPC calls (multiplexing).
-///
-/// r[bridge.ws.multiplexing]
 #[tokio::test]
 async fn test_websocket_multiplexing() {
     let (roam_addr, _) = start_roam_server().await;

@@ -1,5 +1,6 @@
 //! Generate SHM golden vectors for Swift runtime parity tests.
 
+use roam_core::MethodId;
 use roam_frame::{
     SHM_FRAME_HEADER_SIZE, SLOT_REF_FRAME_SIZE, ShmFrameHeader, SlotRef, encode_inline_frame,
     encode_slot_ref_frame,
@@ -99,7 +100,7 @@ fn main() {
         msg_type: 1,
         flags: 0,
         id: 99,
-        method_id: 0x1234_5678_9ABC_DEF0,
+        method_id: MethodId(0x1234_5678_9ABC_DEF0),
         payload_len: 4,
     };
     let mut header_buf = [0u8; SHM_FRAME_HEADER_SIZE];
@@ -117,12 +118,12 @@ fn main() {
     write_vector(&out_dir, "slot_ref", &slot_ref_buf);
 
     let mut inline_buf = [0u8; 64];
-    let inline_len = encode_inline_frame(1, 99, 0x42, b"swift-shm", &mut inline_buf);
+    let inline_len = encode_inline_frame(1, 99, MethodId(0x42), b"swift-shm", &mut inline_buf);
     write_vector(&out_dir, "frame_inline", &inline_buf[..inline_len]);
 
     let mut slot_ref_frame_buf = [0u8; SLOT_REF_FRAME_SIZE];
     let slot_ref_frame_len =
-        encode_slot_ref_frame(4, 7, 0, 8192, &slot_ref, &mut slot_ref_frame_buf);
+        encode_slot_ref_frame(4, 7, MethodId(0), 8192, &slot_ref, &mut slot_ref_frame_buf);
     write_vector(
         &out_dir,
         "frame_slot_ref",

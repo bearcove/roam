@@ -298,7 +298,6 @@ where
 // Tests
 // ============================================================================
 
-/// r[verify channeling.request.channels] - Unary calls work through proxy
 #[tokio::test]
 async fn test_forwarding_unary() {
     let service = StreamingService::new();
@@ -323,7 +322,6 @@ async fn test_forwarding_unary() {
     assert_eq!(call_count.load(Ordering::SeqCst), 1);
 }
 
-/// r[verify channeling.request.channels] - Client-to-server streaming works through proxy
 #[tokio::test]
 async fn test_forwarding_client_to_server_streaming() {
     let service = StreamingService::new();
@@ -390,7 +388,6 @@ async fn test_forwarding_client_to_server_empty_stream() {
     assert_eq!(call_count.load(Ordering::SeqCst), 1);
 }
 
-/// r[verify channeling.request.channels] - Server-to-client streaming works through proxy
 #[tokio::test]
 async fn test_forwarding_server_to_client_streaming() {
     let service = StreamingService::new();
@@ -436,7 +433,6 @@ async fn test_forwarding_server_to_client_streaming() {
     assert_eq!(call_count.load(Ordering::SeqCst), 1);
 }
 
-/// r[verify channeling.request.channels] - Bidirectional streaming works through proxy
 #[tokio::test]
 async fn test_forwarding_bidirectional_streaming() {
     let service = StreamingService::new();
@@ -549,7 +545,6 @@ async fn test_forwarding_multiple_streaming_calls() {
     assert_eq!(call_count.load(Ordering::SeqCst), 3);
 }
 
-/// r[verify channeling.request.channels] - Empty stream close survives multi-hop forwarding
 #[tokio::test]
 async fn test_forwarding_client_to_server_empty_stream_multi_hop() {
     let service = StreamingService::new();

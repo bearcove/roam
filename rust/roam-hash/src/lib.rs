@@ -72,7 +72,6 @@ fn encode_string(s: &str, out: &mut Vec<u8>) {
 // rs[impl signature.container] - encode container types (List, Option, Array, Map, Set, Tuple)
 // rs[impl signature.struct] - encode struct types
 // rs[impl signature.enum] - encode enum types
-// rs[impl signature.stream] - encode Tx/Rx stream types
 // rs[impl signature.recursive] - handle recursive types with back-references
 pub fn encode_shape(shape: &'static Shape, out: &mut Vec<u8>) {
     let mut visited = HashSet::new();

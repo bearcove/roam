@@ -63,7 +63,7 @@ fn channeling_sum_client_to_server() {
         let method_id = method_id::sum();
 
         // Allocate channel ID (odd = initiator)
-        let channel_id: u64 = 1;
+        let channel_id: u32 = 1;
 
         // Send Request with channel ID as the payload
         // Payload: tuple of (channel_id: u64)
@@ -154,7 +154,7 @@ fn channeling_generate_server_to_client() {
         let method_id = method_id::generate();
 
         // Allocate channel ID (odd = initiator)
-        let channel_id: u64 = 1;
+        let channel_id: u32 = 1;
         let channel_id_wire = ChannelId(channel_id);
         let count: u32 = 5;
 
@@ -253,8 +253,8 @@ fn channeling_transform_bidirectional() {
         let method_id = method_id::transform();
 
         // Allocate channel IDs (odd = initiator)
-        let input_channel_id: u64 = 1;
-        let output_channel_id: u64 = 3;
+        let input_channel_id: u32 = 1;
+        let output_channel_id: u32 = 3;
         let input_channel_id_wire = ChannelId(input_channel_id);
         let output_channel_id_wire = ChannelId(output_channel_id);
 

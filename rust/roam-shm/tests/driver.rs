@@ -185,7 +185,6 @@ fn setup_test() -> TestFixture {
         .add_peer(roam_shm::spawn::AddPeerOptions {
             peer_name: Some("test-guest".to_string()),
             on_death: None,
-            ..Default::default()
         })
         .unwrap();
 
@@ -367,7 +366,6 @@ fn setup_multi_peer_test() -> MultiPeerFixture {
         .add_peer(roam_shm::spawn::AddPeerOptions {
             peer_name: Some("guest-1".to_string()),
             on_death: None,
-            ..Default::default()
         })
         .unwrap();
     let peer_id1 = ticket1.peer_id;
@@ -379,7 +377,6 @@ fn setup_multi_peer_test() -> MultiPeerFixture {
         .add_peer(roam_shm::spawn::AddPeerOptions {
             peer_name: Some("guest-2".to_string()),
             on_death: None,
-            ..Default::default()
         })
         .unwrap();
     let peer_id2 = ticket2.peer_id;
@@ -497,7 +494,6 @@ async fn test_dynamic_peer_creation_no_preregistration() {
         .create_peer(roam_shm::spawn::AddPeerOptions {
             peer_name: Some("dynamic-peer-1".to_string()),
             on_death: None,
-            ..Default::default()
         })
         .await
         .unwrap();
@@ -523,7 +519,6 @@ async fn test_dynamic_peer_creation_no_preregistration() {
         .create_peer(roam_shm::spawn::AddPeerOptions {
             peer_name: Some("dynamic-peer-2".to_string()),
             on_death: None,
-            ..Default::default()
         })
         .await
         .unwrap();
@@ -539,7 +534,6 @@ async fn test_dynamic_peer_creation_no_preregistration() {
         .create_peer(roam_shm::spawn::AddPeerOptions {
             peer_name: Some("dynamic-peer-3".to_string()),
             on_death: None,
-            ..Default::default()
         })
         .await
         .unwrap();
@@ -582,7 +576,6 @@ async fn test_lazy_spawn_real_processes() {
         .create_peer(roam_shm::spawn::AddPeerOptions {
             peer_name: Some("guest1".to_string()),
             on_death: None,
-            ..Default::default()
         })
         .await
         .expect("failed to create peer 1");
@@ -622,7 +615,6 @@ async fn test_lazy_spawn_real_processes() {
         .create_peer(roam_shm::spawn::AddPeerOptions {
             peer_name: Some("guest2".to_string()),
             on_death: None,
-            ..Default::default()
         })
         .await
         .expect("failed to create peer 2");
@@ -704,7 +696,6 @@ async fn host_to_guest_backpressure_streaming() {
         .add_peer(roam_shm::spawn::AddPeerOptions {
             peer_name: Some("slow-guest".to_string()),
             on_death: None,
-            ..Default::default()
         })
         .unwrap();
     let peer_id = ticket.peer_id;
@@ -811,7 +802,6 @@ async fn host_to_guest_backpressure_host_streaming() {
         .add_peer(roam_shm::spawn::AddPeerOptions {
             peer_name: Some("slow-consumer".to_string()),
             on_death: None,
-            ..Default::default()
         })
         .unwrap();
     let peer_id = ticket.peer_id;
@@ -912,7 +902,6 @@ async fn slot_exhaustion_should_not_corrupt_channel_state() {
         .add_peer(roam_shm::spawn::AddPeerOptions {
             peer_name: Some("concurrent-test".to_string()),
             on_death: None,
-            ..Default::default()
         })
         .unwrap();
     let peer_id = ticket.peer_id;
@@ -1036,7 +1025,6 @@ async fn streaming_errors_should_not_corrupt_channel_state() {
         .add_peer(roam_shm::spawn::AddPeerOptions {
             peer_name: Some("streaming-errors-test".to_string()),
             on_death: None,
-            ..Default::default()
         })
         .unwrap();
     let peer_id = ticket.peer_id;
@@ -1186,7 +1174,6 @@ async fn mixed_calls_with_slot_exhaustion() {
         .add_peer(roam_shm::spawn::AddPeerOptions {
             peer_name: Some("mixed-calls-test".to_string()),
             on_death: None,
-            ..Default::default()
         })
         .unwrap();
     let peer_id = ticket.peer_id;
@@ -1369,7 +1356,6 @@ async fn recursive_calls_with_slot_exhaustion() {
         .add_peer(roam_shm::spawn::AddPeerOptions {
             peer_name: Some("recursive-test".to_string()),
             on_death: None,
-            ..Default::default()
         })
         .unwrap();
     let peer_id = ticket.peer_id;
@@ -1747,7 +1733,6 @@ async fn recursive_streaming_calls_with_slot_exhaustion() {
         .add_peer(roam_shm::spawn::AddPeerOptions {
             peer_name: Some("recursive-streaming-test".to_string()),
             on_death: None,
-            ..Default::default()
         })
         .unwrap();
     let peer_id = ticket.peer_id;

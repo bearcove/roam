@@ -308,8 +308,6 @@ struct StreamingCallState {
 ///
 /// This must be called synchronously before the task is spawned,
 /// so that channels are registered before any data messages arrive.
-///
-/// r[bridge.ws.streaming]
 async fn setup_streaming_call(
     session: Arc<std::sync::Mutex<WsSession>>,
     request_id: u64,

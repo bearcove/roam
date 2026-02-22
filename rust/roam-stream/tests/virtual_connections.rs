@@ -519,7 +519,6 @@ async fn concurrent_calls_on_virtual_connection() {
     assert_eq!(results, (0..10).collect::<Vec<_>>());
 }
 
-// r[verify call.payload] - Complex types work over virtual connections
 #[tokio::test]
 async fn complex_types_over_virtual_connection() {
     let service = TestService::new();

@@ -393,7 +393,7 @@ fn rpc_pipelining_multiple_requests() {
                 .map_err(|e| format!("postcard args: {e}"))?;
             let req = Message::Request {
                 conn_id: roam_types::ConnectionId::ROOT,
-                request_id: RequestId((i + 10) as u64), // Use 10, 11, 12 to distinguish from other tests
+                request_id: RequestId((i + 10) as u32), // Use 10, 11, 12 to distinguish from other tests
                 method_id: method_id::echo(),
                 metadata: metadata_empty(),
                 channels: vec![],
@@ -434,7 +434,7 @@ fn rpc_pipelining_multiple_requests() {
 
         // Verify all 3 responses received with correct correlation.
         for (i, msg) in messages.iter().enumerate() {
-            let request_id = RequestId((i + 10) as u64);
+            let request_id = RequestId((i + 10) as u32);
             match responses.get(&request_id) {
                 Some(s) if s == *msg => {}
                 Some(s) => {

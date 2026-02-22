@@ -304,7 +304,7 @@ async fn tunnel_close_propagates() {
 // r[verify call.request.channels]
 #[test]
 fn collect_channel_ids_simple_tx() {
-    let tx: Tx<i32> = Tx::try_from(42u64).unwrap();
+    let tx: Tx<i32> = Tx::try_from(42u32).unwrap();
     let plan = RpcPlan::for_type::<Tx<i32>, Tx<()>, Rx<()>>();
     let ids = collect_channel_ids(&tx, &plan);
     assert_eq!(ids, vec![ChannelId(42)]);
@@ -313,7 +313,7 @@ fn collect_channel_ids_simple_tx() {
 // r[verify call.request.channels]
 #[test]
 fn collect_channel_ids_simple_rx() {
-    let rx: Rx<i32> = Rx::try_from(99u64).unwrap();
+    let rx: Rx<i32> = Rx::try_from(99u32).unwrap();
     let plan = RpcPlan::for_type::<Rx<i32>, Tx<()>, Rx<()>>();
     let ids = collect_channel_ids(&rx, &plan);
     assert_eq!(ids, vec![ChannelId(99)]);
@@ -322,8 +322,8 @@ fn collect_channel_ids_simple_rx() {
 // r[verify call.request.channels]
 #[test]
 fn collect_channel_ids_tuple() {
-    let rx: Rx<String> = Rx::try_from(10u64).unwrap();
-    let tx: Tx<String> = Tx::try_from(20u64).unwrap();
+    let rx: Rx<String> = Rx::try_from(10u32).unwrap();
+    let tx: Tx<String> = Tx::try_from(20u32).unwrap();
     let args = (rx, tx);
     let plan = RpcPlan::for_type::<(Rx<String>, Tx<String>), Tx<()>, Rx<()>>();
     let ids = collect_channel_ids(&args, &plan);
@@ -341,8 +341,8 @@ fn collect_channel_ids_nested_in_struct() {
     }
 
     let args = StreamArgs {
-        input: Rx::try_from(100u64).unwrap(),
-        output: Tx::try_from(200u64).unwrap(),
+        input: Rx::try_from(100u32).unwrap(),
+        output: Tx::try_from(200u32).unwrap(),
         count: 5,
     };
     let plan = RpcPlan::for_type::<StreamArgs, Tx<()>, Rx<()>>();
@@ -353,7 +353,7 @@ fn collect_channel_ids_nested_in_struct() {
 // r[verify call.request.channels]
 #[test]
 fn collect_channel_ids_option_some() {
-    let tx: Tx<i32> = Tx::try_from(55u64).unwrap();
+    let tx: Tx<i32> = Tx::try_from(55u32).unwrap();
     let args: Option<Tx<i32>> = Some(tx);
     let plan = RpcPlan::for_type::<Option<Tx<i32>>, Tx<()>, Rx<()>>();
     let ids = collect_channel_ids(&args, &plan);
@@ -372,9 +372,9 @@ fn collect_channel_ids_option_none() {
 // r[verify call.request.channels]
 #[test]
 fn collect_channel_ids_vec() {
-    let tx1: Tx<i32> = Tx::try_from(1u64).unwrap();
-    let tx2: Tx<i32> = Tx::try_from(2u64).unwrap();
-    let tx3: Tx<i32> = Tx::try_from(3u64).unwrap();
+    let tx1: Tx<i32> = Tx::try_from(1u32).unwrap();
+    let tx2: Tx<i32> = Tx::try_from(2u32).unwrap();
+    let tx3: Tx<i32> = Tx::try_from(3u32).unwrap();
     let args: Vec<Tx<i32>> = vec![tx1, tx2, tx3];
     let plan = RpcPlan::for_type::<Vec<Tx<i32>>, Tx<()>, Rx<()>>();
     let ids = collect_channel_ids(&args, &plan);
@@ -396,7 +396,7 @@ fn collect_channel_ids_deeply_nested() {
 
     let args = Outer {
         inner: Inner {
-            channel: Tx::try_from(777u64).unwrap(),
+            channel: Tx::try_from(777u32).unwrap(),
         },
     };
     let plan = RpcPlan::for_type::<Outer, Tx<()>, Rx<()>>();
@@ -424,7 +424,7 @@ fn collect_channel_ids_large_bytes_payload_with_channel() {
 
     let args = ResponseLike {
         payload: vec![0xCDu8; 512 * 1024],
-        channel: Tx::try_from(4242u64).unwrap(),
+        channel: Tx::try_from(4242u32).unwrap(),
     };
     let plan = RpcPlan::for_type::<ResponseLike, Tx<()>, Rx<()>>();
     let ids = collect_channel_ids(&args, &plan);
@@ -443,10 +443,10 @@ fn collect_channel_ids_enum_all_active_fields() {
         Struct { left: Rx<u8>, right: Tx<u8> } = 2,
     }
 
-    let pair = Multi::Pair(vec![1, 2, 3], Tx::try_from(11u64).unwrap());
+    let pair = Multi::Pair(vec![1, 2, 3], Tx::try_from(11u32).unwrap());
     let struct_variant = Multi::Struct {
-        left: Rx::try_from(22u64).unwrap(),
-        right: Tx::try_from(33u64).unwrap(),
+        left: Rx::try_from(22u32).unwrap(),
+        right: Tx::try_from(33u32).unwrap(),
     };
 
     let plan = RpcPlan::for_type::<Multi, Tx<()>, Rx<()>>();
@@ -474,8 +474,8 @@ fn collect_channel_ids_array_tuple_and_map_coverage() {
     let value = Complex {
         tuple: (
             7,
-            Tx::try_from(100u64).unwrap(),
-            [Rx::try_from(101u64).unwrap(), Rx::try_from(102u64).unwrap()],
+            Tx::try_from(100u32).unwrap(),
+            [Rx::try_from(101u32).unwrap(), Rx::try_from(102u32).unwrap()],
         ),
         map,
         bytes: [0u8; 16],
@@ -503,11 +503,11 @@ fn collect_channel_ids_shared_shape_branches_not_order_sensitive() {
 
     let value = Root {
         a: Leaf {
-            channel: Some(Tx::try_from(5u64).unwrap()),
+            channel: Some(Tx::try_from(5u32).unwrap()),
             payload: vec![1; 64 * 1024],
         },
         b: Leaf {
-            channel: Some(Tx::try_from(6u64).unwrap()),
+            channel: Some(Tx::try_from(6u32).unwrap()),
             payload: vec![2; 64 * 1024],
         },
     };

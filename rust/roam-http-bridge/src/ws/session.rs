@@ -15,8 +15,6 @@ use crate::{BridgeError, BridgeService};
 use super::messages::ServerMessage;
 
 /// State for a single WebSocket connection.
-///
-/// r[bridge.ws.multiplexing] - Supports multiple concurrent calls.
 pub struct WsSession {
     /// Registered services.
     services: Arc<HashMap<String, Arc<dyn BridgeService>>>,

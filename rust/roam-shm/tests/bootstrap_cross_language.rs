@@ -401,12 +401,12 @@ async fn rust_host_shm_to_swift_guest_data_path() {
 
     host.send(
         peer_id,
-        &ShmMsg::new(msg_type::DATA, 101, 0, b"ack-inline".to_vec()),
+        &ShmMsg::new(msg_type::DATA, 101, MethodId(0), b"ack-inline".to_vec()),
     )
     .unwrap();
     host.send(
         peer_id,
-        &ShmMsg::new(msg_type::DATA, 102, 0, b"ack-slot".to_vec()),
+        &ShmMsg::new(msg_type::DATA, 102, MethodId(0), b"ack-slot".to_vec()),
     )
     .unwrap();
 
@@ -455,7 +455,7 @@ async fn rust_host_shm_growth_remap_to_swift_guest() {
     for _ in 0..100 {
         match host.send(
             peer_id,
-            &ShmMsg::new(msg_type::DATA, 201, 0, payload.clone()),
+            &ShmMsg::new(msg_type::DATA, 201, MethodId(0), payload.clone()),
         ) {
             Ok(()) => {
                 first_sent = true;
@@ -471,7 +471,7 @@ async fn rust_host_shm_growth_remap_to_swift_guest() {
 
     let second_before_growth = host.send(
         peer_id,
-        &ShmMsg::new(msg_type::DATA, 202, 0, payload.clone()),
+        &ShmMsg::new(msg_type::DATA, 202, MethodId(0), payload.clone()),
     );
     assert!(
         matches!(
@@ -484,8 +484,11 @@ async fn rust_host_shm_growth_remap_to_swift_guest() {
     let extent_idx = host.grow_size_class(0).expect("grow size class 0");
     assert_eq!(extent_idx, 1);
 
-    host.send(peer_id, &ShmMsg::new(msg_type::DATA, 202, 0, payload))
-        .expect("send should succeed after growth");
+    host.send(
+        peer_id,
+        &ShmMsg::new(msg_type::DATA, 202, MethodId(0), payload),
+    )
+    .expect("send should succeed after growth");
 
     let output = tokio::task::spawn_blocking(move || child.wait_with_output())
         .await
@@ -550,7 +553,12 @@ async fn rust_host_shm_growth_remap_for_swift_send_path() {
     // Trigger guest to attempt second large send.
     host.send(
         peer_id,
-        &ShmMsg::new(msg_type::DATA, 401, 0, b"start-second-send".to_vec()),
+        &ShmMsg::new(
+            msg_type::DATA,
+            401,
+            MethodId(0),
+            b"start-second-send".to_vec(),
+        ),
     )
     .expect("send remap trigger");
 
@@ -584,7 +592,7 @@ async fn rust_host_shm_growth_remap_for_swift_send_path() {
     if got_second {
         host.send(
             peer_id,
-            &ShmMsg::new(msg_type::DATA, 402, 0, b"send-remap-ack".to_vec()),
+            &ShmMsg::new(msg_type::DATA, 402, MethodId(0), b"send-remap-ack".to_vec()),
         )
         .expect("send remap-send ack");
     }

@@ -4,8 +4,10 @@
 //! under slot exhaustion, rather than exercising the full driver stack.
 
 use facet_testhelpers::test;
+use roam_core::MethodId;
 use roam_shm::host::ShmHost;
 use roam_shm::layout::SegmentConfig;
+use roam_shm::msg::ShmMsg;
 
 /// Returns a config with a tiny slot pool to provoke exhaustion quickly.
 fn tiny_slot_config() -> SegmentConfig {
@@ -37,7 +39,7 @@ async fn slot_freed_by_guest_read_is_reusable() {
     let large = vec![0u8; 5000];
     let mut sent = 0usize;
     loop {
-        let msg = roam_shm::msg::ShmMsg::new(1, sent as u32, 1, large.clone());
+        let msg = ShmMsg::new(1, sent as u32, MethodId(1), large.clone());
         match host.send(peer_id, &msg) {
             Ok(()) => sent += 1,
             Err(roam_shm::host::SendError::SlotExhausted) => break,
@@ -56,7 +58,7 @@ async fn slot_freed_by_guest_read_is_reusable() {
     drop(frame);
 
     // The host should now be able to send one more large message.
-    let msg = roam_shm::msg::ShmMsg::new(1, 999, 1, large.clone());
+    let msg = ShmMsg::new(1, 999, MethodId(1), large.clone());
     match host.send(peer_id, &msg) {
         Ok(()) => eprintln!("correctly sent after slot freed by guest read"),
         Err(roam_shm::host::SendError::SlotExhausted) => {
@@ -84,7 +86,7 @@ async fn slots_freed_for_populated_when_host_reads_guest_slot_msg() {
 
     // Guest sends a large message (will use a slot).
     let large = vec![0u8; 5000];
-    let msg = roam_shm::msg::ShmMsg::new(1, 1, 1, large);
+    let msg = ShmMsg::new(1, 1, MethodId(1), large);
     guest.send(&msg).expect("guest send should succeed");
 
     // Host polls - should see the message and mark peer in slots_freed_for.
@@ -120,7 +122,7 @@ async fn guest_can_send_after_host_exhausts_then_guest_reads() {
     let large = vec![0u8; 5000];
     let mut sent = 0usize;
     loop {
-        let msg = roam_shm::msg::ShmMsg::new(1, sent as u32, 1, large.clone());
+        let msg = ShmMsg::new(1, sent as u32, MethodId(1), large.clone());
         match host.send(peer_id, &msg) {
             Ok(()) => sent += 1,
             Err(roam_shm::host::SendError::SlotExhausted) => break,
@@ -130,7 +132,7 @@ async fn guest_can_send_after_host_exhausts_then_guest_reads() {
     eprintln!("filled {sent} slots from host→guest");
 
     // Verify guest CANNOT send (slots exhausted).
-    let response = roam_shm::msg::ShmMsg::new(1, 0, 1, large.clone());
+    let response = ShmMsg::new(1, 0, MethodId(1), large.clone());
     match guest.send(&response) {
         Err(roam_shm::guest::SendError::SlotExhausted) => {
             eprintln!("confirmed: guest slot-exhausted before reading host messages");
@@ -149,7 +151,7 @@ async fn guest_can_send_after_host_exhausts_then_guest_reads() {
     eprintln!("guest read all {sent} messages from host");
 
     // Now guest should be able to send a response.
-    let response = roam_shm::msg::ShmMsg::new(1, 0, 1, large.clone());
+    let response = ShmMsg::new(1, 0, MethodId(1), large.clone());
     match guest.send(&response) {
         Ok(()) => eprintln!("guest can send after reading host messages ✓"),
         Err(roam_shm::guest::SendError::SlotExhausted) => {

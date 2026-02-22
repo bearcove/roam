@@ -13,7 +13,7 @@
   },
   "lsp": {
     "rust-analyzer": {
-      "initialization_options": { "cargo": { "features": ["diagnostics"] } },
+      "initialization_options": { "cargo": {} },
     },
     "vscode-css-language-server": {
       "settings": {

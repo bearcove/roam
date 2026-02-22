@@ -223,7 +223,6 @@ pub enum Message {
     // ========================================================================
     /// r[impl core.metadata] - Request carries metadata key-value pairs.
     /// r[impl call.metadata.unknown] - Unknown keys are ignored.
-    /// r[impl channeling.request.channels] - Channel IDs listed explicitly for proxy support.
     Request {
         conn_id: ConnectionId,
         request_id: RequestId,
@@ -258,7 +257,6 @@ pub enum Message {
     // ========================================================================
     // Channels (conn_id scoped)
     // ========================================================================
-    // r[impl wire.stream] - Tx<T>/Rx<T> encoded as u64 channel ID on wire
     Data {
         conn_id: ConnectionId,
         channel_id: ChannelId,

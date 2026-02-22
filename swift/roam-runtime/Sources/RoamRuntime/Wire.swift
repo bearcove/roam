@@ -5,19 +5,21 @@ import Foundation
 /// Hello message for connection handshake.
 ///
 /// r[impl message.hello.structure] - Hello contains version, maxPayloadSize, initialChannelCredit.
-/// r[impl message.hello.version] - Version field determines protocol version.
+
 public enum Hello: Sendable {
     case v1(maxPayloadSize: UInt32, initialChannelCredit: UInt32)
     case v2(maxPayloadSize: UInt32, initialChannelCredit: UInt32)
     case v3(maxPayloadSize: UInt32, initialChannelCredit: UInt32)
     case v4(maxPayloadSize: UInt32, initialChannelCredit: UInt32)
     case v5(maxPayloadSize: UInt32, initialChannelCredit: UInt32, maxConcurrentRequests: UInt32)
-    case v6(maxPayloadSize: UInt32, initialChannelCredit: UInt32, maxConcurrentRequests: UInt32, metadata: [MetadataEntry])
+    case v6(
+        maxPayloadSize: UInt32, initialChannelCredit: UInt32, maxConcurrentRequests: UInt32,
+        metadata: [MetadataEntry])
 }
 
 /// Returns a Hello message using the current protocol version with default parameters.
 ///
-/// r[impl message.hello.version] - Use v6 protocol defaults.
+
 public func defaultHello() -> Hello {
     .v6(
         maxPayloadSize: 1024 * 1024,
@@ -183,7 +185,6 @@ public typealias MetadataEntry = (key: String, value: MetadataValue, flags: UInt
 
 /// Wire protocol message types (v4 protocol).
 ///
-/// r[impl wire.message-types] - All wire message types.
 /// r[impl core.call] - Request/Response messages implement the call abstraction.
 /// r[impl core.call.request-id] - Request ID links requests to responses.
 /// r[impl core.channel] - Data/Close/Reset/Credit messages operate on channels.
@@ -211,7 +212,7 @@ public enum Message: Sendable {
     case goodbye(connId: UInt64, reason: String)
 
     // Discriminant 5: Request (RPC - scoped to conn_id)
-    /// r[impl channeling.request.channels] - Channel IDs listed explicitly for proxy support.
+
     case request(
         connId: UInt64, requestId: UInt64, methodId: UInt64, metadata: [MetadataEntry],
         channels: [UInt64], payload: [UInt8])

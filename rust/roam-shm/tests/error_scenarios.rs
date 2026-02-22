@@ -205,7 +205,12 @@ fn test_guest_crash_triggers_death_callback() {
             let mut guest = ShmGuest::attach_with_ticket(&spawn_args).unwrap();
 
             // Send a message to prove we connected
-            let msg = ShmMsg::new(msg_type::DATA, 1, 0, b"hello before crash".to_vec());
+            let msg = ShmMsg::new(
+                msg_type::DATA,
+                1,
+                MethodId(0),
+                b"hello before crash".to_vec(),
+            );
             let _ = guest.send(&msg);
 
             // Crash! Use std::mem::forget to skip Drop (which does graceful detach)
@@ -294,7 +299,12 @@ fn test_sigkill_triggers_death_detection() {
             let mut guest = ShmGuest::attach_with_ticket(&spawn_args).unwrap();
 
             // Send a message
-            let msg = ShmMsg::new(msg_type::DATA, 1, 0, b"waiting to be killed".to_vec());
+            let msg = ShmMsg::new(
+                msg_type::DATA,
+                1,
+                MethodId(0),
+                b"waiting to be killed".to_vec(),
+            );
             let _ = guest.send(&msg);
 
             // Don't forget guest - we want it alive when we get killed
@@ -560,7 +570,7 @@ fn test_send_error_payload_too_large_guest() {
 
     // Try to send payload larger than max_payload_size
     let large_payload = vec![0u8; 200];
-    let msg = ShmMsg::new(msg_type::DATA, 1, 0, large_payload);
+    let msg = ShmMsg::new(msg_type::DATA, 1, MethodId(0), large_payload);
 
     let result = guest.send(&msg);
     assert!(
@@ -585,7 +595,7 @@ fn test_send_error_payload_too_large_host() {
 
     // Try to send payload larger than max_payload_size
     let large_payload = vec![0u8; 200];
-    let msg = ShmMsg::new(msg_type::DATA, 1, 0, large_payload);
+    let msg = ShmMsg::new(msg_type::DATA, 1, MethodId(0), large_payload);
 
     let result = host.send(peer_id, &msg);
     assert!(
@@ -610,7 +620,7 @@ fn test_send_error_inline_payload_too_large() {
 
     // 20 bytes would fit inline but exceeds max_payload_size of 10
     let payload = vec![0u8; 20];
-    let msg = ShmMsg::new(msg_type::DATA, 1, 0, payload);
+    let msg = ShmMsg::new(msg_type::DATA, 1, MethodId(0), payload);
 
     let result = guest.send(&msg);
     assert!(
@@ -628,7 +638,7 @@ fn test_send_error_peer_not_attached() {
 
     // Try to send to a peer that doesn't exist
     let fake_peer_id = roam_shm::peer::PeerId::from_index(0).unwrap();
-    let msg = ShmMsg::new(msg_type::DATA, 1, 0, b"hello".to_vec());
+    let msg = ShmMsg::new(msg_type::DATA, 1, MethodId(0), b"hello".to_vec());
 
     let result = host.send(fake_peer_id, &msg);
     assert!(
@@ -655,7 +665,7 @@ fn test_send_error_peer_detached() {
     let _ = host.poll();
 
     // Try to send to detached peer
-    let msg = ShmMsg::new(msg_type::DATA, 1, 0, b"hello".to_vec());
+    let msg = ShmMsg::new(msg_type::DATA, 1, MethodId(0), b"hello".to_vec());
 
     let result = host.send(peer_id, &msg);
     assert!(
@@ -777,7 +787,7 @@ fn test_graceful_shutdown_no_death_callback() {
             let mut guest = ShmGuest::attach_with_ticket(&spawn_args).unwrap();
 
             // Send a message to prove we connected
-            let msg = ShmMsg::new(msg_type::DATA, 1, 0, b"graceful goodbye".to_vec());
+            let msg = ShmMsg::new(msg_type::DATA, 1, MethodId(0), b"graceful goodbye".to_vec());
             guest.send(&msg).unwrap();
 
             // Graceful detach via Drop

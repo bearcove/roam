@@ -1401,7 +1401,6 @@ where
             .get_mut(&conn_id)
             .expect("connection validated above");
 
-        // r[impl core.conn.dispatcher] - Use connection-specific dispatcher if available
         let dispatcher: &dyn ServiceDispatcher = if let Some(ref conn_dispatcher) = conn.dispatcher
         {
             conn_dispatcher.as_ref()

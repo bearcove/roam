@@ -460,15 +460,7 @@ fn generate_dispatch_method(
         quote! { let (#(#arg_names),*) = args; }
     };
 
-    let method_name_str = method.name();
     let idx = method_index;
-
-    // For logging, we need to reference the args tuple (no colors for log output)
-    let args_log = if arg_names.is_empty() {
-        quote! { "()" }
-    } else {
-        quote! { args.pretty_with(#roam::PrettyPrinter::new().with_colors(#roam::facet_pretty::ColorMode::Never).with_max_content_len(64)) }
-    };
 
     // Determine how to handle the result based on return type
     let return_type = method.return_type();

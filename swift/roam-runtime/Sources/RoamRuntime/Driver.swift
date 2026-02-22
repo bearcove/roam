@@ -119,7 +119,7 @@ private actor RequestIdAllocator {
 
 /// Async semaphore for limiting concurrent outgoing requests.
 ///
-/// r[impl flow.call.concurrency-limit] - Enforces negotiated maxConcurrentRequests.
+
 /// FIFO fairness: waiters are resumed in order. `close()` fails all waiters
 /// when the connection dies, preventing callers from hanging forever.
 private actor AsyncSemaphore {
@@ -193,7 +193,7 @@ public final class ConnectionHandle: @unchecked Sendable {
 
     /// Make a raw RPC call.
     ///
-    /// r[impl flow.call.concurrency-limit] - Blocks if maxConcurrentRequests are in-flight.
+    /// r[impl flow.request.concurrent-limit] - Blocks if maxConcurrentRequests are in-flight.
     public func callRaw(
         methodId: UInt64,
         metadata: [MetadataEntry] = [],

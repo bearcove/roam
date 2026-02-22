@@ -27,7 +27,7 @@ fn test_file_backed_segment() {
     assert_eq!(guest.peer_id().get(), 1);
 
     // Send message host -> guest
-    let msg = ShmMsg::new(msg_type::DATA, 1, 0, b"hello from host".to_vec());
+    let msg = ShmMsg::new(msg_type::DATA, 1, MethodId(0), b"hello from host".to_vec());
     host.send(guest.peer_id(), &msg).unwrap();
 
     // Guest receives
@@ -46,14 +46,14 @@ fn test_file_backed_bidirectional() {
     let mut guest = ShmGuest::attach_path(&path).unwrap();
 
     // Host -> Guest
-    let msg = ShmMsg::new(msg_type::DATA, 1, 0, b"ping".to_vec());
+    let msg = ShmMsg::new(msg_type::DATA, 1, MethodId(0), b"ping".to_vec());
     host.send(guest.peer_id(), &msg).unwrap();
 
     let received = guest.recv().unwrap();
     assert_eq!(received.payload_bytes(), b"ping");
 
     // Guest -> Host
-    let msg = ShmMsg::new(msg_type::DATA, 2, 0, b"pong".to_vec());
+    let msg = ShmMsg::new(msg_type::DATA, 2, MethodId(0), b"pong".to_vec());
     guest.send(&msg).unwrap();
 
     let PollResult { messages, .. } = host.poll();
@@ -91,7 +91,7 @@ fn test_file_backed_large_payload() {
 
     // Send large payload (requires slot)
     let large_payload = vec![0xAB; 1024];
-    let msg = ShmMsg::new(msg_type::DATA, 1, 0, large_payload.clone());
+    let msg = ShmMsg::new(msg_type::DATA, 1, MethodId(0), large_payload.clone());
     host.send(guest.peer_id(), &msg).unwrap();
 
     let received = guest.recv().unwrap();
@@ -117,11 +117,11 @@ fn test_file_backed_multiple_guests() {
     assert_eq!(guest2.peer_id().get(), 2);
 
     // Send to guest1
-    let msg = ShmMsg::new(msg_type::DATA, 1, 0, b"for guest1".to_vec());
+    let msg = ShmMsg::new(msg_type::DATA, 1, MethodId(0), b"for guest1".to_vec());
     host.send(guest1.peer_id(), &msg).unwrap();
 
     // Send to guest2
-    let msg = ShmMsg::new(msg_type::DATA, 2, 0, b"for guest2".to_vec());
+    let msg = ShmMsg::new(msg_type::DATA, 2, MethodId(0), b"for guest2".to_vec());
     host.send(guest2.peer_id(), &msg).unwrap();
 
     // Each guest receives their own message
@@ -160,7 +160,7 @@ fn test_cross_process_ipc() {
             let mut guest = ShmGuest::attach_path(path).unwrap();
 
             // Send message to host
-            let msg = ShmMsg::new(msg_type::DATA, 1, 0, b"hello from child".to_vec());
+            let msg = ShmMsg::new(msg_type::DATA, 1, MethodId(0), b"hello from child".to_vec());
             guest.send(&msg).unwrap();
 
             // Wait for response
@@ -183,7 +183,12 @@ fn test_cross_process_ipc() {
             let peer_id = messages[0].0;
 
             // Send response
-            let msg = ShmMsg::new(msg_type::DATA, 2, 0, b"hello from parent".to_vec());
+            let msg = ShmMsg::new(
+                msg_type::DATA,
+                2,
+                MethodId(0),
+                b"hello from parent".to_vec(),
+            );
             host.send(peer_id, &msg).unwrap();
 
             // Wait for child to exit
@@ -264,7 +269,12 @@ fn test_spawn_ticket_workflow() {
             assert_eq!(guest.peer_id().get(), 1);
 
             // Send message to host
-            let msg = ShmMsg::new(msg_type::DATA, 1, 0, b"spawned guest says hi".to_vec());
+            let msg = ShmMsg::new(
+                msg_type::DATA,
+                1,
+                MethodId(0),
+                b"spawned guest says hi".to_vec(),
+            );
             guest.send(&msg).unwrap();
 
             // Wait for response with retry
@@ -303,7 +313,12 @@ fn test_spawn_ticket_workflow() {
             assert_eq!(peer_id.get(), 1);
 
             // Send response
-            let msg = ShmMsg::new(msg_type::DATA, 2, 0, b"host acknowledges".to_vec());
+            let msg = ShmMsg::new(
+                msg_type::DATA,
+                2,
+                MethodId(0),
+                b"host acknowledges".to_vec(),
+            );
             host.send(peer_id, &msg).unwrap();
 
             // Wait for child to exit
