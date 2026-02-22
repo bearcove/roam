@@ -7,10 +7,16 @@
 //!   don't know what `T` is.
 //! - **Asymmetric IO**: send `T`, receive [`SelfRef<T>`] (decoded value +
 //!   refcounted backing storage for zero-copy).
-//! - **Packet\<T\>**: wire frame struct (seq + ack + T). Implementation detail
-//!   of `ReliableLink` — upper layers never see it.
+//! - **Packet\<T\>**: wire frame enum — either `Hello` (reliability handshake)
+//!   or `Data` (seq + ack + T). Implementation detail of `ReliableLink` —
+//!   upper layers never see it.
 //! - **ReliableLink**: wraps `Link<Packet<T>, C>`, strips packet framing,
-//!   exposes `Link<T, C>` with transparent reconnect + replay.
+//!   exposes `Link<T, C>` with transparent reconnect + replay. Generic over
+//!   [`LinkSource`] for how replacement links arrive (pull via Dialer on
+//!   client, push via channel on server).
+//! - **ReliableAcceptor**: server-side router. Accepts raw connections, reads
+//!   the first `Packet::Hello` to extract a [`ResumeKey`], routes reconnects
+//!   to existing `ReliableLink` instances, yields new sessions upward.
 //! - **Codec**: plan-driven, scatter-gather encode, unsafe `decode_into`. Not
 //!   generic over `T`. TypeErasedValue plan delegation is expanded by the codec
 //!   into Skeleton + BorrowedBlob parts during traversal.
@@ -263,7 +269,7 @@ pub trait LinkRx<T, C: Codec>: Send + 'static {
 }
 
 // ---------------------------------------------------------------------------
-// Packet (struct, not trait — internal to ReliableLink)
+// Packet (enum — internal to ReliableLink)
 // ---------------------------------------------------------------------------
 
 /// Packet sequence number (per direction).
@@ -279,74 +285,153 @@ pub struct PacketAck {
     pub max_delivered: PacketSeq,
 }
 
-/// Wire frame: seq/ack metadata wrapping a payload of type `T`.
+/// Opaque session identifier for reliability-layer resume.
+///
+/// Assigned by the server on first connection. Sent by the client on
+/// reconnect so the server can route the new raw link to the correct
+/// [`ReliableLink`] instance.
+#[derive(Facet, Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ResumeKey(pub Vec<u8>);
+
+/// Reliability handshake exchanged as the first packet on a new connection.
+///
+/// Sent as `Packet::Hello` with seq=0. The server reads this to determine
+/// whether the connection is new or a reconnect, and routes accordingly.
+#[derive(Facet, Debug, Clone)]
+pub struct ReliableHello {
+    /// `None` = new session (server assigns a key).
+    /// `Some` = reconnect to existing session.
+    pub resume_key: Option<ResumeKey>,
+
+    /// Last contiguous seq delivered to this peer's upper layer.
+    /// The other side replays everything after this.
+    pub last_received: Option<PacketSeq>,
+}
+
+/// Wire frame: the unit carried over a raw `Link` inside the reliability layer.
 ///
 /// Serialized atomically by the codec in one pass — no intermediate buffer.
 /// Only exists inside `ReliableLink`; upper layers see `T` directly.
+///
+/// The first packet on a new connection MUST be `Hello` (seq=0).
+/// All subsequent packets are `Data`.
 #[derive(Facet, Debug, Clone)]
-pub struct Packet<T> {
-    pub seq: PacketSeq,
-    pub ack: Option<PacketAck>,
-    pub item: T,
+pub enum Packet<T> {
+    /// Reliability handshake (first packet, seq=0).
+    Hello(ReliableHello),
+
+    /// Sequenced data carrying an upper-layer item.
+    Data {
+        seq: PacketSeq,
+        ack: Option<PacketAck>,
+        item: T,
+    },
 }
 
 // ---------------------------------------------------------------------------
-// ReliableLink (concept, not implemented here)
+// LinkSource
+// ---------------------------------------------------------------------------
+
+/// Source of replacement [`Link`] values for [`ReliableLink`].
+///
+/// Client and server differ only in how a replacement link arrives:
+///
+/// - **Client (pull)**: a `Dialer` that connects and returns a new link.
+///   May error; caller decides retry policy.
+/// - **Server (push)**: a channel receiver that awaits the next inbound
+///   connection routed by [`ReliableAcceptor`]. Times out if no reconnect
+///   arrives within a configured window.
+///
+/// `ReliableLink` is generic over this trait — same seq/ack/replay logic
+/// regardless of which side initiated the connection.
+pub trait LinkSource<T, C: Codec>: Send + 'static {
+    type Link: Link<Packet<T>, C>;
+
+    #[allow(async_fn_in_trait)]
+    async fn next_link(&mut self) -> std::io::Result<Self::Link>;
+}
+
+// ---------------------------------------------------------------------------
+// ReliableLink
 // ---------------------------------------------------------------------------
 //
-// struct ReliableLink<T, C: Codec> { ... }
+// struct ReliableLink<T, C, S>
+// where
+//     C: Codec,
+//     S: LinkSource<T, C>,
+// {
+//     source: S,
+//     current_tx: <S::Link as Link<Packet<T>, C>>::Tx,
+//     current_rx: <S::Link as Link<Packet<T>, C>>::Rx,
+//     tx_seq: PacketSeq,
+//     rx_seq: PacketSeq,
+//     replay_buffer: VecDeque<...>,
+//     ...
+// }
 //
-// impl<T, C: Codec> Link<T, C> for ReliableLink<T, C> { ... }
+// impl<T, C, S> Link<T, C> for ReliableLink<T, C, S> { ... }
 //
-// Wraps a Link<Packet<T>, C>. Generic over T — doesn't know what T is.
+// Generic over T — doesn't know what T is.
 // Understands Packet: assigns seq, processes acks, buffers for replay,
-// deduplicates inbound. On reconnect (via Dialer), establishes a new
-// underlying Link<Packet<T>, C> and replays unacked packets.
+// deduplicates inbound. On link failure, calls source.next_link() to
+// obtain a replacement, exchanges Hello, replays unacked packets.
 //
 // Upper layers see Link<T, C>. Packet is invisible.
 
 // ---------------------------------------------------------------------------
-// Dialer
+// ReliableAcceptor (server-side router)
 // ---------------------------------------------------------------------------
-
-/// Source of new [`Link`] values for reconnect.
-///
-/// Used by `ReliableLink` to establish replacement links after failure.
-pub trait Dialer<T, C: Codec>: Send + Sync + 'static {
-    type Link: Link<T, C>;
-
-    #[allow(async_fn_in_trait)]
-    async fn dial(&self) -> std::io::Result<Self::Link>;
-}
+//
+// struct ReliableAcceptor<T, C, L>
+// where
+//     C: Codec,
+//     L: Link<Packet<T>, C>,
+// {
+//     sessions: HashMap<ResumeKey, mpsc::Sender<L>>,
+//     ...
+// }
+//
+// The server's accept loop hands each new raw connection to
+// ReliableAcceptor::ingest(raw_link):
+//
+// 1. Read the first Packet::Hello from the raw link.
+// 2. Extract the ResumeKey.
+// 3. If resume_key matches an existing session:
+//    push the raw link into that session's mpsc::Sender<L>.
+//    The corresponding ReliableLink is sitting on its LinkSource
+//    (channel receiver) waiting for this.
+// 4. If resume_key is None (new session):
+//    assign a ResumeKey, create a new ReliableLink with a channel-based
+//    LinkSource, yield the new session upward.
+//
+// User code:
+//
+//     loop {
+//         let session = acceptor.accept().await;
+//         tokio::spawn(handle(session));
+//         // reconnects are routed internally, never surface here
+//     }
 
 // ---------------------------------------------------------------------------
-// Session types
+// Session
 // ---------------------------------------------------------------------------
 
 /// Whether the session is acting as initiator or acceptor.
+///
+/// Determines who speaks first in the protocol handshake. Orthogonal to
+/// reconnect — reconnect is handled by `ReliableLink`, not `Session`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SessionRole {
     Initiator,
     Acceptor,
 }
 
-/// Reconnect policy.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Reconnect {
-    Disabled,
-    Enabled,
-}
-
-// ---------------------------------------------------------------------------
-// Session (shape)
-// ---------------------------------------------------------------------------
-//
 // Session knows Message concretely but is generic over the Link.
 //
-// Note: `Link<T, C>` is asymmetric by definition: it sends `T` and receives
-// `SelfRef<T>`. So `L: Link<Message, C>` means:
-// - `L::Tx` sends `Message`
-// - `L::Rx` yields `SelfRef<Message>`
+// Link<T, C> is asymmetric by definition: it sends T and receives
+// SelfRef<T>. So L: Link<Message, C> means:
+// - L::Tx sends Message
+// - L::Rx yields SelfRef<Message>
 //
 //     struct Session<L, C>
 //     where
@@ -359,6 +444,21 @@ pub enum Reconnect {
 //         ...
 //     }
 //
-// Whether L is raw SHM, TCP + ReliableLink, or anything else is invisible.
-// Session sends Message, receives SelfRef<Message>, runs the protocol
-// state machine (handshake, connections, request correlation, channels).
+// Session does not know or care about reliability. Whether L is a raw SHM
+// link, a ReliableLink over TCP, or anything else is invisible. Session
+// sends Message, receives SelfRef<Message>, runs the protocol state
+// machine (handshake, connections, request correlation, channels).
+//
+// Construction:
+//
+// - SHM (no reliability needed):
+//     Session::new(shm_link, role)
+//
+// - TCP client:
+//     let reliable = ReliableLink::new(dialer, ...);
+//     Session::new(reliable, Initiator)
+//
+// - TCP server (via ReliableAcceptor):
+//     let session = acceptor.accept().await;
+//     // internally: ReliableAcceptor created a ReliableLink with a
+//     // channel-based LinkSource, wrapped it in Session(Acceptor)
