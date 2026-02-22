@@ -27,12 +27,13 @@ This section is prescriptive: it defines the target Rust architecture.
 
 > rs[term.payload]
 >
-> A **Payload** is one opaque binary unit moved by a link.
+> A **Payload** is an opaque byte buffer carried inside roam messages (for
+> example: Request/Response payloads, or channel Data payload bytes).
 > In Rust this is `roam_types::Payload` (a `#[repr(transparent)]` wrapper over
-> `Vec<u8>`): uninterpreted bytes at the link boundary.
+> `Vec<u8>`).
 >
-> Example: the postcard encoding of one `Message`, or the raw bytes carried in
-> a WebSocket binary message.
+> A Payload is NOT the `Link` boundary item type in Rust: Rust `Link` is typed
+> and uses `Codec` to encode/decode `T` directly.
 
 > rs[term.transport]
 >
@@ -88,22 +89,22 @@ This section is prescriptive: it defines the target Rust architecture.
 > rs[layer.link.interface]
 >
 > Rust MUST provide one shared **link** interface for all transports
-> (stream, framed, shm), with a split sender/receiver model for roam
-> `Payload` values.
+> (stream, framed, shm), with a split sender/receiver model for typed `T`
+> values encoded/decoded via `Codec`.
 
 ```rust
-pub trait Link {
-    type Sender: LinkSender + Send + 'static;
-    type Receiver: LinkReceiver + Send + 'static;
-    fn split(self) -> (Self::Sender, Self::Receiver);
+pub trait Link<T: 'static, C: Codec> {
+    type Tx: LinkTx<T, C>;
+    type Rx: LinkRx<T, C>;
+    fn split(self) -> (Self::Tx, Self::Rx);
 }
 
-pub trait LinkSender: Send + 'static {
-    type Permit<'a>: LinkSendPermit
+pub trait LinkTx<T, C: Codec>: Send + 'static {
+    type Permit<'a>: LinkTxPermit<T, C>
     where
         Self: 'a;
 
-    /// Wait for outbound capacity for exactly one payload and reserve it for
+    /// Wait for outbound capacity for exactly one item and reserve it for
     /// the caller.
     ///
     /// Cancellation of `reserve` MUST NOT leak capacity; if reservation
@@ -118,24 +119,26 @@ pub trait LinkSender: Send + 'static {
         Self: Sized;
 }
 
-pub trait LinkSendPermit {
-    /// Enqueue exactly one payload into the reserved capacity.
+pub trait LinkTxPermit<T, C: Codec> {
+    /// Enqueue exactly one item into the reserved capacity.
     ///
     /// This MUST NOT block: backpressure happens at `reserve`, not at `send`.
-    fn send(self, payload: Payload);
+    fn send(self, item: T) -> Result<(), C::EncodeError>;
 }
 
-pub trait LinkReceiver: Send + 'static {
-    async fn recv(&mut self) -> io::Result<Option<Payload>>;
+pub trait LinkRx<T: 'static, C: Codec>: Send + 'static {
+    type Error: std::error::Error + Send + Sync + 'static;
+    async fn recv(&mut self) -> Result<Option<SelfRef<T>>, Self::Error>;
 }
 ```
 
 > rs[layer.link.serialization]
 >
-> `Message` ↔ `Payload` serialization is NOT owned by `Link`.
-> Rust runtimes above `Link` MUST serialize `Message` to `Payload` before
-> sending and MUST deserialize `Payload` back to `Message` after `recv`.
-> For Rust, this serialization MUST use postcard.
+> `Link` owns encoding/decoding between `T` and the underlying transport's
+> bytes via a `Codec` `C`.
+>
+> `LinkRx::recv` yields `SelfRef<T>` (decoded value plus backing storage) so
+> transports can support zero-copy borrows from their receive buffers.
 
 ## Codec
 
@@ -151,40 +154,35 @@ pub trait LinkReceiver: Send + 'static {
 
 > rs[layer.codec.interface]
 >
-> Rust MUST provide one primary codec trait boundary that consumes a `Link` and
-> exposes a typed interface for sending and receiving `T: Facet` values, with
-> the same split sender/receiver model and the same permit-based backpressure
-> semantics. The roam runtime uses this codec interface with `T = Message`.
+> Rust MUST provide one primary codec trait boundary. The codec is plan-driven:
+> it encodes/decodes any `T: Facet` using a precomputed `TypePlanCore`.
 >
-> The codec layer MUST NOT introduce additional outbound buffering beyond what
-> the underlying `Link` already provides; it reuses `LinkSender::reserve` and
-> `LinkSendPermit::send` to preserve fairness and ordering guarantees.
+> The codec layer MUST be usable by transports to encode directly into their
+> own buffers (stream write buffers, SHM slots, etc.) without intermediate
+> staging.
 
 ```rust
-pub trait Codec {
-    type Sender: CodecSender;
-    type Receiver: CodecReceiver;
-    fn split(self) -> (Self::Sender, Self::Receiver);
+pub enum EncodedPart<'a> {
+    Skeleton(smallvec::SmallVec<[u8; 64]>),
+    BorrowedBlob(&'a [u8]),
 }
 
-pub trait CodecSender {
-    type Permit<'a>: CodecSendPermit
-    where
-        Self: 'a;
+pub trait Codec: Send + Sync + 'static {
+    type EncodeError: std::error::Error + Send + Sync + 'static;
+    type DecodeError: std::error::Error + Send + Sync + 'static;
 
-    async fn reserve(&self) -> io::Result<Self::Permit<'_>>;
+    fn encode_scatter<'a>(
+        &self,
+        value: facet_reflect::Peek<'a, 'a>,
+        parts: &mut Vec<EncodedPart<'a>>,
+    ) -> Result<usize, Self::EncodeError>;
 
-    async fn close(self) -> io::Result<()>
-    where
-        Self: Sized;
-}
-
-pub trait CodecSendPermit {
-    fn send<T: Facet>(self, value: T);
-}
-
-pub trait CodecReceiver {
-    async fn recv<T: Facet>(&mut self) -> io::Result<Option<T>>;
+    unsafe fn decode_into(
+        &self,
+        plan: &facet::TypePlanCore,
+        bytes: &[u8],
+        out: facet_core::PtrUninit,
+    ) -> Result<(), Self::DecodeError>;
 }
 ```
 
@@ -197,24 +195,24 @@ pub trait CodecReceiver {
 
 > rs[layer.codec.errors]
 >
-> If deserialization fails, `recv` MUST return `Err(...)` (an I/O-like error)
-> and the higher runtime layers MUST treat the link as failed (as with any
-> other inbound framing error). The codec layer MUST NOT attempt recovery by
-> skipping bytes or re-synchronizing within a link.
+> If deserialization fails during `LinkRx::recv`, `LinkRx::recv` MUST return
+> `Err(...)` and the higher runtime layers MUST treat the link as failed (as
+> with any other inbound framing error). The codec layer MUST NOT attempt
+> recovery by skipping bytes or re-synchronizing within a link.
 
 > rs[layer.link.permits]
 >
 > Link outbound buffering and backpressure MUST be permit-based:
 >
-> - `LinkSender::reserve` MUST await until outbound capacity for exactly one
->   payload is available, then reserve it for the caller by returning a permit.
+> - `LinkTx::reserve` MUST await until outbound capacity for exactly one item
+>   is available, then reserve it for the caller by returning a permit.
 >   Capacity reservation MUST be FIFO-fair: if multiple tasks call `reserve`,
 >   permits MUST be handed out in the order reservations were requested.
 >   Cancelling a `reserve` call MUST forfeit the caller's place in that FIFO
 >   order, but MUST NOT leak capacity.
 >
-> - `LinkSendPermit::send` MUST enqueue exactly one payload into the reserved
->   capacity and MUST NOT block.
+> - `LinkTxPermit::send` MUST enqueue exactly one item into the reserved
+>   capacity and MUST NOT block (beyond encoding).
 >
 > - Dropping a permit without calling `send` MUST release the reserved capacity
 >   back to the link.
@@ -223,15 +221,15 @@ pub trait CodecReceiver {
 >   This buffer is what permits reserve.
 >
 > Link receive and close behavior:
-> - `LinkReceiver::recv` MUST await until one inbound `Payload` is available
->   (`Ok(Some(payload))`), the inbound direction closes cleanly (`Ok(None)`), or
->   an I/O/framing error occurs (`Err(...)`).
-> - `LinkReceiver::recv` is single-consumer: it MUST NOT be awaited concurrently
+> - `LinkRx::recv` MUST await until one inbound item is available
+>   (`Ok(Some(item))`), the inbound direction closes cleanly (`Ok(None)`), or
+>   an I/O/framing/decode error occurs (`Err(...)`).
+> - `LinkRx::recv` is single-consumer: it MUST NOT be awaited concurrently
 >   by multiple tasks.
-> - `LinkSender::close` MUST stop handing out new permits, MUST drain/flush all
->   already-enqueued payload bytes, then MUST perform transport-level outbound
+> - `LinkTx::close` MUST stop handing out new permits, MUST drain/flush all
+>   already-enqueued outbound bytes, then MUST perform transport-level outbound
 >   close (or return `Err(...)` if drain/flush/close fails).
-> - `LinkSender::close` MUST NOT begin while there exist outstanding permits
+> - `LinkTx::close` MUST NOT begin while there exist outstanding permits
 >   derived from that sender. (In Rust, this is enforced by the permit borrowing
 >   the sender and `close` consuming it.)
 >   The purpose of `close` is to let higher layers shut down a link without
@@ -241,8 +239,8 @@ pub trait CodecReceiver {
 > Concurrency, ordering, and loss:
 > - Link implementations MUST support concurrent send and receive on the same
 >   link (one task reserving/sending while another receives).
-> - Link implementations MUST preserve payload ordering per direction.
-> - Link implementations MUST NOT duplicate or silently drop enqueued payloads.
+> - Link implementations MUST preserve item ordering per direction.
+> - Link implementations MUST NOT duplicate or silently drop enqueued items.
 
 > rs[layer.link.blind]
 >

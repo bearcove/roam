@@ -182,15 +182,6 @@ pub struct Payload(pub Vec<u8>);
 
 // Opaque capability used to authorize resuming a SessionId.
 pub struct ResumeToken(pub [u8; 16]);
-
-// Call acknowledgements use a QUIC-style SACK representation.
-pub struct CallAckRange {
-    /// Count of unacknowledged RequestIds between this block and the previous one.
-    pub gap: u32,
-    
-    /// Count of acknowledged RequestIds in this block.
-    pub len: u32,
-}
 ```
 
 ## Transports, Links, and Connections
@@ -343,8 +334,9 @@ type level, roam provides `Tx<T>` and `Rx<T>` to indicate direction.
 
 > r[core.channel]
 >
-> `Tx<T>` represents data flowing from **caller to callee** (input).
-> `Rx<T>` represents data flowing from **callee to caller** (output).
+> Service definitions are written from the **callee/handler** perspective.
+> `Tx<T>` represents data flowing from **callee to caller** (output).
+> `Rx<T>` represents data flowing from **caller to callee** (input).
 > Each has exactly one sender and one receiver.
 
 On the wire, `Tx<T>` and `Rx<T>` are schema-level markers for channeling.
@@ -368,17 +360,17 @@ The following abstract messages relate to channels:
 |---------|--------|---------|
 | **Data** | channel sender | Deliver one value of type `T` (sequenced) |
 | **Ack** | channel receiver | Acknowledge receipt of Data up to a sequence number |
-| **Close** | caller (for Push) | End of channel (no more Data from caller) |
+| **Close** | caller (for `Rx<T>`) | End of channel (no more Data from caller) |
 | **Reset** | either peer | Abort the channel immediately |
 
 Ack supports exactly-once delivery and transparent reconnection by allowing a
 sender to retransmit unacknowledged Data after a disconnect.
 
-For `Tx<T>` (caller→callee), the caller sends Close when done sending.
+For `Rx<T>` (caller→callee), the caller sends Close when done sending.
 After sending Close, the caller MUST NOT send more Data on that channel.
 See `r[channeling.close]` for details.
 
-For `Rx<T>` (callee→caller), the channel is implicitly closed when the
+For `Tx<T>` (callee→caller), the channel is implicitly closed when the
 callee sends the Response. No explicit Close message is sent.
 See `r[channeling.lifecycle.response-closes-pulls]`.
 
@@ -396,9 +388,9 @@ connection's negotiated `Parity`. See `r[channeling.id.parity]` for details.
 
 ### Channels and Calls
 
-Channels are established via method calls. `Tx<T>` channels may outlive
+Channels are established via method calls. `Rx<T>` channels may outlive
 the Response — the caller continues sending until they send Close.
-`Rx<T>` channels are implicitly closed when Response is sent.
+`Tx<T>` channels are implicitly closed when Response is sent.
 See `r[channeling.call-complete]` and `r[channeling.channels-outlive-response]`.
 
 ## Errors
@@ -452,9 +444,10 @@ See the [Metadata](#metadata-1) section for complete details.
 Connection failures create uncertainty: did the server process the request
 before the connection dropped?
 
-If a session is successfully resumed (`r[core.session]`, `r[message.resume.initiate]`),
-peers can provide exactly-once behavior for calls and channels using `CallAck`
-and channel `Ack`.
+If a session is successfully resumed (`r[core.session]`), peers can provide
+exactly-once delivery by replaying and deduplicating transport units after a
+disconnect. Channel element delivery additionally uses per-channel `seq` and
+`Ack` (`r[core.channel]`, Channel Messages table).
 
 Nonces are an optional, transport-agnostic mechanism for idempotency across
 session loss (e.g. server restart, session expiry, or implementations that do
@@ -656,20 +649,12 @@ This section specifies the complete lifecycle.
 > r[call.request-id.liveness]
 >
 > A request is "live" from when the Request message is sent until the caller
-> has received the corresponding Response and the caller has acknowledged it
-> with `CallAck` (`r[call.ack]`).
+> has received the corresponding Response.
 
 > r[call.request-id.no-reuse-while-live]
 >
 > A caller MUST NOT reuse a live `RequestId` for a different logical call.
 > Reusing a live RequestId is a connection error.
-
-> r[call.request-id.duplicate-is-retry]
->
-> If a callee receives a Request whose `request_id` matches a live request
-> it has already received from that caller, it MUST treat it as a retry:
-> it MUST NOT execute the method handler a second time, and it MUST ensure
-> the caller eventually receives exactly one Response for that `request_id`.
 
 > r[call.request-id.wrap-window]
 >
@@ -687,53 +672,7 @@ This section specifies the complete lifecycle.
 > r[call.request-id.cancel-still-live]
 >
 > Sending a Cancel message does NOT remove a request from live status. The
-> request remains live until a Response is received and acknowledged.
-
-## Call Acknowledgement (CallAck)
-
-The callee may need to retain per-request state (deduplication and/or cached
-Responses) so that retries across link failure can be handled exactly-once.
-`CallAck` allows the caller to confirm receipt of Responses so the callee can
-forget completed calls, enabling bounded memory and safe `RequestId` wrap.
-
-> r[call.ack]
->
-> After receiving a Response for a call it initiated, the caller MUST send
-> `CallAck` to the callee, acknowledging that Response.
-
-> r[call.ack.only-after-response]
->
-> A caller MUST NOT acknowledge a `RequestId` unless it has received the
-> corresponding Response.
-
-> r[call.ack.sack]
->
-> `CallAck` MUST use a QUIC-style SACK representation: it acknowledges a set of
-> `RequestId` values (for requests initiated by the caller on that connection).
-> The set is encoded as:
-> - `largest`: the largest acknowledged RequestId in serial order
-> - `first_len`: a length (>= 1) of the first contiguous acknowledged block
->   ending at `largest`
-> - `ranges`: additional blocks, each described by `(gap, len)` where:
->   - `gap` (>= 1) is the count of unacknowledged RequestIds between blocks
->   - `len` (>= 1) is the count of acknowledged RequestIds in the block
->
-> Blocks are interpreted by repeatedly applying `wrapping_sub` on the underlying
-> `u32` values. Serial ordering uses `r[call.request-id.serial-order]`.
-
-> r[call.ack.largest-monotonic]
->
-> For a given (connection, caller), the `largest` value in `CallAck` messages
-> MUST advance monotonically in the caller's RequestId serial order. A callee
-> MUST accept duplicate `CallAck` messages.
-
-> r[call.ack.effect]
->
-> After a callee has received `CallAck` acknowledging a given RequestId, it MAY
-> forget any cached Response and deduplication state for that call. If the
-> callee later receives a retry Request for an already-acknowledged RequestId,
-> it MAY treat it as a new call (it is the caller's responsibility to not retry
-> after acknowledging).
+> request remains live until a Response is received.
 
 For channeling methods, the Request/Response exchange negotiates channels,
 but those channels have their own lifecycle independent of the call. See
@@ -1059,7 +998,7 @@ await all 10 responses, rather than round-tripping each one sequentially.
 
 # Channeling RPC
 
-Channeling methods have `Tx<T>` (caller→callee) or `Rx<T>` (callee→caller)
+Channeling methods have `Rx<T>` (caller→callee) or `Tx<T>` (callee→caller)
 in argument position. Unlike simple RPC calls, data flows continuously over dedicated
 channels.
 
@@ -1074,36 +1013,24 @@ channels.
 
 > r[channeling.caller-pov]
 >
-> Service definitions are written from the **caller's perspective**.
-> `Tx<T>` means "caller transmits data to callee". `Rx<T>` means
-> "caller receives data from callee".
-
-> r[channeling.holder-semantics]
->
-> From the holder's perspective: `Tx<T>` means "I send on this",
-> `Rx<T>` means "I receive from this". Generated callee handlers
-> have the types flipped relative to the service definition.
+> Service definitions are written from the **callee/handler** perspective.
+> `Rx<T>` means the handler receives a stream of `T` values from the caller.
+> `Tx<T>` means the handler sends a stream of `T` values to the caller.
 
 Example:
 
 ```rust
-// Service definition (caller's perspective)
+// Service definition (callee/handler perspective)
 #[roam::service]
 pub trait Channeling {
-    async fn sum(&self, numbers: Tx<u32>) -> u32;       // caller→callee
-    async fn range(&self, n: u32, output: Rx<u32>);     // callee→caller
+    async fn sum(&self, numbers: Rx<u32>) -> u32;       // caller→callee
+    async fn range(&self, n: u32, output: Tx<u32>);     // callee→caller
 }
 
 // Generated caller stub — same types as definition
 impl ChannelingClient {
-    async fn sum(&self, numbers: Tx<u32>) -> u32;       // caller sends
-    async fn range(&self, n: u32, output: Rx<u32>);     // caller receives
-}
-
-// Generated callee handler — types flipped
-trait ChannelingHandler {
-    async fn sum(&self, numbers: Rx<u32>) -> u32;       // callee receives
-    async fn range(&self, n: u32, output: Tx<u32>);     // callee sends
+    async fn sum(&self, numbers: Rx<u32>) -> u32;       // caller sends
+    async fn range(&self, n: u32, output: Tx<u32>);     // caller receives
 }
 ```
 
@@ -1244,8 +1171,8 @@ Caller                                  Callee
 
 > r[channeling.close]
 >
-> For `Tx<T>` (caller→callee), the caller sends Close when done.
-> For `Rx<T>` (callee→caller), the channel closes implicitly with Response.
+> For `Rx<T>` (caller→callee), the caller sends Close when done.
+> For `Tx<T>` (callee→caller), the channel closes implicitly with Response.
 
 > r[channeling.data-after-close]
 >
@@ -1278,13 +1205,13 @@ Caller                                  Callee
 > r[channeling.call-complete]
 >
 > The RPC call completes when the Response is received. At that point:
-> - All `Rx<T>` channels are closed (callee can no longer send)
-> - `Tx<T>` channels may still be open (caller may still be sending)
+> - All `Tx<T>` channels are closed (callee can no longer send)
+> - `Rx<T>` channels may still be open (caller may still be sending)
 > - The request ID is no longer in-flight
 
 > r[channeling.channels-outlive-response]
 >
-> `Tx<T>` channels (caller→callee) may outlive the Response. The caller
+> `Rx<T>` channels (caller→callee) may outlive the Response. The caller
 > continues sending until they send Close. The callee processes the final
 > return value only after all input channels are closed.
 
@@ -1311,7 +1238,6 @@ enum Message {
     Request { conn_id: ConnectionId, request_id: RequestId, method_id: MethodId, metadata: Metadata, channels: Vec<ChannelId>, payload: Payload },
     Response { conn_id: ConnectionId, request_id: RequestId, metadata: Metadata, payload: Payload },
     Cancel { conn_id: ConnectionId, request_id: RequestId },
-    CallAck { conn_id: ConnectionId, largest: RequestId, first_len: u32, ranges: Vec<CallAckRange> },
     
     // Channels (conn_id scoped)
     Data { conn_id: ConnectionId, channel_id: ChannelId, seq: Seq, payload: Payload },
@@ -1522,11 +1448,10 @@ Goodbye { conn_id: ConnectionId, reason: String }
 > A peer MAY send Goodbye with an empty reason for graceful shutdown
 > (not due to an error). This is the normal way to close a connection.
 
-### Request / Response / Cancel / CallAck
+### Request / Response / Cancel
 
 `Request` initiates an RPC call. `Response` returns the result. `Cancel`
-requests that the callee stop processing a request. `CallAck` acknowledges
-receipt of Responses so the callee can forget completed calls.
+requests that the callee stop processing a request.
 
 The `request_id` correlates requests with responses, enabling multiple
 calls to be in flight simultaneously (pipelining).
