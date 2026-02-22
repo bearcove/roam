@@ -6,7 +6,7 @@ weight = 10
 
 # Introduction
 
-This is roam specification v4.0.0, last updated February 6, 2026. It canonically
+This is roam specification v5.0.0, last updated February 22, 2026. It canonically
 lives at <https://github.com/bearcove/roam> — where you can get the latest version.
 
 roam is a **Rust-native** RPC protocol. We don't claim to be language-neutral —
@@ -14,44 +14,128 @@ Rust is the lowest common denominator. There is no independent schema language;
 Rust traits *are* the schema. Implementations for other languages (Swift,
 TypeScript, etc.) are generated from Rust definitions.
 
-This means:
-- The Rust Implementation Specification[^RUST-SPEC] is essential
-- Other implementations use Rust tooling for code generation
-- Fully independent implementations are a non-goal
+## Defining a service
 
 Services are defined inside of Rust "proto" crates, annotating traits with
 the `#[roam::service]` proc macro attribute:
 
 ```rust
 #[roam::service]
-pub trait TemplateHost {
+pub trait Adder {
     /// Load a template by name.
-    async fn load_template(&self, context_id: ContextId, name: String) -> LoadTemplateResult;
-
-    /// Call a template function on the host.
-    async fn call_function(
-        &self,
-        context_id: ContextId,
-        name: String,
-        args: Vec<Value>,
-        kwargs: Vec<(String, Value)>,
-    ) -> CallFunctionResult;
-    
-    // etc.
+    async fn add(&self, l: u32, r: u32) -> u32;
 }
 ```
 
 All types that occur as arguments or in return position must implement
 [Facet](https://facet.rs), so that they might be serialized and deserialized
-with facet-postcard (see [^POSTCARD]).
+with facet-postcard.
+
+## Implementing a service
+
+The `service` macro adds a `&Context` parameter to all functions:
+
+```rust
+#[derive(Clone)]
+struct AdderHandler;
+
+impl Adder for AdderHandler {
+    /// Add two numbers.
+    async fn add(&self, _cx: &Context, l: u32, r: u32) -> u32 {
+        // we could fetch metadata etc. through `_cx`
+        l + r
+    };
+}
+```
+
+## Consuming a service
+
+The proc macro also generates a `{ServiceName}Client` struct, which provides the
+same async methods, without `&Context` this time: 
+
+```rust
+// Make a call
+let result = client.add(3, 5).await;
+assert_eq!(result, 8);
+```
+
+...because metadata can be passed to the future, before awaiting it:
+
+```rust
+// Make a call with custom metadata
+let result = client
+    .add(3, 5)
+    .with_metadata(meta)
+    .await;
+assert_eq!(result, 8);
+```
+
+## High-level concepts
+
+But how do you obtain a client?
+
+To "handle" a call (ie. send a response to an incoming request), or to "make" a
+call (ie. send a request to the peer, expecting a response), one needs an active
+connection.
+
+Connections are the fourth layer in the roam connectivity model. First, we need to
+establish a **Link** with the other peer: typically by accepting a TCP/Unix socket
+connection, or establishing one, or negotiating an SHM link over a file and some
+sockets, etc. etc. — this lets us exchange **Payloads** (opaque byte buffers).
+
+On top of the **Link** is the **Wire** which deals with serialization and
+deserialization to and from postcard.
+
+On top of the **Wire** sits the **Session**: it has a stable identifiers, can be
+resumed if we lose connectivity and have to re-create a new **Link**.
+
+Finally, a **Session** can host many connections, starting with the root
+connection, with identifier 0, which is always open.
+
+So, the model goes:
+
+  * Link (Memory, stdio, TCP, Unix sockets, Named pipes, WebSocket, SHM)
+  * Wire (serialization/deserialiation)
+  * Session (durable set of connections, request state machine etc.)
+  * Connections (namespace for request/channel IDs)
+  
+Transports ("kinds of links") typically let you both "accept" or "connect".
+In both cases, one must specify:
+
+  * A service handler (to handle incoming requests)
+  * A client type (to make outgoing requests)
+  
+```rust
+// Simple case: connect over TCP, we act as a client only (don't handle any), brand new link
+let (session, caller_a) = Session::new::<Adder>().connect_over(Tcp::new("127.0.0.1:3030")).build().await?;
+let eight = caller_a.add(3, 5).await;
+
+// Let's make a new connection in the same session - this time we handle requests on Echo
+let caller_b = session.connect::<Adder>().handler<Echo>(EchoHandler::new()).build().await?;
+let twelve = caller_a.add(6, 6).await;
+
+// Now let's accept connections - we need a loop for that
+let mut acceptor = Session::accept_over(Tcp::bind("127.0.0.1:3030")).await?;
+loop {
+    let incoming = acceptor.next().await?;
+    
+    let (session, caller_c) = incoming.accept::<Adder>().handler<Third>(ThirdHandler::new()).build().await?;
+    // Handle this connection...
+}
+```
+
+Important: `incoming.accept()`, `session.connect`, `Session::new` all default to
+`ClientService = ()`, which impl client and handler for an empty service. 
+
+## Codegen for third-party languages
 
 Bindings for other languages (Swift, TypeScript) are generated using
 a Rust codegen package which is linked together with the "proto" crate to
 output Swift/TypeScript packages.
 
-This specification exists to ensure that various implementations are compatible, and
-to ensure that those implementations are specified — that their code corresponds to
-natural-language requirements, rather than just floating out there.
+For examples of Swift usage, see the [vixen](https://github.com/bearcove/vixen)
+build system. For examples of TypeScript, well, no active projects use it right
+now.
 
 # Core Semantics
 
@@ -1993,11 +2077,3 @@ rather than channel errors because:
 
 Channel-scoped errors (Reset) are for application-level issues where
 the connection can continue serving other channels.
-
-# References
-
-[^POSTCARD]: Postcard Wire Format Specification - <https://postcard.jamesmunns.com/wire-format>
-
-[^RUST-SPEC]: roam Rust Implementation Specification - <@/rust-spec/_index.md>
-
-[^SHM-SPEC]: roam Shared Memory Transport Specification - <@/shm-spec/_index.md>
