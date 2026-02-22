@@ -7,37 +7,39 @@
 //!
 //! Layer names and trait names are intended to match:
 //!
-//! - **Link**: transports move opaque [`Payload`] units between peers.
-//! - **Packet**: reliable, ordered delivery of `Payload` over a `Link`, with
-//!   seq/ack and replay for resumption.
-//! - **Codec**: serialization between [`crate::Message`] and [`Payload`].
-//! - **Wire**: message IO on top of `Packet + Codec` (policy-blind).
+//! - **Link**: transports move values of some type `T` between peers, applying
+//!   backpressure via permits.
+//! - **Packet**: reliable, ordered delivery and resumption by wrapping items in
+//!   [`Packet<T>`] with sequence numbers and acknowledgements.
+//! - **Codec**: serialization and deserialization; typically `postcard` for any
+//!   `T: Facet`.
 //! - **Session**: the protocol state machine (handshake, resume, routing, etc.).
 //! - **Client**: generated service clients built on top of `Session`.
 
 use crate::Payload;
+use facet::Facet;
 use std::io;
 
 /// A bidirectional established transport between two peers.
 ///
 /// A transport (TCP, WebSocket, SHM, etc.) implements this trait to expose an
-/// already-established pipe of [`Payload`] units.
+/// already-established pipe of items.
 ///
 /// A `Link` is owned by the protocol runtime task (the `Session` layer); user
 /// code should generally not interact with `Link` directly.
-pub trait Link {
-    type Sender: LinkSender;
-    type Receiver: LinkReceiver;
+pub trait Link<T> {
+    type Tx: LinkTx<T>;
+    type Rx: LinkRx<T>;
 
-    fn split(self) -> (Self::Sender, Self::Receiver);
+    fn split(self) -> (Self::Tx, Self::Rx);
 }
 
 /// Sending side of a [`Link`].
 ///
 /// Backpressure is expressed via `reserve()`: a successful reserve grants
-/// capacity for exactly one `Payload` and yields a [`LinkSendPermit`].
-pub trait LinkSender: Send + 'static {
-    type Permit<'a>: LinkSendPermit
+/// capacity for exactly one item and yields a [`LinkTxPermit`].
+pub trait LinkTx<T>: Send + 'static {
+    type Permit<'a>: LinkTxPermit<T>
     where
         Self: 'a;
 
@@ -58,20 +60,20 @@ pub trait LinkSender: Send + 'static {
         Self: Sized;
 }
 
-/// A permit for sending exactly one [`Payload`].
+/// A permit for sending exactly one item.
 ///
 /// This MUST NOT block: backpressure happens at `reserve()`, not at `send()`.
-pub trait LinkSendPermit {
-    fn send(self, payload: Payload);
+pub trait LinkTxPermit<T> {
+    fn send(self, item: T);
 }
 
 /// Receiving side of a [`Link`].
 ///
 /// `recv` is single-consumer: it takes `&mut self`. Higher layers that need
 /// fanout MUST implement it above the `Link` boundary.
-pub trait LinkReceiver: Send + 'static {
+pub trait LinkRx<T>: Send + 'static {
     #[allow(async_fn_in_trait)]
-    async fn recv(&mut self) -> io::Result<Option<Payload>>;
+    async fn recv(&mut self) -> io::Result<Option<T>>;
 }
 
 /// Packet sequence number (per direction).
@@ -82,7 +84,9 @@ pub trait LinkReceiver: Send + 'static {
 /// - bounded buffering with backpressure (no silent drop)
 ///
 /// Note: this is an API sketch; the exact representation is not fixed here.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Facet, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[repr(transparent)]
+#[facet(transparent)]
 pub struct PacketSeq(pub u32);
 
 /// Cumulative ACK: all packets up to (and including) `max_delivered` have been
@@ -91,109 +95,36 @@ pub struct PacketSeq(pub u32);
 /// This is intentionally cumulative (not SACK/ranges) to keep the packet layer
 /// simple. Transports that can reorder may still buffer internally, but the
 /// packet layer only reports contiguous delivery progress.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Facet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct PacketAck {
     pub max_delivered: PacketSeq,
 }
 
-/// Reliable, ordered delivery of [`Payload`] units.
+/// A packet envelope around one item.
 ///
-/// `Packet` sits immediately above [`Link`]. It is responsible for:
-/// - attaching to a `Link` and emitting/consuming transport `Payload` units
-/// - adding sequence numbers
-/// - generating/processing cumulative ACKs
-/// - replaying unacked outbound payloads after reconnect
-/// - deduplicating inbound payloads
-/// - producing an in-order stream of payloads for upper layers
-///
-/// `Packet` is intentionally policy-blind: it does not understand roam calls,
-/// channels, or dispatch. It only provides exactly-once, in-order delivery of
-/// opaque payload units to upper layers.
-pub trait Packet {
-    type Sender: PacketSender;
-    type Receiver: PacketReceiver;
-
-    fn split(self) -> (Self::Sender, Self::Receiver);
-}
-
-pub trait PacketSender: Send + 'static {
-    type Permit<'a>: PacketSendPermit
-    where
-        Self: 'a;
-
-    #[allow(async_fn_in_trait)]
-    async fn reserve(&self) -> io::Result<Self::Permit<'_>>;
-
-    #[allow(async_fn_in_trait)]
-    async fn close(self) -> io::Result<()>
-    where
-        Self: Sized;
-}
-
-pub trait PacketSendPermit {
-    /// Enqueue exactly one payload into the reserved capacity.
-    fn send(self, payload: Payload);
-}
-
-pub trait PacketReceiver: Send + 'static {
-    /// Receive the next in-order payload.
-    ///
-    /// This layer MUST NOT yield payloads out of order. If the underlying
-    /// transport reorders or drops, the packet layer MUST buffer/replay until
-    /// order is restored or the link is deemed failed.
-    #[allow(async_fn_in_trait)]
-    async fn recv(&mut self) -> io::Result<Option<Payload>>;
+/// This is what the packet layer sends on the wire. Making this generic over
+/// `T` lets the packet layer avoid "double serialization": a transport can
+/// encode `Packet<T>` directly in one pass.
+#[derive(Facet, Debug, Clone, PartialEq, Eq)]
+pub struct Packet<T> {
+    pub seq: PacketSeq,
+    pub ack: Option<PacketAck>,
+    pub item: T,
 }
 
 /// Message serialization and deserialization.
 ///
 /// This is the only layer that understands the schema of `Message` at the
-/// `Payload` boundary (postcard in Rust).
+/// `Payload` boundary (typically `postcard` for any `T: Facet`).
 ///
 /// It MUST NOT implement request correlation, channel routing, flow control, or
 /// reconnection logic. It is purely a `(Message ↔ Payload)` transform.
-pub trait Codec: Send + Sync + 'static {
+pub trait Codec<T>: Send + Sync + 'static {
     type EncodeError: std::error::Error + Send + Sync + 'static;
     type DecodeError: std::error::Error + Send + Sync + 'static;
 
-    fn encode(&self, message: &crate::Message) -> Result<Payload, Self::EncodeError>;
-    fn decode(&self, payload: &Payload) -> Result<crate::Message, Self::DecodeError>;
-}
-
-/// Message-level IO over an established [`Link`].
-///
-/// This layer is protocol-message-shaped but schema-blind: it moves
-/// `crate::Message` values without owning any call/session policy.
-///
-/// A typical implementation wraps a `Packet` and a `Codec`.
-pub trait Wire {
-    type Sender: WireSender;
-    type Receiver: WireReceiver;
-
-    fn split(self) -> (Self::Sender, Self::Receiver);
-}
-
-pub trait WireSender: Send + 'static {
-    type Permit<'a>: WireSendPermit
-    where
-        Self: 'a;
-
-    #[allow(async_fn_in_trait)]
-    async fn reserve(&self) -> io::Result<Self::Permit<'_>>;
-
-    #[allow(async_fn_in_trait)]
-    async fn close(self) -> io::Result<()>
-    where
-        Self: Sized;
-}
-
-pub trait WireSendPermit {
-    fn send(self, message: crate::Message);
-}
-
-pub trait WireReceiver: Send + 'static {
-    #[allow(async_fn_in_trait)]
-    async fn recv(&mut self) -> io::Result<Option<crate::Message>>;
+    fn encode(&self, item: &T) -> Result<Payload, Self::EncodeError>;
+    fn decode(&self, payload: &Payload) -> Result<T, Self::DecodeError>;
 }
 
 /// A source of new [`Link`] values (used for reconnect-capable initiators).
@@ -201,7 +132,7 @@ pub trait WireReceiver: Send + 'static {
 /// If a session is constructed from a single already-established `Link`, it
 /// cannot reconnect unless it also has a `Dialer`.
 pub trait Dialer: Send + Sync + 'static {
-    type Link: Link;
+    type Link;
 
     #[allow(async_fn_in_trait)]
     async fn dial(&self) -> io::Result<Self::Link>;
@@ -226,20 +157,18 @@ pub enum Reconnect {
 /// This is a *shape*, not a full implementation: the actual state machine lives
 /// in `roam-runtime`.
 #[derive(Debug)]
-pub struct SessionBuilder<C, L, D> {
+pub struct SessionBuilder<L, D> {
     role: SessionRole,
     reconnect: Reconnect,
-    codec: C,
     initial_link: Option<L>,
     dialer: Option<D>,
 }
 
-impl<C, L, D> SessionBuilder<C, L, D> {
-    pub fn new(role: SessionRole, codec: C) -> Self {
+impl<L, D> SessionBuilder<L, D> {
+    pub fn new(role: SessionRole) -> Self {
         Self {
             role,
             reconnect: Reconnect::Disabled,
-            codec,
             initial_link: None,
             dialer: None,
         }
@@ -260,10 +189,6 @@ impl<C, L, D> SessionBuilder<C, L, D> {
         self
     }
 
-    pub fn codec(&self) -> &C {
-        &self.codec
-    }
-
     pub fn role(&self) -> SessionRole {
         self.role
     }
@@ -278,6 +203,6 @@ impl<C, L, D> SessionBuilder<C, L, D> {
 /// The real session handle will live in `roam-runtime` and expose call/dispatch
 /// APIs. This exists so we can discuss type parameters and builder ergonomics.
 #[derive(Debug)]
-pub struct SessionHandle<C, L, D> {
-    _phantom: core::marker::PhantomData<(C, L, D)>,
+pub struct SessionHandle<L, D> {
+    _phantom: core::marker::PhantomData<(L, D)>,
 }
