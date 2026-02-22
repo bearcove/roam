@@ -80,8 +80,23 @@ assert_eq!(result, 8);
 But how do you obtain a client?
 
 To "handle" a call (ie. send a response to an incoming request), or to "make" a
-call (ie. send a request to the peer, expecting a response), one needs an active
-connection.
+call (ie. send a request to the peer, expecting a response), one needs a connection.
+
+roam supports various transports, like memory, TCP and other sockets, WebSocket,
+shared memory; but a roam connection sits several layers above a "TCP connection".
+
+
+```mermaid
+graph TD
+    A["🔗 Link\n(Memory, stdio, TCP, Unix sockets,\nNamed pipes, WebSocket, SHM)"]
+    B["📦 Wire\n(Serialization / Deserialization\nvia postcard)"]
+    C["🔄 Session\n(Durable set of connections,\nrequest state machine, resumable)"]
+    D["🔌 Connections\n(Namespace for request/channel IDs,\nroot connection ID=0 always open)"]
+
+    A --> B --> C --> D
+```
+
+
 
 Connections are the fourth layer in the roam connectivity model. First, we need to
 establish a **Link** with the other peer: typically by accepting a TCP/Unix socket
@@ -1530,7 +1545,7 @@ This section is prescriptive: it defines the target Rust architecture.
 
 ## Terms and Definitions
 
-> rs[term.message]
+> r[term.message]
 >
 > A **Message** is one roam protocol message (for example: `Request`,
 > `Response`, `Data`, `Close`, `Credit`, `Goodbye`) as defined by the main
@@ -1538,7 +1553,7 @@ This section is prescriptive: it defines the target Rust architecture.
 >
 > Example: `Request { conn_id: 0, request_id: 42, ... }`.
 
-> rs[term.payload]
+> r[term.payload]
 >
 > A **Payload** is an opaque byte buffer carried inside roam messages (for
 > example: Request/Response payloads, or channel Data payload bytes).
@@ -1548,34 +1563,34 @@ This section is prescriptive: it defines the target Rust architecture.
 > A Payload is NOT the `Link` boundary item type in Rust: Rust `Link` is typed
 > and uses `Codec` to encode/decode `T` directly.
 
-> rs[term.transport]
+> r[term.transport]
 >
 > A **transport** is a mechanism that sends and receives roam `Payload`
 > values between peers.
 >
 > Example: TCP byte stream, WebSocket message transport, or SHM transport.
 
-> rs[term.link]
+> r[term.link]
 >
 > A **link** is one concrete instantiation of a transport between two peers
 > (`r[core.link]`).
 >
 > Example: one established TCP socket between peer A and peer B.
 
-> rs[term.conduit]
+> r[term.conduit]
 >
 > A **conduit** wraps a link and provides serialization/deserialization of payloads
 > to and from postcard. This is the layer at which `StableConduit` implements seamless
 > reconnection (allowing a session to hop to a new link).
 
-> rs[term.session]
+> r[term.session]
 >
 > A **session** allows multiplexing **connections** on a **conduit**. It is a
 > state machines that sends and receives **messages**, keeping track of calls
 > (also called requests), channels (created via calls), virtual connections
 > (connections with ID>1), and flow control.
 
-> rs[term.connection]
+> r[term.connection]
 >
 > Every session has an implit root virtual connection (`conn_id = 0`) and can
 > carry additional virtual connections opened with `Connect`/`Accept`
@@ -1583,11 +1598,11 @@ This section is prescriptive: it defines the target Rust architecture.
 >
 > Each connection has its own namespace when it comes to request IDs and channel IDs.
 
-> rs[term.virtual-connection]
+> r[term.virtual-connection]
 > 
 > Connections
 
-> rs[term.channel]
+> r[term.channel]
 >
 > A **channel** is a directional data path identified by `(conn_id, channel_id)`.
 > `Tx<T>` and `Rx<T>` are Rust-level handles over that mechanism
@@ -1598,14 +1613,14 @@ This section is prescriptive: it defines the target Rust architecture.
 
 ## Trait Boundaries
 
-> rs[layer.trait-boundaries]
+> r[layer.trait-boundaries]
 >
 > Each layer MUST correspond to one primary Rust trait boundary. Layer
 > responsibilities MUST NOT leak across trait boundaries.
 
 ## Link
 
-> rs[layer.transport]
+> r[layer.transport]
 >
 > Concrete transport implementations are responsible only for moving roam
 > `Payload` values and performing transport-specific framing/signaling.
@@ -1614,7 +1629,7 @@ This section is prescriptive: it defines the target Rust architecture.
 > the stack exclusively via the `Link` trait below (there is no separate
 > higher-level "transport layer" beyond `Link`).
 
-> rs[layer.link.interface]
+> r[layer.link.interface]
 >
 > Rust MUST provide one shared **link** interface for all transports
 > (stream, framed, shm), with a split sender/receiver model for typed `T`
@@ -1660,7 +1675,7 @@ pub trait LinkRx<T: 'static, C: Codec>: Send + 'static {
 }
 ```
 
-> rs[layer.link.serialization]
+> r[layer.link.serialization]
 >
 > `Link` owns encoding/decoding between `T` and the underlying transport's
 > bytes via a `Codec` `C`.
@@ -1670,17 +1685,17 @@ pub trait LinkRx<T: 'static, C: Codec>: Send + 'static {
 
 ## Codec
 
-> rs[layer.codec.owner]
+> r[layer.codec.owner]
 >
 > Rust MUST define a dedicated **codec** layer above `Link` that owns
 > serialization and deserialization between roam `Message` and `Payload`.
 > For Rust, this serialization MUST use postcard.
 >
 > The codec layer exists to make the `Link` boundary mechanically enforceable:
-> `Link` remains payload-opaque (`rs[layer.link.blind]`), while all knowledge of
+> `Link` remains payload-opaque (`r[layer.link.blind]`), while all knowledge of
 > the `Message` type lives strictly above it.
 
-> rs[layer.codec.interface]
+> r[layer.codec.interface]
 >
 > Rust MUST provide one primary codec trait boundary. The codec is plan-driven:
 > it encodes/decodes any `T: Facet` using a precomputed `TypePlanCore`.
@@ -1714,21 +1729,21 @@ pub trait Codec: Send + Sync + 'static {
 }
 ```
 
-> rs[layer.codec.blind]
+> r[layer.codec.blind]
 >
 > The codec layer is protocol-blind above serialization:
 > it MUST NOT implement request correlation, channel routing, flow control,
 > reconnect/retry, virtual-connection logic, or any other roam semantics.
 > Those behaviors belong to higher runtime layers.
 
-> rs[layer.codec.errors]
+> r[layer.codec.errors]
 >
 > If deserialization fails during `LinkRx::recv`, `LinkRx::recv` MUST return
 > `Err(...)` and the higher runtime layers MUST treat the link as failed (as
 > with any other inbound framing error). The codec layer MUST NOT attempt
 > recovery by skipping bytes or re-synchronizing within a link.
 
-> rs[layer.link.permits]
+> r[layer.link.permits]
 >
 > Link outbound buffering and backpressure MUST be permit-based:
 >
@@ -1770,14 +1785,14 @@ pub trait Codec: Send + Sync + 'static {
 > - Link implementations MUST preserve item ordering per direction.
 > - Link implementations MUST NOT duplicate or silently drop enqueued items.
 
-> rs[layer.link.blind]
+> r[layer.link.blind]
 >
 > `Link` is protocol-blind: it MUST treat payload bytes as opaque and MUST NOT
 > make decisions based on roam semantics (method IDs, request lifecycle, channel
 > lifecycle, etc.). Transport-specific framing/signaling is allowed, but roam
 > protocol behavior is not.
 
-> rs[layer.link.connector]
+> r[layer.link.connector]
 >
 > Rust MUST provide a transport-agnostic connector interface that yields fresh
 > `Link` instances. Any component that needs to (re)establish links MUST depend
@@ -1790,7 +1805,7 @@ pub trait TransportConnector {
 }
 ```
 
-> rs[layer.transport.stream]
+> r[layer.transport.stream]
 >
 > Stream transports (for example: TCP, Unix sockets) MUST use 4-byte
 > little-endian length-prefix framing (`r[transport.bytestream.length-prefix]`).
@@ -1821,14 +1836,14 @@ pub trait TransportConnector {
 >
 > Stream buffering and backpressure entail:
 > - buffering:
->   - in-process outbound queue (finite) is required by `rs[layer.link.permits]`
+>   - in-process outbound queue (finite) is required by `r[layer.link.permits]`
 >   - OS socket send/receive buffers and user-space read/write buffers are also
 >     part of the transport
 > - backpressure: when the outbound queue is full, `reserve` MUST await; when
 >   the OS socket send buffer is full, the writer task awaits; payloads MUST NOT
 >   be dropped to relieve pressure.
 
-> rs[layer.transport.framed]
+> r[layer.transport.framed]
 >
 > Framed transports (for example: WebSocket) MUST map one transport frame to
 > one roam `Payload` (`r[transport.message.one-to-one]`).
@@ -1853,13 +1868,13 @@ pub trait TransportConnector {
 >
 > Framed buffering and backpressure entail:
 > - buffering:
->   - in-process outbound queue (finite) is required by `rs[layer.link.permits]`
+>   - in-process outbound queue (finite) is required by `r[layer.link.permits]`
 >   - frame queues and internal codec buffers are part of the framed transport
 > - backpressure: when the outbound queue is full, `reserve` MUST await; when
 >   the framed sink is not ready, the writer task awaits. `permit.send` MUST NOT
 >   block.
 
-> rs[layer.transport.shm]
+> r[layer.transport.shm]
 >
 > SHM transport MUST preserve the same link/virtual-connection semantics.
 > Transport signaling/buffering is SHM-specific.
@@ -1886,7 +1901,7 @@ pub trait TransportConnector {
 >
 > SHM buffering and backpressure entail:
 > - buffering:
->   - in-process outbound queue (finite) is required by `rs[layer.link.permits]`
+>   - in-process outbound queue (finite) is required by `r[layer.link.permits]`
 >   - bounded SHM rings/queues are also transport buffers; each entry is exactly
 >     one payload
 > - backpressure: when the outbound queue is full, `reserve` MUST await; when
@@ -1895,7 +1910,7 @@ pub trait TransportConnector {
 
 ## Session
 
-> rs[layer.session]
+> r[layer.session]
 >
 > The session layer owns all roam protocol state machine concerns over a live
 > link:
@@ -1906,12 +1921,12 @@ pub trait TransportConnector {
 > - transparent resumption after link failure (exactly-once replay/dedup)
 > - protocol violation handling and error mapping
 
-> rs[layer.session.shutdown]
+> r[layer.session.shutdown]
 >
 > Protocol-level shutdown behavior (including when/why to send `Goodbye`) is
 > owned by the session layer, not by the transport/link abstraction.
 
-> rs[layer.session.interface]
+> r[layer.session.interface]
 >
 > Rust MUST provide one primary session interface that consumes a `Link`,
 > exposes root-connection call capability, exposes incoming connection
@@ -1929,12 +1944,12 @@ pub trait Session {
 
 ## Flow Control
 
-> rs[layer.flow-control.owner]
+> r[layer.flow-control.owner]
 >
 > Channel flow control is owned by the session layer, not by generated clients
 > and not by method-specific call code.
 
-> rs[layer.flow-control.rules]
+> r[layer.flow-control.rules]
 >
 > Flow control semantics MUST follow main-spec rules
 > (`r[flow.channel.credit-based]`, `r[flow.channel.all-transports]`,
@@ -1947,7 +1962,7 @@ pub trait Session {
 > These differences MUST remain observationally equivalent at the protocol
 > level.
 
-> rs[layer.flow-control.interface]
+> r[layer.flow-control.interface]
 >
 > Rust MUST define a dedicated flow-control trait used by the session layer.
 
@@ -1965,7 +1980,7 @@ pub trait FlowControl {
 
 ## Call Runtime
 
-> rs[layer.call-runtime]
+> r[layer.call-runtime]
 >
 > The call runtime owns the typed-to-message boundary:
 > - argument encoding into Request payload (`r[call.request.payload-encoding]`)
@@ -1974,11 +1989,11 @@ pub trait FlowControl {
 > - response decoding (`r[call.response.encoding]`)
 > - response-side `Rx<T>` binding
 
-> rs[layer.call-runtime.interface]
+> r[layer.call-runtime.interface]
 >
 > Rust MUST define one primary call-runtime interface for typed method calls.
 
-> rs[layer.call-runtime.single-codepath]
+> r[layer.call-runtime.single-codepath]
 >
 > Rust MUST implement exactly one call/dispatch codepath for every method,
 > always using the channel-aware request representation. The "simple" case is
@@ -1986,21 +2001,21 @@ pub trait FlowControl {
 
 ## Generated Clients
 
-> rs[layer.generated-client]
+> r[layer.generated-client]
 >
 > Generated Rust service clients are concrete typed API structs with method
 > impls. They own method descriptors, typed argument construction, and one
 > inner call-runtime handle; they MUST NOT own link I/O, reconnect/retry
 > control flow, or channel protocol mechanics.
 
-> rs[client.nongeneric]
+> r[client.nongeneric]
 >
 > Generated Rust service clients MUST expose non-generic concrete types.
 > Runtime polymorphism, when needed, is an internal runtime concern.
 
 ## What a Call Entails (Rust)
 
-> rs[call.steps]
+> r[call.steps]
 >
 > A Rust call path MUST perform:
 > 1. Encode typed args as Request payload tuple
@@ -2012,17 +2027,17 @@ pub trait FlowControl {
 
 ## Reconnection and Retry
 
-> rs[reconnect.owner]
+> r[reconnect.owner]
 >
 > Automatic reconnection and session resume are owned by session
 > implementations (not by generated service clients).
 
-> rs[reconnect.new-link]
+> r[reconnect.new-link]
 >
 > Reconnection creates a new link instance. It does not resume the previous
 > link instance.
 
-> rs[reconnect.resume]
+> r[reconnect.resume]
 >
 > After a link failure, a reconnecting session implementation MUST establish a
 > new link and MUST attempt to resume the existing session using the
@@ -2036,7 +2051,7 @@ pub trait FlowControl {
 > to user-visible handles (calls and channels) that depended on the old
 > session.
 
-> rs[reconnect.trigger]
+> r[reconnect.trigger]
 >
 > Reconnect/retry behavior MUST follow reconnect-spec rules:
 > - trigger on transport failures (`r[reconnect.trigger.transport]`)
@@ -2045,18 +2060,18 @@ pub trait FlowControl {
 > - preserve shared/single-reconnect concurrency semantics
 >   (`r[reconnect.concurrency.shared]`, `r[reconnect.concurrency.single-reconnect]`)
 
-> rs[retry.semantic]
+> r[retry.semantic]
 >
 > Retry means re-issuing the same logical call after reconnect due to transport
 > failure. This is transport-failure recovery behavior, not application-level
 > retry policy.
 
-> rs[reconnect.inflight.requests]
+> r[reconnect.inflight.requests]
 >
 > In-flight requests on a failed link MUST complete with transport failure
 > unless explicitly retried by reconnect logic.
 
-> rs[reconnect.inflight.channels]
+> r[reconnect.inflight.channels]
 >
 > Channels on a failed link MUST be resumed and completed exactly-once if the
 > session is resumed successfully. If the session cannot be resumed, channels
@@ -2064,22 +2079,22 @@ pub trait FlowControl {
 
 ## Channel Binding
 
-> rs[channel.binding.request]
+> r[channel.binding.request]
 >
 > Request-side channel ownership is caller-side and schema-driven
 > (`r[channeling.allocation.caller]`, `r[call.request.channels.schema-driven]`).
 
-> rs[channel.binding.server]
+> r[channel.binding.server]
 >
 > On dispatch, Rust MUST treat Request.channels as authoritative and patch IDs
 > into deserialized args before binding streams (`r[channeling.allocation.caller]`).
 
-> rs[channel.binding.response]
+> r[channel.binding.response]
 >
 > On the caller side, Rust MUST bind response `Rx<T>` handles after decoding
 > a successful response, using response channel IDs and method schema.
 
-> rs[channel.binding.transport-agnostic]
+> r[channel.binding.transport-agnostic]
 >
 > Channel binding semantics are transport-agnostic and MUST be identical across
 > framed, stream, and shm transports.
@@ -2089,7 +2104,7 @@ pub trait FlowControl {
 Every method has a unique 64-bit identifier computed from its service name,
 method name, and signature.
 
-> rs[method.identity.computation]
+> r[method.identity.computation]
 >
 > The method ID MUST be computed as:
 > ```
@@ -2111,29 +2126,29 @@ The `sig_bytes` used in method identity is a BLAKE3 hash of the method's
 structural signature. This is computed at compile time by the `#[roam::service]`
 macro using [facet](https://facet.rs) type introspection.
 
-> rs[signature.hash.algorithm]
+> r[signature.hash.algorithm]
 >
 > The signature hash MUST be computed by hashing a canonical byte
 > representation of the method signature using BLAKE3.
 
-> rs[signature.varint]
+> r[signature.varint]
 >
 > Variable-length integers (`varint`) in signature encoding use the
 > same format as [POSTCARD]: unsigned LEB128. Each byte contains 7
 > data bits; the high bit indicates continuation (1 = more bytes).
 
-> rs[signature.endianness]
+> r[signature.endianness]
 >
 > All fixed-width integers in signature encoding are little-endian.
 > The final u64 method ID is extracted as the first 8 bytes of the
 > BLAKE3 hash, interpreted as little-endian.
 
 The canonical representation encodes the method signature as a tuple (see
-`rs[signature.method]` below). Each type within is encoded recursively:
+`r[signature.method]` below). Each type within is encoded recursively:
 
 ## Primitive Types
 
-> rs[signature.primitive]
+> r[signature.primitive]
 >
 > Primitive types MUST be encoded as a single byte tag:
 
@@ -2159,7 +2174,7 @@ The canonical representation encodes the method signature as a tuple (see
 
 ## Container Types
 
-> rs[signature.container]
+> r[signature.container]
 >
 > Container types MUST be encoded as a tag byte followed by their element type(s):
 
@@ -2176,7 +2191,7 @@ The canonical representation encodes the method signature as a tuple (see
 Note: These are wire-format types, not Rust types. `Vec`, `VecDeque`, and
 `LinkedList` all encode as List. `HashMap` and `BTreeMap` both encode as Map.
 
-> rs[signature.bytes.equivalence]
+> r[signature.bytes.equivalence]
 >
 > Any "bytes" type MUST use the `bytes` tag (`0x11`) in signature encoding.
 > This includes the dedicated `bytes` wire-format type and a list of `u8`.
@@ -2184,7 +2199,7 @@ Note: These are wire-format types, not Rust types. `Vec`, `VecDeque`, and
 
 ## Struct Types
 
-> rs[signature.struct]
+> r[signature.struct]
 >
 > Struct types MUST be encoded as:
 > ```
@@ -2198,7 +2213,7 @@ This allows renaming types without breaking compatibility.
 
 ## Enum Types
 
-> rs[signature.enum]
+> r[signature.enum]
 >
 > Enum types MUST be encoded as:
 > ```
@@ -2214,7 +2229,7 @@ Variants MUST be encoded in declaration order.
 
 ## Recursive Types
 
-> rs[signature.recursive]
+> r[signature.recursive]
 >
 > When encoding types that reference themselves (directly or indirectly),
 > implementations MUST detect cycles and emit a back-reference tag (`0x32`)
@@ -2230,7 +2245,7 @@ Variants MUST be encoded in declaration order.
 
 ## Method Signature Encoding
 
-> rs[signature.method]
+> r[signature.method]
 >
 > A method signature MUST be encoded as a tuple of its arguments followed
 > by the return type:
@@ -2267,13 +2282,13 @@ roam. The hub topology supports one **host** and multiple **guests** (1:N),
 designed for plugin systems where a host application loads guest plugins
 that communicate via shared memory.
 
-> shm[shm.scope]
+> r[shm.scope]
 >
 > This binding encodes Core Semantics over shared memory. It does NOT
 > redefine the meaning of calls, channels, errors, or flow control —
 > only their representation in this transport.
 
-> shm[shm.architecture]
+> r[shm.architecture]
 >
 > This binding assumes:
 > - All processes sharing the segment run on the **same architecture**
@@ -2287,7 +2302,7 @@ that communicate via shared memory.
 
 ## Hub (1:N)
 
-> shm[shm.topology.hub]
+> r[shm.topology.hub]
 >
 > The hub topology has exactly one **host** and zero or more **guests**.
 > The host creates and owns the shared memory segment. Guests attach to
@@ -2305,27 +2320,27 @@ that communicate via shared memory.
 └───────┘ └───────┘ └───────┘
 ```
 
-> shm[shm.topology.hub.communication]
+> r[shm.topology.hub.communication]
 >
 > Guests communicate only with the host, not with each other. Each
 > guest has its own BipBuffers and channel table within the shared
 > segment, and all guests share the VarSlotPool.
 
-> shm[shm.topology.hub.calls]
+> r[shm.topology.hub.calls]
 >
 > Either the host or a guest can initiate calls. The host can call
 > methods on any guest; a guest can call methods on the host.
 
 ## Peer Identification
 
-> shm[shm.topology.peer-id]
+> r[shm.topology.peer-id]
 >
 > A guest's `peer_id` (u8) is 1 + the index of its entry in the peer
 > table. Peer table entry 0 corresponds to `peer_id = 1`, entry 1 to
 > `peer_id = 2`, etc. The host does not have a peer_id (it is not in
 > the peer table).
 
-> shm[shm.topology.max-guests]
+> r[shm.topology.max-guests]
 >
 > The maximum number of guests is limited to 255 (peer IDs 1-255).
 > The `max_guests` field in the segment header MUST be ≤ 255. The
@@ -2336,26 +2351,26 @@ that communicate via shared memory.
 Core defines `request_id` and `channel_id` as u64. SHM uses narrower
 encodings to fit in the 24-byte frame header:
 
-> shm[shm.id.request-id]
+> r[shm.id.request-id]
 >
 > SHM encodes `request_id` as u32. The upper 32 bits of Core's u64
 > `request_id` are implicitly zero. Implementations MUST NOT use
 > request IDs ≥ 2^32.
 
-> shm[shm.id.channel-id]
+> r[shm.id.channel-id]
 >
 > SHM encodes `channel_id` as u32. The upper 32 bits of Core's u64
 > `channel_id` are implicitly zero.
 
 ## Channel ID Allocation
 
-> shm[shm.id.channel-scope]
+> r[shm.id.channel-scope]
 >
 > Channel IDs are scoped to the guest-host pair. Two different guests
 > may independently use the same `channel_id` value without collision
 > because they have separate channel tables.
 
-> shm[shm.id.channel-parity]
+> r[shm.id.channel-parity]
 >
 > Within a guest-host pair, channel IDs use odd/even parity to prevent
 > collisions:
@@ -2366,7 +2381,7 @@ encodings to fit in the 24-byte frame header:
 
 ## Request ID Scope
 
-> shm[shm.id.request-scope]
+> r[shm.id.request-scope]
 >
 > Request IDs are scoped to the guest-host pair. Two different guests
 > may use the same `request_id` value without collision because their
@@ -2377,14 +2392,14 @@ encodings to fit in the 24-byte frame header:
 Core Semantics require a Hello exchange to negotiate connection parameters.
 SHM replaces this with the segment header:
 
-> shm[shm.handshake]
+> r[shm.handshake]
 >
 > SHM does not use Hello messages. Instead, the segment header fields
 > (`max_payload_size`, `initial_credit`, `max_channels`) serve as the
 > host's unilateral configuration. Guests accept these values by
 > attaching to the segment.
 
-> shm[shm.handshake.no-negotiation]
+> r[shm.handshake.no-negotiation]
 >
 > Unlike networked transports, SHM has no negotiation — the host's
 > values are authoritative. A guest that cannot operate within these
@@ -2397,7 +2412,7 @@ state for all guests.
 
 ## Segment Header
 
-> shm[shm.segment.header]
+> r[shm.segment.header]
 >
 > The segment MUST begin with a header:
 
@@ -2424,17 +2439,17 @@ Offset  Size   Field                Description
 96      32     reserved             Reserved for future use (zero)
 ```
 
-> shm[shm.segment.header-size]
+> r[shm.segment.header-size]
 >
 > The segment header is 128 bytes.
 
-> shm[shm.segment.magic]
+> r[shm.segment.magic]
 >
 > The magic field MUST be exactly `RAPAHUB\x01` (8 bytes).
 
 ## Peer Table
 
-> shm[shm.segment.peer-table]
+> r[shm.segment.peer-table]
 >
 > The peer table contains one entry per potential guest:
 
@@ -2444,7 +2459,7 @@ struct PeerEntry {
     state: AtomicU32,           // 0=Empty, 1=Attached, 2=Goodbye, 3=Reserved
     epoch: AtomicU32,           // Incremented on attach
     _reserved_head_tail: [AtomicU32; 4], // Reserved (v1 ring indices, zeroed in v2)
-    last_heartbeat: AtomicU64,  // Monotonic tick count (see shm[shm.crash.heartbeat-clock])
+    last_heartbeat: AtomicU64,  // Monotonic tick count (see r[shm.crash.heartbeat-clock])
     ring_offset: u64,           // Offset to this guest's area (BipBuffers)
     slot_pool_offset: u64,      // Reserved in v2 (0)
     channel_table_offset: u64,  // Offset to this guest's channel table
@@ -2457,13 +2472,13 @@ struct PeerEntry {
 > (write, read, watermark) lives in the BipBuffer headers within the
 > guest area instead of in the peer table.
 
-> shm[shm.segment.peer-state]
+> r[shm.segment.peer-state]
 >
 > Peer states:
 > - **Empty (0)**: Slot available for a new guest
 > - **Attached (1)**: Guest is active
 > - **Goodbye (2)**: Guest is shutting down or has crashed
-> - **Reserved (3)**: Host has allocated slot, guest not yet attached (see `shm[shm.spawn.reserved-state]`)
+> - **Reserved (3)**: Host has allocated slot, guest not yet attached (see `r[shm.spawn.reserved-state]`)
 
 ## Per-Guest BipBuffers
 
@@ -2471,7 +2486,7 @@ Each guest has two BipBuffers (variable-length byte SPSC ring buffers):
 - **Guest→Host BipBuffer**: Guest produces frames, host consumes
 - **Host→Guest BipBuffer**: Host produces frames, guest consumes
 
-> shm[shm.bipbuf.layout]
+> r[shm.bipbuf.layout]
 >
 > Each guest's area (at `PeerEntry.ring_offset`) contains:
 > 1. Guest→Host BipBuffer: 128-byte header + `bipbuf_capacity` bytes data
@@ -2480,7 +2495,7 @@ Each guest has two BipBuffers (variable-length byte SPSC ring buffers):
 >
 > Total per guest: `align64(2 × (128 + bipbuf_capacity)) + align64(max_channels × 16)`.
 
-> shm[shm.bipbuf.header]
+> r[shm.bipbuf.header]
 >
 > Each BipBuffer has a 128-byte header (two cache lines):
 >
@@ -2502,13 +2517,13 @@ Each guest has two BipBuffers (variable-length byte SPSC ring buffers):
 > Splitting producer and consumer fields onto separate cache lines avoids
 > false sharing.
 
-> shm[shm.bipbuf.initialization]
+> r[shm.bipbuf.initialization]
 >
 > On segment creation, all BipBuffer memory MUST be zeroed (write=0,
 > watermark=0, read=0). On guest attach, the guest MUST NOT assume buffer
 > contents are valid.
 
-> shm[shm.bipbuf.grant]
+> r[shm.bipbuf.grant]
 >
 > To reserve `n` contiguous bytes for writing (**grant**):
 >
@@ -2522,13 +2537,13 @@ Each guest has two BipBuffers (variable-length byte SPSC ring buffers):
 >    - If `write + n < read`: grant `[write..write+n)`. Done.
 >    - Else return full.
 
-> shm[shm.bipbuf.commit]
+> r[shm.bipbuf.commit]
 >
 > After writing data into a granted region, the producer commits by
 > advancing `write += n` with **Release** ordering. This makes the
 > written bytes visible to the consumer.
 
-> shm[shm.bipbuf.read]
+> r[shm.bipbuf.read]
 >
 > To read available bytes:
 >
@@ -2540,20 +2555,20 @@ Each guest has two BipBuffers (variable-length byte SPSC ring buffers):
 >    - If `read < write`: readable region is `[read..write)`.
 >    - Otherwise the buffer is empty.
 
-> shm[shm.bipbuf.release]
+> r[shm.bipbuf.release]
 >
 > After processing `n` bytes, the consumer releases by advancing
 > `read += n` with **Release** ordering. If `read` reaches or exceeds
 > `watermark`, set `read = 0` and `watermark = 0` (wrap to beginning).
 
-> shm[shm.bipbuf.full]
+> r[shm.bipbuf.full]
 >
 > If the BipBuffer has no room for the requested grant, the producer
 > MUST wait. Implementations SHOULD use a doorbell signal or polling
 > with backoff. A full BipBuffer indicates backpressure from a slow
 > consumer, not a protocol error.
 
-> shm[shm.backpressure.host-to-guest]
+> r[shm.backpressure.host-to-guest]
 >
 > When the host cannot write to a guest's H→G BipBuffer (buffer full
 > or no slots available), it MUST queue the message and retry when
@@ -2568,7 +2583,7 @@ written into BipBuffers.
 
 ## ShmFrameHeader (24 bytes)
 
-> shm[shm.frame.header]
+> r[shm.frame.header]
 >
 > Each frame begins with a 24-byte header (little-endian):
 >
@@ -2576,7 +2591,7 @@ written into BipBuffers.
 > Offset  Size  Field        Description
 > ──────  ────  ─────        ───────────
 > 0       4     total_len    Frame size in bytes (including this field), padded to 4
-> 4       1     msg_type     Message type (see shm[shm.desc.msg-type])
+> 4       1     msg_type     Message type (see r[shm.desc.msg-type])
 > 5       1     flags        Bit 0: FLAG_SLOT_REF (payload in VarSlotPool)
 > 6       2     _reserved    Reserved (zero)
 > 8       4     id           request_id or channel_id (u32)
@@ -2584,19 +2599,19 @@ written into BipBuffers.
 > 20      4     payload_len  Actual payload byte count
 > ```
 
-> shm[shm.frame.alignment]
+> r[shm.frame.alignment]
 >
 > `total_len` MUST be padded up to a 4-byte boundary. The padding
 > bytes (between the end of the payload or slot reference and the next
 > 4-byte boundary) SHOULD be zeroed.
 
-> shm[shm.frame.inline]
+> r[shm.frame.inline]
 >
 > When `FLAG_SLOT_REF` is clear (flags bit 0 = 0), the payload bytes
 > immediately follow the 24-byte header inline in the BipBuffer.
 > The frame occupies `align4(24 + payload_len)` bytes total.
 
-> shm[shm.frame.slot-ref]
+> r[shm.frame.slot-ref]
 >
 > When `FLAG_SLOT_REF` is set (flags bit 0 = 1), a 12-byte `SlotRef`
 > follows the header instead of inline payload:
@@ -2614,7 +2629,7 @@ written into BipBuffers.
 > The actual payload is stored in the VarSlotPool slot identified by
 > this reference. The frame occupies 36 bytes (`align4(24 + 12)`).
 
-> shm[shm.frame.threshold]
+> r[shm.frame.threshold]
 >
 > A frame with `24 + payload_len <= inline_threshold` SHOULD be sent
 > inline. Larger payloads MUST use a slot reference. The default
@@ -2627,7 +2642,7 @@ The abstract Message type (see [CORE-SPEC]) has separate `metadata` and
 `payload` fields. SHM frames carry both in the payload region, combined
 into a single encoded value:
 
-> shm[shm.metadata.in-payload]
+> r[shm.metadata.in-payload]
 >
 > For Request and Response messages, the frame's payload contains both
 > metadata and arguments/result, encoded as a single [POSTCARD] value:
@@ -2647,14 +2662,14 @@ into a single encoded value:
 > This differs from other transports where metadata and payload are
 > separate fields in the Message enum.
 
-> shm[shm.metadata.limits]
+> r[shm.metadata.limits]
 >
-> The limits from `shm[call.metadata.limits]` apply: at most 128 keys,
+> The limits from `r[call.metadata.limits]` apply: at most 128 keys,
 > each value at most 16 KB. Violations are connection errors.
 
 ## Message Types
 
-> shm[shm.desc.msg-type]
+> r[shm.desc.msg-type]
 >
 > The `msg_type` field in `ShmFrameHeader` identifies the abstract message:
 >
@@ -2671,49 +2686,49 @@ into a single encoded value:
 > | 9 | Accept | `request_id` |
 > | 10 | Reject | `request_id` |
 
-> shm[shm.flow.no-credit-message]
+> r[shm.flow.no-credit-message]
 >
 > There is no Credit message type. Credit is conveyed via shared
 > atomic counters in the channel table (see [Flow Control](#flow-control)).
 
 ## Payload Encoding
 
-> shm[shm.payload.encoding]
+> r[shm.payload.encoding]
 >
 > Payloads MUST be [POSTCARD]-encoded.
 
-> shm[shm.payload.inline]
+> r[shm.payload.inline]
 >
 > If `24 + payload_len <= inline_threshold`, the payload SHOULD be
-> stored inline in the BipBuffer frame (see `shm[shm.frame.inline]`).
+> stored inline in the BipBuffer frame (see `r[shm.frame.inline]`).
 > The default inline threshold is 256 bytes.
 
-> shm[shm.payload.slot]
+> r[shm.payload.slot]
 >
 > If `24 + payload_len > inline_threshold`, the payload MUST be stored
 > in the shared VarSlotPool and referenced via a `SlotRef` in the frame
-> (see `shm[shm.frame.slot-ref]`).
+> (see `r[shm.frame.slot-ref]`).
 
 ## Slot Lifecycle
 
-> shm[shm.slot.allocate]
+> r[shm.slot.allocate]
 >
 > To allocate a slot from the VarSlotPool:
 > 1. Find the smallest size class where `slot_size >= payload_len`
-> 2. Pop from that class's Treiber stack free list (see `shm[shm.varslot.allocation]`)
+> 2. Pop from that class's Treiber stack free list (see `r[shm.varslot.allocation]`)
 > 3. If exhausted, try the next larger class
 > 4. Increment the slot's generation counter
 > 5. Write payload to the slot's data region
 
-> shm[shm.slot.free]
+> r[shm.slot.free]
 >
 > To free a slot:
 > 1. Push it back onto the size class's Treiber stack free list
->    (see `shm[shm.varslot.freeing]`)
+>    (see `r[shm.varslot.freeing]`)
 >
 > The receiver frees slots after processing the message.
 
-> shm[shm.slot.exhaustion]
+> r[shm.slot.exhaustion]
 >
 > If no free slots are available in any suitable size class, the sender
 > MUST wait. Use polling with backoff. Slot exhaustion is not a protocol
@@ -2723,14 +2738,14 @@ into a single encoded value:
 
 ## Memory Ordering
 
-> shm[shm.ordering.ring-publish]
+> r[shm.ordering.ring-publish]
 >
 > When writing a frame to a BipBuffer:
 > 1. Grant contiguous space (check write vs read positions)
 > 2. Write frame header and payload into the granted region
 > 3. Commit: advance `write += total_len` with **Release** ordering
 
-> shm[shm.ordering.ring-consume]
+> r[shm.ordering.ring-consume]
 >
 > When reading frames from a BipBuffer:
 > 1. Load `write` with **Acquire** ordering
@@ -2743,31 +2758,31 @@ into a single encoded value:
 Use doorbells for efficient cross-process notification, complemented by
 polling with backoff:
 
-> shm[shm.wakeup.consumer-wait]
+> r[shm.wakeup.consumer-wait]
 >
 > **Consumer waiting for messages** (BipBuffer empty):
 > - Wait: poll on doorbell fd (or busy-wait with backoff)
 > - Wake: Producer signals doorbell after committing bytes
 
-> shm[shm.wakeup.producer-wait]
+> r[shm.wakeup.producer-wait]
 >
 > **Producer waiting for space** (BipBuffer full):
 > - Wait: poll on doorbell fd (or busy-wait with backoff)
 > - Wake: Consumer signals doorbell after releasing bytes
 
-> shm[shm.wakeup.credit-wait]
+> r[shm.wakeup.credit-wait]
 >
 > **Sender waiting for credit** (zero remaining):
 > - Wait: futex_wait on `ChannelEntry.granted_total`
 > - Wake: Receiver calls futex_wake on `granted_total` after updating
 
-> shm[shm.wakeup.slot-wait]
+> r[shm.wakeup.slot-wait]
 >
 > **Sender waiting for slots** (VarSlotPool exhausted):
 > - Wait: poll with backoff (implementation-defined strategy)
 > - Wake: Receiver signals after freeing a slot back to the pool
 
-> shm[shm.wakeup.fallback]
+> r[shm.wakeup.fallback]
 >
 > On non-Linux platforms, use polling with exponential backoff or
 > platform-specific primitives (e.g., `WaitOnAddress` on Windows).
@@ -2779,7 +2794,7 @@ messages.
 
 ## Channel Metadata Table
 
-> shm[shm.flow.channel-table]
+> r[shm.flow.channel-table]
 >
 > Each guest-host pair has a **channel metadata table** for tracking
 > active channels. The table is located at a fixed offset within the
@@ -2795,12 +2810,12 @@ struct ChannelEntry {
 // 16 bytes per entry
 ```
 
-> shm[shm.flow.channel-table-location]
+> r[shm.flow.channel-table-location]
 >
 > Each guest's channel table offset is stored in `PeerEntry.channel_table_offset`.
 > The table size is `max_channels * 16` bytes.
 
-> shm[shm.flow.channel-table-indexing]
+> r[shm.flow.channel-table-indexing]
 >
 > The `channel_id` directly indexes the channel table: channel N uses
 > entry N. This means:
@@ -2808,7 +2823,7 @@ struct ChannelEntry {
 > - Channel ID 0 is reserved; entry 0 is unused
 > - Usable channel IDs are 1 to `max_channels - 1`
 
-> shm[shm.flow.channel-activate]
+> r[shm.flow.channel-activate]
 >
 > When opening a new channel, the allocator MUST initialize the entry:
 > 1. Set `granted_total = initial_credit` (from segment header)
@@ -2817,7 +2832,7 @@ struct ChannelEntry {
 > The sender maintains its own `sent_total` counter locally (not in
 > shared memory).
 
-> shm[shm.flow.channel-id-reuse]
+> r[shm.flow.channel-id-reuse]
 >
 > A channel ID MAY be reused after the channel is closed (Close or Reset
 > received by both peers). To reuse:
@@ -2825,62 +2840,62 @@ struct ChannelEntry {
 > 2. Receiver sets `ChannelEntry.state = Free` (with Release ordering)
 > 3. Allocator polls for `state == Free` before reusing
 >
-> On reuse, the allocator reinitializes per `shm[shm.flow.channel-activate]`.
+> On reuse, the allocator reinitializes per `r[shm.flow.channel-activate]`.
 >
 > Implementations SHOULD delay reuse to avoid races (e.g., wait for
 > the entry to be Free before reallocating).
 
 ## Credit Counters
 
-> shm[shm.flow.counter-per-channel]
+> r[shm.flow.counter-per-channel]
 >
 > Each active channel has a `granted_total: AtomicU32` counter in its
 > channel table entry. The receiver publishes; the sender reads.
 
 ## Counter Semantics
 
-> shm[shm.flow.granted-total]
+> r[shm.flow.granted-total]
 >
 > `granted_total` is cumulative bytes authorized by the receiver.
 > Monotonically increasing (modulo wrap).
 
-> shm[shm.flow.remaining-credit]
+> r[shm.flow.remaining-credit]
 >
 > remaining = `granted_total - sent_total` (wrapping subtraction).
 > Sender MUST NOT send if remaining < payload size.
 
-> shm[shm.flow.wrap-rule]
+> r[shm.flow.wrap-rule]
 >
 > Interpret `granted_total - sent_total` as signed i32. Negative or
 > > 2^31 indicates corruption.
 
 ## Memory Ordering for Credit
 
-> shm[shm.flow.ordering.receiver]
+> r[shm.flow.ordering.receiver]
 >
 > Update `granted_total` with Release after consuming data.
 
-> shm[shm.flow.ordering.sender]
+> r[shm.flow.ordering.sender]
 >
 > Load `granted_total` with Acquire before deciding to send.
 
 ## Initial Credit
 
-> shm[shm.flow.initial]
+> r[shm.flow.initial]
 >
 > Channels start with `granted_total = initial_credit` from segment
 > header. Sender's `sent_total` starts at 0.
 
 ## Zero Credit
 
-> shm[shm.flow.zero-credit]
+> r[shm.flow.zero-credit]
 >
 > Sender waits. Use futex on the counter to avoid busy-wait.
 > Receiver wakes after granting credit.
 
 ## Credit and Reset
 
-> shm[shm.flow.reset]
+> r[shm.flow.reset]
 >
 > After Reset, stop accessing the channel's credit counter. Values
 > after Reset are undefined.
@@ -2889,7 +2904,7 @@ struct ChannelEntry {
 
 ## Attaching
 
-> shm[shm.guest.attach]
+> r[shm.guest.attach]
 >
 > To attach, a guest:
 > 1. Opens the shared memory segment
@@ -2899,13 +2914,13 @@ struct ChannelEntry {
 > 5. Increments epoch
 > 6. Begins processing
 
-> shm[shm.guest.attach-failure]
+> r[shm.guest.attach-failure]
 >
 > If no Empty slots exist, the guest cannot attach (hub is full).
 
 ## Detaching
 
-> shm[shm.guest.detach]
+> r[shm.guest.detach]
 >
 > To detach gracefully:
 > 1. Set state to Goodbye
@@ -2915,7 +2930,7 @@ struct ChannelEntry {
 
 ## Host Observing Guests
 
-> shm[shm.host.poll-peers]
+> r[shm.host.poll-peers]
 >
 > The host periodically checks peer states. On observing Goodbye or
 > epoch change (crash), the host cleans up that guest's resources.
@@ -2924,24 +2939,24 @@ struct ChannelEntry {
 
 ## Goodbye
 
-> shm[shm.goodbye.guest]
+> r[shm.goodbye.guest]
 >
 > A guest signals shutdown by setting its peer state to Goodbye.
 > It MAY send a Goodbye frame with reason first.
 
-> shm[shm.goodbye.host]
+> r[shm.goodbye.host]
 >
 > The host signals shutdown by setting `host_goodbye` in the header
 > to a non-zero value. Guests MUST poll this field and detach when
 > it becomes non-zero.
 
-> shm[shm.goodbye.payload]
+> r[shm.goodbye.payload]
 >
 > A Goodbye frame's payload is a [POSTCARD]-encoded `String`
-> containing the reason. Per `shm[core.error.goodbye-reason]`, the
+> containing the reason. Per `r[core.error.goodbye-reason]`, the
 > reason MUST contain the rule ID that was violated.
 
-> shm[shm.goodbye.host-atomic]
+> r[shm.goodbye.host-atomic]
 >
 > The `host_goodbye` field MUST be accessed atomically (load/store
 > with at least Relaxed ordering). It is written by the host and
@@ -2953,7 +2968,7 @@ The host is responsible for detecting crashed guests. Epoch-based
 detection only works when a new guest attaches; the host needs
 additional mechanisms to detect a guest that crashed while attached.
 
-> shm[shm.crash.host-owned]
+> r[shm.crash.host-owned]
 >
 > The host MUST use an out-of-band mechanism to detect crashed guests.
 > Common approaches:
@@ -2962,7 +2977,7 @@ additional mechanisms to detect a guest that crashed while attached.
 > - Require guests to update a heartbeat field periodically
 > - Use OS-specific death notifications
 
-> shm[shm.crash.heartbeat]
+> r[shm.crash.heartbeat]
 >
 > If using heartbeats: each `PeerEntry` contains a `last_heartbeat:
 > AtomicU64` field. Guests MUST update this at least every
@@ -2970,7 +2985,7 @@ additional mechanisms to detect a guest that crashed while attached.
 > declares a guest crashed if heartbeat is stale by more than
 > `2 * heartbeat_interval`.
 
-> shm[shm.crash.heartbeat-clock]
+> r[shm.crash.heartbeat-clock]
 >
 > Heartbeat values are **monotonic clock readings**, not wall-clock time.
 > All processes read from the same system monotonic clock, so values are
@@ -2986,12 +3001,12 @@ additional mechanisms to detect a guest that crashed while attached.
 > - Windows: `QueryPerformanceCounter`
 > - macOS: `mach_absolute_time`
 
-> shm[shm.crash.epoch]
+> r[shm.crash.epoch]
 >
 > Guests increment epoch on attach. If epoch changes unexpectedly,
 > the previous instance crashed and was replaced.
 
-> shm[shm.crash.recovery]
+> r[shm.crash.recovery]
 >
 > On detecting a crashed guest, the host MUST:
 > 1. Set the peer state to Goodbye
@@ -3005,7 +3020,7 @@ additional mechanisms to detect a guest that crashed while attached.
 
 # Byte Accounting
 
-> shm[shm.bytes.what-counts]
+> r[shm.bytes.what-counts]
 >
 > For flow control, "bytes" = `payload_len` of Data frames (the
 > [POSTCARD]-encoded element size). Frame header overhead and slot
@@ -3018,7 +3033,7 @@ file that can be memory-mapped by multiple processes.
 
 ## Segment File
 
-> shm[shm.file.path]
+> r[shm.file.path]
 >
 > The host creates the segment as a regular file at a path known to
 > both host and guests. Common locations:
@@ -3029,7 +3044,7 @@ file that can be memory-mapped by multiple processes.
 > The path MUST be communicated to guests out-of-band (e.g., via
 > command-line argument or environment variable).
 
-> shm[shm.file.create]
+> r[shm.file.create]
 >
 > To create a segment file:
 > 1. Open or create the file with read/write permissions
@@ -3039,22 +3054,22 @@ file that can be memory-mapped by multiple processes.
 >    VarSlotPool, channel tables)
 > 5. Write header magic last (signals segment is ready)
 
-> shm[shm.file.attach]
+> r[shm.file.attach]
 >
 > To attach to an existing segment:
 > 1. Open the file read/write
 > 2. Memory-map with `MAP_SHARED`
 > 3. Validate magic and version
 > 4. Read configuration from header
-> 5. Proceed with guest attachment per `shm[shm.guest.attach]`
+> 5. Proceed with guest attachment per `r[shm.guest.attach]`
 
-> shm[shm.file.permissions]
+> r[shm.file.permissions]
 >
 > The segment file SHOULD have permissions that allow all intended
 > guests to read and write. On POSIX systems, mode 0600 or 0660 is
 > typical, with the host and guests running as the same user or group.
 
-> shm[shm.file.cleanup]
+> r[shm.file.cleanup]
 >
 > The host SHOULD delete the segment file on graceful shutdown. On
 > crash, stale segment files may remain; implementations SHOULD handle
@@ -3062,14 +3077,14 @@ file that can be memory-mapped by multiple processes.
 
 ## Platform Mapping
 
-> shm[shm.file.mmap-posix]
+> r[shm.file.mmap-posix]
 >
 > On POSIX systems, use `mmap()` with:
 > - `PROT_READ | PROT_WRITE`
 > - `MAP_SHARED` (required for cross-process visibility)
 > - File descriptor from `open()` or `shm_open()`
 
-> shm[shm.file.mmap-windows]
+> r[shm.file.mmap-windows]
 >
 > On Windows, use:
 > - `CreateFileMapping()` to create a file mapping object
@@ -3083,7 +3098,7 @@ information needed to attach to the segment.
 
 ## Spawn Ticket
 
-> shm[shm.spawn.ticket]
+> r[shm.spawn.ticket]
 >
 > Before spawning a guest, the host:
 > 1. Allocates a peer table entry (finds Empty slot, sets to Reserved)
@@ -3093,7 +3108,7 @@ information needed to attach to the segment.
 >    - `peer_id`: Assigned peer ID (1-255)
 >    - `doorbell_fd`: Guest's end of the doorbell (Unix only)
 
-> shm[shm.spawn.reserved-state]
+> r[shm.spawn.reserved-state]
 >
 > The peer entry state during spawning:
 > - Host sets state to **Reserved** before spawn
@@ -3114,7 +3129,7 @@ pub enum PeerState {
 
 ## Command-Line Arguments
 
-> shm[shm.spawn.args]
+> r[shm.spawn.args]
 >
 > The canonical way to pass spawn ticket information to a guest process
 > is via command-line arguments:
@@ -3125,7 +3140,7 @@ pub enum PeerState {
 > --doorbell-fd=<fd>   # Doorbell file descriptor (Unix only)
 > ```
 
-> shm[shm.spawn.fd-inheritance]
+> r[shm.spawn.fd-inheritance]
 >
 > On Unix, the doorbell file descriptor MUST be inheritable by the child
 > process. The host MUST NOT set `O_CLOEXEC` / `FD_CLOEXEC` on the
@@ -3134,7 +3149,7 @@ pub enum PeerState {
 
 ## Guest Initialization
 
-> shm[shm.spawn.guest-init]
+> r[shm.spawn.guest-init]
 >
 > A spawned guest process:
 > 1. Parses command-line arguments to extract ticket info
@@ -3153,7 +3168,7 @@ complementing BipBuffer-based communication.
 
 ## Purpose
 
-> shm[shm.doorbell.purpose]
+> r[shm.doorbell.purpose]
 >
 > A doorbell is a bidirectional notification channel between host and
 > guest that provides:
@@ -3165,7 +3180,7 @@ complementing BipBuffer-based communication.
 
 ## Implementation
 
-> shm[shm.doorbell.socketpair]
+> r[shm.doorbell.socketpair]
 >
 > On Unix, doorbells are implemented using `socketpair()`:
 >
@@ -3178,7 +3193,7 @@ complementing BipBuffer-based communication.
 > The host keeps `fds[0]` and passes `fds[1]` to the guest via the
 > spawn ticket.
 
-> shm[shm.doorbell.signal]
+> r[shm.doorbell.signal]
 >
 > To signal the peer, write a single byte to the socket:
 >
@@ -3189,7 +3204,7 @@ complementing BipBuffer-based communication.
 >
 > The byte value is ignored; only the wakeup matters.
 
-> shm[shm.doorbell.wait]
+> r[shm.doorbell.wait]
 >
 > To wait for a signal (with optional timeout):
 >
@@ -3206,7 +3221,7 @@ complementing BipBuffer-based communication.
 > }
 > ```
 
-> shm[shm.doorbell.death]
+> r[shm.doorbell.death]
 >
 > When a process terminates, its end of the socketpair is closed by the
 > kernel. The surviving process sees `POLLHUP` or `POLLERR` on its end,
@@ -3214,7 +3229,7 @@ complementing BipBuffer-based communication.
 
 ## Integration with BipBuffers
 
-> shm[shm.doorbell.ring-integration]
+> r[shm.doorbell.ring-integration]
 >
 > Doorbells complement BipBuffer-based messaging:
 > - After committing a frame to the BipBuffer, signal the doorbell
@@ -3223,10 +3238,10 @@ complementing BipBuffer-based communication.
 >
 > This avoids busy-waiting and integrates with async I/O frameworks.
 
-> shm[shm.doorbell.optional]
+> r[shm.doorbell.optional]
 >
 > Doorbell support is OPTIONAL. Implementations MAY use only futex-based
-> wakeup (per `shm[shm.wakeup.*]`). Doorbells are recommended when:
+> wakeup (per `r[shm.wakeup.*]`). Doorbells are recommended when:
 > - Death detection latency is critical
 > - Integration with async I/O (epoll/kqueue/IOCP) is desired
 > - Busy-waiting must be avoided entirely
@@ -3238,7 +3253,7 @@ clean up resources and optionally restart them.
 
 ## Notification Callback
 
-> shm[shm.death.callback]
+> r[shm.death.callback]
 >
 > When adding a peer, the host MAY register a death callback:
 >
@@ -3254,7 +3269,7 @@ clean up resources and optionally restart them.
 > The callback is invoked when the guest's doorbell indicates death
 > (POLLHUP/POLLERR) or when heartbeat timeout is exceeded.
 
-> shm[shm.death.callback-context]
+> r[shm.death.callback-context]
 >
 > The death callback:
 > - Is called from the host's I/O or monitor thread
@@ -3264,7 +3279,7 @@ clean up resources and optionally restart them.
 
 ## Detection Methods
 
-> shm[shm.death.detection-methods]
+> r[shm.death.detection-methods]
 >
 > Implementations SHOULD use multiple detection methods:
 >
@@ -3279,7 +3294,7 @@ clean up resources and optionally restart them.
 > on Linux, process handle on Windows) provide immediate notification
 > on all platforms.
 
-> shm[shm.death.process-handle]
+> r[shm.death.process-handle]
 >
 > On Linux 5.3+, use `pidfd_open()` to get a pollable fd for the child
 > process. On Windows, the process handle from `CreateProcess()` is
@@ -3288,9 +3303,9 @@ clean up resources and optionally restart them.
 
 ## Recovery Actions
 
-> shm[shm.death.recovery]
+> r[shm.death.recovery]
 >
-> On guest death detection, per `shm[shm.crash.recovery]`:
+> On guest death detection, per `r[shm.crash.recovery]`:
 > 1. Invoke the death callback (if registered)
 > 2. Set peer state to Goodbye, then Empty
 > 3. Reset BipBuffers and reclaim VarSlotPool slots
@@ -3305,7 +3320,7 @@ Fixed-size per-guest bitmap pools (v1) have been eliminated.
 
 ## Size Classes
 
-> shm[shm.varslot.classes]
+> r[shm.varslot.classes]
 >
 > A variable-size pool consists of multiple **size classes**, each with
 > its own slot size and count. Example configuration:
@@ -3320,7 +3335,7 @@ Fixed-size per-guest bitmap pools (v1) have been eliminated.
 >
 > The specific configuration is application-dependent.
 
-> shm[shm.varslot.selection]
+> r[shm.varslot.selection]
 >
 > To allocate a slot for a payload of size `N`:
 > 1. Find the smallest size class where `slot_size >= N`
@@ -3330,7 +3345,7 @@ Fixed-size per-guest bitmap pools (v1) have been eliminated.
 
 ## Shared Pool Architecture
 
-> shm[shm.varslot.shared]
+> r[shm.varslot.shared]
 >
 > The VarSlotPool is **shared** across all guests:
 > - One pool region for the entire hub (at `var_slot_pool_offset`)
@@ -3340,7 +3355,7 @@ Fixed-size per-guest bitmap pools (v1) have been eliminated.
 > This allows efficient use of memory when different guests have
 > different payload size distributions.
 
-> shm[shm.varslot.ownership]
+> r[shm.varslot.ownership]
 >
 > Each slot tracks its current owner:
 >
@@ -3358,7 +3373,7 @@ Fixed-size per-guest bitmap pools (v1) have been eliminated.
 
 ## Extent-Based Growth
 
-> shm[shm.varslot.extents]
+> r[shm.varslot.extents]
 >
 > Size classes can grow dynamically via **extents**:
 > - Each size class starts with one extent of `slot_count` slots
@@ -3374,7 +3389,7 @@ Fixed-size per-guest bitmap pools (v1) have been eliminated.
 > }
 > ```
 
-> shm[shm.varslot.extent-layout]
+> r[shm.varslot.extent-layout]
 >
 > Each extent contains:
 > 1. Extent header (class, index, slot count, offsets)
@@ -3393,7 +3408,7 @@ Fixed-size per-guest bitmap pools (v1) have been eliminated.
 
 ## Free List Management
 
-> shm[shm.varslot.freelist]
+> r[shm.varslot.freelist]
 >
 > Each size class maintains a lock-free free list using a Treiber stack:
 >
@@ -3407,7 +3422,7 @@ Fixed-size per-guest bitmap pools (v1) have been eliminated.
 > Allocation pops from the head; freeing pushes to the head. The
 > generation counter prevents ABA problems.
 
-> shm[shm.varslot.allocation]
+> r[shm.varslot.allocation]
 >
 > To allocate from a size class:
 > 1. Load `free_head` with Acquire
@@ -3417,7 +3432,7 @@ Fixed-size per-guest bitmap pools (v1) have been eliminated.
 > 5. On success, increment slot's generation, set state to Allocated
 > 6. On failure, retry from step 1
 
-> shm[shm.varslot.freeing]
+> r[shm.varslot.freeing]
 >
 > To free a slot:
 > 1. Verify generation matches (detect double-free)
