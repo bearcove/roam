@@ -85,7 +85,6 @@ call (ie. send a request to the peer, expecting a response), one needs a connect
 roam supports various transports, like memory, TCP and other sockets, WebSocket,
 shared memory; but a roam connection sits several layers above a "TCP connection".
 
-
 ```mermaid
 graph TD
     A["🔗 Link\n(Memory, stdio, TCP, Unix sockets,\nNamed pipes, WebSocket, SHM)"]
