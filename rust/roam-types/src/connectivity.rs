@@ -7,17 +7,22 @@
 //!
 //! Layer names and trait names are intended to match:
 //!
-//! - **Link**: transports move values of some type `T` between peers, applying
-//!   backpressure via permits.
-//! - **Packet**: reliable, ordered delivery and resumption by wrapping items in
-//!   [`Packet<T>`] with sequence numbers and acknowledgements.
-//! - **Codec**: serialization and deserialization; typically `postcard` for any
-//!   `T: Facet`.
+//! - **Link**: transports move *typed values* between peers, applying
+//!   backpressure via permits. Transports are generic over the value type and
+//!   do not need to "know" what that type is beyond generic bounds.
+//! - **ReliableLink**: provides reliable, ordered delivery and resumption for a
+//!   `Link<T>` by wrapping items in [`Packet<T>`] internally (sequence numbers
+//!   and acknowledgements). The `Packet<T>` envelope is an implementation
+//!   detail below the reliability boundary; upper layers see only `T`.
+//! - **Codec**: serialization and deserialization used by `Link` to write/read
+//!   values directly into/from transport storage (socket buffers, SHM regions,
+//!   etc.). The concrete `Codec` (postcard) is chosen by higher layers; `Link`
+//!   stays generic over it.
 //! - **Session**: the protocol state machine (handshake, resume, routing, etc.).
 //! - **Client**: generated service clients built on top of `Session`.
 
-use crate::Payload;
-use facet::{Facet, Peek, TypePlan, TypePlanCore};
+use facet::Facet;
+use facet_reflect::TypePlanCore;
 use std::io;
 
 /// A bidirectional established transport between two peers.
@@ -27,9 +32,14 @@ use std::io;
 ///
 /// A `Link` is owned by the protocol runtime task (the `Session` layer); user
 /// code should generally not interact with `Link` directly.
-pub trait Link<T: for<'a> Facet<'a>, C: Codec<T>> {
-    type Tx: LinkTx<T>;
-    type Rx: LinkRx<T>;
+pub trait Link<TxItem, RxItem, C>
+where
+    TxItem: for<'a> Facet<'a>,
+    RxItem: for<'a> Facet<'a>,
+    C: Codec,
+{
+    type Tx: LinkTx<TxItem>;
+    type Rx: LinkRx<RxItem>;
 
     fn split(self) -> (Self::Tx, Self::Rx);
 }
@@ -112,19 +122,43 @@ pub struct Packet<T> {
     pub item: T,
 }
 
+/// Sketch: a reliability wrapper that strips the `Packet<T>` envelope.
+///
+/// The reliability layer is generic over `T`: it understands `Packet` (seq/ack,
+/// replay, dedup) but remains blind to `T` itself.
+///
+/// The wrapped link typically transports `Packet<T>` values, while the exposed
+/// link transports `T` values.
+#[derive(Debug)]
+pub struct ReliableLink<L, T, C> {
+    _inner: L,
+    _phantom: core::marker::PhantomData<(T, C)>,
+}
+
 /// Message serialization and deserialization.
 ///
-/// This is the only layer that understands the schema of `Message` at the
-/// `Payload` boundary (typically `postcard` for any `T: Facet`).
+/// A codec is selected by higher layers (typically postcard for any `T: Facet`)
+/// and used by [`Link`] implementations to encode and decode values.
+///
+/// This is intentionally an API sketch. The concrete design is expected to:
+/// - support plan-driven encode/decode via [`TypePlanCore`] (prepared statement)
+/// - support encode directly into transport-owned buffers (SHM bipbuffer,
+///   varslots, socket buffers) without intermediate staging buffers when possible
 pub trait Codec: Send + Sync + 'static {
     type EncodeError: std::error::Error + Send + Sync + 'static;
     type DecodeError: std::error::Error + Send + Sync + 'static;
 
-    fn encode(&self, item: Peek) -> Result<Payload, Self::EncodeError>;
-    fn decode<'a, T: Facet<'a>>(
+    fn encode_by_plan(
         &self,
+        plan: &TypePlanCore,
+        value: facet::Peek<'_, '_>,
+        out: &mut Vec<u8>,
+    ) -> Result<(), Self::EncodeError>;
+
+    fn decode_by_plan<T: Facet<'static>>(
+        &self,
+        plan: &TypePlanCore,
         payload: &[u8],
-        plan: &TypePlan<T>,
     ) -> Result<T, Self::DecodeError>;
 }
 
@@ -132,8 +166,13 @@ pub trait Codec: Send + Sync + 'static {
 ///
 /// If a session is constructed from a single already-established `Link`, it
 /// cannot reconnect unless it also has a `Dialer`.
-pub trait Dialer<T: for<'a> Facet<'a>, C: Codec>: Send + Sync + 'static {
-    type Link: Link<T, C>;
+pub trait Dialer<TxItem, RxItem, C>: Send + Sync + 'static
+where
+    TxItem: for<'a> Facet<'a>,
+    RxItem: for<'a> Facet<'a>,
+    C: Codec,
+{
+    type Link: Link<TxItem, RxItem, C>;
 
     #[allow(async_fn_in_trait)]
     async fn dial(&self) -> io::Result<Self::Link>;

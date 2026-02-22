@@ -16,7 +16,6 @@ members = [
   "rust/roam-local",
   "rust/roam-fdpass",
   "rust/roam-websocket",
-  "rust/roam-http-bridge",
   "rust/subject-rust",
   "rust/shm-primitives",
   "rust/ur-taking-me-with-you",
