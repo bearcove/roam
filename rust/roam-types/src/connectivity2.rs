@@ -242,3 +242,35 @@ pub trait LinkSource: Send + 'static {
 
     async fn next_link(&mut self) -> std::io::Result<Attachment<Self::Link>>;
 }
+
+// ---------------------------------------------------------------------------
+// SessionAcceptor
+// ---------------------------------------------------------------------------
+
+/// Yields new sessions from inbound connections.
+///
+/// The acceptor listens for incoming connections and produces ready-to-use
+/// [`Conduit`]s. For StableConduit-based transports, reconnects are handled
+/// internally — only genuinely new sessions surface through `accept`.
+///
+/// User code calls `accept` in a loop and hands each Conduit to
+/// `Session::new`.
+pub trait SessionAcceptor {
+    type Conduit: Conduit;
+
+    async fn accept(&mut self) -> std::io::Result<Self::Conduit>;
+}
+
+// ---------------------------------------------------------------------------
+// Session
+// ---------------------------------------------------------------------------
+
+/// Whether the session is acting as initiator or acceptor.
+///
+/// Determines who speaks first in the protocol handshake. Orthogonal to
+/// reconnect — reconnect is handled by StableConduit, not Session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionRole {
+    Initiator,
+    Acceptor,
+}
