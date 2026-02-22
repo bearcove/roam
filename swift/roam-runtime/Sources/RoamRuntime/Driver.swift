@@ -871,7 +871,6 @@ public final class Driver: @unchecked Sendable {
             // r[impl call.cancel.message] - Cancel requests termination.
             // r[impl call.cancel.best-effort] - Cancel is best-effort, response may still arrive.
             // r[impl core.call.cancel] - Cancel message uses request_id.
-            // r[impl call.request-id.cancel-still-in-flight] - Cancel only valid for in-flight.
             let _ = await state.removeInFlight(requestId)
         // Handler may still be processing; best-effort cancellation
 
@@ -898,10 +897,8 @@ public final class Driver: @unchecked Sendable {
         }
     }
 
-    /// r[impl call.request-id.duplicate-detection] - Duplicate request_id is fatal.
     /// r[impl flow.call.payload-limit] - Payloads bounded by max_payload_size.
     /// r[impl message.hello.enforcement] - Exceeding limit requires Goodbye.
-    /// r[impl call.request-id.in-flight] - Request IDs must be tracked while in-flight.
     /// r[impl call.request-id.uniqueness] - Each request uses a unique ID.
     private func handleRequest(
         requestId: UInt64,
@@ -910,7 +907,6 @@ public final class Driver: @unchecked Sendable {
         channels: [UInt64],
         payload: [UInt8]
     ) async throws {
-        // r[impl call.request-id.duplicate-detection]
         let inserted = await state.addInFlight(
             requestId,
             responseMetadata: responseMetadataFromRequest(metadata)

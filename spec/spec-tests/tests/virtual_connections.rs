@@ -59,7 +59,6 @@ fn connect_rejected_when_not_listening() {
 
         // Send Connect request - subject is not listening for incoming connections
         // r[verify message.connect.initiate]
-        // r[verify message.connect.request-id]
         let connect_msg = Message::Connect {
             request_id: RequestId(1),
             metadata: metadata_empty(),
@@ -289,7 +288,6 @@ fn virtual_connection_goodbye_independence() {
     .unwrap();
 }
 
-// r[verify message.connect.request-id] - Connect uses unique request_id
 // r[verify message.connect.metadata] - Connect can include metadata
 #[test]
 fn connect_message_structure() {
