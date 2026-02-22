@@ -7,22 +7,7 @@ specs (
         impls (
             {
                 name rust
-                include (
-                    rust/**/*.rs
-                    spec/**/*.rs
-                )
-                exclude (target/**)
-            }
-            {
-                name swift
-                include (swift/**/*.swift)
-            }
-            {
-                name typescript
-                include (
-                    typescript/**/*.ts
-                    typescript/**/*.js
-                )
+                include (rust/**/*.rs)
             }
         )
     }

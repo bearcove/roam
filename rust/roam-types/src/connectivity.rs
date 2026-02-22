@@ -1,98 +1,42 @@
-//! Connectivity-layer sketch (CL variant).
+//! Connectivity layer: Link (raw bytes) + Conduit (typed).
 //!
-//! Design:
+//! ## Layering
 //!
-//! - **Link\<T, C\>**: bidirectional transport, generic over item type `T` and
-//!   codec `C`. Transports (TCP, WS, SHM) implement this generically — they
-//!   don't know what `T` is.
-//! - **Asymmetric IO**: send `T`, receive [`SelfRef<T>`] (decoded value +
-//!   refcounted backing storage for zero-copy).
-//! - **Packet\<T\>**: wire frame enum — either `Hello` (reliability handshake)
-//!   or `Data` (seq + ack + T). Implementation detail of `ReliableLink` —
-//!   upper layers never see it.
-//! - **ReliableLink**: wraps `Link<Packet<T>, C>`, strips packet framing,
-//!   exposes `Link<T, C>` with transparent reconnect + replay. Generic over
-//!   [`LinkSource`] for how replacement links arrive (pull via Dialer on
-//!   client, push via channel on server).
-//! - **ReliableAcceptor**: server-side router. Accepts raw connections, reads
-//!   the first `Packet::Hello` to extract a [`ResumeKey`], routes reconnects
-//!   to existing `ReliableLink` instances, yields new sessions upward.
-//! - **Codec**: plan-driven, scatter-gather encode, unsafe `decode_into`. Not
-//!   generic over `T`. TypeErasedValue plan delegation is expanded by the codec
-//!   into Skeleton + BorrowedBlob parts during traversal.
-//! - **Session**: knows `Message` concretely, generic over the `Link`.
+//! ```text
+//! ┌───────────────────────────────────────────┐
+//! │  Session                                  │
+//! │  knows Message, generic over Conduit      │
+//! ├───────────────────────────────────────────┤
+//! │  Conduit (trait)                          │
+//! │  typed send/recv, codec is internal       │
+//! │  ├── BareConduit: Link + codec            │
+//! │  └── StableConduit: Link + codec          │
+//! │      + seq/ack/replay (bytes in buffer)   │
+//! ├───────────────────────────────────────────┤
+//! │  Link (trait)                             │
+//! │  raw bytes, transport provides buffers    │
+//! │  ├── TcpLink                              │
+//! │  ├── WebSocketLink                        │
+//! │  └── ShmLink (bipbuffer/varslot)          │
+//! └───────────────────────────────────────────┘
+//! ```
+//!
+//! - **Link has no T or C generics** — it moves raw bytes.
+//! - **Link provides write buffers** — `alloc(len)` returns a `WriteSlot`
+//!   backed by the transport's own memory (bipbuffer for SHM, write buf for
+//!   TCP). Caller encodes directly into the slot. One copy, not two.
+//! - **Conduit owns serialization** — codec is an implementation detail,
+//!   not a trait parameter. Session sees `impl Conduit`, never `C: Codec`.
+//! - **StableConduit replay buffer stores bytes** — no `T: Clone` needed.
+//! - **Both layers are splittable and use permits.**
 
-#![allow(unsafe_code)]
+#![allow(unsafe_code, async_fn_in_trait)]
 
 use facet::Facet;
 use std::mem::ManuallyDrop;
 
 // ---------------------------------------------------------------------------
-// Codec
-// ---------------------------------------------------------------------------
-
-/// A chunk of encoded output from [`Codec::encode_scatter`].
-pub enum EncodedPart<'a> {
-    /// Small skeleton bytes (struct layout, varint prefixes, seq/ack metadata).
-    /// Owned by the codec's traversal.
-    Skeleton(smallvec::SmallVec<[u8; 64]>),
-
-    /// Reference to existing large data in the source value (e.g. the contents
-    /// of a `Vec<u8>` field). Borrowed from the value being encoded — valid for
-    /// lifetime `'a`.
-    BorrowedBlob(&'a [u8]),
-}
-
-/// Plan-driven serialization and deserialization.
-///
-/// A single codec instance (e.g. `PostcardCodec`) handles any `T: Facet` via
-/// precomputed [`facet::TypePlanCore`].
-///
-/// Not generic over `T`: the plan carries the type information.
-pub trait Codec: Send + Sync + 'static {
-    type EncodeError: std::error::Error + Send + Sync + 'static;
-    type DecodeError: std::error::Error + Send + Sync + 'static;
-
-    /// Scatter-gather encode: serialize a value into a list of parts.
-    ///
-    /// The codec traverses the value (via [`facet_reflect::Peek`]), serializes
-    /// small fields into [`EncodedPart::Skeleton`] chunks, and records
-    /// references to large byte slices as [`EncodedPart::BorrowedBlob`].
-    ///
-    /// Returns the total encoded size (sum of all parts). The caller uses
-    /// this to reserve space in the destination (BipBuffer, VarSlot, etc.),
-    /// then writes the parts sequentially. One traversal, large blobs copied
-    /// once directly from source to destination.
-    ///
-    /// `value` is a [`facet_reflect::Peek`] — a safe handle carrying both the
-    /// pointer and the type's shape. No raw pointer / plan mismatch possible.
-    ///
-    /// For TypeErasedValue fields (plan-delegation), the codec expands them
-    /// into Skeleton + BorrowedBlob parts during traversal — no special part
-    /// kind needed.
-    fn encode_scatter<'a>(
-        &self,
-        value: facet_reflect::Peek<'a, 'a>,
-        parts: &mut Vec<EncodedPart<'a>>,
-    ) -> Result<usize, Self::EncodeError>;
-
-    /// Decode bytes into uninitialized memory using a precomputed plan.
-    ///
-    /// # Safety
-    ///
-    /// - `out` must be valid, aligned, and properly-sized for `plan`'s root shape.
-    /// - On error, the codec MUST clean up any partially-initialized fields
-    ///   (via facet's [`facet_reflect::Partial`] or equivalent).
-    unsafe fn decode_into(
-        &self,
-        plan: &facet::TypePlanCore,
-        bytes: &[u8],
-        out: facet_core::PtrUninit,
-    ) -> Result<(), Self::DecodeError>;
-}
-
-// ---------------------------------------------------------------------------
-// SelfRef
+// SelfRef + Backing
 // ---------------------------------------------------------------------------
 
 /// A decoded value `T` that may borrow from its own backing storage.
@@ -206,7 +150,7 @@ impl<T: 'static> SelfRef<T> {
     /// Transform the contained value, keeping the same backing storage.
     ///
     /// Useful for projecting through wrapper types:
-    /// `SelfRef<Packet<T>>` → `SelfRef<T>` by extracting the inner item.
+    /// `SelfRef<Frame<T>>` → `SelfRef<T>` by extracting the inner item.
     ///
     /// The closure receives the old value by move and returns the new value.
     /// Any references the new value holds into the backing storage (inherited
@@ -236,38 +180,90 @@ impl<T: 'static> core::ops::Deref for SelfRef<T> {
 // No `DerefMut` — mutating T could invalidate borrowed references.
 
 // ---------------------------------------------------------------------------
-// Link
+// Link — raw bytes transport
 // ---------------------------------------------------------------------------
 
-/// Bidirectional transport of `T` values using codec `C`.
+/// Bidirectional raw-bytes transport.
 ///
-/// Transports implement this generically — a TCP link doesn't know whether
-/// `T` is `Message`, `Packet<Message>`, or anything else. It just encodes `T`
-/// via `C` into its write buffer and decodes from its read buffer.
-///
-/// **Asymmetric by definition**: [`LinkTx`] sends `T`, [`LinkRx`] yields
-/// [`SelfRef<T>`]. So `Link<Message, C>` means Tx sends `Message` and Rx
-/// yields `SelfRef<Message>`.
-///
-/// Composable: `ReliableLink` wraps `Link<Packet<T>, C>` and itself implements
-/// `Link<T, C>`, hiding the packet layer from everything above.
-pub trait Link<T: 'static, C: Codec> {
-    type Tx: LinkTx<T, C>;
-    type Rx: LinkRx<T, C>;
+/// TCP, WebSocket, SHM all implement this. No knowledge of what's being
+/// sent — just bytes in, bytes out. The transport provides write buffers
+/// so callers can encode directly into the destination (zero-copy for SHM).
+pub trait Link {
+    type Tx: LinkTx;
+    type Rx: LinkRx;
 
     fn split(self) -> (Self::Tx, Self::Rx);
 }
 
-/// A [`Link`] assembled from pre-split Tx and Rx halves.
+/// Sending half of a [`Link`].
 ///
-/// Used when the halves were split earlier (e.g. the acceptor split a raw
-/// link to read Hello from Rx) and need to be passed as a `Link` again.
+/// Uses a two-phase write: `alloc(len)` returns a [`WriteSlot`] backed by
+/// the transport's own buffer (bipbuffer slot, kernel write buffer, etc.),
+/// then the caller fills it and calls [`WriteSlot::commit`].
+///
+/// `alloc` is the backpressure point — it awaits until the transport has
+/// room for `len` bytes.
+pub trait LinkTx: Send + 'static {
+    type Slot<'a>: WriteSlot
+    where
+        Self: 'a;
+
+    /// Allocate a writable buffer of exactly `len` bytes.
+    ///
+    /// Backpressure: blocks until the transport can accommodate `len` bytes.
+    /// For SHM: allocates from bipbuffer or varslot.
+    /// For TCP: reserves space in the write buffer.
+    ///
+    /// Dropping the returned slot without committing discards it and
+    /// releases the space.
+    async fn alloc(&self, len: usize) -> std::io::Result<Self::Slot<'_>>;
+
+    /// Graceful close of the outbound direction.
+    async fn close(self) -> std::io::Result<()>
+    where
+        Self: Sized;
+}
+
+/// A writable slot in the transport's output buffer.
+///
+/// Obtained from [`LinkTx::alloc`]. The caller writes encoded bytes into
+/// [`as_mut_slice`](WriteSlot::as_mut_slice), then calls
+/// [`commit`](WriteSlot::commit) to make them visible to the receiver.
+///
+/// Dropping without commit = discard (no bytes sent, space reclaimed).
+pub trait WriteSlot {
+    /// The writable buffer, exactly the size requested in `alloc`.
+    fn as_mut_slice(&mut self) -> &mut [u8];
+
+    /// Commit the written bytes. After this, the receiver can see them.
+    /// Sync — the bytes are already in the transport's buffer.
+    fn commit(self);
+}
+
+/// Receiving half of a [`Link`].
+///
+/// Yields [`Backing`] values: the raw bytes plus their ownership handle.
+/// The transport handles framing (length-prefix, WebSocket frames, etc.)
+/// and returns exactly one message's bytes per `recv` call.
+///
+/// For SHM: the Backing might be a VarSlot reference.
+/// For TCP: the Backing is a heap-allocated buffer.
+pub trait LinkRx: Send + 'static {
+    type Error: std::error::Error + Send + Sync + 'static;
+
+    /// Receive the next message's raw bytes.
+    ///
+    /// Returns `Ok(None)` when the peer has closed the connection.
+    async fn recv(&mut self) -> Result<Option<Backing>, Self::Error>;
+}
+
+/// A [`Link`] assembled from pre-split Tx and Rx halves.
 pub struct SplitLink<Tx, Rx> {
     pub tx: Tx,
     pub rx: Rx,
 }
 
-impl<T: 'static, C: Codec, Tx: LinkTx<T, C>, Rx: LinkRx<T, C>> Link<T, C> for SplitLink<Tx, Rx> {
+impl<Tx: LinkTx, Rx: LinkRx> Link for SplitLink<Tx, Rx> {
     type Tx = Tx;
     type Rx = Rx;
 
@@ -276,53 +272,95 @@ impl<T: 'static, C: Codec, Tx: LinkTx<T, C>, Rx: LinkRx<T, C>> Link<T, C> for Sp
     }
 }
 
-/// Sending half of a [`Link`].
+// ---------------------------------------------------------------------------
+// Conduit — typed, serialization-aware
+// ---------------------------------------------------------------------------
+
+/// Bidirectional typed transport. Wraps a [`Link`] and owns serialization.
 ///
-/// Permit-based backpressure: `reserve()` awaits capacity for one item.
-pub trait LinkTx<T, C: Codec>: Send + 'static {
-    type Permit<'a>: LinkTxPermit<T, C>
+/// Generic over `T`: the message type flowing through. The constructor
+/// takes a `TypePlan<T>` (for type safety), type-erases it to
+/// `TypePlanCore`, and uses the precomputed plan for fast deserialization.
+///
+/// Session is generic over this trait. The codec (postcard) is an
+/// implementation detail — it doesn't appear in the trait signature.
+///
+/// Two implementations:
+/// - `BareConduit`: Link + postcard. If the link dies, it's dead.
+/// - `StableConduit`: Link + postcard + seq/ack/replay. Handles reconnect
+///   transparently. Replay buffer stores encoded bytes (no `T: Clone`).
+pub trait Conduit<T: 'static> {
+    type Tx: ConduitTx<T>;
+    type Rx: ConduitRx<T>;
+
+    fn split(self) -> (Self::Tx, Self::Rx);
+}
+
+/// Sending half of a [`Conduit`].
+///
+/// Permit-based: `reserve()` is the backpressure point, `permit.send()`
+/// serializes and writes.
+pub trait ConduitTx<T: 'static>: Send + 'static {
+    type Permit<'a>: ConduitTxPermit<T>
     where
         Self: 'a;
 
-    /// Reserve capacity for exactly one item.
+    /// Reserve capacity for one outbound message.
     ///
-    /// Cancellation MUST NOT leak capacity. Dropping a permit without calling
-    /// `send()` MUST return that capacity.
-    #[allow(async_fn_in_trait)]
+    /// Backpressure lives here — this may block waiting for:
+    /// - StableConduit: replay buffer capacity (bounded outstanding)
+    /// - Flow control from the peer
+    ///
+    /// Dropping the permit without sending releases the reservation.
     async fn reserve(&self) -> std::io::Result<Self::Permit<'_>>;
 
-    /// Graceful close of the outbound direction. Consumes self.
-    #[allow(async_fn_in_trait)]
+    /// Graceful close of the outbound direction.
     async fn close(self) -> std::io::Result<()>
     where
         Self: Sized;
 }
 
-/// Permit for sending exactly one item. MUST NOT block (beyond encoding).
+/// Permit for sending exactly one message through a [`ConduitTx`].
 ///
-/// The permit knows the codec `C` and can return typed encode errors.
-/// Note: "send never blocks" still holds — encoding can *fail*, but it
-/// does not await or apply backpressure. Backpressure is at `reserve()`.
-pub trait LinkTxPermit<T, C: Codec> {
-    fn send(self, item: T) -> Result<(), C::EncodeError>;
-}
-
-/// Receiving half of a [`Link`].
-///
-/// Yields [`SelfRef<T>`]: decoded value + backing storage.
-/// Single-consumer (`&mut self`).
-pub trait LinkRx<T: 'static, C: Codec>: Send + 'static {
-    /// Transport-specific error type (IO errors, decode errors, framing
-    /// errors, peer death, etc.).
+/// `send` is async because it allocates from the underlying Link (which
+/// may block for buffer space). The Conduit's `reserve()` handles
+/// logical backpressure (outstanding messages), while the Link's `alloc`
+/// handles physical backpressure (buffer bytes).
+pub trait ConduitTxPermit<T: 'static> {
     type Error: std::error::Error + Send + Sync + 'static;
 
-    /// Receive the next item.
-    #[allow(async_fn_in_trait)]
+    /// Serialize `item` and send it through the link.
+    ///
+    /// Flow:
+    /// 1. Encode item with facet-postcard → `Vec<u8>`
+    /// 2. `link_tx.alloc(len)` → write slot
+    /// 3. Copy into slot
+    /// 4. Commit (+ buffer encoded bytes for replay in StableConduit)
+    async fn send(self, item: &T) -> Result<(), Self::Error>;
+}
+
+/// Receiving half of a [`Conduit`].
+///
+/// Yields decoded values as [`SelfRef<T>`] (value + backing storage).
+/// Uses a precomputed `TypePlanCore` for fast plan-driven deserialization
+/// via `Partial::from_raw` + `FormatDeserializer::deserialize_into`.
+pub trait ConduitRx<T: 'static>: Send + 'static {
+    type Error: std::error::Error + Send + Sync + 'static;
+
+    /// Receive and decode the next message.
+    ///
+    /// Flow:
+    /// 1. `link_rx.recv()` → `Backing` (raw bytes + ownership)
+    /// 2. Allocate `MaybeUninit<T>`, create `Partial::from_raw` with cached plan
+    /// 3. `PostcardParser` + `FormatDeserializer::deserialize_into`
+    /// 4. Wrap in `SelfRef<T>`
+    ///
+    /// Returns `Ok(None)` when the peer has closed.
     async fn recv(&mut self) -> Result<Option<SelfRef<T>>, Self::Error>;
 }
 
 // ---------------------------------------------------------------------------
-// Packet (enum — internal to ReliableLink)
+// Frame — internal to StableConduit
 // ---------------------------------------------------------------------------
 
 /// Packet sequence number (per direction).
@@ -342,16 +380,16 @@ pub struct PacketAck {
 ///
 /// Assigned by the server on first connection. Sent by the client on
 /// reconnect so the server can route the new raw link to the correct
-/// [`ReliableLink`] instance.
+/// StableConduit instance.
 #[derive(Facet, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ResumeKey(pub Vec<u8>);
 
-/// Reliability handshake exchanged as the first packet on a new connection.
+/// Client's opening handshake, sent as the first message on a new connection.
 ///
-/// Sent as `Packet::Hello` with seq=0. The server reads this to determine
-/// whether the connection is new or a reconnect, and routes accordingly.
+/// The server reads this to determine whether the connection is new or a
+/// reconnect, and routes accordingly.
 #[derive(Facet, Debug, Clone)]
-pub struct ReliableHello {
+pub struct ClientHello {
     /// `None` = new session (server assigns a key).
     /// `Some` = reconnect to existing session.
     pub resume_key: Option<ResumeKey>,
@@ -361,66 +399,54 @@ pub struct ReliableHello {
     pub last_received: Option<PacketSeq>,
 }
 
-/// Wire frame: the unit carried over a raw `Link` inside the reliability layer.
+/// Server's handshake response.
 ///
-/// Serialized atomically by the codec in one pass — no intermediate buffer.
-/// Only exists inside `ReliableLink`; upper layers see `T` directly.
-///
-/// The first packet on a new connection MUST be `Hello` (seq=0).
-/// All subsequent packets are `Data`.
+/// Always carries a resume key (assigned for new sessions, confirmed for
+/// reconnects).
 #[derive(Facet, Debug, Clone)]
-#[repr(u8)]
-pub enum Packet<T> {
-    /// Reliability handshake (first packet, seq=0).
-    Hello(ReliableHello),
+pub struct ServerHello {
+    /// The session's resume key. Always present.
+    pub resume_key: ResumeKey,
 
-    /// Sequenced data carrying an upper-layer item.
-    Data {
-        seq: PacketSeq,
-        ack: Option<PacketAck>,
-        item: T,
-    },
+    /// Last contiguous seq delivered to this peer's upper layer.
+    /// The other side replays everything after this.
+    pub last_received: Option<PacketSeq>,
+}
+
+/// Sequenced data frame, serialized by StableConduit over a raw Link.
+///
+/// Handshake messages (ClientHello / ServerHello) are exchanged before
+/// data flow begins — they're separate types, not part of this frame.
+/// After the handshake, all traffic is `Frame<T>`.
+#[derive(Facet, Debug, Clone)]
+pub struct Frame<T> {
+    pub seq: PacketSeq,
+    pub ack: Option<PacketAck>,
+    pub item: T,
 }
 
 // ---------------------------------------------------------------------------
-// LinkSource
+// Attachment / LinkSource — for StableConduit reconnect
 // ---------------------------------------------------------------------------
 
 /// A raw link bundled with the peer's Hello (if already consumed).
 ///
-/// Used as the payload for [`LinkSource`]. The `peer_hello` field
-/// distinguishes client from server:
-///
-/// - **Client** (`peer_hello = None`): the Dialer connected but no Hello
-///   was exchanged yet. `ReliableLink` does the full Hello exchange.
-/// - **Server** (`peer_hello = Some(hello)`): the acceptor already read
-///   the client's Hello (needed for routing). `ReliableLink` only sends
-///   its own Hello response.
+/// - **Client** (`client_hello = None`): Dialer connected, no Hello yet.
+/// - **Server** (`client_hello = Some`): acceptor already read client's Hello.
 pub struct Attachment<L> {
     pub link: L,
-    pub peer_hello: Option<ReliableHello>,
+    pub client_hello: Option<ClientHello>,
 }
 
-/// Source of replacement [`Link`] values for [`ReliableLink`].
+/// Source of replacement [`Link`]s for [`StableConduit`] reconnect.
 ///
-/// Client and server differ only in how a replacement link arrives:
-///
-/// - **Client (pull)**: a `Dialer` that connects and returns a new link.
-///   May error; caller decides retry policy.
-/// - **Server (push)**: a channel receiver that awaits the next inbound
-///   connection routed by [`ReliableAcceptor`]. Times out if no reconnect
-///   arrives within a configured window.
-///
-/// `ReliableLink` is generic over this trait — same seq/ack/replay logic
-/// regardless of which side initiated the connection.
-pub trait LinkSource<T: 'static, C: Codec>: Send + 'static {
-    type Link: Link<Packet<T>, C>;
+/// - **Client (pull)**: Dialer that connects and returns a new link.
+/// - **Server (push)**: channel receiver from the acceptor.
+pub trait LinkSource: Send + 'static {
+    type Link: Link;
 
-    #[allow(async_fn_in_trait)]
     async fn next_link(&mut self) -> std::io::Result<Attachment<Self::Link>>;
 }
-
-// ReliableLink and ReliableAcceptor are implemented in `roam-core`.
 
 // ---------------------------------------------------------------------------
 // SessionAcceptor
@@ -428,17 +454,16 @@ pub trait LinkSource<T: 'static, C: Codec>: Send + 'static {
 
 /// Yields new sessions from inbound connections.
 ///
-/// Both plain listeners (SHM) and [`ReliableAcceptor`](struct@crate::ReliableAcceptor)
-/// implement this. User code calls [`accept`](Self::accept) in a loop and
-/// gets back a `Link<Message, C>` ready to hand to `Session::new`.
+/// The acceptor listens for incoming connections and produces ready-to-use
+/// [`Conduit`]s. For StableConduit-based transports, reconnects are handled
+/// internally — only genuinely new sessions surface through `accept`.
 ///
-/// Reconnects (for reliable transports) are handled internally and never
-/// surface through `accept` — only genuinely new sessions appear.
-pub trait SessionAcceptor<C: Codec> {
-    type Link: Link<crate::Message, C>;
+/// User code calls `accept` in a loop and hands each Conduit to
+/// `Session::new`.
+pub trait SessionAcceptor<T: 'static> {
+    type Conduit: Conduit<T>;
 
-    #[allow(async_fn_in_trait)]
-    async fn accept(&mut self) -> std::io::Result<Self::Link>;
+    async fn accept(&mut self) -> std::io::Result<Self::Conduit>;
 }
 
 // ---------------------------------------------------------------------------
@@ -448,7 +473,7 @@ pub trait SessionAcceptor<C: Codec> {
 /// Whether the session is acting as initiator or acceptor.
 ///
 /// Determines who speaks first in the protocol handshake. Orthogonal to
-/// reconnect — reconnect is handled by `ReliableLink`, not `Session`.
+/// reconnect — reconnect is handled by StableConduit, not Session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SessionRole {
     Initiator,

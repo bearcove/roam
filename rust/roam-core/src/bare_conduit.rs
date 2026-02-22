@@ -1,33 +1,57 @@
-use roam_types::connectivity2::{
-    Conduit, ConduitRx, ConduitTx, ConduitTxPermit, Link, LinkTx, WriteSlot,
+use std::marker::PhantomData;
+use std::sync::Arc;
+
+use facet::Facet;
+use facet_reflect::TypePlanCore;
+
+use roam_types::{
+    Conduit, ConduitRx, ConduitTx, ConduitTxPermit, Link, LinkTx, SelfRef, WriteSlot,
 };
-use roam_types::{Backing, SelfRef};
 
 /// Wraps a [`Link`] with postcard serialization. No reconnect, no reliability.
 ///
 /// If the link dies, the conduit is dead. For localhost, SHM, or any
 /// transport where reconnect isn't needed.
-pub struct BareConduit<L: Link> {
+///
+/// Takes a `TypePlan<T>` at construction for type safety, stores the
+/// type-erased `TypePlanCore` for fast plan-driven deserialization.
+pub struct BareConduit<T: 'static, L: Link> {
     link: L,
+    plan: Arc<TypePlanCore>,
+    _phantom: PhantomData<fn() -> T>,
 }
 
-impl<L: Link> BareConduit<L> {
-    pub fn new(link: L) -> Self {
-        Self { link }
+impl<T: Facet<'static> + 'static, L: Link> BareConduit<T, L> {
+    pub fn new(link: L, plan: facet_reflect::TypePlan<T>) -> Self {
+        Self {
+            link,
+            plan: plan.core(),
+            _phantom: PhantomData,
+        }
     }
 }
 
-impl<L: Link> Conduit for BareConduit<L>
+impl<T: Facet<'static> + 'static, L: Link> Conduit<T> for BareConduit<T, L>
 where
     L::Tx: Send + 'static,
     L::Rx: Send + 'static,
 {
-    type Tx = BareConduitTx<L::Tx>;
-    type Rx = BareConduitRx<L::Rx>;
+    type Tx = BareConduitTx<T, L::Tx>;
+    type Rx = BareConduitRx<T, L::Rx>;
 
     fn split(self) -> (Self::Tx, Self::Rx) {
         let (tx, rx) = self.link.split();
-        (BareConduitTx { link_tx: tx }, BareConduitRx { link_rx: rx })
+        (
+            BareConduitTx {
+                link_tx: tx,
+                _phantom: PhantomData,
+            },
+            BareConduitRx {
+                link_rx: rx,
+                plan: self.plan,
+                _phantom: PhantomData,
+            },
+        )
     }
 }
 
@@ -35,18 +59,24 @@ where
 // Tx
 // ---------------------------------------------------------------------------
 
-pub struct BareConduitTx<LTx: LinkTx> {
+pub struct BareConduitTx<T: 'static, LTx: LinkTx> {
     link_tx: LTx,
+    _phantom: PhantomData<fn() -> T>,
 }
 
-impl<LTx: LinkTx + Send + 'static> ConduitTx for BareConduitTx<LTx> {
+impl<T: Facet<'static> + 'static, LTx: LinkTx + Send + 'static> ConduitTx<T>
+    for BareConduitTx<T, LTx>
+{
     type Permit<'a>
-        = BareConduitPermit<'a, LTx>
+        = BareConduitPermit<'a, T, LTx>
     where
         Self: 'a;
 
     async fn reserve(&self) -> std::io::Result<Self::Permit<'_>> {
-        Ok(BareConduitPermit { tx: self })
+        Ok(BareConduitPermit {
+            tx: self,
+            _phantom: PhantomData,
+        })
     }
 
     async fn close(self) -> std::io::Result<()> {
@@ -58,18 +88,19 @@ impl<LTx: LinkTx + Send + 'static> ConduitTx for BareConduitTx<LTx> {
 // Permit
 // ---------------------------------------------------------------------------
 
-pub struct BareConduitPermit<'a, LTx: LinkTx> {
-    tx: &'a BareConduitTx<LTx>,
+pub struct BareConduitPermit<'a, T: 'static, LTx: LinkTx> {
+    tx: &'a BareConduitTx<T, LTx>,
+    _phantom: PhantomData<fn() -> T>,
 }
 
-impl<LTx: LinkTx> ConduitTxPermit for BareConduitPermit<'_, LTx> {
+impl<T: Facet<'static> + 'static, LTx: LinkTx> ConduitTxPermit<T>
+    for BareConduitPermit<'_, T, LTx>
+{
     type Error = BareConduitError;
 
-    async fn send<'a, T: facet::Facet<'a>>(self, item: &'a T) -> Result<(), Self::Error> {
-        // 1. Encode to vec (postcard determines the size)
+    async fn send(self, item: &T) -> Result<(), Self::Error> {
         let encoded = facet_postcard::to_vec(item).map_err(BareConduitError::Encode)?;
 
-        // 2. Allocate from link
         let mut slot = self
             .tx
             .link_tx
@@ -77,7 +108,6 @@ impl<LTx: LinkTx> ConduitTxPermit for BareConduitPermit<'_, LTx> {
             .await
             .map_err(BareConduitError::Io)?;
 
-        // 3. Copy into slot and commit
         slot.as_mut_slice().copy_from_slice(&encoded);
         slot.commit();
         Ok(())
@@ -88,19 +118,19 @@ impl<LTx: LinkTx> ConduitTxPermit for BareConduitPermit<'_, LTx> {
 // Rx
 // ---------------------------------------------------------------------------
 
-pub struct BareConduitRx<LRx> {
+pub struct BareConduitRx<T: 'static, LRx> {
     link_rx: LRx,
+    plan: Arc<TypePlanCore>,
+    _phantom: PhantomData<fn() -> T>,
 }
 
-impl<LRx> ConduitRx for BareConduitRx<LRx>
+impl<T: Facet<'static> + 'static, LRx> ConduitRx<T> for BareConduitRx<T, LRx>
 where
-    LRx: roam_types::connectivity2::LinkRx + Send + 'static,
+    LRx: roam_types::LinkRx + Send + 'static,
 {
     type Error = BareConduitError;
 
-    async fn recv<T: facet::Facet<'static> + 'static>(
-        &mut self,
-    ) -> Result<Option<SelfRef<T>>, Self::Error> {
+    async fn recv(&mut self) -> Result<Option<SelfRef<T>>, Self::Error> {
         let backing = match self
             .link_rx
             .recv()
@@ -111,11 +141,48 @@ where
             None => return Ok(None),
         };
 
-        SelfRef::try_new(backing, |bytes| {
-            facet_postcard::from_slice(bytes).map_err(BareConduitError::Decode)
-        })
-        .map(Some)
+        let plan = self.plan.clone();
+
+        SelfRef::try_new(backing, |bytes| deserialize_with_plan::<T>(&plan, bytes)).map(Some)
     }
+}
+
+/// Deserialize bytes into T using a precomputed TypePlanCore.
+///
+/// Uses `Partial::from_raw` + `FormatDeserializer::deserialize_into` for
+/// fast plan-driven deserialization (no plan rebuild per call).
+fn deserialize_with_plan<T: 'static>(
+    plan: &Arc<TypePlanCore>,
+    bytes: &[u8],
+) -> Result<T, BareConduitError> {
+    use facet_format::{FormatDeserializer, MetaSource};
+    use facet_postcard::PostcardParser;
+    use facet_reflect::Partial;
+
+    let mut value = std::mem::MaybeUninit::<T>::uninit();
+    let ptr = facet_core::PtrUninit::new(value.as_mut_ptr().cast::<u8>());
+
+    let root_id = plan.root_id();
+
+    // SAFETY: ptr points to valid, aligned, properly-sized memory for T.
+    // The plan was built from TypePlan<T> so root_id matches T's shape.
+    #[allow(unsafe_code)]
+    let partial: Partial<'_, false> = unsafe { Partial::from_raw(ptr, Arc::clone(plan), root_id) }
+        .map_err(|e| BareConduitError::Decode(e.into()))?;
+
+    let mut parser = PostcardParser::new(bytes);
+    let mut deserializer = FormatDeserializer::new_owned(&mut parser);
+    let partial = deserializer
+        .deserialize_into(partial, MetaSource::FromEvents)
+        .map_err(BareConduitError::Decode)?;
+
+    partial
+        .finish_in_place()
+        .map_err(|e| BareConduitError::Decode(e.into()))?;
+
+    // SAFETY: finish_in_place succeeded, so value is fully initialized.
+    #[allow(unsafe_code)]
+    Ok(unsafe { value.assume_init() })
 }
 
 // ---------------------------------------------------------------------------
@@ -125,7 +192,7 @@ where
 #[derive(Debug)]
 pub enum BareConduitError {
     Encode(facet_postcard::SerializeError),
-    Decode(facet_postcard::DeserializeError),
+    Decode(facet_format::DeserializeError),
     Io(std::io::Error),
     LinkDead,
 }

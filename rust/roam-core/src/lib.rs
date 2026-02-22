@@ -1,18 +1,15 @@
 //! Core implementations for the roam connectivity layer.
 //!
 //! This crate provides concrete implementations of the traits defined in
-//! [`roam_types::connectivity`]:
+//! [`roam_types`]:
 //!
-//! - [`ReliableLink`]: wraps a raw `Link<Packet<T>, C>`, strips packet
-//!   framing, exposes `Link<T, C>` with transparent reconnect + replay.
-//! - [`ReliableAcceptor`]: server-side router that accepts raw connections,
-//!   reads the reliability handshake, routes reconnects to existing sessions.
+//! - [`BareConduit`]: wraps a raw `Link` with postcard serialization.
+//!   No reconnect, no reliability. For localhost, SHM, testing.
+//! - `StableConduit` (TODO): wraps a Link + seq/ack/replay with
+//!   bytes-based replay buffer. Handles reconnect transparently.
 
-mod reliable_link;
-pub use reliable_link::{ReliableLink, ReliableLinkError};
-
-mod reliable_acceptor;
-pub use reliable_acceptor::{ChannelLinkSource, IngestError, NewSession, ReliableAcceptor};
+mod bare_conduit;
+pub use bare_conduit::{BareConduit, BareConduitError};
 
 mod memory_link;
 pub use memory_link::{MemoryLink, MemoryLinkRx, MemoryLinkTx, memory_link_pair};

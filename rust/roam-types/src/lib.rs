@@ -28,5 +28,3 @@ pub use message::*;
 
 mod connectivity;
 pub use connectivity::*;
-
-mod connectivity2;

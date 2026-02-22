@@ -513,6 +513,7 @@ version = "3.0.0"
 dependencies = [
  "facet",
  "facet-core",
+ "facet-format",
  "facet-postcard",
  "facet-reflect",
  "roam-types",
