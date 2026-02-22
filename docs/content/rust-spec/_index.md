@@ -187,114 +187,37 @@ The canonical bytes would be:
 
 BLAKE3 hash of these bytes gives `sig_bytes`.
 
-# Introspection Types
-
-The `Diagnostic` service uses these types for introspection and debugging.
-Type information uses `facet::Shape` directly rather than a parallel type system.
-
-```rust
-struct ServiceDetail {
-    name: Cow<'static, str>,
-    methods: Vec<MethodDetail>,
-    doc: Option<Cow<'static, str>>,
-}
-
-struct MethodDetail {
-    service_name: Cow<'static, str>,
-    method_name: Cow<'static, str>,
-    args: Vec<ArgDetail>,
-    return_type: &'static Shape,  // facet Shape, not TypeDetail
-    doc: Option<Cow<'static, str>>,
-}
-
-struct ArgDetail {
-    name: Cow<'static, str>,
-    ty: &'static Shape,  // facet Shape
-}
-
-struct ServiceSummary {
-    name: Cow<'static, str>,
-    method_count: u32,
-    doc: Option<Cow<'static, str>>,
-}
-
-struct MethodSummary {
-    name: Cow<'static, str>,
-    method_id: u64,
-    doc: Option<Cow<'static, str>>,
-}
-
-enum MismatchExplanation {
-    /// Service doesn't exist
-    UnknownService { closest: Option<Cow<'static, str>> },
-    /// Service exists but method doesn't
-    UnknownMethod { service: Cow<'static, str>, closest: Option<Cow<'static, str>> },
-    /// Method exists but signature differs
-    SignatureMismatch { 
-        service: Cow<'static, str>,
-        method: Cow<'static, str>,
-        expected: MethodDetail,
-    },
-}
-```
-
-## Using Shape for Type Introspection
-
-Instead of a custom `TypeDetail` enum, roam uses `facet::Shape` directly.
-Use `facet_core` to inspect shapes:
-
-- `shape.def` reveals if it's a struct, enum, list, option, etc.
-- `shape.type_params` gives generic parameters
-- `shape.scalar_type()` returns the scalar type for primitives
-- `roam_schema::classify_shape()` provides high-level classification for codegen
-
-Helper functions in `roam_schema`:
-- `is_tx(shape)` / `is_rx(shape)` — check for streaming types
-- `is_channel(shape)` — check for any channel type
-- `contains_channels(shape)` — recursively check for channels
-- `is_bytes(shape)` — check for `Vec<u8>` or `&[u8]`
-
-## Usage
-
-When `Diagnostic.explain_mismatch` returns `SignatureMismatch`, the client
-can diff its local `MethodDetail` against the `expected` field to show
-exactly where the types diverge:
-
-```
-Method `TemplateHost.load_template` signature mismatch:
-  arg `context_id`: expected ContextId { id: u64 }
-                        got ContextId { id: u32 }
-                                           ^^^
-```
-
 # Wire Type Mappings
 
 Certain roam types have special wire representations that differ from
 their Rust representation.
 
-## Tx<T> / Rx<T> (Channeling)
+## Tx<T> / Rx<T> (Channels)
 
-Roam uses directional channel handles in Rust:
-- `Tx<T>` for caller → callee data flow
-- `Rx<T>` for callee → caller data flow
+In Rust, a `#[roam::service]` trait describes what the handler implementation
+("server") implements.
 
-On the wire, both are encoded as `u64` channel IDs in payload values.
-The element type `T` is known from the method schema.
-
-Channel IDs are also carried in Request/Response framing (`channels` fields),
-and payload IDs are patched from framing IDs during prepare/bind. See
-`rs[call.request.channels]` and `rs[call.request.channels.schema-driven]` in the
-main specification.
+- `Rx<T>` means the handler receives a stream of `T` values from the caller.
+- `Tx<T>` means the handler sends a stream of `T` values to the caller.
 
 ```rust
-// Method signature:
-async fn sum(&self, numbers: Tx<u32>) -> u32;
-async fn range(&self, n: u32, output: Rx<u32>);
+#[roam::service]
+trait Adder {
+    // Handler receives numbers from the caller.
+    async fn sum(&self, numbers: Rx<u32>) -> u32;
+}
 
-// Payload representation: channel IDs only
-// payload(sum)   = postcard::to_vec(&(numbers_channel_id: u64,))?;
-// payload(range) = postcard::to_vec(&(n, output_channel_id: u64))?;
+// Caller sends numbers on tx and passes the receiving end to the RPC call.
+let (tx, rx) = roam::channel();
+spawn(async move {
+    tx.send(123).await.unwrap();
+});
+let sum = client.sum(rx).await;
 ```
+
+Wire-level channel ID encoding and Request.channels behavior are specified in
+the main spec (`r[call.request.channels]`, `r[call.request.channels.schema-driven]`,
+`r[channeling.allocation.caller]`).
 
 The `#[roam::service]` proc macro MUST reject methods where `Tx<T>` or `Rx<T>`
 appear inside the error type `E` of `Result<T, E>`, enforcing
@@ -303,31 +226,56 @@ appear inside the error type `E` of `Result<T, E>`, enforcing
 # RoamError
 
 The `RoamError<E>` type is defined in the [main specification](@/spec/_index.md#roamerror).
-The Rust implementation provides this type with Facet derivation:
+
+Two separate concerns apply in Rust:
+
+> rs[roam-error.semantic]
+>
+> Semantically, Rust `RoamError<E>` MUST expose the same variants defined by
+> the main specification (`User`, `UnknownMethod`, `InvalidPayload`,
+> `Cancelled`).
+
+> rs[roam-error.wire]
+>
+> On the wire, Rust encoding MUST preserve the main-spec discriminant mapping.
+> With postcard/facet enum encoding this is by variant order.
+
+Rust type:
 
 ```rust
 #[derive(Facet)]
 pub enum RoamError<E> {
-    User(E),         // discriminant 0
-    UnknownMethod,   // discriminant 1
-    InvalidPayload,  // discriminant 2
-    Cancelled,       // discriminant 3
+    User(E),
+    UnknownMethod,
+    InvalidPayload,
+    Cancelled,
 }
 ```
 
-The variant order MUST match the main spec — Postcard encodes enum
-discriminants as varints starting from 0.
+Wire discriminants:
+
+| Variant | Discriminant |
+|---------|--------------|
+| `User(E)` | `0` |
+| `UnknownMethod` | `1` |
+| `InvalidPayload` | `2` |
+| `Cancelled` | `3` |
 
 ## Generated Client Types
 
-For a method:
+For a fallible method in a service definition:
 ```rust
-async fn get_user(&self, id: UserId) -> Result<User, UserError>;
+#[roam::service]
+trait MyService {
+    async fn get_user(&self, id: UserId) -> Result<User, UserError>;
+}
 ```
 
-The generated client method returns:
+the generated client has:
 ```rust
-async fn get_user(&self, id: UserId) -> Result<User, RoamError<UserError>>;
+impl MyServiceClient {
+    async fn get_user(&self, id: UserId) -> Result<User, RoamError<UserError>>;
+}
 ```
 
 Callers can distinguish application errors from protocol errors:
@@ -340,6 +288,36 @@ match client.get_user(id).await {
     // ...
 }
 ```
+
+For an infallible method:
+```rust
+#[roam::service]
+trait HealthService {
+    async fn ping(&self) -> Pong;
+}
+```
+
+the generated client has:
+```rust
+impl HealthServiceClient {
+    async fn ping(&self) -> Result<Pong, RoamError<core::convert::Infallible>>;
+}
+```
+
+### Protocol mismatch diagnostics
+
+> rs[client.protocol-mismatch.diagnostics]
+>
+> Generated Rust clients SHOULD provide transparent protocol-mismatch
+> diagnostics on `RoamError::UnknownMethod` and `RoamError::InvalidPayload`.
+> This MAY involve additional RPC exchanges (for example, introspection calls
+> to discover available methods/signatures) before surfacing the final error.
+
+> rs[client.protocol-mismatch.best-effort]
+>
+> Diagnostic enrichment is best-effort. If the peer does not support
+> introspection, or diagnostic lookup fails, the client MUST still return the
+> original protocol error.
 
 # Rust Runtime Layering
 
