@@ -1,13 +1,6 @@
 # Enable experimental features
 experimental = ["setup-scripts"]
 
-[scripts.setup.build-subject-rust]
-command = "cargo build --release -p subject-rust"
-
-[scripts.setup.build-guest-process]
-command = "./scripts/build-roam-shm-test-setup.sh"
-slow-timeout = { period = "60s" }
-
 [profile.loom]
 slow-timeout = { period = "10s", terminate-after = 3 }
 
@@ -23,11 +16,3 @@ status-level = "pass"
 
 # Slow test warning threshold
 slow-timeout = { period = "2s", terminate-after = 2 }
-
-[[profile.default.scripts]]
-filter = "package(spec-tests)"
-setup = "build-subject-rust"
-
-[[profile.default.scripts]]
-filter = "package(roam-shm)"
-setup = "build-guest-process"

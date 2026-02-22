@@ -16,3 +16,6 @@ pub use reliable_acceptor::{ChannelLinkSource, IngestError, NewSession, Reliable
 
 mod memory_link;
 pub use memory_link::{MemoryLink, MemoryLinkRx, MemoryLinkTx, memory_link_pair};
+
+#[cfg(test)]
+mod tests;
