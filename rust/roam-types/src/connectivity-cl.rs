@@ -12,11 +12,14 @@
 //! - **ReliableLink**: wraps `Link<Packet<T>, C>`, strips packet framing,
 //!   exposes `Link<T, C>` with transparent reconnect + replay.
 //! - **Codec**: plan-driven, scatter-gather encode, unsafe `decode_into`. Not
-//!   generic over `T`.
+//!   generic over `T`. TypeErasedValue plan delegation is expanded by the codec
+//!   into Skeleton + BorrowedBlob parts during traversal.
 //! - **Session**: knows `Message` concretely, generic over the `Link`.
 
+#![allow(unsafe_code)]
+
 use facet::Facet;
-use std::io;
+use std::mem::ManuallyDrop;
 
 // ---------------------------------------------------------------------------
 // Codec
@@ -57,6 +60,10 @@ pub trait Codec: Send + Sync + 'static {
     ///
     /// `value` is a [`facet_reflect::Peek`] — a safe handle carrying both the
     /// pointer and the type's shape. No raw pointer / plan mismatch possible.
+    ///
+    /// For TypeErasedValue fields (plan-delegation), the codec expands them
+    /// into Skeleton + BorrowedBlob parts during traversal — no special part
+    /// kind needed.
     fn encode_scatter<'a>(
         &self,
         value: facet_reflect::Peek<'a, 'a>,
@@ -88,16 +95,18 @@ pub trait Codec: Send + Sync + 'static {
 /// `SelfRef` keeps that storage alive so `T` can safely borrow from it
 /// (via Facet's `'static` lifetime + variance guarantee).
 ///
-/// Drop order: `value` is dropped before `_backing`, so borrowed references
-/// in `T` remain valid through `T`'s drop.
-pub struct SelfRef<T> {
-    /// The decoded value, potentially borrowing from `_backing`.
-    /// Dropped first.
-    value: T,
+/// Uses `ManuallyDrop` + custom `Drop` to guarantee drop order: value is
+/// dropped before backing, so borrowed references in `T` remain valid
+/// through `T`'s drop.
+///
+/// `T` must be covariant in any lifetime parameters (checked at construction
+/// via facet's variance tracking).
+pub struct SelfRef<T: 'static> {
+    /// The decoded value, potentially borrowing from `backing`.
+    value: ManuallyDrop<T>,
 
     /// Backing storage keeping decoded bytes alive.
-    /// Dropped second.
-    _backing: Backing,
+    backing: ManuallyDrop<Backing>,
 }
 
 /// Backing storage for a [`SelfRef`].
@@ -110,20 +119,80 @@ enum Backing {
     // Mmap(Arc<MmapRegion>),
 }
 
-impl<T> core::ops::Deref for SelfRef<T> {
+impl Backing {
+    /// Access the backing bytes.
+    fn as_bytes(&self) -> &[u8] {
+        match self {
+            Backing::Boxed(b) => b,
+        }
+    }
+}
+
+impl<T: 'static> Drop for SelfRef<T> {
+    fn drop(&mut self) {
+        // Drop value first (it may borrow from backing), then backing.
+        unsafe {
+            ManuallyDrop::drop(&mut self.value);
+            ManuallyDrop::drop(&mut self.backing);
+        }
+    }
+}
+
+impl<T: 'static + Facet<'static>> SelfRef<T> {
+    /// Construct a `SelfRef` from backing storage and a builder.
+    ///
+    /// The builder receives a `&'static [u8]` view of the backing bytes —
+    /// sound because the backing is heap-allocated (stable address) and
+    /// dropped after the value.
+    ///
+    /// Panics if `T` is not covariant (lifetime cannot safely shrink).
+    pub fn try_new<E>(
+        backing: Backing,
+        builder: impl FnOnce(&'static [u8]) -> Result<T, E>,
+    ) -> Result<Self, E> {
+        let variance = T::SHAPE.computed_variance();
+        assert!(
+            variance.can_shrink(),
+            "SelfRef<T> requires T to be covariant. Type {:?} has variance {:?}",
+            T::SHAPE.type_identifier,
+            variance
+        );
+
+        // Create a 'static slice from the backing bytes.
+        // Sound because:
+        // - Backing is heap-allocated (stable address)
+        // - We drop value before backing (custom Drop impl)
+        let bytes: &'static [u8] = unsafe {
+            let b = backing.as_bytes();
+            std::slice::from_raw_parts(b.as_ptr(), b.len())
+        };
+
+        let value = builder(bytes)?;
+
+        Ok(Self {
+            value: ManuallyDrop::new(value),
+            backing: ManuallyDrop::new(backing),
+        })
+    }
+
+    /// Infallible variant of [`try_new`](Self::try_new).
+    pub fn new(backing: Backing, builder: impl FnOnce(&'static [u8]) -> T) -> Self {
+        Self::try_new(backing, |bytes| {
+            Ok::<_, std::convert::Infallible>(builder(bytes))
+        })
+        .unwrap_or_else(|e: std::convert::Infallible| match e {})
+    }
+}
+
+impl<T: 'static> core::ops::Deref for SelfRef<T> {
     type Target = T;
     fn deref(&self) -> &T {
         &self.value
     }
 }
 
-impl<T> core::ops::DerefMut for SelfRef<T> {
-    fn deref_mut(&mut self) -> &mut T {
-        &mut self.value
-    }
-}
-
 // No `into_inner()` — T may borrow from backing. Use Deref instead.
+// No `DerefMut` — mutating T could invalidate borrowed references.
 
 // ---------------------------------------------------------------------------
 // Link
@@ -135,7 +204,9 @@ impl<T> core::ops::DerefMut for SelfRef<T> {
 /// `T` is `Message`, `Packet<Message>`, or anything else. It just encodes `T`
 /// via `C` into its write buffer and decodes from its read buffer.
 ///
-/// **Asymmetric**: [`LinkTx`] sends `T`, [`LinkRx`] yields [`SelfRef<T>`].
+/// **Asymmetric by definition**: [`LinkTx`] sends `T`, [`LinkRx`] yields
+/// [`SelfRef<T>`]. So `Link<Message, C>` means Tx sends `Message` and Rx
+/// yields `SelfRef<Message>`.
 ///
 /// Composable: `ReliableLink` wraps `Link<Packet<T>, C>` and itself implements
 /// `Link<T, C>`, hiding the packet layer from everything above.
@@ -159,11 +230,11 @@ pub trait LinkTx<T, C: Codec>: Send + 'static {
     /// Cancellation MUST NOT leak capacity. Dropping a permit without calling
     /// `send()` MUST return that capacity.
     #[allow(async_fn_in_trait)]
-    async fn reserve(&self) -> io::Result<Self::Permit<'_>>;
+    async fn reserve(&self) -> std::io::Result<Self::Permit<'_>>;
 
     /// Graceful close of the outbound direction. Consumes self.
     #[allow(async_fn_in_trait)]
-    async fn close(self) -> io::Result<()>
+    async fn close(self) -> std::io::Result<()>
     where
         Self: Sized;
 }
@@ -171,6 +242,8 @@ pub trait LinkTx<T, C: Codec>: Send + 'static {
 /// Permit for sending exactly one item. MUST NOT block (beyond encoding).
 ///
 /// The permit knows the codec `C` and can return typed encode errors.
+/// Note: "send never blocks" still holds — encoding can *fail*, but it
+/// does not await or apply backpressure. Backpressure is at `reserve()`.
 pub trait LinkTxPermit<T, C: Codec> {
     fn send(self, item: T) -> Result<(), C::EncodeError>;
 }
@@ -180,12 +253,13 @@ pub trait LinkTxPermit<T, C: Codec> {
 /// Yields [`SelfRef<T>`]: decoded value + backing storage.
 /// Single-consumer (`&mut self`).
 pub trait LinkRx<T, C: Codec>: Send + 'static {
+    /// Transport-specific error type (IO errors, decode errors, framing
+    /// errors, peer death, etc.).
+    type Error: std::error::Error + Send + Sync + 'static;
+
     /// Receive the next item.
-    ///
-    /// Decode errors are mapped to `io::Error` — a decode failure means the
-    /// link is broken (per spec: deserialization failure = link failure).
     #[allow(async_fn_in_trait)]
-    async fn recv(&mut self) -> io::Result<Option<SelfRef<T>>>;
+    async fn recv(&mut self) -> Result<Option<SelfRef<T>>, Self::Error>;
 }
 
 // ---------------------------------------------------------------------------
@@ -242,7 +316,7 @@ pub trait Dialer<T, C: Codec>: Send + Sync + 'static {
     type Link: Link<T, C>;
 
     #[allow(async_fn_in_trait)]
-    async fn dial(&self) -> io::Result<Self::Link>;
+    async fn dial(&self) -> std::io::Result<Self::Link>;
 }
 
 // ---------------------------------------------------------------------------
@@ -267,15 +341,20 @@ pub enum Reconnect {
 // Session (shape)
 // ---------------------------------------------------------------------------
 //
-// Session knows Message concretely but is generic over the Link:
+// Session knows Message concretely but is generic over the Link.
+//
+// Note: `Link<T, C>` is asymmetric by definition: it sends `T` and receives
+// `SelfRef<T>`. So `L: Link<Message, C>` means:
+// - `L::Tx` sends `Message`
+// - `L::Rx` yields `SelfRef<Message>`
 //
 //     struct Session<L, C>
 //     where
 //         C: Codec,
 //         L: Link<crate::Message, C>,
 //     {
-//         tx: L::Tx,     // sends Message
-//         rx: L::Rx,     // receives SelfRef<Message>
+//         tx: L::Tx,
+//         rx: L::Rx,
 //         role: SessionRole,
 //         ...
 //     }
