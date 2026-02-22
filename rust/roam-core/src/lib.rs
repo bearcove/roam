@@ -13,3 +13,6 @@ pub use reliable_link::{ReliableLink, ReliableLinkError};
 
 mod reliable_acceptor;
 pub use reliable_acceptor::{ChannelLinkSource, IngestError, NewSession, ReliableAcceptor};
+
+mod memory_link;
+pub use memory_link::{MemoryLink, MemoryLinkRx, MemoryLinkTx, memory_link_pair};

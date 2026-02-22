@@ -1,18 +1,24 @@
-#![deny(unsafe_code)]
-
-//! Stream transport layer for roam RPC.
+//! Byte-stream transport for roam.
 //!
-//! This crate provides length-prefixed framing and byte-stream specific machinery for running
-//! roam services over TCP, Unix sockets, or any async byte stream.
-//!
-//! For message-based transports (like WebSocket) that already provide framing,
-//! use `roam_core` directly - it has the Driver and accept_framed/connect_framed.
+//! Implements [`Link<T, C>`](roam_types::Link) over any `AsyncRead + AsyncWrite`
+//! pair (TCP, Unix sockets, stdio) using 4-byte little-endian length-prefix
+//! framing.
 
-mod driver;
-mod framing;
+/// A [`Link`](roam_types::Link) over a byte stream with length-prefix framing.
+///
+/// Wraps an `AsyncRead + AsyncWrite` pair. Each message is framed as
+/// `[len: u32 LE][payload bytes]`.
+pub struct StreamLink<R, W> {
+    _reader: R,
+    _writer: W,
+}
 
-// Byte-stream specific API (stays here)
-pub use driver::{Client, Connector, accept, connect, connect_with_policy};
+/// Sending half of a [`StreamLink`].
+pub struct StreamLinkTx<W> {
+    _writer: W,
+}
 
-// length-prefixed framing
-pub use framing::LengthPrefixedFramed;
+/// Receiving half of a [`StreamLink`].
+pub struct StreamLinkRx<R> {
+    _reader: R,
+}

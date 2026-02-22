@@ -191,6 +191,18 @@ impl<T: 'static + Facet<'static>> SelfRef<T> {
 }
 
 impl<T: 'static> SelfRef<T> {
+    /// Wrap an owned value that does NOT borrow from backing.
+    ///
+    /// No variance check — the value is fully owned. The backing is kept
+    /// alive but the value doesn't reference it. Useful for in-memory
+    /// transports (MemoryLink) where no deserialization occurs.
+    pub fn owning(backing: Backing, value: T) -> Self {
+        Self {
+            value: ManuallyDrop::new(value),
+            backing: ManuallyDrop::new(backing),
+        }
+    }
+
     /// Transform the contained value, keeping the same backing storage.
     ///
     /// Useful for projecting through wrapper types:

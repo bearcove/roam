@@ -1,0 +1,30 @@
+[package]
+name = "roam-stream"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Stream transport layer for roam RPC - works with TCP, Unix sockets, or any async byte stream"
+
+[package.metadata]
+
+[package.metadata."docs.rs"]
+rustdoc-args = ["--html-in-header", "arborium-header.html"]
+
+[features]
+default = []
+
+[dependencies]
+facet.workspace = true
+tokio = { workspace = true, features = ["net", "io-util", "rt", "time", "sync"] }
+roam-types.workspace = true
+roam-core.workspace = true
+facet-postcard.workspace = true
+facet-reflect.workspace = true
+moire.workspace = true
+
+[dev-dependencies]
+spec-proto = { path = "../../spec/spec-proto" }
+roam = { path = "../roam" }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+once_cell = "1"

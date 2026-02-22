@@ -1383,23 +1383,13 @@ enum Hello {
         max_payload_size: u32,
         max_concurrent_requests: u32,
         parity: Parity,
-        resume: Option<(SessionId, ResumeToken)>,
     },
-}
-
-enum ResumeStatus {
-    Resumed,
-    Fresh,
-    Rejected { reason: String },
 }
 
 enum HelloYourself {
     V7 {
         max_payload_size: u32,
         max_concurrent_requests: u32,
-        resume_status: ResumeStatus,
-        session_id: SessionId,
-        resume_token: ResumeToken,
     },
 }
 ```
@@ -1428,22 +1418,8 @@ enum HelloYourself {
 > - The initiator chooses `parity` and sends it in `Hello`.
 > - The acceptor MUST use the opposite parity.
 >
-> If `Hello.resume` is present and resumption succeeds, the acceptor MUST set
-> `HelloYourself.resume_status = Resumed` and MUST set `HelloYourself.session_id`
-> to the resumed session ID.
->
-> If `Hello.resume` is present and resumption fails, the acceptor MUST set
-> `HelloYourself.resume_status = Rejected { reason }` and MUST start a fresh
-> session (a new `session_id` and `resume_token`) reflected in HelloYourself.
->
-> If `Hello.resume` is absent, the acceptor MUST set
-> `HelloYourself.resume_status = Fresh` and MUST start a fresh session.
-
-> r[message.hello.resume-token.rotate]
->
-> The acceptor MUST generate a fresh `resume_token` from a cryptographically
-> secure random source for every `HelloYourself`, and MUST treat it as a secret
-> capability required to resume the session after a link failure.
+> Session resumption metadata is not carried by `Hello`/`HelloYourself`.
+> (Resumption is handled by the reliability layer below the roam message model.)
 
 ### Connect / Accept / Reject
 
