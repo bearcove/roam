@@ -165,17 +165,6 @@ pub fn metadata_string(metadata: &Metadata, key: &str) -> Option<String> {
 }
 
 /// Protocol message.
-///
-/// Variant order is wire-significant (postcard enum discriminants).
-///
-/// # Virtual Connections (v2.0.0)
-///
-/// A link carries multiple virtual connections, each with its own request ID
-/// space, channel ID space, and dispatcher. Connection 0 is implicit on link
-/// establishment. Additional connections are opened via Connect/Accept/Reject.
-///
-/// All messages except Hello, Connect, Accept, and Reject include a `conn_id`
-/// field identifying which virtual connection they belong to.
 #[repr(u8)]
 #[derive(Debug, Clone, PartialEq, Eq, Facet)]
 pub enum Message {

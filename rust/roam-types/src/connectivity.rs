@@ -17,7 +17,7 @@
 //! - **Client**: generated service clients built on top of `Session`.
 
 use crate::Payload;
-use facet::Facet;
+use facet::{Facet, Peek, TypePlan, TypePlanCore};
 use std::io;
 
 /// A bidirectional established transport between two peers.
@@ -27,7 +27,7 @@ use std::io;
 ///
 /// A `Link` is owned by the protocol runtime task (the `Session` layer); user
 /// code should generally not interact with `Link` directly.
-pub trait Link<T> {
+pub trait Link<T: for<'a> Facet<'a>, C: Codec<T>> {
     type Tx: LinkTx<T>;
     type Rx: LinkRx<T>;
 
@@ -116,23 +116,24 @@ pub struct Packet<T> {
 ///
 /// This is the only layer that understands the schema of `Message` at the
 /// `Payload` boundary (typically `postcard` for any `T: Facet`).
-///
-/// It MUST NOT implement request correlation, channel routing, flow control, or
-/// reconnection logic. It is purely a `(Message ↔ Payload)` transform.
-pub trait Codec<T>: Send + Sync + 'static {
+pub trait Codec: Send + Sync + 'static {
     type EncodeError: std::error::Error + Send + Sync + 'static;
     type DecodeError: std::error::Error + Send + Sync + 'static;
 
-    fn encode(&self, item: &T) -> Result<Payload, Self::EncodeError>;
-    fn decode(&self, payload: &Payload) -> Result<T, Self::DecodeError>;
+    fn encode(&self, item: Peek) -> Result<Payload, Self::EncodeError>;
+    fn decode<'a, T: Facet<'a>>(
+        &self,
+        payload: &[u8],
+        plan: &TypePlan<T>,
+    ) -> Result<T, Self::DecodeError>;
 }
 
 /// A source of new [`Link`] values (used for reconnect-capable initiators).
 ///
 /// If a session is constructed from a single already-established `Link`, it
 /// cannot reconnect unless it also has a `Dialer`.
-pub trait Dialer: Send + Sync + 'static {
-    type Link;
+pub trait Dialer<T: for<'a> Facet<'a>, C: Codec>: Send + Sync + 'static {
+    type Link: Link<T, C>;
 
     #[allow(async_fn_in_trait)]
     async fn dial(&self) -> io::Result<Self::Link>;
