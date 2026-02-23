@@ -53,7 +53,7 @@ differently depending on the variant:
 | Variant    | Serialize                                              | Deserialize                                 |
 |------------|--------------------------------------------------------|---------------------------------------------|
 | `Borrowed` | Construct `Peek` from `(ptr, shape)`, recurse          | N/A (never deserialized into)               |
-| `Raw`      | Write `backing[offset..offset+len]` verbatim (forward) | Read length prefix, store backing + range   |
+| `Raw`      | Write `backing[offset..offset+len]` verbatim (forward) | Deserialize bytes, store offset + len       |
 
 The vtable provides **data, not I/O**. The serializer/deserializer
 does all reading and writing. The vtable just tells the format what
@@ -70,7 +70,13 @@ enum OpaqueContent<'a> {
     /// own framing (e.g. postcard writes a varint length prefix
     /// before the inner value's bytes).
     /// Used by `Payload::Borrowed` on the send path.
-    Value { ptr: PtrConst, shape: &'static Shape },
+    Value {
+        ptr: PtrConst,
+        shape: &'static Shape,
+        /// Optional precomputed plan for plan-driven serialization.
+        /// When present, the serializer can skip shape-graph walking.
+        plan: Option<&'static TypePlanCore>,
+    },
 
     /// Pre-serialized bytes — the serializer writes them verbatim
     /// (with whatever framing the format requires).
@@ -79,45 +85,43 @@ enum OpaqueContent<'a> {
 }
 ```
 
-For deserialization, the format handles all I/O (reads the length
-prefix, determines the byte range). It then needs to tell the opaque
-type "here's your byte range" so the type can store it. This is done
-through a second vtable function:
+For deserialization, the key insight is that **from the format's
+perspective, `Payload` looks like `&[u8]`**. Each format already knows
+how to serialize and deserialize byte sequences using its own native
+encoding. Postcard uses a varint length prefix followed by raw bytes.
+JSON would use base64. The format doesn't need special instructions —
+it just sees bytes.
+
+The vtable's deserialize side tells the opaque type "here are your
+bytes" after the format has already done all the I/O:
 
 ```rust
-/// The format has parsed the opaque region and determined the byte
-/// range. Initialize the opaque value at self_ptr to store this
-/// range. The opaque type decides how to represent it internally
-/// (e.g. Payload::Raw { backing, offset, len }).
+/// The format has deserialized a byte sequence for this opaque
+/// field. Initialize the opaque value at self_ptr to store the
+/// byte range. The opaque type decides how to represent it
+/// internally (e.g. Payload::Raw { backing, offset, len }).
 ///
-/// `input_ptr` and `input_len` point into the backing's buffer.
-/// The format passes these after reading its own framing (e.g.
-/// varint length prefix for postcard).
+/// `offset` and `len` describe the byte range within the input
+/// buffer. The format passes these after deserializing the byte
+/// sequence using its own native encoding.
 type OpaqueDeserializeStoreFn = unsafe fn(
     self_ptr: PtrUninit,
-    input_ptr: *const u8,
-    input_len: usize,
+    offset: usize,
+    len: usize,
 ) -> Result<PtrMut, /* error */ ()>;
 ```
 
 The `Backing` ownership is handled separately — the `SelfRef<Message>`
 already keeps the backing alive, so the `Payload::Raw` variant just
-needs to record the pointer + length into that backing. No ownership
+needs to record the offset + length into that backing. No ownership
 transfer at the vtable level.
 
 The format drives the whole process:
 1. Format hits the opaque field during deserialization
-2. Format reads its framing (varint length prefix)
-3. Format calls the vtable with the byte range
+2. Format deserializes a byte sequence using its native encoding
+   (e.g. postcard reads a varint length, then that many raw bytes)
+3. Format calls the vtable with the byte range (offset + len)
 4. Opaque type stores the range internally
-
-### TypePlanCore on Payload
-
-`Payload::Borrowed` should also carry an `Option<&'static TypePlanCore>`
-for the inner value's type. This isn't needed for serialization (the
-`Peek` + `Shape` suffice), but will be useful for future optimizations
-where the serializer can use a precomputed plan instead of walking the
-shape graph.
 
 ## Receive path: deferred deserialization (raw bytes)
 
@@ -132,15 +136,14 @@ eagerly because we don't know what type it should be.
 ### What we need
 
 A "raw value" concept — facet-postcard's equivalent of serde's
-`RawValue`. When the deserializer encounters a `Payload` field, it
-should:
+`RawValue`. Since `Payload` presents as `&[u8]` to the format, the
+deserializer handles it the way it handles any byte sequence:
 
-1. Note the current byte offset in the input
-2. Skip over the encoded value without interpreting it (walk the
-   postcard encoding to find where the value ends)
-3. Record the byte range `(start_offset, end_offset)`
-4. Store this range in the `Payload` so the dispatch layer can
-   deserialize it later with the correct type
+1. Read the byte sequence using the format's native encoding
+   (for postcard: read varint length, then that many raw bytes)
+2. Record the byte range `(offset, len)` within the input buffer
+3. Call the vtable to store this range in the `Payload` so the
+   dispatch layer can deserialize it later with the correct type
 
 On the receive side, `Payload` would have a `Bytes` variant (or
 similar) holding a reference into the backing:
@@ -175,58 +178,44 @@ The dispatch layer then:
 3. Deserializes `backing[offset..offset+len]` into the concrete args
    type, producing a `SelfRef<T>` that keeps the backing alive
 
-### Skip-and-record in postcard
+### Why this works without special framing
 
-Postcard is a TLV-ish format. Skipping a value requires walking the
-shape to know how many bytes to consume (varints are variable-length,
-sequences have length prefixes, etc.). But we don't need the *value's*
-shape — we need a shape-unaware skip.
+Postcard is not self-describing — a `u32` is a varint (1-5 bytes), a
+struct is fields back-to-back with no delimiters. Without knowing the
+type, you can't skip over a value. This seems like it would make
+deferred deserialization impossible.
 
-Actually, we **do** need the shape. Postcard doesn't have self-
-describing framing. A `u32` is encoded as a varint (1-5 bytes), a
-`struct { a: u32, b: u32 }` is two varints back-to-back with no
-delimiter. Without knowing the type, we can't know how many bytes to
-skip.
+But since `Payload` presents as `&[u8]` to the format, postcard
+encodes it the same way it encodes any byte sequence: **varint length
+prefix + raw bytes**. On the receive side, postcard reads the varint
+length, knows exactly how many bytes to consume, and passes the range
+to the vtable. No shape knowledge needed during the initial frame
+parse.
 
-This means the "skip" must be driven by *something*. Options:
-
-**Option A: Length-prefix the payload.** Before serializing the inner
-value, write a varint length prefix. On deserialize, read the length,
-skip that many bytes, record the range. This adds a few bytes per
-message but makes skipping trivial and shape-independent.
-
-**Option B: Shape-driven skip.** The deserializer uses the inner
-value's `Shape` (which must be known to the receive side somehow —
-perhaps from the `method_id` → type mapping registered at startup) to
-walk the value without constructing it. But this means we need the
-type info *before* we can skip, which defeats the purpose of deferring.
-
-**Option A is strongly preferred.** The length prefix is tiny (1-5
-bytes for messages up to 4GB), and it makes the receive path clean:
-read length → slice the bytes → done. No shape lookup needed during
-the initial frame parse.
-
-### Integration with the send path
-
-If we go with Option A (length-prefixed payload), the send path needs
-to know the payload's serialized size before writing it. This is
-exactly what the scatter plan provides — after building the scatter
-plan for the inner value, we know `plan.total_size`, write it as a
-varint, then write the plan's segments. The `Payload`'s vtable hook
-would signal "serialize inner value with length prefix."
+On the send side, the vtable's `OpaqueContentFn` returns
+`OpaqueContent::Value { ptr, shape, plan }`. The serializer serializes
+the inner value into bytes (using the shape/plan), and writes those
+bytes the same way it writes any `&[u8]` — with whatever framing the
+format uses natively. For postcard, that's a varint length prefix.
+The scatter plan provides the total size, so the length prefix can be
+computed before the payload bytes are written.
 
 ## Summary of facet changes needed
 
-1. **Opaque-inner vtable hook** (`facet-core`): a way for opaque types
-   to say "serialize this `(ptr, shape)` in my place." Used on the
-   send path.
+1. **Opaque-content vtable** (`facet-core`): `OpaqueContentFn` and
+   `OpaqueDeserializeStoreFn` on the Shape for opaque types. The
+   serialize side returns `OpaqueContent` (either a type-erased value
+   or pre-serialized bytes). The deserialize side accepts a byte range
+   (offset + len). The format treats the opaque field as `&[u8]` and
+   uses its native byte-sequence encoding.
 
-2. **Raw-value deserialization** (`facet-postcard`): when deserializing
-   a field marked for deferred parsing, read a length prefix and store
-   the byte range without interpreting the contents. Used on the
-   receive path.
+2. **Opaque-aware serialization** (`facet-postcard` and other formats):
+   when serializing an opaque type, call the vtable to get content,
+   serialize it as bytes. When deserializing, deserialize a byte
+   sequence and call the vtable to store the range. No special framing
+   — the format's existing byte-sequence encoding handles everything.
 
 3. **Scatter/gather API** (`facet-postcard`, issue #2065): produces a
-   scatter plan instead of writing to a `Vec`. Required for both
-   the send path (zero-copy into write slots) and the length-prefix
-   calculation (need to know payload size before writing the prefix).
+   scatter plan instead of writing to a `Vec`. Required for the send
+   path (zero-copy into write slots) and for computing the payload
+   size before writing the format's native length encoding.
