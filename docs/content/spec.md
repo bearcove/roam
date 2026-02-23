@@ -87,15 +87,18 @@ call (ie. send a request to the peer, expecting a response), one needs a connect
 roam supports various transports, like memory, TCP and other sockets, WebSocket,
 shared memory; but a roam connection sits several layers above a "TCP connection".
 
-```mermaid
-graph TD
-    A["Link (Memory, stdio, TCP, Unix sockets, Named pipes, WebSocket, SHM)"]
-    B["Conduit (Serialization / Deserialization via postcard — bare or stable)"]
-    C["Session (Durable set of connections, request state machine, resumable)"]
-    D["Connections (Namespace for request/channel IDs, root connection ID=0 always open)"]
-    E["Requests/Channels (RPC calls and streaming channels)"]
-
-    A --> B --> C --> D --> E
+```aasvg
++------------------------+
+| Requests / Channels    |  RPC calls and streaming data
++------------------------+
+| Connections            |  request/channel ID namespace
++------------------------+
+| Session                |  set of connections over a conduit
++------------------------+
+| Conduit                |  serialization, reconnection
++------------------------+
+| Link                   |  TCP, SHM, WebSocket, etc.
++------------------------+
 ```
 
 ## Links and transports
@@ -374,13 +377,49 @@ documentation for more information.
 > A session can hold many connections: it starts with one, the root connection,
 > with ID 0. Trying to close the root connection is a protocol error.
 
+> r[connection.virtual]
+>
+> Connections that are dynamically opened in a session with identifiers strictly
+> greater than 0 are called "virtual connections". 
+
 > r[connection.open]
 >
 > Either peer may allocate a new connection ID using its parity, and send a
-> `Connect` message on the desired connection ID. The counterpart must reply with
-> either Accept or Reject. 
+> `OpenConnection` message on the desired connection ID, Then wait until the
+> counterpart replies with either `AcceptConnection` or `RejectConnection`. Only
+> once `AcceptConnection` has been received may the peer send other messages on
+> that connection.
 
-## Connections
+> r[connection.parity]
+>
+> When opening a virtual connection, a peer requests a certain parity. That
+> parity doesn’t have to be the same as the session parity.
+>
+> The design objective is to allow proxies to map existing connections without
+> having to translate request IDs or channel IDs.
 
-On top of the **Conduit** sits the **Session**: it has a stable identifiers, can be
-resumed if we lose connectivity and have to re-create a new **Link**.
+Case study: [dodeca](https://github.com/bearcove/dodeca) is a static site
+generator. It’s using roam RPC over the shared memory transport to communicate
+the host (main binary) and cells, which implement basic functionality.
+
+Dodeca's HTTP server is implemented as a cell: on top of serving HTML, it also
+accepts new roam sessions over WebSocket connections, to serve the DevTools
+service (which allows inspecting the template variables and patching the page
+live when new changes are made to the Markdown, etc.).
+
+The HTTP server cell finds itself in the middle of the host and the browser, and
+has to forward calls somehow:
+
+```mermaid
+graph LR
+    Host["Host (main binary)"]
+    Cell["HTTP Server Cell"]
+    Browser["Browser (DevTools)"]
+
+    Host <-->|"roam / SHM"| Cell
+    Cell <-->|"roam / WebSocket"| Browser
+```
+
+Instead of manually forwarding calls back to the host, the HTTP server cell can
+simply open a virtual connection on its existing host session, matching the
+parity that the browser peer picked when connecting over WS.
