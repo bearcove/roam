@@ -4,6 +4,7 @@
 //! in shared memory. Zero-copy: the receiver's [`SelfRef`](roam_types::SelfRef)
 //! borrows directly from the shared region.
 
+pub mod framing;
 pub mod varslot;
 
 /// A [`Link`](roam_types::Link) over shared memory ring buffers.
