@@ -77,9 +77,9 @@ let result = client
 assert_eq!(result, 8);
 ```
 
-## High-level concepts
-
 But how do you obtain a client?
+
+# The connectivity stack
 
 To "handle" a call (ie. send a response to an incoming request), or to "make" a
 call (ie. send a request to the peer, expecting a response), one needs a connection.
@@ -98,12 +98,59 @@ graph TD
     A --> B --> C --> D --> E
 ```
 
+## Links and transports
 
+> r[link]
+> 
+> A link provides a reliable way to send and receive payloads (byte buffers)
+> between two peers.
+> 
+> A kind of link is called a "transport". If you use the TCP transport, then you
+> establish TCP links between your peers.
 
-Connections are the fourth layer in the roam connectivity model. First, we need to
-establish a **Link** with the other peer: typically by accepting a TCP/Unix socket
-connection, or establishing one, or negotiating an SHM link over a file and some
-sockets, etc. etc. — this lets us exchange **Payloads** (opaque byte buffers).
+> r[transport.memory]
+> 
+> Roam provides an in-memory transport via `MemoryLink`, based on tokio MPSC
+> channels.
+
+> r[transport.stream]
+> 
+> Roam provides a stream transport via `StreamLink`, which prefixes each payload
+> with its length: a 32-bit LE unsigned integer.
+
+> r[transport.stream.kinds]
+> 
+> `StreamLink` must be constructible from arbitrary tokio `AsyncRead`/`AsyncWrite`
+> pairs. Convenience constructors are provided for:
+>
+>   * TCP sockets
+>   * Stdio
+>   * Unix sockets
+>   * Named pipes on Windows
+
+> r[transport.stream.local]
+>
+> Roam provides a `LocalLink` abstraction that uses named pipes on Windows and
+> Unix sockets on Linux & macOS. Endpoints/addresses are a `String` internally
+
+> r[transport.websocket]
+>
+> Roam provides a Websocket link, which sends payloads via Websocket binary
+> frames.
+
+> r[transport.websocket.platforms]
+>
+> The Websocket link MUST work on platforms where tokio works
+> (e.g. `x86_64-unknown-linux-gnu`) and on `wasm32-unknown-unknown`.
+
+> r[transport.shm]
+>
+> Roam provides a shared memory transport. It is designed for high-performance
+> IPC on a single machine.
+
+Links are designed to avoid dropping messages.
+
+## Conduits
 
 On top of the **Link** is the **Wire** which deals with serialization and
 deserialization to and from postcard.
