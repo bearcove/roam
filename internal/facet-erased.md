@@ -1,31 +1,33 @@
-# Facet Opaque Adapter for Erased Payloads
+# Facet Opaque Adapter for Roam Payload
 
 ## Purpose
 
 Define the contract behind `#[facet(opaque = thing)]` so Roam can:
 
-1. serialize erased payloads on send,
-2. defer payload deserialization on receive,
-3. keep low-copy behavior when backing is stable.
+1. serialize erased outgoing payloads,
+2. parse incoming envelopes before payload concrete type is known,
+3. defer payload decoding with low-copy behavior when possible.
 
-This document is the API contract, not an implementation sketch.
+## Core Invariant
 
-## Problem
+For incoming data, the runtime object is `SelfRef<Message>`: `(Backing, Message)`.
 
-Roam envelopes can be parsed before payload concrete type is known.
+`Backing` is single-owner and not split into sub-backings. Therefore deferred
+payload state inside `Message` stores either:
 
-- Send path needs: erased value -> concrete bytes.
-- Receive path needs: raw payload bytes -> stored deferred payload.
+1. a borrowed byte slice into the message backing, or
+2. owned bytes.
 
-Facet must let opaque types provide this behavior explicitly.
+It does not store a second `Backing` handle for a payload subrange.
 
 ## Annotation
 
 ```rust
 #[facet(opaque = PayloadAdapter)]
 pub enum Payload<'payload> {
-    Borrowed { /* type-erased outgoing value */ },
-    Raw { /* deferred incoming bytes */ },
+    Borrowed { /* outgoing erased value */ },
+    RawBorrowed(&'payload [u8]),
+    RawOwned(Vec<u8>),
 }
 ```
 
@@ -33,7 +35,7 @@ pub enum Payload<'payload> {
 
 ## Public Adapter Interface
 
-The public interface is typed. No raw pointer parameters are exposed here.
+Public interface is typed. Pointer shims are internal.
 
 ```rust
 pub struct OpaqueSerialize {
@@ -42,67 +44,68 @@ pub struct OpaqueSerialize {
     pub plan: Option<&'static TypePlanCore>,
 }
 
-pub enum OpaqueDeserialize {
-    Borrowed { offset: usize, len: usize },
+pub enum OpaqueDeserialize<'de> {
+    Borrowed(&'de [u8]),
     Owned(Vec<u8>),
 }
 
-pub trait FacetOpaqueAdapter<T> {
+pub trait FacetOpaqueAdapter {
     type Error;
+    type SendValue;
+    type RecvValue<'de>;
 
-    /// Map a concrete opaque value to erased serialization inputs.
-    fn serialize_map(value: &T) -> OpaqueSerialize;
+    /// Outgoing path: map typed value to erased serialization inputs.
+    fn serialize_map(value: &Self::SendValue) -> OpaqueSerialize;
 
-    /// Build the concrete opaque value from deferred payload input.
-    fn deserialize_build(input: OpaqueDeserialize) -> Result<T, Self::Error>;
+    /// Incoming path: build deferred payload representation.
+    fn deserialize_build<'de>(input: OpaqueDeserialize<'de>)
+        -> Result<Self::RecvValue<'de>, Self::Error>;
 }
 ```
 
-## Semantics
+## Directional Semantics
 
-### Send path
+### Send
 
-1. Serializer reaches a `#[facet(opaque = ...)]` field.
-2. It calls `FacetOpaqueAdapter::<T>::serialize_map(&value)`.
-3. Returned `(ptr, shape, plan)` defines what to serialize.
-4. Format serializes that value using normal format rules.
+1. Serializer reaches `#[facet(opaque = ...)]` field.
+2. Calls `serialize_map(...)`.
+3. Uses returned `(ptr, shape, plan)` to serialize payload bytes.
 
-### Receive path
+### Receive
 
-1. Format decodes payload bytes as a byte sequence.
-2. If bytes are in a stable backing buffer, pass:
-   `OpaqueDeserialize::Borrowed { offset, len }`.
-3. Otherwise pass:
-   `OpaqueDeserialize::Owned(Vec<u8>)`.
-4. Call `FacetOpaqueAdapter::<T>::deserialize_build(...)`.
-5. Store returned `T` in the destination field.
+1. Parser decodes payload bytes.
+2. If parser input can borrow stably, call `deserialize_build(Borrowed(&[u8]))`.
+3. Otherwise call `deserialize_build(Owned(Vec<u8>))`.
+4. Store returned deferred payload value inside `Message`.
 
-## Borrowed vs Owned Rules
+## Where Slicing Lives
 
-1. `Borrowed { offset, len }` means the range is inside the format's current
-   input backing and remains valid for the opaque value's required lifetime.
-2. If that guarantee cannot be made, the format MUST use `Owned(Vec<u8>)`.
-3. Adapter decides internal storage layout for both modes.
+Slicing belongs to parser/input logic, not to payload storage types.
 
-## Internal Lowering
+1. Parser decides whether borrowed slice is valid.
+2. Adapter boundary receives either borrowed slice or owned bytes.
+3. If parser internally tracks ranges, it resolves range -> slice before calling
+   `deserialize_build`.
 
-Facet derive may lower the typed trait methods to raw-pointer function pointers
-in shape metadata. That lowering is internal only.
+## Roam Dispatch Transform
 
-- Public API stays typed (`&T`, `Result<T, _>`, enum input).
-- Internal vtable may use pointer-based shims for uniform dispatch.
+Incoming flow is:
 
-## Roam Outcome
+1. Parse envelope into `SelfRef<Message>`.
+2. Read `method_id` and resolve concrete args `(Shape, TypePlanCore)`.
+3. Consume/map `SelfRef<Message>` into `SelfRef<ConcreteArgs>` using the same
+   backing.
 
-This contract enables both directions cleanly:
+This is a move/transform, not a backing split.
 
-1. Send: erased payloads serialize without ad-hoc manual encoding.
-2. Receive: envelope parses first, payload bytes are retained as deferred raw,
-   then decoded later with concrete method/item type.
-3. Low-copy path is preserved via `Borrowed { offset, len }` when possible.
+## Outgoing vs Incoming
+
+1. Incoming messages live in `SelfRef<Message>` and can use `RawBorrowed(&[u8])`.
+2. Outgoing messages are not in `SelfRef<Message>` and use erased outgoing form
+   (`Borrowed { ... }`) or owned raw bytes.
 
 ## Non-goals
 
-1. Facet does not impose one universal payload storage type.
-2. Facet does not require all formats to support borrowed input.
-3. Facet does not encode transport/backing ownership policy in this trait.
+1. No universal facet-wide backing container.
+2. No requirement that every format support borrowed input.
+3. No payload-level ownership model that splits or clones transport `Backing`.
