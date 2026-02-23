@@ -328,21 +328,22 @@ documentation for more information.
 >
 >   * Hello
 >   * HelloYourself
->   * Connect
->   * Accept
->   * Reject
->   * Goodbye
+>   * ProtocolError
+>   * OpenConnection
+>   * AcceptConnection
+>   * RejectConnection
+>   * CloseConnection
 >   * Request
 >   * Response
->   * Cancel
->   * Data
->   * Close
->   * Reset
+>   * CancelRequest
+>   * ChannelItem
+>   * CloseChannel
+>   * ResetChannel
 
 > r[session.handshake]
 >
 > To establish a session on top of an existing conduit, a handshake must be
-> performed. The initiator sends a "Hello" message, with the version field
+> performed. The initiator sends a `Hello` message, with the version field
 > set to `7`, and the parity field set to the identifier partition desired by
 > the initiator.
 >
@@ -362,16 +363,18 @@ documentation for more information.
 > A peer that has claimed `Odd` parity at the session level can request virtual
 > connections with identifiers 1, 3, 5, 7, etc. Their 
 
-> r[session.connection]
+## Connections
+
+> r[connection]
 > 
 > A connection is a namespace for requests and channels inside of a session. 
 
-> r[session.connection.root]
+> r[connection.root]
 > 
 > A session can hold many connections: it starts with one, the root connection,
-> with ID 0. Trying to close the root connection tears down the entire session. 
+> with ID 0. Trying to close the root connection is a protocol error.
 
-> r[session.connection.open]
+> r[connection.open]
 >
 > Either peer may allocate a new connection ID using its parity, and send a
 > `Connect` message on the desired connection ID. The counterpart must reply with
