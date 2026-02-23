@@ -338,6 +338,11 @@ impl BipBufRaw {
     pub fn try_read(&self) -> Option<&[u8]> {
         let header = self.header();
         let read = header.read.load(Ordering::Relaxed);
+
+        // Load `write` BEFORE `watermark` to synchronize with the producer's
+        // wrap sequence (which stores watermark then write with Release).
+        // If we see write=0, Acquire guarantees we also see the new watermark.
+        let write = header.write.load(Ordering::Acquire);
         let watermark = header.watermark.load(Ordering::Acquire);
 
         // If wrap is active, consume tail [read..watermark) before front data.
@@ -351,15 +356,14 @@ impl BipBufRaw {
             // Tail consumed: wrap to front and clear watermark.
             header.read.store(0, Ordering::Release);
             header.watermark.store(0, Ordering::Release);
-            let write = header.write.load(Ordering::Acquire);
-            if write > 0 {
+            let current_write = header.write.load(Ordering::Acquire);
+            if current_write > 0 {
                 let ptr = self.data;
-                return Some(unsafe { core::slice::from_raw_parts(ptr, write as usize) });
+                return Some(unsafe { core::slice::from_raw_parts(ptr, current_write as usize) });
             }
             return None;
         }
 
-        let write = header.write.load(Ordering::Acquire);
         if read < write {
             // Normal case: readable region is [read..write).
             let len = write - read;
