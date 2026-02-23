@@ -114,6 +114,8 @@ r[zerocopy.send.shm]
 In all cases, serialization writes directly into shared memory. Zero
 copies for the payload bytes — the receiver reads from the same physical
 memory.
+`mmap_threshold` is defined by the SHM transport as the largest payload
+that fits in any VarSlotPool class (see [SHM spec](@/spec/shm.md)).
 
 ## Receive path
 
@@ -286,6 +288,67 @@ r[zerocopy.framing.no-double-serialize]
 The conduit MUST NOT serialize the value into a temporary buffer and
 then copy it into the write slot. The conduit serializes the value (or
 `Frame<T>`) directly into the link's write slot in one pass.
+
+### Scatter/gather serialization
+
+r[zerocopy.scatter]
+
+Serializing directly into the write slot requires knowing the total
+encoded size before calling `LinkTx::alloc(len)`. Postcard's encoding
+is sequential and deterministic, so the serializer can compute the
+exact output size and collect copy instructions without writing to a
+final destination buffer.
+
+r[zerocopy.scatter.plan]
+
+The serializer performs a single walk over the value and produces a
+**scatter plan**: a staging buffer plus an ordered list of segments.
+Each segment is either:
+
+- **Staged** — a byte range within the staging buffer (structural
+  bytes: varints, enum tags, length prefixes, fixed-size fields), or
+- **Reference** — a pointer and length into the original value's memory
+  (blob fields: `&[u8]`, `&str`).
+
+The staging buffer contains only the structural bytes. Blob payloads
+are never copied into it — they remain at their original addresses.
+
+r[zerocopy.scatter.plan.size]
+
+The total encoded size is the sum of all segment lengths (staged +
+referenced). This is known after the walk completes, before any bytes
+are written to the destination.
+
+r[zerocopy.scatter.write]
+
+To write the scatter plan into a destination buffer:
+
+1. Call `LinkTx::alloc(total_size)` to obtain a `WriteSlot`.
+2. Walk the segment list in order. For each segment, `memcpy` its bytes
+   (from staging buffer or from the referenced source) into the write
+   slot at the current offset.
+3. Call `commit()` on the write slot.
+
+This is the only point where bytes are copied into the link's buffer.
+Blob data goes directly from the caller's memory to the write slot —
+one copy total.
+
+r[zerocopy.scatter.lifetime]
+
+The scatter plan borrows from the original value. The plan MUST be
+consumed (written into a slot) before the borrows expire. In practice,
+the conduit's `send` method builds the plan and writes it within the
+same call, while the caller's `.await` keeps all borrows alive (see
+`zerocopy.send.lifetime`).
+
+r[zerocopy.scatter.replay]
+
+For StableConduit, the replay buffer needs an owned copy of the
+serialized frame bytes. After writing the scatter plan into the write
+slot, the conduit copies the slot's byte range into the replay buffer.
+This is one additional `memcpy` (slot → replay buffer) that is
+unavoidable for reliability — but there is no intermediate `Vec`
+between serialization and the write slot.
 
 ## Payload representation
 

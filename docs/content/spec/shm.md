@@ -244,19 +244,21 @@ Each guest has two BipBuffers (bipartite circular buffers):
 > Offset  Size  Field        Description
 > ──────  ────  ─────        ───────────
 > 0       4     total_len    Entry size in bytes (padded to 4-byte boundary)
-> 4       1     flags        Bit 0: SLOT_REF (payload in VarSlotPool)
+> 4       1     flags        Bit 0: SLOT_REF, Bit 1: MMAP_REF
 > 5       3     reserved     Reserved (zero)
 > ```
 
 > r[shm.framing.inline]
 >
-> When `SLOT_REF` is clear (flags bit 0 = 0), the payload bytes
+> When both `SLOT_REF` and `MMAP_REF` are clear (flags bits 0 and 1 = 0),
+> the payload bytes
 > immediately follow the 8-byte header inline in the BipBuffer.
 > The entry occupies `align4(8 + payload_len)` bytes.
 
 > r[shm.framing.slot-ref]
 >
-> When `SLOT_REF` is set (flags bit 0 = 1), a 12-byte slot reference
+> When `SLOT_REF` is set and `MMAP_REF` is clear
+> (flags bit 0 = 1, bit 1 = 0), a 12-byte slot reference
 > follows the header instead of inline payload:
 >
 > ```text
@@ -272,12 +274,47 @@ Each guest has two BipBuffers (bipartite circular buffers):
 > The actual payload is stored in the VarSlotPool slot identified by
 > this reference. The entry occupies 20 bytes (`align4(8 + 12)`).
 
+> r[shm.framing.mmap-ref]
+>
+> When `MMAP_REF` is set and `SLOT_REF` is clear
+> (flags bit 1 = 1, bit 0 = 0), a 24-byte mmap reference follows the
+> header:
+>
+> ```text
+> Offset  Size  Field            Description
+> ──────  ────  ─────            ───────────
+> 0       4     map_id           Mapping identifier
+> 4       4     map_generation   Mapping ABA generation counter
+> 8       8     map_offset       Byte offset within the mapping
+> 16      4     payload_len      Payload length in bytes
+> 20      4     reserved         Reserved (zero)
+> ```
+>
+> The payload bytes live in the referenced mapping at
+> `map_offset..map_offset+payload_len`. The entry occupies 32 bytes
+> (`align4(8 + 24)`).
+>
+> `map_id` indexes a host-managed mapping registry shared by all peers.
+> `map_generation` prevents ABA when a registry slot is reused.
+
+> r[shm.framing.flags]
+>
+> `SLOT_REF` and `MMAP_REF` MUST NOT both be set in the same entry.
+
 > r[shm.framing.threshold]
 >
-> An entry with `8 + payload_len <= inline_threshold` SHOULD be sent
-> inline. Larger payloads MUST use a slot reference. The default inline
-> threshold is 256 bytes (configurable via the segment header;
-> 0 means use the default).
+> Payload routing uses three tiers:
+>
+> - If `8 + payload_len <= inline_threshold`, send inline (SHOULD).
+> - Else if `payload_len <= mmap_threshold`, send `SLOT_REF` (MUST).
+> - Else, send `MMAP_REF` (MUST).
+>
+> The default inline threshold is 256 bytes (configurable via the
+> segment header; 0 means use the default).
+>
+> `mmap_threshold` is the largest payload that can fit in any VarSlotPool
+> size class (`max(slot_size)` across classes). It is derived from pool
+> layout, not stored as a separate header field.
 
 > r[shm.framing.alignment]
 >
@@ -310,8 +347,9 @@ Each guest has two BipBuffers (bipartite circular buffers):
 >
 > To allocate a slot for a payload of `N` bytes: find the smallest size
 > class where `slot_size >= N` and allocate from its free list. If
-> exhausted, try the next larger class. If all classes are exhausted,
-> the sender MUST wait (backpressure).
+> exhausted, try the next larger class. If all candidate classes are
+> exhausted, the sender MUST wait (backpressure). If no class satisfies
+> `slot_size >= N`, the sender MUST use `MMAP_REF` instead of VarSlotPool.
 
 ## Slot Metadata
 
@@ -392,6 +430,104 @@ Each guest has two BipBuffers (bipartite circular buffers):
 > When a guest crashes, the host MUST scan the VarSlotPool for slots
 > with `owner_peer == crashed_peer_id` and return them to their
 > respective free lists.
+
+# Mmap Payload Registry
+
+> r[shm.mmap]
+>
+> `MMAP_REF` entries reference payload bytes that live outside the
+> BipBuffer and VarSlotPool. The host MUST manage these mappings in a
+> registry keyed by `(map_id, map_generation)`.
+
+> r[shm.mmap.registry]
+>
+> A mapping registry entry contains:
+>
+> - mapping identity: `map_id`, `map_generation`
+> - byte extent: total mapping length in bytes
+> - ownership/liveness metadata
+> - per-peer delivery state (which peers may still read this mapping)
+
+> r[shm.mmap.publish]
+>
+> Before the producer commits a BipBuffer entry with `MMAP_REF`, the
+> host MUST publish the referenced mapping in the registry and make it
+> attachable by the target peer. A receiver MUST treat an unknown
+> `(map_id, map_generation)` as a protocol error.
+
+> r[shm.mmap.bounds]
+>
+> For each `MMAP_REF`, the receiver MUST validate
+> `map_offset + payload_len <= mapping_length` from the resolved registry
+> entry before exposing borrowed bytes.
+
+> r[shm.mmap.ordering]
+>
+> Publication and visibility ordering MUST ensure:
+>
+> 1. Mapping registry entry is visible to the target peer
+> 2. Mapping payload bytes are fully initialized
+> 3. `MMAP_REF` frame is committed to BipBuffer
+>
+> A peer MUST NOT observe step 3 without being able to complete steps 1-2.
+
+> r[shm.mmap.release]
+>
+> When a receiver finishes processing a payload referenced by `MMAP_REF`,
+> it MUST release its delivery lease for that `(map_id, map_generation)`.
+
+> r[shm.mmap.reclaim]
+>
+> The host MUST reclaim a mapping when no peer leases remain and no
+> in-flight BipBuffer entries can still reference it.
+
+> r[shm.mmap.aba]
+>
+> `map_generation` MUST be incremented whenever a `map_id` slot is reused.
+> Receivers MUST reject stale generations to prevent ABA aliasing.
+
+> r[shm.mmap.crash-recovery]
+>
+> On crashed-peer recovery, the host MUST drop all delivery leases held by
+> that peer for registry mappings and reevaluate reclaim eligibility.
+
+> r[shm.mmap.attach]
+>
+> A mapping is "attachable" only after the receiver has a valid
+> OS-level handle for that mapping and registry metadata for
+> `(map_id, map_generation, mapping_length)`.
+
+> r[shm.mmap.attach.message]
+>
+> Handle-delivery metadata MUST include:
+>
+> - `map_id: u32`
+> - `map_generation: u32`
+> - `mapping_length: u64`
+>
+> Fields are encoded little-endian.
+
+> r[shm.mmap.attach.unix]
+>
+> On Unix, the host MUST transfer a mapping fd via `sendmsg` +
+> `SCM_RIGHTS` on a per-peer mapping-control socket. Exactly one fd is
+> transferred per control message, and the message body MUST be the
+> metadata in `r[shm.mmap.attach.message]`. The receiver MUST treat an
+> fd/control-body mismatch as a protocol error.
+
+> r[shm.mmap.attach.windows]
+>
+> On Windows, the host MUST duplicate the mapping handle into the guest
+> process (`DuplicateHandle`) and deliver the duplicated handle value
+> plus metadata from `r[shm.mmap.attach.message]` over the per-peer
+> mapping-control channel. The receiver MUST treat invalid or
+> non-readable handles as a protocol error.
+
+> r[shm.mmap.attach.once]
+>
+> A receiver MUST NOT require repeated handle delivery for the same
+> `(map_id, map_generation)` tuple. Subsequent `MMAP_REF` frames MAY
+> reuse the previously delivered handle until that generation is retired.
 
 # Signaling
 
@@ -475,16 +611,18 @@ Each guest has two BipBuffers (bipartite circular buffers):
 >
 >   1. Allocates a peer table entry (sets state to Reserved)
 >   2. Creates a doorbell pair
->   3. Spawns the guest process, passing:
+>   3. Creates a per-peer mapping-control channel
+>   4. Spawns the guest process, passing:
 >      - Path to the segment file
 >      - Assigned peer ID
 >      - Guest's doorbell fd (Unix: via fd inheritance)
+>      - Guest's mapping-control endpoint
 
 > r[shm.spawn.fd-inheritance]
 >
-> On Unix, the doorbell fd MUST be inheritable by the child process.
-> The host MUST NOT set `O_CLOEXEC` on the guest's doorbell fd before
-> spawning.
+> On Unix, both the doorbell fd and mapping-control endpoint MUST be
+> inheritable by the child process. The host MUST NOT set `O_CLOEXEC`
+> on either guest endpoint before spawning.
 
 ## Crash Detection
 
@@ -510,16 +648,20 @@ Each guest has two BipBuffers (bipartite circular buffers):
 > On detecting a crashed guest, the host MUST:
 >
 >   1. Set the peer state to Goodbye
->   2. Scan the H2G BipBuffer for any `SLOT_REF` entries and free those
->      slots (they are host-owned — `owner_peer == 0` — but were in
->      flight to the crashed guest and will never be freed by the receiver)
+>   2. Scan the H2G BipBuffer for any `SLOT_REF` and `MMAP_REF` entries
+>      and reclaim those backing resources (they are host-owned but were
+>      in flight to the crashed guest and will never be released by the
+>      receiver)
 >   3. Reset both BipBuffer headers (write=0, read=0, watermark=0)
 >   4. Scan VarSlotPool for slots with `owner_peer == crashed_peer_id`
 >      and return them to their free lists
->   5. Set state to Empty (allowing a new guest to attach)
+>   5. Drop all mapping-registry leases held by `crashed_peer_id` and
+>      reclaim mappings that become unreferenced
+>   6. Set state to Empty (allowing a new guest to attach)
 >
 > Step 2 MUST precede step 3: once the H2G BipBuffer is reset its
-> content is gone and the slot references cannot be recovered.
+> content is gone and in-flight `SLOT_REF`/`MMAP_REF` entries cannot be
+> recovered.
 
 ## Host Shutdown
 

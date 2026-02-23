@@ -5,8 +5,12 @@
 //!
 //! - **Inline**: payload bytes follow the header directly. The entry is
 //!   `align4(8 + payload_len)` bytes.
-//! - **Slot-ref**: a [`SlotRefBody`] follows the header instead. The entry
+//! - **Slot-ref**: a [`SlotRefBody`] follows the header (bit 0 set). The entry
 //!   is exactly 20 bytes.
+//! - **Mmap-ref**: a [`MmapRefBody`] follows the header (bit 1 set). The entry
+//!   is exactly 32 bytes.
+//!
+//! Bits 0 and 1 of flags MUST NOT both be set.
 //!
 //! All values are native-endian (little-endian on all supported platforms).
 
@@ -20,6 +24,9 @@ use crate::varslot::SlotRef;
 /// Bit 0 of `FrameHeader::flags`: payload is in VarSlotPool, not inline.
 pub const FLAG_SLOT_REF: u8 = 0x01;
 
+/// Bit 1 of `FrameHeader::flags`: payload is in an external mmap region.
+pub const FLAG_MMAP_REF: u8 = 0x02;
+
 /// Size of [`FrameHeader`] in bytes.
 pub const FRAME_HEADER_SIZE: usize = 8;
 
@@ -28,6 +35,12 @@ pub const SLOT_REF_BODY_SIZE: usize = 12;
 
 /// Size of a slot-ref entry (header + body), always exactly 20 bytes.
 pub const SLOT_REF_ENTRY_SIZE: u32 = 20;
+
+/// Size of [`MmapRefBody`] in bytes.
+pub const MMAP_REF_BODY_SIZE: usize = 24;
+
+/// Size of an mmap-ref entry (header + body), always exactly 32 bytes.
+pub const MMAP_REF_ENTRY_SIZE: u32 = 32;
 
 /// Default inline threshold when the segment header field is 0.
 pub const DEFAULT_INLINE_THRESHOLD: u32 = 256;
@@ -44,7 +57,8 @@ pub struct FrameHeader {
     /// Total entry size in bytes, padded to a 4-byte boundary.
     /// Includes the 8-byte header itself.
     pub total_len: u32,
-    /// Bit 0: `FLAG_SLOT_REF`. All other bits reserved and zero.
+    /// Bit 0: `FLAG_SLOT_REF`. Bit 1: `FLAG_MMAP_REF`. Both MUST NOT be set
+    /// simultaneously. All other bits reserved and zero.
     pub flags: u8,
     pub _reserved: [u8; 3],
 }
@@ -62,10 +76,34 @@ pub struct SlotRefBody {
     pub generation: u32,
 }
 
+/// The 24-byte mmap reference body that follows a `FrameHeader` when
+/// `FLAG_MMAP_REF` is set.
+///
+/// r[impl shm.framing.mmap-ref]
+#[repr(C)]
+pub struct MmapRefBody {
+    pub map_id: u32,
+    pub map_generation: u32,
+    pub map_offset: u64,
+    pub payload_len: u32,
+    pub _reserved: u32,
+}
+
+/// Decoded mmap reference (no raw pointers).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MmapRef {
+    pub map_id: u32,
+    pub map_generation: u32,
+    pub map_offset: u64,
+    pub payload_len: u32,
+}
+
 #[cfg(not(loom))]
 const _: () = assert!(core::mem::size_of::<FrameHeader>() == FRAME_HEADER_SIZE);
 #[cfg(not(loom))]
 const _: () = assert!(core::mem::size_of::<SlotRefBody>() == SLOT_REF_BODY_SIZE);
+#[cfg(not(loom))]
+const _: () = assert!(core::mem::size_of::<MmapRefBody>() == MMAP_REF_BODY_SIZE);
 
 // ── align helper ──────────────────────────────────────────────────────────────
 
@@ -99,6 +137,30 @@ pub fn write_inline(producer: &mut BipBufProducer<'_>, payload: &[u8]) -> Result
     buf[payload_end..entry_len as usize].fill(0);
 
     producer.commit(entry_len);
+    Ok(())
+}
+
+/// Write an mmap-ref frame to the producer.
+///
+/// Always 32 bytes: 8-byte header + 24-byte [`MmapRefBody`].
+///
+/// r[impl shm.framing.mmap-ref]
+pub fn write_mmap_ref(producer: &mut BipBufProducer<'_>, mmap: &MmapRef) -> Result<(), BipBufFull> {
+    let buf = producer.try_grant(MMAP_REF_ENTRY_SIZE).ok_or(BipBufFull)?;
+
+    let hdr = unsafe { &mut *(buf.as_mut_ptr() as *mut FrameHeader) };
+    hdr.total_len = MMAP_REF_ENTRY_SIZE;
+    hdr.flags = FLAG_MMAP_REF;
+    hdr._reserved = [0; 3];
+
+    let body = unsafe { &mut *(buf[FRAME_HEADER_SIZE..].as_mut_ptr() as *mut MmapRefBody) };
+    body.map_id = mmap.map_id;
+    body.map_generation = mmap.map_generation;
+    body.map_offset = mmap.map_offset;
+    body.payload_len = mmap.payload_len;
+    body._reserved = 0;
+
+    producer.commit(MMAP_REF_ENTRY_SIZE);
     Ok(())
 }
 
@@ -137,6 +199,8 @@ pub enum Frame<'a> {
     Inline(&'a [u8]),
     /// The payload lives in the VarSlotPool at the given slot reference.
     SlotRef(SlotRef),
+    /// The payload lives in an external mmap region.
+    MmapRef(MmapRef),
 }
 
 /// Parse the next frame from the front of `data`.
@@ -159,9 +223,13 @@ pub fn peek_frame(data: &[u8]) -> Option<(Frame<'_>, u32)> {
         return None;
     }
 
-    let frame = if hdr.flags & FLAG_SLOT_REF == 0 {
-        Frame::Inline(&data[FRAME_HEADER_SIZE..total_len])
-    } else {
+    // r[impl shm.framing.flags]
+    let both = FLAG_SLOT_REF | FLAG_MMAP_REF;
+    if hdr.flags & both == both {
+        return None; // invalid: both bits set
+    }
+
+    let frame = if hdr.flags & FLAG_SLOT_REF != 0 {
         if total_len < FRAME_HEADER_SIZE + SLOT_REF_BODY_SIZE {
             return None;
         }
@@ -172,6 +240,19 @@ pub fn peek_frame(data: &[u8]) -> Option<(Frame<'_>, u32)> {
             slot_idx: body.slot_idx,
             generation: body.generation,
         })
+    } else if hdr.flags & FLAG_MMAP_REF != 0 {
+        if total_len < FRAME_HEADER_SIZE + MMAP_REF_BODY_SIZE {
+            return None;
+        }
+        let body = unsafe { &*(data[FRAME_HEADER_SIZE..].as_ptr() as *const MmapRefBody) };
+        Frame::MmapRef(MmapRef {
+            map_id: body.map_id,
+            map_generation: body.map_generation,
+            map_offset: body.map_offset,
+            payload_len: body.payload_len,
+        })
+    } else {
+        Frame::Inline(&data[FRAME_HEADER_SIZE..total_len])
     };
 
     Some((frame, hdr.total_len))
@@ -188,6 +269,7 @@ pub fn read_frame(consumer: &mut BipBufConsumer<'_>) -> Option<OwnedFrame> {
     let owned = match frame {
         Frame::Inline(payload) => OwnedFrame::Inline(payload.to_vec()),
         Frame::SlotRef(slot) => OwnedFrame::SlotRef(slot),
+        Frame::MmapRef(r) => OwnedFrame::MmapRef(r),
     };
     consumer.release(consumed);
     Some(owned)
@@ -198,6 +280,7 @@ pub fn read_frame(consumer: &mut BipBufConsumer<'_>) -> Option<OwnedFrame> {
 pub enum OwnedFrame {
     Inline(Vec<u8>),
     SlotRef(SlotRef),
+    MmapRef(MmapRef),
 }
 
 // ── tests ─────────────────────────────────────────────────────────────────────
@@ -310,6 +393,66 @@ mod tests {
         let (_, consumed) = peek_frame(rx.try_read().unwrap()).unwrap();
         // align4(8 + 0) = 8
         assert_eq!(consumed, 8);
+    }
+
+    #[test]
+    fn mmap_ref_entry_size() {
+        let (_region, bip) = make_bipbuf(1024);
+        let (mut tx, mut rx) = bip.split();
+
+        let mmap = MmapRef {
+            map_id: 0,
+            map_generation: 0,
+            map_offset: 0,
+            payload_len: 0,
+        };
+        write_mmap_ref(&mut tx, &mmap).unwrap();
+        let (_, consumed) = peek_frame(rx.try_read().unwrap()).unwrap();
+        assert_eq!(consumed, 32); // MMAP_REF_ENTRY_SIZE
+    }
+
+    #[test]
+    fn mmap_ref_read_write() {
+        let (_region, bip) = make_bipbuf(1024);
+        let (mut tx, mut rx) = bip.split();
+
+        let mmap = MmapRef {
+            map_id: 5,
+            map_generation: 11,
+            map_offset: 4096,
+            payload_len: 1024,
+        };
+        write_mmap_ref(&mut tx, &mmap).unwrap();
+
+        match read_frame(&mut rx).unwrap() {
+            OwnedFrame::MmapRef(r) => {
+                assert_eq!(r.map_id, 5);
+                assert_eq!(r.map_generation, 11);
+                assert_eq!(r.map_offset, 4096);
+                assert_eq!(r.payload_len, 1024);
+            }
+            _ => panic!("expected mmap-ref frame"),
+        }
+    }
+
+    #[test]
+    fn flags_both_set_rejected() {
+        let (_region, bip) = make_bipbuf(1024);
+        let (mut tx, mut rx) = bip.split();
+
+        // Manually write a frame with both flag bits set (invalid).
+        let entry_len: u32 = 32;
+        let buf = tx.try_grant(entry_len).unwrap();
+        let hdr = unsafe { &mut *(buf.as_mut_ptr() as *mut FrameHeader) };
+        hdr.total_len = entry_len;
+        hdr.flags = FLAG_SLOT_REF | FLAG_MMAP_REF;
+        hdr._reserved = [0; 3];
+        buf[FRAME_HEADER_SIZE..].fill(0);
+        tx.commit(entry_len);
+
+        // peek_frame must reject it
+        let data = rx.try_read().unwrap();
+        assert!(peek_frame(data).is_none());
     }
 
     #[test]
