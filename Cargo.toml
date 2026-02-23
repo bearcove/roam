@@ -36,6 +36,7 @@ members = [
   "rust/roam-stream",
   "rust/roam-websocket",
   "rust/roam-shm",
+  "rust/roam-macros-parse",
 ]
 exclude = ["fuzz"]
 

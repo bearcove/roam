@@ -139,7 +139,8 @@ impl Doorbell {
     /// Consumes the handle, taking ownership of the underlying file descriptor.
     pub fn from_handle(handle: DoorbellHandle) -> io::Result<Self> {
         use std::os::unix::io::IntoRawFd;
-        Self::from_raw_fd(handle.0.into_raw_fd())
+        // Safety: IntoRawFd transfers ownership out of handle.0.
+        unsafe { Self::from_raw_fd(handle.0.into_raw_fd()) }
     }
 
     /// Create a Doorbell from a raw file descriptor (plugin side).
@@ -148,8 +149,10 @@ impl Doorbell {
     ///
     /// # Safety
     ///
-    /// The fd must be a valid, open file descriptor from a socketpair.
-    pub fn from_raw_fd(fd: RawFd) -> io::Result<Self> {
+    /// `fd` must be a valid, open file descriptor from a socketpair, and the
+    /// caller must transfer unique ownership — no other owner may close or
+    /// use it afterwards.
+    pub unsafe fn from_raw_fd(fd: RawFd) -> io::Result<Self> {
         let owned = unsafe { OwnedFd::from_raw_fd(fd) };
         set_nonblocking(fd)?;
         let async_fd = AsyncFd::new(owned)?;
@@ -191,7 +194,9 @@ impl Doorbell {
 
         let err = io::Error::last_os_error();
 
-        if err.kind() == ErrorKind::WouldBlock {
+        // WouldBlock (EAGAIN) and ENOBUFS both mean the socket buffer is
+        // temporarily saturated — the peer is alive, coalesce the signal.
+        if err.kind() == ErrorKind::WouldBlock || err.raw_os_error() == Some(libc::ENOBUFS) {
             return SignalResult::BufferFull;
         }
 

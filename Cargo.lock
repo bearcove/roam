@@ -726,6 +726,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "roam-macros-parse"
+version = "3.0.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "unsynn",
+]
+
+[[package]]
 name = "roam-shm"
 version = "3.0.0"
 dependencies = [

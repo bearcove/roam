@@ -226,14 +226,9 @@ impl MmapRegion {
         // 1. Grow the backing file
         self.file.set_len(new_size as u64)?;
 
-        // 2. Unmap old region
-        let unmap_result = unsafe { libc::munmap(self.ptr as *mut libc::c_void, self.len) };
-        if unmap_result != 0 {
-            return Err(io::Error::last_os_error());
-        }
-
-        // 3. Map new region (larger)
-        let ptr = unsafe {
+        // 2. Map new region before tearing down the old one, so that a
+        //    failure here leaves self in a valid state.
+        let new_ptr = unsafe {
             libc::mmap(
                 std::ptr::null_mut(),
                 new_size,
@@ -244,11 +239,14 @@ impl MmapRegion {
             )
         };
 
-        if ptr == libc::MAP_FAILED {
+        if new_ptr == libc::MAP_FAILED {
             return Err(io::Error::last_os_error());
         }
 
-        self.ptr = ptr as *mut u8;
+        // 3. New mapping is live — now it is safe to release the old one.
+        unsafe { libc::munmap(self.ptr as *mut libc::c_void, self.len) };
+
+        self.ptr = new_ptr as *mut u8;
         self.len = new_size;
         Ok(())
     }

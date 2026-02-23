@@ -1,0 +1,17 @@
+[package]
+name = "roam-macros-parse"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Unsynn-based parser for roam #[service] trait definitions"
+
+[package.metadata]
+
+[package.metadata."docs.rs"]
+rustdoc-args = ["--html-in-header", "arborium-header.html"]
+
+[dependencies]
+unsynn = "0.3"
+proc-macro2 = "1"
+quote = "1"

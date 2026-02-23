@@ -281,25 +281,13 @@ impl MmapRegion {
             return Ok(()); // No change needed
         }
 
-        // 1. Unmap old view
-        let unmap_result = unsafe {
-            UnmapViewOfFile(MEMORY_MAPPED_VIEW_ADDRESS {
-                Value: self.ptr as *mut _,
-            })
-        };
-        if unmap_result == 0 {
-            return Err(io::Error::last_os_error());
-        }
-
-        // 2. Close old mapping handle
-        unsafe { CloseHandle(self.mapping_handle) };
-
-        // 3. Grow the backing file
+        // 1. Grow the backing file first.
         self.file.set_len(new_size as u64)?;
 
-        // 4. Create new mapping
+        // 2. Create new mapping and view before releasing the old ones, so
+        //    that any failure here leaves self in a valid state.
         let file_handle = self.file.as_raw_handle() as HANDLE;
-        let mapping_handle = unsafe {
+        let new_mapping = unsafe {
             CreateFileMappingW(
                 file_handle,
                 std::ptr::null(),
@@ -310,21 +298,28 @@ impl MmapRegion {
             )
         };
 
-        if mapping_handle.is_null() {
+        if new_mapping.is_null() {
             return Err(io::Error::last_os_error());
         }
 
-        // 5. Map new view
-        let ptr = unsafe { MapViewOfFile(mapping_handle, FILE_MAP_ALL_ACCESS, 0, 0, new_size) };
+        let new_view = unsafe { MapViewOfFile(new_mapping, FILE_MAP_ALL_ACCESS, 0, 0, new_size) };
 
-        if ptr.Value.is_null() {
-            unsafe { CloseHandle(mapping_handle) };
+        if new_view.Value.is_null() {
+            unsafe { CloseHandle(new_mapping) };
             return Err(io::Error::last_os_error());
         }
 
-        self.ptr = ptr.Value as *mut u8;
+        // 3. New mapping is live — now it is safe to release the old ones.
+        unsafe {
+            UnmapViewOfFile(MEMORY_MAPPED_VIEW_ADDRESS {
+                Value: self.ptr as *mut _,
+            });
+            CloseHandle(self.mapping_handle);
+        }
+
+        self.ptr = new_view.Value as *mut u8;
         self.len = new_size;
-        self.mapping_handle = mapping_handle;
+        self.mapping_handle = new_mapping;
         Ok(())
     }
 
