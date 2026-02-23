@@ -189,6 +189,21 @@ the input buffer.
 The output of this layer is a contiguous byte sequence representing the
 serialized value.
 
+r[zerocopy.framing.value.opaque]
+
+For `Message<'payload>` payload fields marked as opaque, value encoding is
+the boundary where erased payload behavior is applied:
+
+- **Outgoing (`Message<'call>`):** the opaque adapter maps the payload to
+  `(PtrConst, Shape, Option<TypePlanCore>)`, and postcard serializes that
+  mapped value.
+- **Incoming (`Message<'static>` inside `SelfRef`):** postcard decodes the
+  payload byte sequence and materializes deferred payload state as either a
+  borrowed byte slice (when input backing is stable) or owned bytes.
+
+Conduit framing and link framing do not change this mapping contract; they
+only add/remove their own framing around the same encoded payload bytes.
+
 ### Layer 2: Conduit framing
 
 r[zerocopy.framing.conduit]
@@ -266,6 +281,36 @@ Not all conduit × link combinations are valid or useful:
 BareConduit is used with links that don't lose connections (SHM, memory).
 StableConduit is used with links that may disconnect (TCP, WebSocket) and
 need seq/ack for replay on reconnect.
+
+### End-to-end pipeline and lifetimes
+
+r[zerocopy.framing.pipeline]
+
+The runtime pipeline is:
+
+1. **Link layer** receives/sends framed transport bytes.
+2. **Conduit layer** removes/applies conduit framing (`T` vs `Frame<T>`).
+3. **Value layer** decodes/encodes `Message<'payload>` fields, including
+   opaque payload handling.
+
+r[zerocopy.framing.pipeline.incoming]
+
+Incoming path:
+
+1. `LinkRx::recv` yields `Backing` containing one message payload.
+2. Conduit deframes and deserializes into `SelfRef<Message<'static>>`.
+3. Driver/dispatch reads `method_id`, resolves concrete args shape/plan, and
+   maps `SelfRef<Message<'static>>` to `SelfRef<ConcreteArgs>` using the same
+   backing.
+
+r[zerocopy.framing.pipeline.outgoing]
+
+Outgoing path:
+
+1. Driver builds `Message<'call>` borrowing from call scope as needed.
+2. Opaque payload mapping happens during value serialization.
+3. Conduit applies its framing (`T` or `Frame<T>`), then link applies
+   transport framing at commit/send time.
 
 ### Serialization timing
 
