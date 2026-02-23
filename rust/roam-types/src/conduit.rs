@@ -4,18 +4,19 @@ use crate::SelfRef;
 
 /// Bidirectional typed transport. Wraps a [`Link`](crate::Link) and owns serialization.
 ///
-/// Generic over `T`: the message type flowing through. The constructor
-/// takes a `TypePlan<T>` (for type safety), type-erases it to
-/// `TypePlanCore`, and uses the precomputed plan for fast deserialization.
+/// Uses a GAT `Msg<'a>` so that the same type family serves both sides:
+/// - Send: `Msg<'a>` for any `'a` (borrowed data serialized in place)
+/// - Recv: `Msg<'static>` (owned, via `SelfRef`)
 ///
 /// Two implementations:
 /// - `BareConduit`: Link + postcard. If the link dies, it's dead.
 /// - `StableConduit`: Link + postcard + seq/ack/replay. Handles reconnect
-///   transparently. Replay buffer stores encoded bytes (no `T: Clone`).
+///   transparently. Replay buffer stores encoded bytes (no clone needed).
 // r[impl conduit]
-pub trait Conduit<T: 'static> {
-    type Tx: ConduitTx<T>;
-    type Rx: ConduitRx<T>;
+pub trait Conduit {
+    type Msg<'a>;
+    type Tx: for<'a> ConduitTx<Msg<'a> = Self::Msg<'a>>;
+    type Rx: for<'a> ConduitRx<Msg<'a> = Self::Msg<'a>>;
 
     // r[impl conduit.split]
     fn split(self) -> (Self::Tx, Self::Rx);
@@ -26,8 +27,9 @@ pub trait Conduit<T: 'static> {
 /// Permit-based: `reserve()` is the backpressure point, `permit.send()`
 /// serializes and writes.
 // r[impl conduit.permit]
-pub trait ConduitTx<T: 'static>: Send + 'static {
-    type Permit<'a>: ConduitTxPermit<T>
+pub trait ConduitTx {
+    type Msg<'a>;
+    type Permit<'a>: for<'m> ConduitTxPermit<Msg<'m> = Self::Msg<'m>>
     where
         Self: 'a;
 
@@ -48,28 +50,30 @@ pub trait ConduitTx<T: 'static>: Send + 'static {
 
 /// Permit for sending exactly one message through a [`ConduitTx`].
 // r[impl conduit.permit.send]
-pub trait ConduitTxPermit<T: 'static> {
+pub trait ConduitTxPermit {
+    type Msg<'a>;
     type Error: std::error::Error + Send + Sync + 'static;
 
-    fn send(self, item: T) -> Result<(), Self::Error>;
+    fn send(self, item: Self::Msg<'_>) -> Result<(), Self::Error>;
 }
 
 /// Receiving half of a [`Conduit`].
 ///
-/// Yields decoded values as [`SelfRef<T>`] (value + backing storage).
+/// Yields decoded values as [`SelfRef<Msg<'static>>`](SelfRef) (value + backing storage).
 /// Uses a precomputed `TypePlanCore` for fast plan-driven deserialization.
-pub trait ConduitRx<T: 'static>: Send + 'static {
+pub trait ConduitRx {
+    type Msg<'a>: 'a;
     type Error: std::error::Error + Send + Sync + 'static;
 
     /// Receive and decode the next message.
     ///
     /// Returns `Ok(None)` when the peer has closed.
-    async fn recv(&mut self) -> Result<Option<SelfRef<T>>, Self::Error>;
+    async fn recv(&mut self) -> Result<Option<SelfRef<Self::Msg<'static>>>, Self::Error>;
 }
 
 /// Yields new conduits from inbound connections.
-pub trait ConduitAcceptor<T: 'static> {
-    type Conduit: Conduit<T>;
+pub trait ConduitAcceptor {
+    type Conduit: Conduit;
 
     async fn accept(&mut self) -> std::io::Result<Self::Conduit>;
 }

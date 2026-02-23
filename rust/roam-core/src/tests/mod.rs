@@ -13,10 +13,13 @@ fn string_plan() -> &'static RpcPlan {
 }
 
 /// Create a connected pair of BareConduits over MemoryLink for String messages.
-fn conduit_pair() -> (impl Conduit<String>, impl Conduit<String>) {
+fn conduit_pair() -> (impl Conduit<String, String>, impl Conduit<String, String>) {
     let (a, b) = memory_link_pair(16);
     let plan = string_plan();
-    (BareConduit::new(a, plan), BareConduit::new(b, plan))
+    (
+        BareConduit::new_symmetric(a, plan),
+        BareConduit::new_symmetric(b, plan),
+    )
 }
 
 #[tokio::test]
@@ -104,6 +107,63 @@ async fn interleaved_send_recv() {
         let received = client_rx.recv().await.unwrap().unwrap();
         assert_eq!(&*received, &format!("s2c-{i}"));
     }
+}
+
+/// Proves that BareConduit accepts borrowed send types (no `'static` required).
+/// The send side uses a struct borrowing from the calling scope; the receive
+/// side deserializes into the owned equivalent.
+#[tokio::test]
+async fn send_borrowed_recv_owned() {
+    use facet::Facet;
+
+    #[derive(Facet)]
+    struct BorrowedMsg<'a> {
+        name: &'a str,
+        data: &'a [u8],
+    }
+
+    #[derive(Facet, Debug, PartialEq)]
+    struct OwnedMsg {
+        name: String,
+        data: Vec<u8>,
+    }
+
+    fn owned_plan() -> &'static RpcPlan {
+        static PLAN: OnceLock<RpcPlan> = OnceLock::new();
+        PLAN.get_or_init(|| RpcPlan::for_type::<OwnedMsg, (), ()>())
+    }
+
+    let (a, b) = memory_link_pair(16);
+    let plan = owned_plan();
+
+    let sender: BareConduit<BorrowedMsg<'_>, OwnedMsg, _> =
+        BareConduit::new(a, BorrowedMsg::SHAPE, plan);
+    let receiver: BareConduit<BorrowedMsg<'_>, OwnedMsg, _> =
+        BareConduit::new(b, BorrowedMsg::SHAPE, plan);
+
+    let (tx, _) = sender.split();
+    let (_, mut rx) = receiver.split();
+
+    // Data borrowed from the calling scope — not 'static.
+    let name = String::from("hello");
+    let data = vec![1u8, 2, 3];
+
+    let permit = tx.reserve().await.unwrap();
+    permit
+        .send(BorrowedMsg {
+            name: &name,
+            data: &data,
+        })
+        .unwrap();
+
+    let received = rx.recv().await.unwrap().unwrap();
+    assert_eq!(
+        &*received,
+        &OwnedMsg {
+            name: "hello".into(),
+            data: vec![1, 2, 3],
+        }
+    );
 }
 
 #[test]

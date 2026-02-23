@@ -2,7 +2,8 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 
 use facet::Facet;
-use facet_reflect::TypePlanCore;
+use facet_core::{PtrConst, Shape};
+use facet_reflect::{Peek, TypePlanCore};
 
 use roam_types::{
     Conduit, ConduitRx, ConduitTx, ConduitTxPermit, Link, LinkTx, LinkTxPermit, RpcPlan, SelfRef,
@@ -13,16 +14,23 @@ use roam_types::{
 ///
 /// If the link dies, the conduit is dead. For localhost, SHM, or any
 /// transport where reconnect isn't needed.
+///
+/// `T` is the message type family. The send path accepts `T` with any
+/// lifetime (borrowed data serialized in place via `Peek`). The receive
+/// path yields `SelfRef<T<'static>>` (owned).
 // r[impl conduit.bare]
 // r[impl conduit.typeplan]
 pub struct BareConduit<T: 'static, L: Link> {
     link: L,
-    plan: Arc<TypePlanCore>,
-    _phantom: PhantomData<fn() -> T>,
+    recv_plan: Arc<TypePlanCore>,
+    send_shape: &'static Shape,
+    _phantom: PhantomData<fn(T) -> T>,
 }
 
 impl<T: Facet<'static> + 'static, L: Link> BareConduit<T, L> {
-    /// Panics if `plan` was not built for type `T`.
+    /// Create a new BareConduit.
+    ///
+    /// Panics if the plan's shape doesn't match `T::SHAPE`.
     pub fn new(link: L, plan: &'static RpcPlan) -> Self {
         assert!(
             plan.shape == T::SHAPE,
@@ -32,17 +40,19 @@ impl<T: Facet<'static> + 'static, L: Link> BareConduit<T, L> {
         );
         Self {
             link,
-            plan: Arc::clone(&plan.type_plan),
+            recv_plan: Arc::clone(&plan.type_plan),
+            send_shape: T::SHAPE,
             _phantom: PhantomData,
         }
     }
 }
 
-impl<T: Facet<'static> + 'static, L: Link> Conduit<T> for BareConduit<T, L>
+impl<T: Facet<'static> + 'static, L: Link> Conduit for BareConduit<T, L>
 where
     L::Tx: Send + 'static,
     L::Rx: Send + 'static,
 {
+    type Msg<'a> = T;
     type Tx = BareConduitTx<T, L::Tx>;
     type Rx = BareConduitRx<T, L::Rx>;
 
@@ -51,11 +61,12 @@ where
         (
             BareConduitTx {
                 link_tx: tx,
+                send_shape: self.send_shape,
                 _phantom: PhantomData,
             },
             BareConduitRx {
                 link_rx: rx,
-                plan: self.plan,
+                plan: self.recv_plan,
                 _phantom: PhantomData,
             },
         )
@@ -66,14 +77,14 @@ where
 // Tx
 // ---------------------------------------------------------------------------
 
-pub struct BareConduitTx<T: 'static, LTx: LinkTx> {
+pub struct BareConduitTx<T, LTx: LinkTx> {
     link_tx: LTx,
-    _phantom: PhantomData<fn() -> T>,
+    send_shape: &'static Shape,
+    _phantom: PhantomData<fn(T)>,
 }
 
-impl<T: Facet<'static> + 'static, LTx: LinkTx + Send + 'static> ConduitTx<T>
-    for BareConduitTx<T, LTx>
-{
+impl<T, LTx: LinkTx + Send + 'static> ConduitTx for BareConduitTx<T, LTx> {
+    type Msg<'a> = T;
     type Permit<'a>
         = BareConduitPermit<'a, T, LTx>
     where
@@ -83,6 +94,7 @@ impl<T: Facet<'static> + 'static, LTx: LinkTx + Send + 'static> ConduitTx<T>
         let permit = self.link_tx.reserve().await?;
         Ok(BareConduitPermit {
             permit,
+            send_shape: self.send_shape,
             _phantom: PhantomData,
         })
     }
@@ -96,18 +108,24 @@ impl<T: Facet<'static> + 'static, LTx: LinkTx + Send + 'static> ConduitTx<T>
 // Permit
 // ---------------------------------------------------------------------------
 
-pub struct BareConduitPermit<'a, T: 'static, LTx: LinkTx> {
+pub struct BareConduitPermit<'a, T, LTx: LinkTx> {
     permit: LTx::Permit,
-    _phantom: PhantomData<fn() -> (&'a (), T)>,
+    send_shape: &'static Shape,
+    _phantom: PhantomData<fn(T, &'a ())>,
 }
 
-impl<T: Facet<'static> + 'static, LTx: LinkTx> ConduitTxPermit<T>
-    for BareConduitPermit<'_, T, LTx>
-{
+impl<T, LTx: LinkTx> ConduitTxPermit for BareConduitPermit<'_, T, LTx> {
+    type Msg<'a> = T;
     type Error = BareConduitError;
 
     fn send(self, item: T) -> Result<(), Self::Error> {
-        let encoded = facet_postcard::to_vec(&item).map_err(BareConduitError::Encode)?;
+        // SAFETY: send_shape was set from T::SHAPE at construction time.
+        // The item is a valid instance of T, so (ptr, shape) is consistent.
+        #[allow(unsafe_code)]
+        let peek = unsafe {
+            Peek::unchecked_new(PtrConst::new((&raw const item).cast()), self.send_shape)
+        };
+        let encoded = facet_postcard::peek_to_vec(peek).map_err(BareConduitError::Encode)?;
 
         let mut slot = self
             .permit
@@ -130,10 +148,11 @@ pub struct BareConduitRx<T: 'static, LRx> {
     _phantom: PhantomData<fn() -> T>,
 }
 
-impl<T: Facet<'static> + 'static, LRx> ConduitRx<T> for BareConduitRx<T, LRx>
+impl<T: Facet<'static> + 'static, LRx> ConduitRx for BareConduitRx<T, LRx>
 where
     LRx: roam_types::LinkRx + Send + 'static,
 {
+    type Msg<'a> = T;
     type Error = BareConduitError;
 
     async fn recv(&mut self) -> Result<Option<SelfRef<T>>, Self::Error> {
