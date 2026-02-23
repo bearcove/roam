@@ -1,6 +1,6 @@
 +++
 title = "shared memory transport"
-description = "SHM hub transport: BipBuffers, VarSlotPool, signaling, and peer lifecycle"
+description = "Shared memory Link: hub topology, BipBuffers, VarSlotPool, signaling, and peer lifecycle"
 weight = 15
 +++
 
@@ -8,11 +8,11 @@ weight = 15
 
 > r[shm]
 >
-> The shared memory (SHM) transport implements the Link interface for
-> high-performance IPC on a single machine. Payloads are postcard-encoded
-> Messages — the same wire format as TCP and WebSocket transports. SHM
-> provides the delivery mechanism (BipBuffers, VarSlotPool, signaling),
-> not an alternative message format.
+> The shared memory (SHM) transport implements the Link interface
+> (see `r[link]`) for high-performance IPC on a single machine.
+> Like all links, it delivers byte-buffer payloads — it does not
+> know or care what those bytes contain. SHM provides the delivery
+> mechanism (BipBuffers, VarSlotPool, signaling).
 
 > r[shm.architecture]
 >
@@ -34,15 +34,15 @@ weight = 15
 > Guests attach to communicate with the host.
 
 ```aasvg
-         ┌─────────┐
-         │  Host   │
-         └────┬────┘
-              │
-    ┌─────────┼─────────┐
-    │         │         │
-┌───┴───┐ ┌───┴───┐ ┌───┴───┐
-│Guest 1│ │Guest 2│ │Guest 3│
-└───────┘ └───────┘ └───────┘
+         +---------+
+         |  Host   |
+         +----+----+
+              |
+    +---------+---------+
+    |         |         |
++---+---+ +---+---+ +---+---+
+|Guest 1| |Guest 2| |Guest 3|
++-------+ +-------+ +-------+
 ```
 
 > r[shm.topology.communication]
@@ -52,8 +52,8 @@ weight = 15
 
 > r[shm.topology.bidirectional]
 >
-> Either the host or a guest can initiate calls. Communication is
-> bidirectional on each host-guest link.
+> Each host-guest pair forms a bidirectional Link. Either side can
+> send and receive payloads.
 
 > r[shm.topology.max-guests]
 >
@@ -82,11 +82,11 @@ weight = 15
 > ```text
 > Offset  Size  Field               Description
 > ──────  ────  ─────               ───────────
-> 0       8     magic               "ROAMHUB\x01"
+> 0       8     magic               "ROAMHUB\x02"
 > 8       4     version             Segment format version
 > 12      4     header_size         128
 > 16      8     total_size          Segment size in bytes
-> 24      4     max_payload_size    Maximum payload per message
+> 24      4     max_payload_size    Maximum payload size in bytes
 > 28      4     inline_threshold    Max inline frame size (0 = default 256)
 > 32      4     max_guests          Maximum number of guests (≤ 255)
 > 36      4     bipbuf_capacity     BipBuffer data region size per direction
@@ -97,17 +97,18 @@ weight = 15
 > 68      60    reserved            Reserved (zero)
 > ```
 
-> r[shm.segment.magic]
+> r[shm.segment.magic.v2]
 >
-> The magic field MUST be exactly `ROAMHUB\x01` (8 bytes). A guest
+> The magic field MUST be exactly `ROAMHUB\x02` (8 bytes). A guest
 > MUST validate the magic before proceeding.
 
-> r[shm.segment.handshake]
+> r[shm.segment.config]
 >
-> SHM does not use Hello/HelloYourself messages. The segment header
-> fields serve as the host's unilateral configuration. Guests accept
-> these values by attaching to the segment. A guest that cannot operate
-> within these limits MUST NOT attach.
+> The segment header fields are transport-level configuration set by the
+> host when creating the segment. Guests accept these values by attaching.
+> A guest that cannot operate within these limits MUST NOT attach.
+> Session-level negotiation (Hello/HelloYourself) happens above SHM,
+> on the Link, as with any other transport.
 
 ## Peer Table
 
@@ -230,8 +231,8 @@ Each guest has two BipBuffers (bipartite circular buffers):
 > r[shm.framing]
 >
 > Each entry written to a BipBuffer has a small header that describes
-> how to find the payload. The payload itself is a postcard-encoded
-> roam Message — the same format used by TCP and WebSocket transports.
+> how to find the payload. The payload is an opaque byte buffer — the
+> same thing any Link delivers (see `r[link.message]`).
 
 > r[shm.framing.header]
 >
@@ -354,7 +355,7 @@ Each guest has two BipBuffers (bipartite circular buffers):
 >   5. CAS `free_head` to point to this slot
 >   6. On failure: retry from step 3
 >
-> The receiver frees slots after processing the message.
+> The receiver frees slots after consuming the payload.
 
 ## Extent-Based Growth
 
@@ -442,7 +443,7 @@ Each guest has two BipBuffers (bipartite circular buffers):
 > To detach gracefully:
 >
 >   1. Set state to Goodbye
->   2. Drain remaining messages
+>   2. Drain remaining payloads
 >   3. Unmap segment
 
 ## Spawning
