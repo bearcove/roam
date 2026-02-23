@@ -407,9 +407,10 @@ metadata.push((
 > Channel IDs in `Request.channels` and `Response.channels` MUST be listed
 > in the order produced by a schema-driven traversal of the argument types
 > (for requests) or return type (for responses). The traversal visits struct
-> fields and active enum variant fields in declaration order. It MUST NOT
-> descend into collections (lists, arrays, maps, sets). Channels inside an
-> `Option` that is `None` at runtime are simply absent from the list.
+> fields and active enum variant fields in declaration order. It does not
+> descend into collections, since channels MUST NOT appear there (see
+> `r[rpc.channel.no-collections]`). Channels inside an `Option` that is
+> `None` at runtime are simply absent from the list.
 
 > r[rpc.channel.payload-encoding]
 >

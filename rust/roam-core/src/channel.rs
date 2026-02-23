@@ -5,16 +5,18 @@ use facet::Facet;
 /// `Tx<T>` represents the sending end of a channel from the caller's perspective.
 /// Full implementation pending the Requests/Channels spec section.
 #[derive(Facet)]
-pub struct Tx<T: 'static> {
+pub struct Tx<T: 'static, const N: usize = 16> {
     _marker: std::marker::PhantomData<T>,
 }
 
 /// Placeholder for a callee→caller stream channel.
 ///
-/// `Rx<T>` represents the receiving end of a channel from the caller's perspective.
-/// Full implementation pending the Requests/Channels spec section.
+/// `Rx<T, N>` represents the receiving end of a channel from the caller's perspective.
+/// `N` is the initial credit: the number of items the sender may send before
+/// needing explicit credit grants. Full implementation pending the Requests/Channels
+/// spec section.
 #[derive(Facet)]
-pub struct Rx<T: 'static> {
+pub struct Rx<T: 'static, const N: usize = 16> {
     _marker: std::marker::PhantomData<T>,
 }
 

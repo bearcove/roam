@@ -7,6 +7,22 @@ use std::marker::PhantomData;
 use crate::{ChannelId, ConnectionId, Metadata, MethodId, RequestId};
 use facet::{Facet, PtrConst, Shape};
 
+/// Per-connection limits advertised by a peer.
+// r[impl session.connection-settings]
+#[derive(Debug, Clone, PartialEq, Eq, Facet)]
+pub struct ConnectionSettings {
+    /// Maximum number of in-flight requests this peer is willing to accept on this connection.
+    pub max_concurrent_requests: u32,
+}
+
+impl Default for ConnectionSettings {
+    fn default() -> Self {
+        Self {
+            max_concurrent_requests: 1024,
+        }
+    }
+}
+
 /// Protocol message.
 // r[impl session]
 // r[impl session.message]
@@ -55,6 +71,7 @@ structstruck::strike! {
 
         /// Sent by initiator to acceptor as the first message
         // r[impl session.handshake]
+        // r[impl session.connection-settings.hello]
         Hello(pub struct Hello {
             /// Must be equal to 7
             pub version: u32,
@@ -62,12 +79,19 @@ structstruck::strike! {
             /// Parity claimed by the initiator — acceptor will take the other
             pub parity: Parity,
 
+            /// Connection limits advertised by the initiator for the root connection.
+            pub connection_settings: ConnectionSettings,
+
             /// Metadata associated with the connection.
             pub metadata: Metadata,
         }),
 
         /// Sent by acceptor back to initiator. Poetic on purpose, I'm not changing the name.
+        // r[impl session.connection-settings.hello]
         HelloYourself(pub struct HelloYourself {
+            /// Connection limits advertised by the acceptor for the root connection.
+            pub connection_settings: ConnectionSettings,
+
             /// You can _also_ have metadata if you want.
             pub metadata: Metadata,
         }),
@@ -89,13 +113,24 @@ structstruck::strike! {
         /// ID, even though it doesn't exist yet.
         // r[impl connection.open]
         // r[impl connection.virtual]
+        // r[impl session.connection-settings.open]
         OpenConnection(pub struct OpenConnection {
+            /// Parity requested by the opener for this virtual connection.
+            pub parity: Parity,
+
+            /// Connection limits advertised by the opener.
+            pub connection_settings: ConnectionSettings,
+
             /// Metadata associated with the connection.
             pub metadata: Metadata,
         }),
 
         /// Accept a virtual connection request — sent on the connection ID requested.
+        // r[impl session.connection-settings.open]
         AcceptConnection(pub struct AcceptConnection {
+            /// Connection limits advertised by the accepter.
+            pub connection_settings: ConnectionSettings,
+
             /// Metadata associated with the connection.
             pub metadata: Metadata,
         }),
@@ -192,6 +227,16 @@ structstruck::strike! {
 
             /// Metadata associated with resetting the channel.
             pub metadata: Metadata,
+        }),
+
+        /// Grant additional send credit to a channel sender.
+        // r[impl rpc.flow-control.credit.grant]
+        GrantCredit(struct GrantCredit {
+            /// Channel ID to grant credit on.
+            pub channel_id: ChannelId,
+
+            /// Number of additional items the sender may send.
+            pub additional: u32,
         }),
 
     }
