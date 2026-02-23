@@ -5,16 +5,13 @@ use facet::Facet;
 use facet_reflect::TypePlanCore;
 
 use roam_types::{
-    Conduit, ConduitRx, ConduitTx, ConduitTxPermit, Link, LinkTx, SelfRef, WriteSlot,
+    Conduit, ConduitRx, ConduitTx, ConduitTxPermit, Link, LinkTx, RpcPlan, SelfRef, WriteSlot,
 };
 
 /// Wraps a [`Link`] with postcard serialization. No reconnect, no reliability.
 ///
 /// If the link dies, the conduit is dead. For localhost, SHM, or any
 /// transport where reconnect isn't needed.
-///
-/// Takes a `TypePlan<T>` at construction for type safety, stores the
-/// type-erased `TypePlanCore` for fast plan-driven deserialization.
 pub struct BareConduit<T: 'static, L: Link> {
     link: L,
     plan: Arc<TypePlanCore>,
@@ -22,10 +19,17 @@ pub struct BareConduit<T: 'static, L: Link> {
 }
 
 impl<T: Facet<'static> + 'static, L: Link> BareConduit<T, L> {
-    pub fn new(link: L, plan: facet_reflect::TypePlan<T>) -> Self {
+    /// Panics if `plan` was not built for type `T`.
+    pub fn new(link: L, plan: &'static RpcPlan) -> Self {
+        assert!(
+            plan.shape == T::SHAPE,
+            "RpcPlan shape mismatch: plan is for {}, expected {}",
+            plan.shape,
+            T::SHAPE,
+        );
         Self {
             link,
-            plan: plan.core(),
+            plan: Arc::clone(&plan.type_plan),
             _phantom: PhantomData,
         }
     }
@@ -141,8 +145,7 @@ where
             None => return Ok(None),
         };
 
-        let plan = self.plan.clone();
-
+        let plan = Arc::clone(&self.plan);
         SelfRef::try_new(backing, |bytes| deserialize_with_plan::<T>(&plan, bytes)).map(Some)
     }
 }
@@ -165,7 +168,7 @@ fn deserialize_with_plan<T: 'static>(
     let root_id = plan.root_id();
 
     // SAFETY: ptr points to valid, aligned, properly-sized memory for T.
-    // The plan was built from TypePlan<T> so root_id matches T's shape.
+    // The plan was built from RpcPlan::for_type::<T, _, _>() so root_id matches T's shape.
     #[allow(unsafe_code)]
     let partial: Partial<'_, false> = unsafe { Partial::from_raw(ptr, Arc::clone(plan), root_id) }
         .map_err(|e| BareConduitError::Decode(e.into()))?;

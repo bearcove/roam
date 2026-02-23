@@ -1,15 +1,19 @@
-use facet_reflect::TypePlan;
-use roam_types::{Conduit, ConduitRx, ConduitTx, ConduitTxPermit};
+use std::sync::OnceLock;
+
+use roam_types::{Conduit, ConduitRx, ConduitTx, ConduitTxPermit, RpcPlan};
 
 use crate::{BareConduit, memory_link_pair};
+
+fn string_plan() -> &'static RpcPlan {
+    static PLAN: OnceLock<RpcPlan> = OnceLock::new();
+    PLAN.get_or_init(|| RpcPlan::for_type::<String, (), ()>())
+}
 
 /// Create a connected pair of BareConduits over MemoryLink for String messages.
 fn conduit_pair() -> (impl Conduit<String>, impl Conduit<String>) {
     let (a, b) = memory_link_pair(16);
-    (
-        BareConduit::new(a, TypePlan::<String>::build().unwrap()),
-        BareConduit::new(b, TypePlan::<String>::build().unwrap()),
-    )
+    let plan = string_plan();
+    (BareConduit::new(a, plan), BareConduit::new(b, plan))
 }
 
 #[tokio::test]

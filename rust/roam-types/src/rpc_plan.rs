@@ -9,8 +9,12 @@ use facet_reflect::TypePlanCore;
 /// Contains both the deserialization plan and the locations of all channels
 /// within the type structure. Computed once per monomorphized type via `OnceLock`.
 pub struct RpcPlan {
+    /// The shape this plan was built for. Used for type-safe construction.
+    pub shape: &'static Shape,
+
     /// Deserialization plan for this type.
     pub type_plan: Arc<TypePlanCore>,
+
     /// Locations of all Rx/Tx channels in this type, in declaration order.
     pub channel_locations: &'static [ChannelLocation],
 }
@@ -57,6 +61,7 @@ impl RpcPlan {
         walk_shape(shape, &mut visitor);
 
         RpcPlan {
+            shape,
             type_plan,
             channel_locations: visitor.locations.leak(),
         }
@@ -103,7 +108,6 @@ impl facet_path::ShapeVisitor for ChannelDiscovery {
         }
 
         // Skip all collection subtrees — schema-driven discovery only
-        // r[call.request.channels.schema-driven]
         if matches!(
             shape.def,
             facet::Def::List(_) | facet::Def::Array(_) | facet::Def::Map(_) | facet::Def::Set(_)
