@@ -795,11 +795,9 @@ dependencies = [
  "facet-cargo-toml",
  "heck",
  "insta",
- "prettyplease",
  "proc-macro2",
  "quote",
  "roam-macros-parse",
- "syn",
 ]
 
 [[package]]

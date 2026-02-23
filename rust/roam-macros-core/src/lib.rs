@@ -876,8 +876,31 @@ mod tests {
     use quote::quote;
 
     fn prettyprint(ts: proc_macro2::TokenStream) -> String {
-        let file: syn::File = syn::parse2(ts).expect("failed to parse generated code");
-        prettyplease::unparse(&file)
+        use std::io::Write;
+        use std::process::{Command, Stdio};
+
+        let mut child = Command::new("rustfmt")
+            .args(["--edition", "2024"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::inherit())
+            .spawn()
+            .expect("failed to spawn rustfmt");
+
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(ts.to_string().as_bytes())
+            .unwrap();
+
+        let output = child.wait_with_output().expect("rustfmt failed");
+        assert!(
+            output.status.success(),
+            "rustfmt exited with {}",
+            output.status
+        );
+        String::from_utf8(output.stdout).expect("rustfmt output not UTF-8")
     }
 
     fn generate(input: proc_macro2::TokenStream) -> String {

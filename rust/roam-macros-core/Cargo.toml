@@ -21,5 +21,3 @@ facet-cargo-toml.workspace = true
 
 [dev-dependencies]
 insta = "1"
-prettyplease = "0.2"
-syn = { version = "2", features = ["full"] }

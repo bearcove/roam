@@ -4,35 +4,46 @@ expression: "generate(quote! { trait Ping { async fn ping(&self) -> u64; } })"
 ---
 #[allow(non_snake_case, clippy::all)]
 pub fn ping_service_descriptor() -> &'static ::roam::session::ServiceDescriptor {
-    static DESCRIPTOR: std::sync::OnceLock<
-        &'static ::roam::session::ServiceDescriptor,
-    > = std::sync::OnceLock::new();
-    DESCRIPTOR
-        .get_or_init(|| {
-            let methods: Vec<&'static ::roam::session::MethodDescriptor> = vec![
-                Box::leak(Box::new(::roam::session::MethodDescriptor { id :
-                ::roam::hash::method_id_from_shapes("Ping", "ping", & [], < u64 as
-                ::roam::facet::Facet > ::SHAPE,), service_name : "Ping", method_name :
-                "ping", args : & [], return_shape : < u64 as ::roam::facet::Facet >
-                ::SHAPE, args_plan :
-                Box::leak(Box::new(::roam::session::RpcPlan::for_type:: < (),
-                ::roam::session::Tx:: < () >, ::roam::session::Rx:: < () >> ())), ok_plan
-                : Box::leak(Box::new(::roam::session::RpcPlan::for_type:: < u64,
-                ::roam::session::Tx:: < () >, ::roam::session::Rx:: < () >> ())),
-                err_plan : Box::leak(Box::new(::roam::session::RpcPlan::for_type:: <
-                ::core::convert::Infallible, ::roam::session::Tx:: < () >,
-                ::roam::session::Rx:: < () >> ())), doc : None, }))
-            ];
-            Box::leak(
-                Box::new(::roam::session::ServiceDescriptor {
-                    service_name: "Ping",
-                    methods: Box::leak(methods.into_boxed_slice()),
-                    doc: None,
-                }),
-            )
-        })
+    static DESCRIPTOR: std::sync::OnceLock<&'static ::roam::session::ServiceDescriptor> =
+        std::sync::OnceLock::new();
+    DESCRIPTOR.get_or_init(|| {
+        let methods: Vec<&'static ::roam::session::MethodDescriptor> =
+            vec![Box::leak(Box::new(::roam::session::MethodDescriptor {
+                id: ::roam::hash::method_id_from_shapes(
+                    "Ping",
+                    "ping",
+                    &[],
+                    <u64 as ::roam::facet::Facet>::SHAPE,
+                ),
+                service_name: "Ping",
+                method_name: "ping",
+                args: &[],
+                return_shape: <u64 as ::roam::facet::Facet>::SHAPE,
+                args_plan: Box::leak(Box::new(::roam::session::RpcPlan::for_type::<
+                    (),
+                    ::roam::session::Tx<()>,
+                    ::roam::session::Rx<()>,
+                >())),
+                ok_plan: Box::leak(Box::new(::roam::session::RpcPlan::for_type::<
+                    u64,
+                    ::roam::session::Tx<()>,
+                    ::roam::session::Rx<()>,
+                >())),
+                err_plan: Box::leak(Box::new(::roam::session::RpcPlan::for_type::<
+                    ::core::convert::Infallible,
+                    ::roam::session::Tx<()>,
+                    ::roam::session::Rx<()>,
+                >())),
+                doc: None,
+            }))];
+        Box::leak(Box::new(::roam::session::ServiceDescriptor {
+            service_name: "Ping",
+            methods: Box::leak(methods.into_boxed_slice()),
+            doc: None,
+        }))
+    })
 }
-/// Method IDs for the service (indexes into the service descriptor).
+#[doc = r" Method IDs for the service (indexes into the service descriptor)."]
 #[allow(non_snake_case, clippy::all, unused)]
 pub mod ping_method_id {
     use super::*;
@@ -44,15 +55,12 @@ pub trait Ping
 where
     Self: Send + Sync,
 {
-    fn ping(
-        &self,
-        cx: &::roam::Context,
-    ) -> impl std::future::Future<Output = u64> + Send;
+    fn ping(&self, cx: &::roam::Context) -> impl std::future::Future<Output = u64> + Send;
 }
-/// Dispatcher for this service.
-///
-/// Supports middleware that can inspect deserialized args before the handler runs.
-/// Middleware is configured via [`with_middleware`](Self::with_middleware).
+#[doc = r" Dispatcher for this service."]
+#[doc = r""]
+#[doc = r" Supports middleware that can inspect deserialized args before the handler runs."]
+#[doc = r" Middleware is configured via [`with_middleware`](Self::with_middleware)."]
 #[derive(Clone)]
 pub struct PingDispatcher<H> {
     handler: H,
@@ -62,26 +70,23 @@ impl<H> PingDispatcher<H>
 where
     H: Ping + Clone + 'static,
 {
-    /// Create a new dispatcher with no middleware.
+    #[doc = r" Create a new dispatcher with no middleware."]
     pub fn new(handler: H) -> Self {
         Self {
             handler,
             middleware: Vec::new(),
         }
     }
-    /// Add middleware to this dispatcher.
-    ///
-    /// Middleware runs after deserialization but before the handler.
-    /// It can inspect args via reflection and reject requests.
-    /// Middleware runs in the order it was added.
-    pub fn with_middleware<M: ::roam::session::Middleware + 'static>(
-        mut self,
-        mw: M,
-    ) -> Self {
+    #[doc = r" Add middleware to this dispatcher."]
+    #[doc = r""]
+    #[doc = r" Middleware runs after deserialization but before the handler."]
+    #[doc = r" It can inspect args via reflection and reject requests."]
+    #[doc = r" Middleware runs in the order it was added."]
+    pub fn with_middleware<M: ::roam::session::Middleware + 'static>(mut self, mw: M) -> Self {
         self.middleware.push(std::sync::Arc::new(mw));
         self
     }
-    /// Add already-Arc'd middleware to this dispatcher.
+    #[doc = r" Add already-Arc'd middleware to this dispatcher."]
     pub fn with_middleware_arc(
         mut self,
         mw: std::sync::Arc<dyn ::roam::session::Middleware>,
@@ -118,8 +123,7 @@ where
             )
         } {
             return Box::pin(async move {
-                ::roam::session::send_prepare_error(e, &driver_tx, conn_id, request_id)
-                    .await;
+                ::roam::session::send_prepare_error(e, &driver_tx, conn_id, request_id).await;
             });
         }
         let args: () = unsafe { args_slot.assume_init_read() };
@@ -129,33 +133,27 @@ where
             if !middleware.is_empty() {
                 let args_peek = unsafe {
                     let peek = ::roam::facet::Peek::unchecked_new(
-                        ::roam::facet_core::PtrConst::new(
-                            (&args as *const ()).cast::<u8>(),
-                        ),
+                        ::roam::facet_core::PtrConst::new((&args as *const ()).cast::<u8>()),
                         <() as ::roam::facet::Facet>::SHAPE,
                     );
                     ::roam::session::SendPeek::new(peek)
                 };
-                if let Err(rejection) = ::roam::session::run_pre_middleware(
-                        args_peek,
-                        &mut cx,
-                        &middleware,
-                    )
-                    .await
+                if let Err(rejection) =
+                    ::roam::session::run_pre_middleware(args_peek, &mut cx, &middleware).await
                 {
                     ::roam::session::run_post_middleware(
-                            &cx,
-                            ::roam::session::MethodOutcome::Rejected(rejection.clone()),
-                            &middleware,
-                        )
-                        .await;
+                        &cx,
+                        ::roam::session::MethodOutcome::Rejected(rejection.clone()),
+                        &middleware,
+                    )
+                    .await;
                     ::roam::session::send_prepare_error(
-                            ::roam::session::PrepareError::Rejected(rejection),
-                            &driver_tx,
-                            conn_id,
-                            request_id,
-                        )
-                        .await;
+                        ::roam::session::PrepareError::Rejected(rejection),
+                        &driver_tx,
+                        conn_id,
+                        request_id,
+                    )
+                    .await;
                     return;
                 }
             }
@@ -174,9 +172,7 @@ where
                 .await;
             let send_peek = unsafe {
                 let peek = ::roam::facet::Peek::unchecked_new(
-                    ::roam::facet_core::PtrConst::new(
-                        (&result as *const u64).cast::<u8>(),
-                    ),
+                    ::roam::facet_core::PtrConst::new((&result as *const u64).cast::<u8>()),
                     <u64 as ::roam::facet::Facet>::SHAPE,
                 );
                 ::roam::session::SendPeek::new(peek)
@@ -186,13 +182,13 @@ where
                 ::roam::session::run_post_middleware(&cx, outcome, &middleware).await;
             }
             ::roam::session::send_ok_response(
-                    send_peek,
-                    response_plan,
-                    &driver_tx,
-                    conn_id,
-                    request_id,
-                )
-                .await;
+                send_peek,
+                response_plan,
+                &driver_tx,
+                conn_id,
+                request_id,
+            )
+            .await;
         })
     }
 }
@@ -217,34 +213,32 @@ where
         }
     }
 }
-/**Client for Ping service.
-
-Generic over any [`Caller`](:: roam::session::Caller) implementation, allowing use with both [`ConnectionHandle`](:: roam::session::ConnectionHandle) and reconnecting clients.*/
+#[doc = "Client for Ping service.\n\nGeneric over any [`Caller`](:: roam::session::Caller) implementation, allowing use with both [`ConnectionHandle`](:: roam::session::ConnectionHandle) and reconnecting clients."]
 #[derive(Clone)]
 pub struct PingClient<C: ::roam::session::Caller = ::roam::session::ConnectionHandle> {
     caller: C,
 }
 impl<C: ::roam::session::Caller> PingClient<C> {
-    /// Create a new client wrapping the given caller.
+    #[doc = r" Create a new client wrapping the given caller."]
     pub fn new(caller: C) -> Self {
         Self { caller }
     }
-    pub fn ping(
-        &self,
-    ) -> ::roam::session::CallFuture<C, (), u64, ::core::convert::Infallible> {
+    pub fn ping(&self) -> ::roam::session::CallFuture<C, (), u64, ::core::convert::Infallible> {
         let desc = ping_service_descriptor().methods[0usize];
         ::roam::session::CallFuture::new(self.caller.clone(), desc, ())
     }
 }
-/// Returns the service detail for codegen.
+#[doc = r" Returns the service detail for codegen."]
 pub fn ping_service_detail() -> ::roam::schema::ServiceDetail {
     ::roam::schema::ServiceDetail {
         name: "Ping".into(),
-        methods: vec![
-            ::roam::schema::MethodDetail { service_name : "Ping".into(), method_name :
-            "ping".into(), args : vec![], return_type : < u64 as ::roam::facet::Facet >
-            ::SHAPE, doc : None, }
-        ],
+        methods: vec![::roam::schema::MethodDetail {
+            service_name: "Ping".into(),
+            method_name: "ping".into(),
+            args: vec![],
+            return_type: <u64 as ::roam::facet::Facet>::SHAPE,
+            doc: None,
+        }],
         doc: None,
     }
 }
