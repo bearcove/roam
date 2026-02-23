@@ -103,3 +103,143 @@ let result = caller.add(3, 5).await?;
 >
 > A peer may open a virtual connection on an existing session, providing a
 > handler and receiving a typed caller, just like during session establishment.
+
+# Requests and responses
+
+> r[rpc.request]
+>
+> A `Request` message carries:
+>
+>   * A request ID, unique within the connection, allocated by the caller
+>     using the connection's parity
+>   * A method ID (see `r[rpc.method-id]`)
+>   * Serialized arguments
+>   * A list of channel IDs for channels that appear in the arguments,
+>     allocated by the caller
+>   * Metadata (key-value pairs for tracing, auth, deadlines, etc.)
+
+> r[rpc.response]
+>
+> A `Response` message carries:
+>
+>   * The request ID of the request being responded to
+>   * The serialized return value
+>   * A list of channel IDs for channels that appear in the return type,
+>     allocated by the callee
+>   * Metadata
+
+> r[rpc.request.id-allocation]
+>
+> Request IDs are allocated by the caller using the connection's parity.
+> Sending a `Request` with an ID that does not match the caller's parity,
+> or reusing an ID that is still in flight, is a protocol error.
+
+> r[rpc.response.one-per-request]
+>
+> Every request MUST receive exactly one response. Sending a second response
+> for the same request ID is a protocol error.
+
+> r[rpc.unknown-method]
+>
+> If a handler receives a request with a method ID it does not recognize,
+> it MUST send an error response indicating the method is unknown.
+> This is a call-level error, not a protocol error — the connection
+> remains open.
+
+# Fallible methods
+
+> r[rpc.fallible]
+>
+> A service method may return `T` (infallible) or `Result<T, E>` (fallible),
+> where both `T` and `E` implement `Facet`.
+
+> r[rpc.fallible.caller-signature]
+>
+> On the caller side, the generated client wraps all return types in
+> `Result<_, RoamError<E>>`:
+>
+>   * Infallible `fn foo() -> T` becomes `fn foo() -> Result<T, RoamError>`
+>   * Fallible `fn foo() -> Result<T, E>` becomes `fn foo() -> Result<T, RoamError<E>>`
+
+> r[rpc.fallible.roam-error]
+>
+> `RoamError<E>` distinguishes application errors from protocol-level errors:
+>
+>   * `User(E)` — the handler ran and returned an application error
+>   * `UnknownMethod` — no handler recognized the method ID
+>   * `InvalidPayload` — the arguments could not be deserialized
+>   * `Cancelled` — the call was cancelled before completion
+
+> r[rpc.error.scope]
+>
+> Call errors affect only that call. The connection remains open and other
+> in-flight requests are unaffected.
+
+# Channels
+
+> r[rpc.channel]
+>
+> A channel is a unidirectional, ordered sequence of typed values between
+> two peers. At the type level, `Tx<T>` and `Rx<T>` indicate direction.
+> Each channel has exactly one sender and one receiver.
+
+> r[rpc.channel.direction]
+>
+> Service definitions are written from the handler's perspective:
+>
+>   * `Tx<T>` — data flows from handler to caller (the handler sends)
+>   * `Rx<T>` — data flows from caller to handler (the caller sends)
+
+> r[rpc.channel.placement]
+>
+> `Tx<T>` and `Rx<T>` may appear in both argument types and return types
+> of service methods. They MUST NOT appear in the error variant of a
+> `Result` return type.
+
+> r[rpc.channel.no-collections]
+>
+> `Tx<T>` and `Rx<T>` MUST NOT appear inside collections (lists, arrays,
+> maps, sets). They may be nested arbitrarily deep inside structs and enums.
+
+> r[rpc.channel.allocation]
+>
+> Channel IDs are allocated using the connection's parity. The caller
+> allocates IDs for channels that appear in the request arguments. The
+> callee allocates IDs for channels that appear in the response return type.
+
+> r[rpc.channel.lifecycle]
+>
+> Channels are created as part of a request or response, but they outlive
+> both. A channel remains live until it is explicitly closed or reset,
+> or until the connection is torn down.
+
+> r[rpc.channel.item]
+>
+> A `ChannelItem` message carries a channel ID and a serialized value of
+> the channel's element type.
+
+> r[rpc.channel.close]
+>
+> The sender of a channel sends `CloseChannel` when it is done sending.
+> After sending `CloseChannel`, the sender MUST NOT send any more
+> `ChannelItem` messages on that channel.
+
+> r[rpc.channel.reset]
+>
+> The receiver of a channel sends `ResetChannel` to ask the sender to
+> stop sending. After receiving `ResetChannel`, the sender MUST stop
+> sending `ChannelItem` messages on that channel.
+
+# Cancellation
+
+> r[rpc.cancel]
+>
+> A caller may send `CancelRequest` to indicate it is no longer interested
+> in the response. The handler SHOULD stop processing the request, but
+> a response may still arrive — the caller MUST be prepared to ignore it.
+
+> r[rpc.cancel.channels]
+>
+> Cancelling a request does not automatically close or reset any channels
+> that were created as part of that request. Channels have independent
+> lifecycles and MUST be closed or reset explicitly.

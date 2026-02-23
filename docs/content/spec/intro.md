@@ -14,8 +14,8 @@ weight = 10
 
 ## Defining a service
 
-An application named `fantastic` would typically define services in `*-proto`.
-Crates, if it has only one, the `fantastic-proto` crate would contain something
+An application named `fantastic` would typically define services in `*-proto`
+crates. If it has only one, the `fantastic-proto` crate would contain something
 like:
 
 ```rust

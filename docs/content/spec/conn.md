@@ -37,7 +37,7 @@ weight = 11
 > r[transport.stream.local]
 >
 > Roam provides a `LocalLink` abstraction that uses named pipes on Windows and
-> Unix sockets on Linux & macOS. Endpoints/addresses are a `String` internally
+> Unix sockets on Linux & macOS. Endpoints/addresses are a `String` internally.
 
 > r[transport.websocket]
 >
@@ -248,12 +248,12 @@ documentation for more information.
 
 > r[session.handshake]
 >
-> To establish a session on top of an existing conduit, a handshake must be
+> To establish a session on top of an existing conduit, a handshake MUST be
 > performed. The initiator sends a `Hello` message, with the version field
 > set to `7`, and the parity field set to the identifier partition desired by
 > the initiator.
 >
-> The counterpart must assert that the version is set to 7, adopt the opposite
+> The counterpart MUST assert that the version is set to 7, adopt the opposite
 > parity, and send back a `HelloYourself` message.
 
 > r[session.parity]
