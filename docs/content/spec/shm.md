@@ -94,7 +94,8 @@ weight = 15
 > 48      8     var_pool_offset     Offset to shared VarSlotPool
 > 56      8     heartbeat_interval  Heartbeat interval in nanoseconds (0 = disabled)
 > 64      4     host_goodbye        Host goodbye flag (0 = active)
-> 68      60    reserved            Reserved (zero)
+> 68      8     current_size        Current segment size in bytes (AtomicU64)
+> 76      52    reserved            Reserved (zero)
 > ```
 
 > r[shm.segment.magic.v2]
@@ -365,6 +366,25 @@ Each guest has two BipBuffers (bipartite circular buffers):
 > exhausted, additional extents can be appended to the segment file
 > (requiring remap by all participants). Each extent contains slot
 > metadata followed by slot data storage.
+
+> r[shm.varslot.extents.notification]
+>
+> When the host appends an extent, it MUST notify all attached guests:
+>
+>   1. Truncate the segment file to the new size
+>   2. Store the new size into `current_size` with **Release** ordering
+>   3. Signal every attached guest's doorbell
+>
+> On each doorbell wakeup, a guest MUST load `current_size` with
+> **Acquire** ordering and compare it against its current mapped size.
+> If `current_size` exceeds the mapped size, the guest MUST remap the
+> segment (e.g. `mremap` on Linux, unmap + remap on other platforms)
+> before accessing the new extent's slots.
+>
+> `total_size` in the header records the initial segment size.
+> `current_size` reflects the size after any extent appends; it is
+> always ≥ `total_size`. Guests MUST use `current_size` to determine
+> how much of the file to map.
 
 > r[shm.varslot.crash-recovery]
 >
