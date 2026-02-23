@@ -1,4 +1,4 @@
-use roam_types::{Backing, Link, LinkRx, LinkTx, WriteSlot};
+use roam_types::{Backing, Link, LinkRx, LinkTx, LinkTxPermit, WriteSlot};
 use tokio::sync::mpsc;
 
 /// In-process [`Link`] backed by tokio mpsc channels.
@@ -42,18 +42,18 @@ pub struct MemoryLinkTx {
     tx: mpsc::Sender<Vec<u8>>,
 }
 
-impl LinkTx for MemoryLinkTx {
-    type Slot<'a> = MemoryWriteSlot<'a>;
+pub struct MemoryLinkTxPermit {
+    permit: mpsc::OwnedPermit<Vec<u8>>,
+}
 
-    async fn alloc(&self, len: usize) -> std::io::Result<Self::Slot<'_>> {
-        // Reserve a channel slot for backpressure, then hand out a buffer.
-        let permit = self.tx.reserve().await.map_err(|_| {
+impl LinkTx for MemoryLinkTx {
+    type Permit = MemoryLinkTxPermit;
+
+    async fn reserve(&self) -> std::io::Result<Self::Permit> {
+        let permit = self.tx.clone().reserve_owned().await.map_err(|_| {
             std::io::Error::new(std::io::ErrorKind::ConnectionReset, "receiver dropped")
         })?;
-        Ok(MemoryWriteSlot {
-            buf: vec![0u8; len],
-            permit,
-        })
+        Ok(MemoryLinkTxPermit { permit })
     }
 
     async fn close(self) -> std::io::Result<()> {
@@ -62,22 +62,33 @@ impl LinkTx for MemoryLinkTx {
     }
 }
 
+impl LinkTxPermit for MemoryLinkTxPermit {
+    type Slot = MemoryWriteSlot;
+
+    fn alloc(self, len: usize) -> std::io::Result<Self::Slot> {
+        Ok(MemoryWriteSlot {
+            buf: vec![0u8; len],
+            permit: self.permit,
+        })
+    }
+}
+
 /// Write slot for [`MemoryLinkTx`].
 ///
 /// Holds a `Vec<u8>` buffer and a channel permit. Writing fills the buffer;
 /// commit sends it through the channel.
-pub struct MemoryWriteSlot<'a> {
+pub struct MemoryWriteSlot {
     buf: Vec<u8>,
-    permit: mpsc::Permit<'a, Vec<u8>>,
+    permit: mpsc::OwnedPermit<Vec<u8>>,
 }
 
-impl WriteSlot for MemoryWriteSlot<'_> {
+impl WriteSlot for MemoryWriteSlot {
     fn as_mut_slice(&mut self) -> &mut [u8] {
         &mut self.buf
     }
 
     fn commit(self) {
-        self.permit.send(self.buf);
+        drop(self.permit.send(self.buf));
     }
 }
 

@@ -165,16 +165,23 @@ graph TD
 > before payload B on the sender, then A MUST be observed before B by the
 > receiver, with no duplication.
 
-> r[link.tx.alloc]
+> r[link.tx.reserve]
 >
-> Sending MUST be a two-phase operation:
+> Sending MUST be a three-step operation:
 >
-> 1. `alloc(len)` reserves space for exactly `len` bytes and yields a writable
->    slot backed by transport-owned storage.
-> 2. The caller writes into the slot and then commits it.
+> 1. `reserve()` awaits until the transport can accept one more payload and
+>    yields a send permit.
+> 2. `permit.alloc(len)` allocates a writable slot of exactly `len` bytes backed
+>    by transport-owned storage.
+> 3. The caller writes into the slot and then commits it.
 >
-> `alloc(len)` is the backpressure point: it MUST wait until the transport can
-> accommodate `len` bytes (or error).
+> `reserve()` is the backpressure point: it MUST wait until the transport can
+> accept a payload (or error).
+
+> r[link.tx.permit.drop]
+>
+> Dropping a send permit without allocating/committing MUST release the
+> reservation and MUST NOT publish any payload.
 
 > r[link.message.empty]
 >
@@ -182,13 +189,13 @@ graph TD
 
 > r[link.tx.alloc.limits]
 >
-> If a transport has a maximum payload size, `alloc(len)` MUST return an error
-> when `len` exceeds that maximum (it MUST NOT wait indefinitely).
+> If a transport has a maximum payload size, `permit.alloc(len)` MUST return an
+> error when `len` exceeds that maximum.
 
 > r[link.tx.slot.len]
 >
-> A write slot returned by `alloc(len)` MUST expose a writable byte slice of
-> exactly length `len`.
+> A write slot returned by `permit.alloc(len)` MUST expose a writable byte slice
+> of exactly length `len`.
 
 > r[link.tx.discard]
 >
@@ -203,7 +210,7 @@ graph TD
 
 > r[link.tx.cancel-safe]
 >
-> `alloc(len)` MUST be cancellation-safe: canceling/dropping the `alloc` future
+> `reserve()` MUST be cancellation-safe: canceling/dropping the `reserve` future
 > MUST NOT publish a partial payload and MUST NOT leak reserved capacity.
 
 > r[link.tx.close]

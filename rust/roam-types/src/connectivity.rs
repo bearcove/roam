@@ -22,9 +22,10 @@
 //! ```
 //!
 //! - **Link has no T or C generics** — it moves raw bytes.
-//! - **Link provides write buffers** — `alloc(len)` returns a `WriteSlot`
-//!   backed by the transport's own memory (bipbuffer for SHM, write buf for
-//!   TCP). Caller encodes directly into the slot. One copy, not two.
+//! - **Link provides write buffers** — `reserve()` yields a permit, then
+//!   `permit.alloc(len)` returns a `WriteSlot` backed by the transport's own
+//!   memory (bipbuffer for SHM, write buf for TCP). Caller encodes directly
+//!   into the slot. One copy, not two.
 //! - **Conduit owns serialization** — codec is an implementation detail,
 //!   not a trait parameter. Session sees `impl Conduit`, never `C: Codec`.
 //! - **StableConduit replay buffer stores bytes** — no `T: Clone` needed.
@@ -195,28 +196,42 @@ pub trait Link {
     fn split(self) -> (Self::Tx, Self::Rx);
 }
 
-/// Sending half of a [`Link`].
+/// A permit for allocating exactly one outbound payload.
 ///
-/// Uses a two-phase write: `alloc(len)` returns a [`WriteSlot`] backed by
-/// the transport's own buffer (bipbuffer slot, kernel write buffer, etc.),
-/// then the caller fills it and calls [`WriteSlot::commit`].
-///
-/// `alloc` is the backpressure point — it awaits until the transport has
-/// room for `len` bytes.
-pub trait LinkTx: Send + 'static {
-    type Slot<'a>: WriteSlot
-    where
-        Self: 'a;
+/// Returned by [`LinkTx::reserve`]. The permit represents *message-level*
+/// capacity (not bytes). Once you have a permit, turning it into a concrete
+/// buffer for a specific payload size is synchronous.
+pub trait LinkTxPermit {
+    type Slot: WriteSlot;
 
     /// Allocate a writable buffer of exactly `len` bytes.
     ///
-    /// Backpressure: blocks until the transport can accommodate `len` bytes.
-    /// For SHM: allocates from bipbuffer or varslot.
-    /// For TCP: reserves space in the write buffer.
+    /// This is synchronous once the permit has been acquired.
+    fn alloc(self, len: usize) -> std::io::Result<Self::Slot>;
+}
+
+/// Sending half of a [`Link`].
+///
+/// Uses a two-phase write:
+///
+/// 1. [`reserve`](LinkTx::reserve) awaits until the transport can accept *one*
+///    more payload and returns a [`LinkTxPermit`].
+/// 2. [`LinkTxPermit::alloc`] allocates a [`WriteSlot`] backed by the
+///    transport's own buffer (bipbuffer slot, kernel write buffer, etc.),
+///    then the caller fills it and calls [`WriteSlot::commit`].
+///
+/// `reserve` is the backpressure point.
+pub trait LinkTx: Send + 'static {
+    type Permit: LinkTxPermit;
+
+    /// Reserve capacity to send exactly one payload.
     ///
-    /// Dropping the returned slot without committing discards it and
-    /// releases the space.
-    async fn alloc(&self, len: usize) -> std::io::Result<Self::Slot<'_>>;
+    /// Backpressure lives here — it awaits until the transport can accept a
+    /// payload (or errors).
+    ///
+    /// Dropping the returned permit without allocating/committing MUST
+    /// release the reservation.
+    async fn reserve(&self) -> std::io::Result<Self::Permit>;
 
     /// Graceful close of the outbound direction.
     async fn close(self) -> std::io::Result<()>
@@ -226,7 +241,7 @@ pub trait LinkTx: Send + 'static {
 
 /// A writable slot in the transport's output buffer.
 ///
-/// Obtained from [`LinkTx::alloc`]. The caller writes encoded bytes into
+/// Obtained from [`LinkTxPermit::alloc`]. The caller writes encoded bytes into
 /// [`as_mut_slice`](WriteSlot::as_mut_slice), then calls
 /// [`commit`](WriteSlot::commit) to make them visible to the receiver.
 ///
@@ -322,10 +337,10 @@ pub trait ConduitTx<T: 'static>: Send + 'static {
 
 /// Permit for sending exactly one message through a [`ConduitTx`].
 ///
-/// `send` is async because it allocates from the underlying Link (which
-/// may block for buffer space). The Conduit's `reserve()` handles
-/// logical backpressure (outstanding messages), while the Link's `alloc`
-/// handles physical backpressure (buffer bytes).
+/// `send` is synchronous. All backpressure is applied by
+/// [`ConduitTx::reserve`], which may await until both:
+/// - the conduit is willing to accept another outstanding message, and
+/// - the underlying link can accept one more payload.
 pub trait ConduitTxPermit<T: 'static> {
     type Error: std::error::Error + Send + Sync + 'static;
 
@@ -333,10 +348,10 @@ pub trait ConduitTxPermit<T: 'static> {
     ///
     /// Flow:
     /// 1. Encode item with facet-postcard → `Vec<u8>`
-    /// 2. `link_tx.alloc(len)` → write slot
+    /// 2. Allocate a write slot from a pre-reserved link permit
     /// 3. Copy into slot
     /// 4. Commit (+ buffer encoded bytes for replay in StableConduit)
-    async fn send(self, item: &T) -> Result<(), Self::Error>;
+    fn send(self, item: &T) -> Result<(), Self::Error>;
 }
 
 /// Receiving half of a [`Conduit`].

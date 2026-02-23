@@ -23,7 +23,7 @@ async fn send_recv_single() {
     let (_server_tx, mut server_rx) = server.split();
 
     let permit = client_tx.reserve().await.unwrap();
-    permit.send(&"hello".to_string()).await.unwrap();
+    permit.send(&"hello".to_string()).unwrap();
 
     let received = server_rx.recv().await.unwrap().unwrap();
     assert_eq!(&*received, "hello");
@@ -37,7 +37,7 @@ async fn send_recv_multiple_in_order() {
 
     for i in 0..10 {
         let permit = client_tx.reserve().await.unwrap();
-        permit.send(&format!("msg-{i}")).await.unwrap();
+        permit.send(&format!("msg-{i}")).unwrap();
     }
 
     for i in 0..10 {
@@ -53,13 +53,13 @@ async fn bidirectional() {
     let (server_tx, mut server_rx) = server.split();
 
     let permit = client_tx.reserve().await.unwrap();
-    permit.send(&"from-client".to_string()).await.unwrap();
+    permit.send(&"from-client".to_string()).unwrap();
 
     let received = server_rx.recv().await.unwrap().unwrap();
     assert_eq!(&*received, "from-client");
 
     let permit = server_tx.reserve().await.unwrap();
-    permit.send(&"from-server".to_string()).await.unwrap();
+    permit.send(&"from-server".to_string()).unwrap();
 
     let received = client_rx.recv().await.unwrap().unwrap();
     assert_eq!(&*received, "from-server");
@@ -72,7 +72,7 @@ async fn close_signals_end() {
     let (_server_tx, mut server_rx) = server.split();
 
     let permit = client_tx.reserve().await.unwrap();
-    permit.send(&"last".to_string()).await.unwrap();
+    permit.send(&"last".to_string()).unwrap();
     client_tx.close().await.unwrap();
 
     let received = server_rx.recv().await.unwrap().unwrap();
@@ -90,13 +90,13 @@ async fn interleaved_send_recv() {
 
     for i in 0..5 {
         let permit = client_tx.reserve().await.unwrap();
-        permit.send(&format!("c2s-{i}")).await.unwrap();
+        permit.send(&format!("c2s-{i}")).unwrap();
 
         let received = server_rx.recv().await.unwrap().unwrap();
         assert_eq!(&*received, &format!("c2s-{i}"));
 
         let permit = server_tx.reserve().await.unwrap();
-        permit.send(&format!("s2c-{i}")).await.unwrap();
+        permit.send(&format!("s2c-{i}")).unwrap();
 
         let received = client_rx.recv().await.unwrap().unwrap();
         assert_eq!(&*received, &format!("s2c-{i}"));

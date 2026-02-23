@@ -5,7 +5,8 @@ use facet::Facet;
 use facet_reflect::TypePlanCore;
 
 use roam_types::{
-    Conduit, ConduitRx, ConduitTx, ConduitTxPermit, Link, LinkTx, RpcPlan, SelfRef, WriteSlot,
+    Conduit, ConduitRx, ConduitTx, ConduitTxPermit, Link, LinkTx, LinkTxPermit, RpcPlan, SelfRef,
+    WriteSlot,
 };
 
 /// Wraps a [`Link`] with postcard serialization. No reconnect, no reliability.
@@ -77,8 +78,9 @@ impl<T: Facet<'static> + 'static, LTx: LinkTx + Send + 'static> ConduitTx<T>
         Self: 'a;
 
     async fn reserve(&self) -> std::io::Result<Self::Permit<'_>> {
+        let permit = self.link_tx.reserve().await?;
         Ok(BareConduitPermit {
-            tx: self,
+            permit,
             _phantom: PhantomData,
         })
     }
@@ -93,8 +95,8 @@ impl<T: Facet<'static> + 'static, LTx: LinkTx + Send + 'static> ConduitTx<T>
 // ---------------------------------------------------------------------------
 
 pub struct BareConduitPermit<'a, T: 'static, LTx: LinkTx> {
-    tx: &'a BareConduitTx<T, LTx>,
-    _phantom: PhantomData<fn() -> T>,
+    permit: LTx::Permit,
+    _phantom: PhantomData<fn() -> (&'a (), T)>,
 }
 
 impl<T: Facet<'static> + 'static, LTx: LinkTx> ConduitTxPermit<T>
@@ -102,14 +104,12 @@ impl<T: Facet<'static> + 'static, LTx: LinkTx> ConduitTxPermit<T>
 {
     type Error = BareConduitError;
 
-    async fn send(self, item: &T) -> Result<(), Self::Error> {
+    fn send(self, item: &T) -> Result<(), Self::Error> {
         let encoded = facet_postcard::to_vec(item).map_err(BareConduitError::Encode)?;
 
         let mut slot = self
-            .tx
-            .link_tx
+            .permit
             .alloc(encoded.len())
-            .await
             .map_err(BareConduitError::Io)?;
 
         slot.as_mut_slice().copy_from_slice(&encoded);
