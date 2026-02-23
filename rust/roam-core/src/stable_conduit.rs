@@ -30,10 +30,16 @@ struct ClientHello {
 struct ServerHello {
     resume_key: ResumeKey,
     last_received: Option<PacketSeq>,
+    // r[impl stable.reconnect.failure]
+    /// If true, the server did not recognize the resume_key and the client
+    /// must treat this as a session loss.
+    rejected: bool,
 }
 
 /// Frame header — seq + ack, serialized separately so we can prepend to
 /// already-encoded item bytes without needing an owned T.
+// r[impl stable.framing]
+// r[impl stable.framing.encoding]
 #[derive(Facet, Debug, Clone, Copy)]
 struct FrameHeader {
     seq: PacketSeq,
@@ -41,9 +47,11 @@ struct FrameHeader {
 }
 
 /// Sequenced data frame. All post-handshake traffic is `Frame<T>`.
+// r[impl stable.framing]
 #[derive(Facet, Debug, Clone)]
 struct Frame<T> {
     seq: PacketSeq,
+    // r[impl stable.ack]
     ack: Option<PacketAck>,
     item: T,
 }
@@ -57,6 +65,7 @@ struct Attachment<L> {
     client_hello: Option<ClientHello>,
 }
 
+// r[impl stable.link-source]
 pub trait LinkSource: Send + 'static {
     type Link: Link;
 
@@ -67,7 +76,7 @@ pub trait LinkSource: Send + 'static {
 // StableConduit
 // ---------------------------------------------------------------------------
 
-// r[impl conduit.stable]
+// r[impl stable]
 pub struct StableConduit<T: 'static, LS: LinkSource> {
     inner: Arc<tokio::sync::Mutex<Inner<LS>>>,
     frame_plan: Arc<TypePlanCore>,
@@ -82,8 +91,10 @@ struct Inner<LS: LinkSource> {
     tx: Option<<LS::Link as Link>::Tx>,
     rx: <LS::Link as Link>::Rx,
     resume_key: Option<ResumeKey>,
+    // r[impl stable.seq]
     next_send_seq: PacketSeq,
     last_received: Option<PacketSeq>,
+    // r[impl stable.replay-buffer]
     /// Encoded item bytes buffered for replay on reconnect.
     replay: ReplayBuffer,
 }
@@ -210,6 +221,10 @@ async fn handshake<L: Link>(
             };
             send_msg(tx, &hello).await?;
             let server_hello: ServerHello = recv_msg(rx).await?;
+            // r[impl stable.reconnect.failure]
+            if server_hello.rejected {
+                return Err(StableConduitError::SessionLost);
+            }
             Ok((server_hello.resume_key, server_hello.last_received))
         }
         Some(client_hello) => {
@@ -218,6 +233,7 @@ async fn handshake<L: Link>(
             let hello = ServerHello {
                 resume_key: key.clone(),
                 last_received,
+                rejected: false,
             };
             send_msg(tx, &hello).await?;
             Ok((key, client_hello.last_received))
@@ -508,6 +524,9 @@ pub enum StableConduitError {
     Io(std::io::Error),
     LinkDead,
     Setup(String),
+    /// The server rejected our resume_key; the session is permanently lost.
+    // r[impl stable.reconnect.failure]
+    SessionLost,
 }
 
 impl std::fmt::Display for StableConduitError {
@@ -518,6 +537,7 @@ impl std::fmt::Display for StableConduitError {
             Self::Io(e) => write!(f, "io error: {e}"),
             Self::LinkDead => write!(f, "link dead"),
             Self::Setup(s) => write!(f, "setup error: {s}"),
+            Self::SessionLost => write!(f, "session lost: server rejected resume key"),
         }
     }
 }
@@ -623,6 +643,7 @@ mod tests {
                 &ServerHello {
                     resume_key: ResumeKey(b"key".to_vec()),
                     last_received: None,
+                    rejected: false,
                 },
             )
             .await
@@ -669,6 +690,7 @@ mod tests {
                 &ServerHello {
                     resume_key: ResumeKey(b"resume-key-for-test".to_vec()),
                     last_received: None,
+                    rejected: false,
                 },
             )
             .await
@@ -709,6 +731,7 @@ mod tests {
                 &ServerHello {
                     resume_key: ResumeKey(b"resume-key-2".to_vec()),
                     last_received: Some(PacketSeq(0)),
+                    rejected: false,
                 },
             )
             .await
@@ -782,6 +805,7 @@ mod tests {
                 &ServerHello {
                     resume_key: ResumeKey(b"key1".to_vec()),
                     last_received: None,
+                    rejected: false,
                 },
             )
             .await
@@ -807,6 +831,7 @@ mod tests {
                 &ServerHello {
                     resume_key: ResumeKey(b"key2".to_vec()),
                     last_received: Some(PacketSeq(1)),
+                    rejected: false,
                 },
             )
             .await
@@ -872,6 +897,7 @@ mod tests {
                 &ServerHello {
                     resume_key: ResumeKey(b"k".to_vec()),
                     last_received: None,
+                    rejected: false,
                 },
             )
             .await
@@ -896,5 +922,73 @@ mod tests {
         assert_eq!(&*b, "second");
 
         server.await.unwrap();
+    }
+
+    /// When the server rejects the resume_key, recv() returns SessionLost.
+    // r[verify stable.reconnect.failure]
+    #[tokio::test]
+    async fn reconnect_failure_surfaces_session_lost() {
+        let (c1, s1) = memory_link_pair(32);
+        let (c2, s2) = memory_link_pair(32);
+
+        // Server 1: accept initial connection, send ack, then drop.
+        let server1 = tokio::spawn(async move {
+            let (s1_tx, mut s1_rx) = s1.split();
+            let _: ClientHello = recv_msg(&mut s1_rx).await.unwrap();
+            send_msg(
+                &s1_tx,
+                &ServerHello {
+                    resume_key: ResumeKey(b"known-key".to_vec()),
+                    last_received: None,
+                    rejected: false,
+                },
+            )
+            .await
+            .unwrap();
+            recv_raw(&mut s1_rx).await;
+            // Drop — triggers reconnect on client.
+        });
+
+        // Server 2: receives reconnect attempt but rejects the resume_key.
+        let server2 = tokio::spawn(async move {
+            let (s2_tx, mut s2_rx) = s2.split();
+            let hello: ClientHello = recv_msg(&mut s2_rx).await.unwrap();
+            assert!(hello.resume_key.is_some());
+            // Reject the resume attempt.
+            send_msg(
+                &s2_tx,
+                &ServerHello {
+                    resume_key: ResumeKey(vec![]),
+                    last_received: None,
+                    rejected: true,
+                },
+            )
+            .await
+            .unwrap();
+        });
+
+        let source = QueuedLinkSource {
+            links: VecDeque::from([(c1, None), (c2, None)]),
+        };
+        let client = StableConduit::<String, _>::new(source, string_plan())
+            .await
+            .unwrap();
+        let (client_tx, mut client_rx) = client.split();
+
+        client_tx
+            .reserve()
+            .await
+            .unwrap()
+            .send(&"hello".to_string())
+            .unwrap();
+
+        // server1 drops → reconnect → server2 rejects → SessionLost
+        match client_rx.recv().await {
+            Err(StableConduitError::SessionLost) => {}
+            other => panic!("expected SessionLost, got: {:?}", other.map(|_| ())),
+        }
+
+        server1.await.unwrap();
+        server2.await.unwrap();
     }
 }
