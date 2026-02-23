@@ -305,3 +305,172 @@ impl LocalLinkAcceptor {
         })
     }
 }
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use roam_types::{Backing, Link, LinkRx, LinkTx, LinkTxPermit, WriteSlot};
+    use tokio::io::split;
+
+    use super::*;
+
+    /// Create a connected pair of StreamLinks backed by a tokio duplex pipe.
+    fn duplex_pair() -> (
+        StreamLink<
+            tokio::io::ReadHalf<tokio::io::DuplexStream>,
+            tokio::io::WriteHalf<tokio::io::DuplexStream>,
+        >,
+        StreamLink<
+            tokio::io::ReadHalf<tokio::io::DuplexStream>,
+            tokio::io::WriteHalf<tokio::io::DuplexStream>,
+        >,
+    ) {
+        let (a, b) = tokio::io::duplex(4096);
+        let (a_r, a_w) = split(a);
+        let (b_r, b_w) = split(b);
+        (StreamLink::new(a_r, a_w), StreamLink::new(b_r, b_w))
+    }
+
+    fn payload(link: &Backing) -> &[u8] {
+        match link {
+            Backing::Boxed(b) => b,
+        }
+    }
+
+    #[tokio::test]
+    async fn round_trip_single() {
+        let (a, b) = duplex_pair();
+        let (tx_a, _rx_a) = a.split();
+        let (_tx_b, mut rx_b) = b.split();
+
+        let permit = tx_a.reserve().await.unwrap();
+        let mut slot = permit.alloc(5).unwrap();
+        slot.as_mut_slice().copy_from_slice(b"hello");
+        slot.commit();
+
+        let msg = rx_b.recv().await.unwrap().unwrap();
+        assert_eq!(payload(&msg), b"hello");
+    }
+
+    #[tokio::test]
+    async fn multiple_messages_in_order() {
+        let (a, b) = duplex_pair();
+        let (tx_a, _rx_a) = a.split();
+        let (_tx_b, mut rx_b) = b.split();
+
+        let payloads: &[&[u8]] = &[b"one", b"two", b"three", b"four"];
+        for p in payloads {
+            let permit = tx_a.reserve().await.unwrap();
+            let mut slot = permit.alloc(p.len()).unwrap();
+            slot.as_mut_slice().copy_from_slice(p);
+            slot.commit();
+        }
+
+        for expected in payloads {
+            let msg = rx_b.recv().await.unwrap().unwrap();
+            assert_eq!(payload(&msg), *expected);
+        }
+    }
+
+    // r[verify link.message.empty]
+    #[tokio::test]
+    async fn empty_payload() {
+        let (a, b) = duplex_pair();
+        let (tx_a, _rx_a) = a.split();
+        let (_tx_b, mut rx_b) = b.split();
+
+        let permit = tx_a.reserve().await.unwrap();
+        let slot = permit.alloc(0).unwrap();
+        slot.commit();
+
+        let msg = rx_b.recv().await.unwrap().unwrap();
+        assert_eq!(payload(&msg), b"");
+    }
+
+    // r[verify link.rx.eof]
+    #[tokio::test]
+    async fn eof_on_peer_close() {
+        let (a, b) = duplex_pair();
+        let (tx_a, _rx_a) = a.split();
+        let (_tx_b, mut rx_b) = b.split();
+
+        tx_a.close().await.unwrap();
+
+        assert!(rx_b.recv().await.unwrap().is_none());
+        // Subsequent calls also return None
+        assert!(rx_b.recv().await.unwrap().is_none());
+    }
+
+    // r[verify link.tx.permit.drop]
+    #[tokio::test]
+    async fn dropped_permit_sends_nothing() {
+        let (a, b) = duplex_pair();
+        let (tx_a, _rx_a) = a.split();
+        let (_tx_b, mut rx_b) = b.split();
+
+        // Drop permit without allocating — nothing should be sent
+        let permit = tx_a.reserve().await.unwrap();
+        drop(permit);
+
+        // Then send a real message
+        let permit = tx_a.reserve().await.unwrap();
+        let mut slot = permit.alloc(3).unwrap();
+        slot.as_mut_slice().copy_from_slice(b"yep");
+        slot.commit();
+
+        let msg = rx_b.recv().await.unwrap().unwrap();
+        assert_eq!(payload(&msg), b"yep");
+    }
+
+    // r[verify link.tx.discard]
+    #[tokio::test]
+    async fn dropped_slot_sends_nothing() {
+        let (a, b) = duplex_pair();
+        let (tx_a, _rx_a) = a.split();
+        let (_tx_b, mut rx_b) = b.split();
+
+        // Drop slot without committing — nothing should be sent
+        let permit = tx_a.reserve().await.unwrap();
+        let slot = permit.alloc(3).unwrap();
+        drop(slot);
+
+        // Then send a real message
+        let permit = tx_a.reserve().await.unwrap();
+        let mut slot = permit.alloc(2).unwrap();
+        slot.as_mut_slice().copy_from_slice(b"ok");
+        slot.commit();
+
+        let msg = rx_b.recv().await.unwrap().unwrap();
+        assert_eq!(payload(&msg), b"ok");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn local_link_round_trip() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.sock");
+        let addr = path.to_str().unwrap();
+
+        let acceptor = LocalLinkAcceptor::bind(addr).unwrap();
+
+        let connect_addr = addr.to_string();
+        let server = tokio::spawn(async move {
+            let link = acceptor.accept().await.unwrap();
+            let (_tx, mut rx) = link.split();
+            rx.recv().await.unwrap().unwrap()
+        });
+
+        let client_link = LocalLink::connect(&connect_addr).await.unwrap();
+        let (tx, _rx) = client_link.split();
+        let permit = tx.reserve().await.unwrap();
+        let mut slot = permit.alloc(5).unwrap();
+        slot.as_mut_slice().copy_from_slice(b"local");
+        slot.commit();
+
+        let msg = server.await.unwrap();
+        assert_eq!(payload(&msg), b"local");
+    }
+}
