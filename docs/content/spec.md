@@ -293,42 +293,89 @@ documentation for more information.
 > any number of connections, on which calls (requests) can be made, and data can be
 > exchanged over channels.
 
+> r[session.peer]
+> 
+> When talking about peers, the local peer is simply called "peer" and the remote
+> peer is called "counterpart".
+
 > r[session.role]
 >
 > Even though a session is established over an existing conduit, and therefore doesn't
 > have to worry about "connecting" or "accepting connections", each peer plays a "role":
 > initiator, or acceptor.
 
-> r[session.bidirectional]
+> r[session.symmetry]
 >
 > The role a peer plays in a session does not dictate whether they make or
 > handle requests, or whether they send or receive items over channels.
 > All sessions are fully bidirectional. 
+
+> r[session.message]
+>
+> Every operation that can be done during a session's lifecycle is done by
+> sending and receiving `Message` values.
+
+> r[session.message.connection_id]
+>
+> Every message is composed of a connection identifier and a payload. The
+> connection ID is meaningful for every message type except for the handshake,
+> i.e., the `Hello` and `HelloYourself` messages, for which the connection id
+> is set to zero.
+
+> r[session.message.payloads]
+>
+> Here are all the kinds of message payloads:
+>
+>   * Hello
+>   * HelloYourself
+>   * Connect
+>   * Accept
+>   * Reject
+>   * Goodbye
+>   * Request
+>   * Response
+>   * Cancel
+>   * Data
+>   * Close
+>   * Reset
 
 > r[session.handshake]
 >
 > To establish a session on top of an existing conduit, a handshake must be
 > performed. The initiator sends a "Hello" message, with the version field
 > set to `7`, and the parity field set to the identifier partition desired by
-> the initiator. 
+> the initiator.
+>
+> The counterpart must assert that the version is set to 7, adopt the opposite
+> parity, and send back a `HelloYourself` message. 
 
 > r[session.parity]
 > 
 > Parity plays a role on two different levels:
+>
 >   * sessions (for connection IDs)
 >   * connections (for request IDs and channel IDs)
 >
 > The idea is to partition the identifier space so that either peer can allocate
 > new identifiers without coordinating.
 > 
-> A peer that has claimed auto
-> parity at the session level can request virtual connections with identifiers
-> 1, 3, 5, 7, etc. 
+> A peer that has claimed `Odd` parity at the session level can request virtual
+> connections with identifiers 1, 3, 5, 7, etc. Their 
+
+> r[session.connection]
+> 
+> A connection is a namespace for requests and channels inside of a session. 
 
 > r[session.connection.root]
 > 
-> A session can have any number of connections: it starts with one, the root connection
-> with ID 0.
+> A session can hold many connections: it starts with one, the root connection,
+> with ID 0. Trying to close the root connection tears down the entire session. 
+
+> r[session.connection.open]
+>
+> Either peer may allocate a new connection ID using its parity, and send a
+> `Connect` message on the desired connection ID. The counterpart must reply with
+> either Accept or Reject. 
 
 ## Connections
 
