@@ -26,8 +26,14 @@ pub use requests::*;
 mod message;
 pub use message::*;
 
-mod connectivity;
-pub use connectivity::*;
+mod selfref;
+pub use selfref::*;
+
+mod link;
+pub use link::*;
+
+mod conduit;
+pub use conduit::*;
 
 mod metadata;
 pub use metadata::*;

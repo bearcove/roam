@@ -1,0 +1,106 @@
+#![allow(async_fn_in_trait)]
+
+use crate::Backing;
+
+/// Bidirectional raw-bytes transport.
+///
+/// TCP, WebSocket, SHM all implement this. No knowledge of what's being
+/// sent — just bytes in, bytes out. The transport provides write buffers
+/// so callers can encode directly into the destination (zero-copy for SHM).
+pub trait Link {
+    type Tx: LinkTx;
+    type Rx: LinkRx;
+
+    fn split(self) -> (Self::Tx, Self::Rx);
+}
+
+/// A permit for allocating exactly one outbound payload.
+///
+/// Returned by [`LinkTx::reserve`]. The permit represents *message-level*
+/// capacity (not bytes). Once you have a permit, turning it into a concrete
+/// buffer for a specific payload size is synchronous.
+pub trait LinkTxPermit {
+    type Slot: WriteSlot;
+
+    /// Allocate a writable buffer of exactly `len` bytes.
+    ///
+    /// This is synchronous once the permit has been acquired.
+    fn alloc(self, len: usize) -> std::io::Result<Self::Slot>;
+}
+
+/// Sending half of a [`Link`].
+///
+/// Uses a two-phase write:
+///
+/// 1. [`reserve`](LinkTx::reserve) awaits until the transport can accept *one*
+///    more payload and returns a [`LinkTxPermit`].
+/// 2. [`LinkTxPermit::alloc`] allocates a [`WriteSlot`] backed by the
+///    transport's own buffer (bipbuffer slot, kernel write buffer, etc.),
+///    then the caller fills it and calls [`WriteSlot::commit`].
+///
+/// `reserve` is the backpressure point.
+pub trait LinkTx: Send + 'static {
+    type Permit: LinkTxPermit;
+
+    /// Reserve capacity to send exactly one payload.
+    ///
+    /// Backpressure lives here — it awaits until the transport can accept a
+    /// payload (or errors).
+    ///
+    /// Dropping the returned permit without allocating/committing MUST
+    /// release the reservation.
+    async fn reserve(&self) -> std::io::Result<Self::Permit>;
+
+    /// Graceful close of the outbound direction.
+    async fn close(self) -> std::io::Result<()>
+    where
+        Self: Sized;
+}
+
+/// A writable slot in the transport's output buffer.
+///
+/// Obtained from [`LinkTxPermit::alloc`]. The caller writes encoded bytes into
+/// [`as_mut_slice`](WriteSlot::as_mut_slice), then calls
+/// [`commit`](WriteSlot::commit) to make them visible to the receiver.
+///
+/// Dropping without commit = discard (no bytes sent, space reclaimed).
+pub trait WriteSlot {
+    /// The writable buffer, exactly the size requested in `alloc`.
+    fn as_mut_slice(&mut self) -> &mut [u8];
+
+    /// Commit the written bytes. After this, the receiver can see them.
+    /// Sync — the bytes are already in the transport's buffer.
+    fn commit(self);
+}
+
+/// Receiving half of a [`Link`].
+///
+/// Yields [`Backing`] values: the raw bytes plus their ownership handle.
+/// The transport handles framing (length-prefix, WebSocket frames, etc.)
+/// and returns exactly one message's bytes per `recv` call.
+///
+/// For SHM: the Backing might be a VarSlot reference.
+/// For TCP: the Backing is a heap-allocated buffer.
+pub trait LinkRx: Send + 'static {
+    type Error: std::error::Error + Send + Sync + 'static;
+
+    /// Receive the next message's raw bytes.
+    ///
+    /// Returns `Ok(None)` when the peer has closed the connection.
+    async fn recv(&mut self) -> Result<Option<Backing>, Self::Error>;
+}
+
+/// A [`Link`] assembled from pre-split Tx and Rx halves.
+pub struct SplitLink<Tx, Rx> {
+    pub tx: Tx,
+    pub rx: Rx,
+}
+
+impl<Tx: LinkTx, Rx: LinkRx> Link for SplitLink<Tx, Rx> {
+    type Tx = Tx;
+    type Rx = Rx;
+
+    fn split(self) -> (Tx, Rx) {
+        (self.tx, self.rx)
+    }
+}
