@@ -22,5 +22,18 @@ pub use stable_conduit::*;
 mod memory_link;
 pub use memory_link::*;
 
+/// Build a `&'static RpcPlan` for type `T`, using `Tx<()>` / `Rx<()>` as the
+/// channel sentinels. Leaks the plan so it lives for the lifetime of the process.
+///
+/// This is the standard helper used by macro-generated code to initialise the
+/// `args_plan`, `ok_plan`, and `err_plan` fields of a `MethodDescriptor`.
+pub fn rpc_plan<T: facet::Facet<'static>>() -> &'static roam_types::RpcPlan {
+    Box::leak(Box::new(roam_types::RpcPlan::for_type::<
+        T,
+        crate::Tx<()>,
+        crate::Rx<()>,
+    >()))
+}
+
 #[cfg(test)]
 mod tests;

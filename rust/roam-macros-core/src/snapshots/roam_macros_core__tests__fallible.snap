@@ -31,21 +31,9 @@ pub fn calc_service_descriptor() -> &'static ::roam::session::ServiceDescriptor 
                     },
                 ],
                 return_shape: <Result<f64, DivError> as ::roam::facet::Facet>::SHAPE,
-                args_plan: Box::leak(Box::new(::roam::session::RpcPlan::for_type::<
-                    (f64, f64),
-                    ::roam::session::Tx<()>,
-                    ::roam::session::Rx<()>,
-                >())),
-                ok_plan: Box::leak(Box::new(::roam::session::RpcPlan::for_type::<
-                    f64,
-                    ::roam::session::Tx<()>,
-                    ::roam::session::Rx<()>,
-                >())),
-                err_plan: Box::leak(Box::new(::roam::session::RpcPlan::for_type::<
-                    DivError,
-                    ::roam::session::Tx<()>,
-                    ::roam::session::Rx<()>,
-                >())),
+                args_plan: ::roam::rpc_plan::<(f64, f64)>(),
+                ok_plan: ::roam::rpc_plan::<f64>(),
+                err_plan: ::roam::rpc_plan::<DivError>(),
                 doc: None,
             }))];
         Box::leak(Box::new(::roam::session::ServiceDescriptor {

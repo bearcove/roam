@@ -22,21 +22,9 @@ pub fn notifier_service_descriptor() -> &'static ::roam::session::ServiceDescrip
                     shape: <String as ::roam::facet::Facet>::SHAPE,
                 }],
                 return_shape: <() as ::roam::facet::Facet>::SHAPE,
-                args_plan: Box::leak(Box::new(::roam::session::RpcPlan::for_type::<
-                    (String,),
-                    ::roam::session::Tx<()>,
-                    ::roam::session::Rx<()>,
-                >())),
-                ok_plan: Box::leak(Box::new(::roam::session::RpcPlan::for_type::<
-                    (),
-                    ::roam::session::Tx<()>,
-                    ::roam::session::Rx<()>,
-                >())),
-                err_plan: Box::leak(Box::new(::roam::session::RpcPlan::for_type::<
-                    ::core::convert::Infallible,
-                    ::roam::session::Tx<()>,
-                    ::roam::session::Rx<()>,
-                >())),
+                args_plan: ::roam::rpc_plan::<(String,)>(),
+                ok_plan: ::roam::rpc_plan::<()>(),
+                err_plan: ::roam::rpc_plan::<::core::convert::Infallible>(),
                 doc: None,
             }))];
         Box::leak(Box::new(::roam::session::ServiceDescriptor {

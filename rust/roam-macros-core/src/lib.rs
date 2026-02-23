@@ -154,7 +154,8 @@ fn generate_service_descriptor_fn(parsed: &ServiceTrait, roam: &TokenStream2) ->
             };
 
             // Build arg types tuple for args_plan
-            let arg_types: Vec<TokenStream2> = m.args().map(|arg| arg.ty.to_token_stream()).collect();
+            let arg_types: Vec<TokenStream2> =
+                m.args().map(|arg| arg.ty.to_token_stream()).collect();
             let tuple_type = if arg_types.is_empty() {
                 quote! { () }
             } else if arg_types.len() == 1 {
@@ -172,7 +173,10 @@ fn generate_service_descriptor_fn(parsed: &ServiceTrait, roam: &TokenStream2) ->
             let (ok_ty, err_ty) = if let Some((ok, err)) = return_type.as_result() {
                 (ok.to_token_stream(), err.to_token_stream())
             } else {
-                (return_type.to_token_stream(), quote! { ::core::convert::Infallible })
+                (
+                    return_type.to_token_stream(),
+                    quote! { ::core::convert::Infallible },
+                )
             };
 
             let method_doc_expr = match m.doc() {
@@ -192,9 +196,9 @@ fn generate_service_descriptor_fn(parsed: &ServiceTrait, roam: &TokenStream2) ->
                     method_name: #method_name_str,
                     args: #args_expr,
                     return_shape: <#return_ty_tokens as #roam::facet::Facet>::SHAPE,
-                    args_plan: Box::leak(Box::new(#roam::session::RpcPlan::for_type::<#tuple_type, ::roam::session::Tx::<()>, ::roam::session::Rx::<()>>())),
-                    ok_plan: Box::leak(Box::new(#roam::session::RpcPlan::for_type::<#ok_ty, ::roam::session::Tx::<()>, ::roam::session::Rx::<()>>())),
-                    err_plan: Box::leak(Box::new(#roam::session::RpcPlan::for_type::<#err_ty, ::roam::session::Tx::<()>, ::roam::session::Rx::<()>>())),
+                    args_plan: #roam::rpc_plan::<#tuple_type>(),
+                    ok_plan: #roam::rpc_plan::<#ok_ty>(),
+                    err_plan: #roam::rpc_plan::<#err_ty>(),
                     doc: #method_doc_expr,
                 }))
             }

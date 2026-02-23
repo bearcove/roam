@@ -19,21 +19,9 @@ pub fn ping_service_descriptor() -> &'static ::roam::session::ServiceDescriptor 
                 method_name: "ping",
                 args: &[],
                 return_shape: <u64 as ::roam::facet::Facet>::SHAPE,
-                args_plan: Box::leak(Box::new(::roam::session::RpcPlan::for_type::<
-                    (),
-                    ::roam::session::Tx<()>,
-                    ::roam::session::Rx<()>,
-                >())),
-                ok_plan: Box::leak(Box::new(::roam::session::RpcPlan::for_type::<
-                    u64,
-                    ::roam::session::Tx<()>,
-                    ::roam::session::Rx<()>,
-                >())),
-                err_plan: Box::leak(Box::new(::roam::session::RpcPlan::for_type::<
-                    ::core::convert::Infallible,
-                    ::roam::session::Tx<()>,
-                    ::roam::session::Rx<()>,
-                >())),
+                args_plan: ::roam::rpc_plan::<()>(),
+                ok_plan: ::roam::rpc_plan::<u64>(),
+                err_plan: ::roam::rpc_plan::<::core::convert::Infallible>(),
                 doc: None,
             }))];
         Box::leak(Box::new(::roam::session::ServiceDescriptor {
