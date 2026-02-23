@@ -11,6 +11,9 @@
 mod bare_conduit;
 pub use bare_conduit::*;
 
+mod channel;
+pub use channel::*;
+
 mod stable_conduit;
 pub use stable_conduit::*;
 
