@@ -71,7 +71,8 @@ caller's `.await` keeps everything alive until the future completes.
 r[zerocopy.send.lifetime]
 
 The send future is not `'static` — it borrows from the caller's scope.
-This means it cannot be spawned as an independent task. It is driven to
+This means it cannot be spawned on executors that require `'static`
+futures (e.g. `tokio::spawn`). It is driven to
 completion by the caller's `.await`, which guarantees all borrows remain
 valid. The actual sequence is:
 
@@ -106,9 +107,10 @@ bytes — the receiver reads from the same physical memory.
 
 r[zerocopy.recv]
 
-On the receive side, `LinkRx::recv` returns a `Backing` that owns the
-raw bytes. The conduit deserializes borrowing from this backing, producing
-a `SelfRef<T>` that pairs the decoded value with its backing.
+On the receive side, `LinkRx::recv` returns a `Backing` that keeps raw
+bytes alive (owned or pinned depending on link type). The conduit
+deserializes borrowing from this backing, producing a `SelfRef<T>` that
+pairs the decoded value with its backing.
 
 r[zerocopy.recv.selfref]
 
@@ -127,7 +129,8 @@ box.
 r[zerocopy.recv.websocket]
 
 **WebSocket links:** `recv` receives a complete message as `bytes::Bytes`,
-converted to `Box<[u8]>`. One copy. Deserialization borrows from the box.
+converted to `Box<[u8]>`. One copy at the Roam link boundary (transport-
+internal buffering is not counted). Deserialization borrows from the box.
 
 r[zerocopy.recv.shm.inline]
 
@@ -156,9 +159,9 @@ reflect the different ownership situations:
 
 r[zerocopy.payload.borrowed]
 
-**Borrowed** — a type-erased pointer to a value in the caller's stack
-frame plus its Shape. Used on the send path when the value is borrowed
-from user code.
+**Borrowed** — a type-erased pointer to caller-owned memory (stack,
+heap, arena, etc.) plus its Shape. Used on the send path when the value
+is reachable for the borrow lifetime.
 
 r[zerocopy.payload.bytes]
 
@@ -169,6 +172,10 @@ provides raw bytes). Paired with a Backing to keep the buffer alive.
 ## Copy count summary
 
 r[zerocopy.copies]
+
+Copy counts are measured at the Roam link boundary — copies internal to
+the transport library (e.g. TLS decryption, WebSocket frame assembly) are
+not included.
 
 | Direction | Stream (TCP) | WebSocket | SHM (inline) | SHM (slot-ref) | SHM (mmap) |
 |-----------|-------------|-----------|--------------|-----------------|------------|
