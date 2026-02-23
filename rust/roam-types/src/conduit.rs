@@ -12,10 +12,12 @@ use crate::SelfRef;
 /// - `BareConduit`: Link + postcard. If the link dies, it's dead.
 /// - `StableConduit`: Link + postcard + seq/ack/replay. Handles reconnect
 ///   transparently. Replay buffer stores encoded bytes (no `T: Clone`).
+// r[impl conduit]
 pub trait Conduit<T: 'static> {
     type Tx: ConduitTx<T>;
     type Rx: ConduitRx<T>;
 
+    // r[impl conduit.split]
     fn split(self) -> (Self::Tx, Self::Rx);
 }
 
@@ -23,6 +25,7 @@ pub trait Conduit<T: 'static> {
 ///
 /// Permit-based: `reserve()` is the backpressure point, `permit.send()`
 /// serializes and writes.
+// r[impl conduit.permit]
 pub trait ConduitTx<T: 'static>: Send + 'static {
     type Permit<'a>: ConduitTxPermit<T>
     where
@@ -44,6 +47,7 @@ pub trait ConduitTx<T: 'static>: Send + 'static {
 }
 
 /// Permit for sending exactly one message through a [`ConduitTx`].
+// r[impl conduit.permit.send]
 pub trait ConduitTxPermit<T: 'static> {
     type Error: std::error::Error + Send + Sync + 'static;
 

@@ -5,6 +5,7 @@
 //! borrows directly from the shared region.
 
 /// A [`Link`](roam_types::Link) over shared memory ring buffers.
+// r[impl transport.shm]
 pub struct ShmLink {
     // Will hold: BipBuffer pair, signaling fds, etc.
 }

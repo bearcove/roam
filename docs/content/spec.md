@@ -282,65 +282,27 @@ Crucially, separating `.send()` from `Permit::send()` avoids losing items
 in-transit by accidentally cancelling (dropping) Futures blocked in a dual-purpose
 `send()`.
 
-
 See tokio's [Sender::reserve](https://docs.rs/tokio/latest/tokio/sync/mpsc/struct.Sender.html#method.reserve)
 documentation for more information.
 
 ## Sessions
 
+> r[session]
+>
+> Sessions are established between two peers on top of a conduit. They keep track of
+> any number of connections, on which calls (requests) can be made, and data can be
+> exchanged over channels.
+
+> r[session.direction]
+>
+> A session is established over an existing conduit. 
+
+> r[session.connection.root]
+> 
+> A session can have any number of connections: it starts with one, the root connection
+> with ID 0.
+
 ## Connections
 
 On top of the **Conduit** sits the **Session**: it has a stable identifiers, can be
 resumed if we lose connectivity and have to re-create a new **Link**.
-
-Finally, a **Session** can host many connections, starting with the root
-connection, with identifier 0, which is always open.
-
-So, the model goes:
-
-  * Link (Memory, stdio, TCP, Unix sockets, Named pipes, WebSocket, SHM)
-  * Wire (serialization/deserialiation)
-  * Session (durable set of connections, request state machine etc.)
-  * Connections (namespace for request/channel IDs)
-  
-Transports ("kinds of links") typically let you both "accept" or "connect".
-In both cases, one must specify:
-
-  * A service handler (to handle incoming requests)
-  * A client type (to make outgoing requests)
-  
-```rust
-// Simple case: connect over TCP, we act as a client only (don't handle any), brand new link
-let (session, caller_a) = Session::new::<Adder>().connect_over(Tcp::new("127.0.0.1:3030")).build().await?;
-let eight = caller_a.add(3, 5).await;
-
-// Let's make a new connection in the same session - this time we handle requests on Echo
-let caller_b = session.connect::<Adder>().handler<Echo>(EchoHandler::new()).build().await?;
-let twelve = caller_a.add(6, 6).await;
-
-// Now let's accept connections - we need a loop for that
-let mut acceptor = Session::accept_over(Tcp::bind("127.0.0.1:3030")).await?;
-loop {
-    let incoming = acceptor.next().await?;
-    
-    let (session, caller_c) = incoming.accept::<Adder>().handler<Third>(ThirdHandler::new()).build().await?;
-    // Handle this connection...
-}
-
-// TODO: add examples for websocket, SHM, etc. - what if you already have an established TCP socket?
-// what if you have a custom transport? How does reconnection work here? How does reconnection work on the
-// server (acceptor) side?
-```
-
-Important: `incoming.accept()`, `session.connect`, `Session::new` all default to
-`ClientService = ()`, which impl client and handler for an empty service. 
-
-## Codegen for third-party languages
-
-Bindings for other languages (Swift, TypeScript) are generated using
-a Rust codegen package which is linked together with the "proto" crate to
-output Swift/TypeScript packages.
-
-For examples of Swift usage, see the [vixen](https://github.com/bearcove/vixen)
-build system. For examples of TypeScript, well, no active projects use it right
-now.

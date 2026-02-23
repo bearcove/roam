@@ -76,6 +76,7 @@ trait LinkSource: Send + 'static {
 // StableConduit
 // ---------------------------------------------------------------------------
 
+// r[impl conduit.stable]
 pub struct StableConduit<T: 'static, LS: LinkSource> {
     inner: Arc<tokio::sync::Mutex<Inner<LS>>>,
     frame_plan: Arc<TypePlanCore>,

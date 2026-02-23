@@ -8,6 +8,8 @@
 ///
 /// Wraps an `AsyncRead + AsyncWrite` pair. Each message is framed as
 /// `[len: u32 LE][payload bytes]`.
+// r[impl transport.stream]
+// r[impl transport.stream.kinds]
 pub struct StreamLink<R, W> {
     _reader: R,
     _writer: W,

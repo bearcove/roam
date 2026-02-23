@@ -6,6 +6,7 @@ use tokio::sync::mpsc;
 /// Each direction is an unbounded channel carrying `Vec<u8>` — raw bytes,
 /// no serialization, no IO. Useful for testing Conduits, Session, and
 /// anything above the transport layer without real networking.
+// r[impl transport.memory]
 pub struct MemoryLink {
     tx: mpsc::Sender<Vec<u8>>,
     rx: mpsc::Receiver<Vec<u8>>,

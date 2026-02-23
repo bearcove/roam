@@ -7,10 +7,14 @@ use crate::Backing;
 /// TCP, WebSocket, SHM all implement this. No knowledge of what's being
 /// sent — just bytes in, bytes out. The transport provides write buffers
 /// so callers can encode directly into the destination (zero-copy for SHM).
+// r[impl link]
+// r[impl link.message]
+// r[impl link.order]
 pub trait Link {
     type Tx: LinkTx;
     type Rx: LinkRx;
 
+    // r[impl link.split]
     fn split(self) -> (Self::Tx, Self::Rx);
 }
 
@@ -19,12 +23,15 @@ pub trait Link {
 /// Returned by [`LinkTx::reserve`]. The permit represents *message-level*
 /// capacity (not bytes). Once you have a permit, turning it into a concrete
 /// buffer for a specific payload size is synchronous.
+// r[impl link.tx.permit.drop]
 pub trait LinkTxPermit {
     type Slot: WriteSlot;
 
     /// Allocate a writable buffer of exactly `len` bytes.
     ///
     /// This is synchronous once the permit has been acquired.
+    // r[impl link.tx.alloc.limits]
+    // r[impl link.message.empty]
     fn alloc(self, len: usize) -> std::io::Result<Self::Slot>;
 }
 
@@ -49,9 +56,12 @@ pub trait LinkTx: Send + 'static {
     ///
     /// Dropping the returned permit without allocating/committing MUST
     /// release the reservation.
+    // r[impl link.tx.reserve]
+    // r[impl link.tx.cancel-safe]
     async fn reserve(&self) -> std::io::Result<Self::Permit>;
 
     /// Graceful close of the outbound direction.
+    // r[impl link.tx.close]
     async fn close(self) -> std::io::Result<()>
     where
         Self: Sized;
@@ -64,12 +74,15 @@ pub trait LinkTx: Send + 'static {
 /// [`commit`](WriteSlot::commit) to make them visible to the receiver.
 ///
 /// Dropping without commit = discard (no bytes sent, space reclaimed).
+// r[impl link.tx.discard]
 pub trait WriteSlot {
     /// The writable buffer, exactly the size requested in `alloc`.
+    // r[impl link.tx.slot.len]
     fn as_mut_slice(&mut self) -> &mut [u8];
 
     /// Commit the written bytes. After this, the receiver can see them.
     /// Sync — the bytes are already in the transport's buffer.
+    // r[impl link.tx.commit]
     fn commit(self);
 }
 
@@ -87,6 +100,9 @@ pub trait LinkRx: Send + 'static {
     /// Receive the next message's raw bytes.
     ///
     /// Returns `Ok(None)` when the peer has closed the connection.
+    // r[impl link.rx.recv]
+    // r[impl link.rx.error]
+    // r[impl link.rx.eof]
     async fn recv(&mut self) -> Result<Option<Backing>, Self::Error>;
 }
 

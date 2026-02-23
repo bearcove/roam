@@ -4,6 +4,8 @@
 //! using tungstenite. Each roam message maps 1:1 to a WebSocket binary frame.
 
 /// A [`Link`](roam_types::Link) over a WebSocket connection.
+// r[impl transport.websocket]
+// r[impl transport.websocket.platforms]
 pub struct WsLink<S> {
     _stream: S,
 }

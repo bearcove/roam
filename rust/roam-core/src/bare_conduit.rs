@@ -13,6 +13,8 @@ use roam_types::{
 ///
 /// If the link dies, the conduit is dead. For localhost, SHM, or any
 /// transport where reconnect isn't needed.
+// r[impl conduit.bare]
+// r[impl conduit.typeplan]
 pub struct BareConduit<T: 'static, L: Link> {
     link: L,
     plan: Arc<TypePlanCore>,
