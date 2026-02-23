@@ -221,7 +221,7 @@ documentation for more information.
 > Every operation that can be done during a session's lifecycle is done by
 > sending and receiving `Message` values.
 
-> r[session.message.connection_id]
+> r[session.message.connection-id]
 >
 > Every message is composed of a connection identifier and a payload. The
 > connection ID is meaningful for every message type except for the handshake
@@ -245,6 +245,7 @@ documentation for more information.
 >   * ChannelItem
 >   * CloseChannel
 >   * ResetChannel
+>   * GrantCredit
 
 > r[session.handshake]
 >
@@ -269,6 +270,26 @@ documentation for more information.
 > For example, if peer Alice initiates a session with `parity` set to `Odd`,
 > Alice may later open virtual connections with ID 1, 3, 5, 7, etc. whereas
 > Bob may open virtual connections with ID 2, 4, 6, 8, etc.
+
+> r[session.connection-settings]
+>
+> `ConnectionSettings` is a struct embedded in `Hello` (for the root
+> connection) and `OpenConnection` (for virtual connections). It carries
+> per-connection limits advertised by the peer:
+>
+>   * `max_concurrent_requests` — the maximum number of in-flight requests
+>     the peer is willing to accept on this connection (u32).
+
+> r[session.connection-settings.hello]
+>
+> `Hello` and `HelloYourself` each carry a `ConnectionSettings` that
+> applies to the root connection. Each peer advertises its own limits.
+
+> r[session.connection-settings.open]
+>
+> `OpenConnection` carries a `ConnectionSettings` from the opener.
+> `AcceptConnection` carries a `ConnectionSettings` from the accepter.
+> Together, they establish the limits for the virtual connection.
 
 > r[session.protocol-error]
 >

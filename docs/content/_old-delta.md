@@ -63,7 +63,14 @@ excluded, and what's still pending.
 - **Per-channel flow control in SHM** — old spec had per-channel credit counters in the
   channel table. Deferred: flow control is a session-level concern to be specced separately.
 
+## Ported (flow control)
+
+- Flow control → `rpc.flow-control.*` in `spec/rpc.md` (max_concurrent_requests via
+  ConnectionSettings, per-channel credit with initial credit in type signature `Tx<T, N>` / `Rx<T, N>`,
+  GrantCredit message)
+- ConnectionSettings → `session.connection-settings.*` in `spec/conn.md` (embedded in Hello and
+  OpenConnection/AcceptConnection)
+
 ## Still pending
 
-- **Flow control** — backpressure for channels (open design question)
 - **Topologies** — proxy patterns (old spec lines 395-405)

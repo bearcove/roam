@@ -76,6 +76,9 @@ pub struct StableConduit<T: 'static, LS: LinkSource> {
 
 struct Inner<LS: LinkSource> {
     source: LS,
+    /// Incremented every time the link is replaced. Used to detect whether
+    /// another task has already reconnected while we were waiting.
+    link_generation: u64,
     tx: Option<<LS::Link as Link>::Tx>,
     rx: <LS::Link as Link>::Rx,
     resume_key: Option<ResumeKey>,
@@ -101,16 +104,18 @@ impl<T: Facet<'static> + 'static, LS: LinkSource> StableConduit<T, LS> {
         let attachment = source.next_link().await.map_err(StableConduitError::Io)?;
         let (link_tx, mut link_rx) = attachment.link.split();
 
-        let (resume_key, last_received) =
-            handshake::<LS::Link>(&link_tx, &mut link_rx, attachment.client_hello).await?;
+        let (resume_key, _peer_last_received) =
+            handshake::<LS::Link>(&link_tx, &mut link_rx, attachment.client_hello, None, None)
+                .await?;
 
         let inner = Inner {
             source,
+            link_generation: 0,
             tx: Some(link_tx),
             rx: link_rx,
             resume_key: Some(resume_key),
             next_send_seq: PacketSeq(0),
-            last_received,
+            last_received: None,
             replay: ReplayBuffer::new(),
         };
 
@@ -122,26 +127,97 @@ impl<T: Facet<'static> + 'static, LS: LinkSource> StableConduit<T, LS> {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Reconnect
+// ---------------------------------------------------------------------------
+
+impl<LS: LinkSource> Inner<LS> {
+    /// Obtain a new link from the source, re-handshake, and replay any
+    /// buffered items the peer missed.
+    // r[impl stable.reconnect]
+    // r[impl stable.reconnect.client-replay]
+    // r[impl stable.reconnect.server-replay]
+    // r[impl stable.replay-buffer.order]
+    async fn reconnect(&mut self) -> Result<(), StableConduitError> {
+        let attachment = self
+            .source
+            .next_link()
+            .await
+            .map_err(StableConduitError::Io)?;
+
+        let (new_tx, mut new_rx) = attachment.link.split();
+
+        let (resume_key, peer_last_received) = handshake::<LS::Link>(
+            &new_tx,
+            &mut new_rx,
+            attachment.client_hello,
+            self.resume_key.clone(),
+            self.last_received,
+        )
+        .await?;
+
+        // Replay items the peer hasn't received yet, in original order.
+        for (seq, item_bytes) in self.replay.iter() {
+            if peer_last_received.is_some_and(|last| *seq <= last) {
+                continue;
+            }
+            let ack = self
+                .last_received
+                .map(|max_delivered| PacketAck { max_delivered });
+            let header_bytes = facet_postcard::to_vec(&FrameHeader { seq: *seq, ack })
+                .map_err(StableConduitError::Encode)?;
+
+            let frame_len = header_bytes.len() + item_bytes.len();
+            let permit = new_tx.reserve().await.map_err(StableConduitError::Io)?;
+            let mut slot = permit.alloc(frame_len).map_err(StableConduitError::Io)?;
+            let buf = slot.as_mut_slice();
+            buf[..header_bytes.len()].copy_from_slice(&header_bytes);
+            buf[header_bytes.len()..].copy_from_slice(item_bytes);
+            slot.commit();
+        }
+
+        self.link_generation += 1;
+        self.tx = Some(new_tx);
+        self.rx = new_rx;
+        self.resume_key = Some(resume_key);
+
+        Ok(())
+    }
+}
+
+/// Perform the handshake on a fresh link.
+///
+/// Returns `(our_resume_key, peer_last_received)`:
+///   - `our_resume_key`: the key to use for the next reconnect attempt
+///   - `peer_last_received`: the highest seq the peer has already seen,
+///     used to decide which replay-buffer entries to re-send
+// r[impl stable.handshake]
+// r[impl stable.handshake.client-hello]
+// r[impl stable.handshake.server-hello]
 async fn handshake<L: Link>(
     tx: &L::Tx,
     rx: &mut L::Rx,
     client_hello: Option<ClientHello>,
+    resume_key: Option<ResumeKey>,
+    last_received: Option<PacketSeq>,
 ) -> Result<(ResumeKey, Option<PacketSeq>), StableConduitError> {
     match client_hello {
         None => {
+            // r[impl stable.reconnect]
             let hello = ClientHello {
-                resume_key: None,
-                last_received: None,
+                resume_key,
+                last_received,
             };
             send_msg(tx, &hello).await?;
             let server_hello: ServerHello = recv_msg(rx).await?;
             Ok((server_hello.resume_key, server_hello.last_received))
         }
         Some(client_hello) => {
+            // r[impl stable.resume-key]
             let key = ResumeKey(fresh_key());
             let hello = ServerHello {
                 resume_key: key.clone(),
-                last_received: None,
+                last_received,
             };
             send_msg(tx, &hello).await?;
             Ok((key, client_hello.last_received))
@@ -232,25 +308,40 @@ where
         Self: 'a;
 
     async fn reserve(&self) -> std::io::Result<Self::Permit<'_>> {
-        let tx = {
-            let inner = self.inner.lock().await;
-            inner
-                .tx
-                .as_ref()
-                .ok_or_else(|| {
-                    std::io::Error::new(std::io::ErrorKind::BrokenPipe, "stable conduit closed")
-                })?
-                .clone()
-        };
+        loop {
+            let (tx, generation) = {
+                let inner = self.inner.lock().await;
+                let tx = inner
+                    .tx
+                    .as_ref()
+                    .ok_or_else(|| {
+                        std::io::Error::new(std::io::ErrorKind::BrokenPipe, "stable conduit closed")
+                    })?
+                    .clone();
+                (tx, inner.link_generation)
+            };
 
-        let link_permit = tx.reserve().await?;
-
-        let guard = self.inner.lock().await;
-        Ok(StableConduitPermit {
-            guard,
-            link_permit,
-            _phantom: PhantomData,
-        })
+            match tx.reserve().await {
+                Ok(link_permit) => {
+                    let guard = self.inner.lock().await;
+                    return Ok(StableConduitPermit {
+                        guard,
+                        link_permit,
+                        _phantom: PhantomData,
+                    });
+                }
+                Err(_) => {
+                    let mut inner = self.inner.lock().await;
+                    if inner.link_generation != generation {
+                        // Another task already reconnected. Retry.
+                        continue;
+                    }
+                    inner.reconnect().await.map_err(|e| {
+                        std::io::Error::new(std::io::ErrorKind::Other, e.to_string())
+                    })?;
+                }
+            }
+        }
     }
 
     async fn close(self) -> std::io::Result<()> {
@@ -328,41 +419,51 @@ where
     type Error = StableConduitError;
 
     async fn recv(&mut self) -> Result<Option<SelfRef<T>>, Self::Error> {
-        let backing = {
-            let mut inner = self.inner.lock().await;
-            inner
-                .rx
-                .recv()
-                .await
-                .map_err(|_| StableConduitError::LinkDead)?
-        };
-
-        let backing = match backing {
-            Some(b) => b,
-            None => return Ok(None),
-        };
-
-        let frame_plan = Arc::clone(&self.frame_plan);
-        let frame_self_ref: SelfRef<Frame<T>> =
-            SelfRef::try_new(backing, |bytes| deserialize_frame(&frame_plan, bytes))?;
-
-        {
-            let mut inner = self.inner.lock().await;
-
-            if let Some(ack) = frame_self_ref.ack {
-                inner.replay.trim(ack);
-            }
-
-            match inner.last_received {
-                None => inner.last_received = Some(frame_self_ref.seq),
-                Some(prev) if frame_self_ref.seq > prev => {
-                    inner.last_received = Some(frame_self_ref.seq)
+        loop {
+            // Phase 1: read raw bytes, reconnecting on link failure.
+            let backing = {
+                let mut inner = self.inner.lock().await;
+                // Any link termination — graceful EOF or error — triggers
+                // reconnect. The session ends only when the LinkSource itself
+                // fails (no more links available), which surfaces as Err.
+                match inner.rx.recv().await {
+                    Ok(Some(b)) => b,
+                    Ok(None) | Err(_) => {
+                        // r[impl stable.reconnect]
+                        inner.reconnect().await?;
+                        continue;
+                    }
                 }
-                _ => {}
-            }
-        }
+            };
 
-        Ok(Some(frame_self_ref.map(|f| f.item)))
+            // Phase 2: deserialize the frame.
+            let frame_plan = Arc::clone(&self.frame_plan);
+            let frame: SelfRef<Frame<T>> =
+                SelfRef::try_new(backing, |bytes| deserialize_frame(&frame_plan, bytes))?;
+
+            // Phase 3: update shared state; skip duplicates.
+            // r[impl stable.seq.monotonic]
+            // r[impl stable.ack.trim]
+            let is_dup = {
+                let mut inner = self.inner.lock().await;
+
+                if let Some(ack) = frame.ack {
+                    inner.replay.trim(ack);
+                }
+
+                let dup = inner.last_received.is_some_and(|prev| frame.seq <= prev);
+                if !dup {
+                    inner.last_received = Some(frame.seq);
+                }
+                dup
+            };
+
+            if is_dup {
+                continue;
+            }
+
+            return Ok(Some(frame.map(|f| f.item)));
+        }
     }
 }
 
@@ -422,3 +523,378 @@ impl std::fmt::Display for StableConduitError {
 }
 
 impl std::error::Error for StableConduitError {}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use std::collections::VecDeque;
+    use std::sync::OnceLock;
+
+    use roam_types::{Conduit, ConduitRx, ConduitTx, ConduitTxPermit, LinkRx, LinkTx, RpcPlan};
+
+    use crate::{MemoryLink, memory_link_pair};
+
+    use super::*;
+
+    fn string_plan() -> &'static RpcPlan {
+        static PLAN: OnceLock<RpcPlan> = OnceLock::new();
+        PLAN.get_or_init(|| RpcPlan::for_type::<String, (), ()>())
+    }
+
+    // A LinkSource backed by a queue of pre-created MemoryLinks.
+    struct QueuedLinkSource {
+        links: VecDeque<(MemoryLink, Option<ClientHello>)>,
+    }
+
+    impl LinkSource for QueuedLinkSource {
+        type Link = MemoryLink;
+
+        async fn next_link(&mut self) -> std::io::Result<Attachment<MemoryLink>> {
+            let (link, client_hello) = self.links.pop_front().ok_or_else(|| {
+                std::io::Error::new(std::io::ErrorKind::ConnectionRefused, "no more links")
+            })?;
+            Ok(Attachment { link, client_hello })
+        }
+    }
+
+    // Encode and send a frame (header + item) directly onto a LinkTx.
+    async fn send_frame<LTx: LinkTx>(tx: &LTx, seq: u32, ack: Option<u32>, item: &str) {
+        let header = FrameHeader {
+            seq: PacketSeq(seq),
+            ack: ack.map(|n| PacketAck {
+                max_delivered: PacketSeq(n),
+            }),
+        };
+        let header_bytes = facet_postcard::to_vec(&header).unwrap();
+        let item_bytes = facet_postcard::to_vec(&item.to_string()).unwrap();
+        let mut frame_bytes = header_bytes;
+        frame_bytes.extend_from_slice(&item_bytes);
+
+        let permit = tx.reserve().await.unwrap();
+        let mut slot = permit.alloc(frame_bytes.len()).unwrap();
+        slot.as_mut_slice().copy_from_slice(&frame_bytes);
+        slot.commit();
+    }
+
+    // Decode a raw frame payload into (seq, ack_max, item).
+    fn decode_frame(bytes: &[u8]) -> (u32, Option<u32>, String) {
+        let plan = std::sync::Arc::new(
+            facet_reflect::TypePlan::<Frame<String>>::build()
+                .unwrap()
+                .core(),
+        );
+        let frame: Frame<String> = deserialize_frame(&plan, bytes).unwrap();
+        (
+            frame.seq.0,
+            frame.ack.map(|a| a.max_delivered.0),
+            frame.item,
+        )
+    }
+
+    // Receive one raw payload from a LinkRx.
+    async fn recv_raw<LRx: LinkRx>(rx: &mut LRx) -> Vec<u8> {
+        let backing = rx.recv().await.unwrap().unwrap();
+        match backing {
+            roam_types::Backing::Boxed(b) => b.to_vec(),
+        }
+    }
+
+    // ---------------------------------------------------------------------------
+    // Basic StableConduit tests
+    // ---------------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn stable_send_recv_single() {
+        let (c, s) = memory_link_pair(16);
+
+        let source = QueuedLinkSource {
+            links: VecDeque::from([(c, None)]),
+        };
+
+        // Server-side: complete handshake then send a frame.
+        let server = tokio::spawn(async move {
+            let (s_tx, mut s_rx) = s.split();
+            let _hello: ClientHello = recv_msg(&mut s_rx).await.unwrap();
+            send_msg(
+                &s_tx,
+                &ServerHello {
+                    resume_key: ResumeKey(b"key".to_vec()),
+                    last_received: None,
+                },
+            )
+            .await
+            .unwrap();
+
+            // Receive one frame from client.
+            let raw = recv_raw(&mut s_rx).await;
+            let (seq, _, item) = decode_frame(&raw);
+            (seq, item)
+        });
+
+        let client = StableConduit::<String, _>::new(source, string_plan())
+            .await
+            .unwrap();
+        let (client_tx, _client_rx) = client.split();
+
+        let permit = client_tx.reserve().await.unwrap();
+        permit.send(&"hello".to_string()).unwrap();
+
+        let (seq, item) = server.await.unwrap();
+        assert_eq!(seq, 0);
+        assert_eq!(item, "hello");
+    }
+
+    // ---------------------------------------------------------------------------
+    // Reconnect tests
+    // ---------------------------------------------------------------------------
+
+    /// Client sends A and B. Server acks A. Link dies.
+    /// On reconnect, server reports last_received = Some(0) (saw A).
+    /// Client replays B (seq 1). Server receives it on the new link.
+    #[tokio::test]
+    async fn reconnect_replays_unacked_frames() {
+        let (c1, s1) = memory_link_pair(32);
+        let (c2, s2) = memory_link_pair(32);
+
+        // Link 1: server receives A and B, acks A, then drops.
+        let server1 = tokio::spawn(async move {
+            let (s1_tx, mut s1_rx) = s1.split();
+
+            let _hello: ClientHello = recv_msg(&mut s1_rx).await.unwrap();
+            send_msg(
+                &s1_tx,
+                &ServerHello {
+                    resume_key: ResumeKey(b"resume-key-for-test".to_vec()),
+                    last_received: None,
+                },
+            )
+            .await
+            .unwrap();
+
+            // Receive A (seq 0)
+            let raw = recv_raw(&mut s1_rx).await;
+            let (seq_a, _, item_a) = decode_frame(&raw);
+            assert_eq!(seq_a, 0);
+            assert_eq!(item_a, "alpha");
+
+            // Receive B (seq 1)
+            let raw = recv_raw(&mut s1_rx).await;
+            let (seq_b, _, item_b) = decode_frame(&raw);
+            assert_eq!(seq_b, 1);
+            assert_eq!(item_b, "beta");
+
+            // Send ack for seq 0 (server has received A but NOT B as far as client knows)
+            // The client will trim replay buffer entry for seq 0 after receiving this.
+            send_frame(&s1_tx, 0, Some(0), "ack-for-alpha").await;
+
+            // Drop — link dies, triggering reconnect on client.
+        });
+
+        // Link 2: server handles reconnect, replays, receives replayed B.
+        let server2 = tokio::spawn(async move {
+            let (s2_tx, mut s2_rx) = s2.split();
+
+            let hello: ClientHello = recv_msg(&mut s2_rx).await.unwrap();
+            // Client should present a resume key.
+            assert!(hello.resume_key.is_some());
+            // Client received one frame from server (seq 0), so last_received = Some(0).
+            assert_eq!(hello.last_received, Some(PacketSeq(0)));
+
+            // Server says it received up to seq 0 from the client (it saw A but not B).
+            send_msg(
+                &s2_tx,
+                &ServerHello {
+                    resume_key: ResumeKey(b"resume-key-2".to_vec()),
+                    last_received: Some(PacketSeq(0)),
+                },
+            )
+            .await
+            .unwrap();
+
+            // Client should replay B (seq 1) automatically.
+            let raw = recv_raw(&mut s2_rx).await;
+            let (seq, _, item) = decode_frame(&raw);
+            assert_eq!(seq, 1);
+            assert_eq!(item, "beta");
+
+            // New message after reconnect (seq 2).
+            let raw = recv_raw(&mut s2_rx).await;
+            let (seq, _, item) = decode_frame(&raw);
+            assert_eq!(seq, 2);
+            assert_eq!(item, "gamma");
+        });
+
+        // Client side.
+        let source = QueuedLinkSource {
+            links: VecDeque::from([(c1, None), (c2, None)]),
+        };
+        let client = StableConduit::<String, _>::new(source, string_plan())
+            .await
+            .unwrap();
+        let (client_tx, mut client_rx) = client.split();
+
+        // Send A and B.
+        client_tx
+            .reserve()
+            .await
+            .unwrap()
+            .send(&"alpha".to_string())
+            .unwrap();
+        client_tx
+            .reserve()
+            .await
+            .unwrap()
+            .send(&"beta".to_string())
+            .unwrap();
+
+        // Receive the ack frame from server1. This trims seq 0 from replay buffer,
+        // leaving only seq 1 (beta) buffered.
+        let msg = client_rx.recv().await.unwrap().unwrap();
+        assert_eq!(&*msg, "ack-for-alpha");
+
+        // server1 drops — recv triggers reconnect transparently.
+        // After reconnect, client replays beta, then we send gamma.
+        client_tx
+            .reserve()
+            .await
+            .unwrap()
+            .send(&"gamma".to_string())
+            .unwrap();
+
+        server1.await.unwrap();
+        server2.await.unwrap();
+    }
+
+    /// On reconnect, server says it has seen everything. Client sends nothing extra.
+    #[tokio::test]
+    async fn reconnect_no_replay_when_all_acked() {
+        let (c1, s1) = memory_link_pair(32);
+        let (c2, s2) = memory_link_pair(32);
+
+        let server1 = tokio::spawn(async move {
+            let (s1_tx, mut s1_rx) = s1.split();
+            let _: ClientHello = recv_msg(&mut s1_rx).await.unwrap();
+            send_msg(
+                &s1_tx,
+                &ServerHello {
+                    resume_key: ResumeKey(b"key1".to_vec()),
+                    last_received: None,
+                },
+            )
+            .await
+            .unwrap();
+
+            // Receive A and B.
+            recv_raw(&mut s1_rx).await;
+            recv_raw(&mut s1_rx).await;
+
+            // Ack both.
+            send_frame(&s1_tx, 0, Some(1), "ack-both").await;
+            // Drop.
+        });
+
+        let server2 = tokio::spawn(async move {
+            let (s2_tx, mut s2_rx) = s2.split();
+            let hello: ClientHello = recv_msg(&mut s2_rx).await.unwrap();
+            assert!(hello.resume_key.is_some());
+
+            // Server has seen everything (up to seq 1).
+            send_msg(
+                &s2_tx,
+                &ServerHello {
+                    resume_key: ResumeKey(b"key2".to_vec()),
+                    last_received: Some(PacketSeq(1)),
+                },
+            )
+            .await
+            .unwrap();
+
+            // Only the new message (seq 2) should arrive — no replay.
+            let raw = recv_raw(&mut s2_rx).await;
+            let (seq, _, item) = decode_frame(&raw);
+            assert_eq!(seq, 2);
+            assert_eq!(item, "gamma");
+        });
+
+        let source = QueuedLinkSource {
+            links: VecDeque::from([(c1, None), (c2, None)]),
+        };
+        let client = StableConduit::<String, _>::new(source, string_plan())
+            .await
+            .unwrap();
+        let (client_tx, mut client_rx) = client.split();
+
+        client_tx
+            .reserve()
+            .await
+            .unwrap()
+            .send(&"alpha".to_string())
+            .unwrap();
+        client_tx
+            .reserve()
+            .await
+            .unwrap()
+            .send(&"beta".to_string())
+            .unwrap();
+
+        let msg = client_rx.recv().await.unwrap().unwrap();
+        assert_eq!(&*msg, "ack-both");
+
+        // Reconnect happens transparently here.
+        client_tx
+            .reserve()
+            .await
+            .unwrap()
+            .send(&"gamma".to_string())
+            .unwrap();
+
+        server1.await.unwrap();
+        server2.await.unwrap();
+    }
+
+    /// After reconnect, duplicate frames (seq <= last_received) are silently dropped.
+    #[tokio::test]
+    async fn duplicate_frames_are_skipped() {
+        let (c, s) = memory_link_pair(32);
+
+        let source = QueuedLinkSource {
+            links: VecDeque::from([(c, None)]),
+        };
+
+        let server = tokio::spawn(async move {
+            let (s_tx, mut s_rx) = s.split();
+            let _: ClientHello = recv_msg(&mut s_rx).await.unwrap();
+            send_msg(
+                &s_tx,
+                &ServerHello {
+                    resume_key: ResumeKey(b"k".to_vec()),
+                    last_received: None,
+                },
+            )
+            .await
+            .unwrap();
+
+            // Send seq 0, then a duplicate seq 0, then seq 1.
+            send_frame(&s_tx, 0, None, "first").await;
+            send_frame(&s_tx, 0, None, "duplicate-first").await;
+            send_frame(&s_tx, 1, None, "second").await;
+        });
+
+        let client = StableConduit::<String, _>::new(source, string_plan())
+            .await
+            .unwrap();
+        let (_client_tx, mut client_rx) = client.split();
+
+        let a = client_rx.recv().await.unwrap().unwrap();
+        assert_eq!(&*a, "first");
+
+        // The duplicate seq 0 is silently dropped, so next is "second".
+        let b = client_rx.recv().await.unwrap().unwrap();
+        assert_eq!(&*b, "second");
+
+        server.await.unwrap();
+    }
+}

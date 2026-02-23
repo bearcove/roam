@@ -10,7 +10,7 @@ use facet::{Facet, PtrConst, Shape};
 /// Protocol message.
 // r[impl session]
 // r[impl session.message]
-// r[impl session.message.connection_id]
+// r[impl session.message.connection-id]
 // r[impl session.peer]
 // r[impl session.symmetry]
 #[derive(Debug, Clone, PartialEq, Eq, Facet)]

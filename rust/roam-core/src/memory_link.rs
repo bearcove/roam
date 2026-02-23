@@ -39,6 +39,7 @@ impl Link for MemoryLink {
 // ---------------------------------------------------------------------------
 
 /// Sending half of a [`MemoryLink`].
+#[derive(Clone)]
 pub struct MemoryLinkTx {
     tx: mpsc::Sender<Vec<u8>>,
 }

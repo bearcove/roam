@@ -180,26 +180,30 @@ let result = caller.add(3, 5).await?;
 > r[rpc.channel]
 >
 > A channel is a unidirectional, ordered sequence of typed values between
-> two peers. At the type level, `Tx<T>` and `Rx<T>` indicate direction.
-> Each channel has exactly one sender and one receiver.
+> two peers. At the type level, `Tx<T, N>` and `Rx<T, N>` indicate direction
+> and initial credit. `T` is the element type; `N` is a `usize` const generic
+> specifying how many items the sender may send before receiving explicit
+> credit (see `r[rpc.flow-control.credit.initial]`). Each channel has exactly
+> one sender and one receiver.
 
 > r[rpc.channel.direction]
 >
 > Service definitions are written from the handler's perspective:
 >
->   * `Tx<T>` — data flows from handler to caller (the handler sends)
->   * `Rx<T>` — data flows from caller to handler (the caller sends)
+>   * `Tx<T, N>` — data flows from handler to caller (the handler sends)
+>   * `Rx<T, N>` — data flows from caller to handler (the caller sends)
 
 > r[rpc.channel.placement]
 >
-> `Tx<T>` and `Rx<T>` may appear in both argument types and return types
-> of service methods. They MUST NOT appear in the error variant of a
+> `Tx<T, N>` and `Rx<T, N>` may appear in both argument types and return
+> types of service methods. They MUST NOT appear in the error variant of a
 > `Result` return type.
 
 > r[rpc.channel.no-collections]
 >
-> `Tx<T>` and `Rx<T>` MUST NOT appear inside collections (lists, arrays,
-> maps, sets). They may be nested arbitrarily deep inside structs and enums.
+> `Tx<T, N>` and `Rx<T, N>` MUST NOT appear inside collections (lists,
+> arrays, maps, sets). They may be nested arbitrarily deep inside structs
+> and enums.
 
 > r[rpc.channel.allocation]
 >
@@ -229,6 +233,72 @@ let result = caller.add(3, 5).await?;
 > The receiver of a channel sends `ResetChannel` to ask the sender to
 > stop sending. After receiving `ResetChannel`, the sender MUST stop
 > sending `ChannelItem` messages on that channel.
+
+# Flow control
+
+> r[rpc.flow-control]
+>
+> Roam provides backpressure at two levels: request pipelining limits and
+> per-channel credit-based flow control.
+
+## Request limits
+
+> r[rpc.flow-control.max-concurrent-requests]
+>
+> Each connection has a per-direction limit on the number of concurrent
+> in-flight requests. Each peer advertises the maximum number of requests
+> it is willing to accept on a connection. A peer MUST NOT send a new
+> request if it would exceed the counterpart's advertised limit.
+
+> r[rpc.flow-control.max-concurrent-requests.default]
+>
+> The default limit is carried in `ConnectionSettings`, which is embedded
+> in `Hello` (for the root connection) and `OpenConnection` (for virtual
+> connections). See `r[session.connection-settings]`.
+
+## Channel credit
+
+> r[rpc.flow-control.credit]
+>
+> Channels use item-based credit for flow control. The receiver of a
+> channel controls how many items the sender may send by granting credit.
+> The sender MUST NOT send a `ChannelItem` if it has zero credit. Each
+> sent `ChannelItem` consumes one unit of credit.
+
+> r[rpc.flow-control.credit.initial]
+>
+> Initial credit is part of the channel's type signature. `Tx<T, N>` and
+> `Rx<T, N>` carry a const generic `N: usize` that specifies the initial
+> credit for the channel. When a channel is created (as part of a request
+> or response), the sender starts with `N` units of credit. This value
+> is known at compile time and is part of the signature hash, so both
+> peers always agree on it.
+
+> r[rpc.flow-control.credit.initial.zero]
+>
+> `N = 0` is valid. The sender MUST wait for an explicit `GrantCredit`
+> before sending any items. This is useful for channels where the receiver
+> needs full control over when data starts flowing.
+
+> r[rpc.flow-control.credit.grant]
+>
+> The receiver of a channel sends a `GrantCredit` message to add credit.
+> `GrantCredit` carries a connection ID, a channel ID, and an `additional`
+> count (u32). The sender's available credit increases by `additional`.
+> The receiver MAY send `GrantCredit` at any time after the channel exists.
+
+> r[rpc.flow-control.credit.grant.additive]
+>
+> Credit is strictly additive. There is no mechanism to revoke granted
+> credit. The receiver controls flow by choosing when and how much credit
+> to grant.
+
+> r[rpc.flow-control.credit.exhaustion]
+>
+> When the sender's credit reaches zero, it MUST stop sending `ChannelItem`
+> messages on that channel until more credit is granted. The sender SHOULD
+> apply backpressure to the producing code (e.g. by blocking a `send()`
+> call) rather than buffering unboundedly.
 
 # Cancellation
 
@@ -343,7 +413,7 @@ metadata.push((
 
 > r[rpc.channel.payload-encoding]
 >
-> `Tx<T>` and `Rx<T>` values in the serialized payload MUST be encoded as
+> `Tx<T, N>` and `Rx<T, N>` values in the serialized payload MUST be encoded as
 > unit placeholders. The actual channel IDs are carried out-of-band in the
 > `channels` field of the `Request` or `Response` message.
 
