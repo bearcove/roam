@@ -771,7 +771,7 @@ mod tests {
             .reserve()
             .await
             .unwrap()
-            .send(&"gamma".to_string())
+            .send("gamma".to_string())
             .unwrap();
 
         server1.await.unwrap();
@@ -860,7 +860,7 @@ mod tests {
             .reserve()
             .await
             .unwrap()
-            .send(&"gamma".to_string())
+            .send("gamma".to_string())
             .unwrap();
 
         server1.await.unwrap();
