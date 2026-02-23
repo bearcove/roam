@@ -293,9 +293,37 @@ documentation for more information.
 > any number of connections, on which calls (requests) can be made, and data can be
 > exchanged over channels.
 
-> r[session.direction]
+> r[session.role]
 >
-> A session is established over an existing conduit. 
+> Even though a session is established over an existing conduit, and therefore doesn't
+> have to worry about "connecting" or "accepting connections", each peer plays a "role":
+> initiator, or acceptor.
+
+> r[session.bidirectional]
+>
+> The role a peer plays in a session does not dictate whether they make or
+> handle requests, or whether they send or receive items over channels.
+> All sessions are fully bidirectional. 
+
+> r[session.handshake]
+>
+> To establish a session on top of an existing conduit, a handshake must be
+> performed. The initiator sends a "Hello" message, with the version field
+> set to `7`, and the parity field set to the identifier partition desired by
+> the initiator. 
+
+> r[session.parity]
+> 
+> Parity plays a role on two different levels:
+>   * sessions (for connection IDs)
+>   * connections (for request IDs and channel IDs)
+>
+> The idea is to partition the identifier space so that either peer can allocate
+> new identifiers without coordinating.
+> 
+> A peer that has claimed auto
+> parity at the session level can request virtual connections with identifiers
+> 1, 3, 5, 7, etc. 
 
 > r[session.connection.root]
 > 
