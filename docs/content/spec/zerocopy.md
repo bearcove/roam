@@ -98,17 +98,30 @@ frame. One copy (value → message buffer).
 
 r[zerocopy.send.shm]
 
-**SHM links:** serialize directly into the BipBuffer or VarSlot. The
-`LinkTx::alloc` call returns a `WriteSlot` pointing into shared memory,
-and serialization writes directly into it. Zero copies for the payload
-bytes — the receiver reads from the same physical memory.
+**SHM links:** the send path depends on payload size:
+
+- **Small (below inline threshold):** serialize directly into the
+  BipBuffer ring. `LinkTx::alloc` returns a `WriteSlot` pointing into
+  the ring.
+- **Medium (above inline threshold, below mmap threshold):** serialize
+  into a VarSlot. `LinkTx::alloc` allocates a slot and returns a
+  `WriteSlot` pointing into it. A slot-ref frame is written to the
+  BipBuffer to notify the receiver.
+- **Large (above mmap threshold):** serialize into a memory-mapped
+  region. A reference to the mapping is sent through the BipBuffer.
+
+In all cases, serialization writes directly into shared memory. Zero
+copies for the payload bytes — the receiver reads from the same physical
+memory.
 
 ## Receive path
 
 r[zerocopy.recv]
 
 On the receive side, `LinkRx::recv` returns a `Backing` that keeps raw
-bytes alive (owned or pinned depending on link type). The conduit
+bytes alive. For heap-backed links the Backing owns the buffer; for SHM
+links it holds a handle (BipBuf region, VarSlot, or mmap) that keeps the
+underlying shared memory valid until dropped. The conduit
 deserializes borrowing from this backing, producing a `SelfRef<T>` that
 pairs the decoded value with its backing.
 
