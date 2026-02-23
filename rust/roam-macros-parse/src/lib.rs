@@ -1,384 +1,432 @@
-//! Parser for `#[roam::service]` trait definitions.
+//! Parser grammar for roam RPC service trait definitions.
 //!
-//! Provides unsynn-based grammar types and a [`parse_service`] entry point.
-//! The consumer (`roam-macros`) uses the returned [`ServiceTrait`] to drive
-//! code generation.
+//! # This Is Just a Grammar
+//!
+//! This crate contains **only** the [unsynn] grammar for parsing Rust trait definitions
+//! that define roam RPC services. It does not:
+//!
+//! - Generate any code
+//! - Perform validation
+//! - Know anything about roam's wire protocol
+//! - Have opinions about how services should be implemented
+//!
+//! It simply parses syntax like:
+//!
+//! ```ignore
+//! pub trait Calculator {
+//!     /// Add two numbers.
+//!     async fn add(&self, a: i32, b: i32) -> i32;
+//! }
+//! ```
+//!
+//! ...and produces an AST ([`ServiceTrait`]) that downstream crates can inspect.
+//!
+//! # Why a Separate Crate?
+//!
+//! The grammar is extracted into its own crate so that:
+//!
+//! 1. **It can be tested independently** — We use [datatest-stable] + [insta] for
+//!    snapshot testing the parsed AST, which isn't possible in a proc-macro crate.
+//!
+//! 2. **It's reusable** — Other tools (linters, documentation generators, IDE plugins)
+//!    can parse service definitions without pulling in proc-macro dependencies.
+//!
+//! 3. **Separation of concerns** — The grammar is pure parsing; [`roam-macros`] handles
+//!    the proc-macro machinery; [`roam-codegen`] handles actual code generation.
+//!
+//! # The Bigger Picture
+//!
+//! ```text
+//! roam-macros-parse     roam-macros              roam-codegen
+//! ┌──────────────┐     ┌──────────────┐         ┌──────────────┐
+//! │              │     │              │         │              │
+//! │  unsynn      │────▶│  #[service]  │────────▶│  build.rs    │
+//! │  grammar     │     │  proc macro  │         │  code gen    │
+//! │              │     │              │         │              │
+//! └──────────────┘     └──────────────┘         └──────────────┘
+//!    just parsing         emit metadata          Rust, TS, Go...
+//! ```
+//!
+//! [unsynn]: https://docs.rs/unsynn
+//! [datatest-stable]: https://docs.rs/datatest-stable
+//! [insta]: https://docs.rs/insta
+//! [`roam-macros`]: https://docs.rs/roam-service-macros
+//! [`roam-codegen`]: https://docs.rs/roam-codegen
 
-use proc_macro2::{Ident, TokenStream};
-use quote::ToTokens;
-use unsynn::*;
+pub use unsynn::Error as ParseError;
+pub use unsynn::ToTokens;
 
-// ============================================================================
-// OPERATORS AND KEYWORDS
-// ============================================================================
-
-operator! {
-    /// `;`
-    pub Semi = ";";
-    /// `&`
-    pub Amp = "&";
-    /// `::`
-    pub PathSep = "::";
-    /// `=`
-    pub Eq = "=";
-}
+use proc_macro2::TokenStream as TokenStream2;
+use unsynn::operator::names::{Assign, Colon, Comma, Gt, Lt, PathSep, Pound, RArrow, Semicolon};
+use unsynn::{
+    Any, BraceGroupContaining, BracketGroupContaining, CommaDelimitedVec, Cons, Either,
+    EndOfStream, Except, Ident, LiteralString, Many, Optional, ParenthesisGroupContaining, Parse,
+    ToTokenIter, TokenStream, keyword, operator, unsynn,
+};
 
 keyword! {
-    /// `pub`
-    pub KPub = "pub";
-    /// `async`
     pub KAsync = "async";
-    /// `fn`
     pub KFn = "fn";
-    /// `trait`
     pub KTrait = "trait";
-    /// `self`
-    pub KSelf = "self";
-    /// `mut`
+    pub KSelfKw = "self";
     pub KMut = "mut";
-    /// `doc` (as used inside `#[doc = "..."]` attributes)
     pub KDoc = "doc";
-    /// `Result` — used to detect fallible return types
-    pub KResult = "Result";
-    /// `in` — used in `pub(in path)`
-    pub KIn = "in";
+    pub KPub = "pub";
+    pub KWhere = "where";
 }
 
-// ============================================================================
-// ANGLE-AWARE TOKEN TREE
-// ============================================================================
+operator! {
+    pub Apostrophe = "'";
+}
+
+/// Parses tokens and groups until `C` is found, handling `<...>` correctly.
+type VerbatimUntil<C> = Many<Cons<Except<C>, AngleTokenTree>>;
 
 unsynn! {
-    /// A single token or a balanced `<...>` group.
-    ///
-    /// Angle brackets are not proc-macro `Group`s, so we handle them manually.
+    /// Parses either a `TokenTree` or `<...>` grouping.
     #[derive(Clone)]
     pub struct AngleTokenTree(
-        pub Either<Cons<Lt, Vec<Cons<Except<Gt>, AngleTokenTree>>, Gt>, TokenTree>,
+        pub Either<Cons<Lt, Vec<Cons<Except<Gt>, AngleTokenTree>>, Gt>, unsynn::TokenTree>,
     );
-}
 
-/// Zero or more tokens, stopping before an instance of `C` at the current level.
-/// Angle brackets are consumed as a unit so nested `<T, E>` are not terminated
-/// early by commas or `>` inside them.
-pub type VerbatimUntil<C> = Many<Cons<Except<C>, AngleTokenTree>>;
-
-// ============================================================================
-// GRAMMAR
-// ============================================================================
-
-unsynn! {
-    /// A `#[roam::service]`-annotated trait definition.
-    pub struct ServiceTrait {
-        /// Attributes on the trait (including any that weren't `#[roam::service]`).
-        pub attributes: Vec<Attribute>,
-        /// Optional visibility modifier.
-        pub vis: Option<Vis>,
-        pub _trait_kw: KTrait,
-        /// The service name (e.g. `Adder`).
-        pub name: Ident,
-        /// Body containing zero or more method declarations.
-        pub body: BraceGroupContaining<Vec<ServiceMethod>>,
-    }
-
-    /// Visibility modifier: `pub`, `pub(crate)`, `pub(in path)`, etc.
-    pub enum Vis {
-        /// `pub(...)` — parenthesised restriction
-        PubGroup(Cons<KPub, ParenthesisGroup>),
-        /// bare `pub`
-        Pub(KPub),
-    }
-
-    /// An outer attribute `#[...]`.
-    pub struct Attribute {
+    pub struct RawAttribute {
         pub _pound: Pound,
-        pub body: BracketGroupContaining<AttributeInner>,
+        pub body: BracketGroupContaining<TokenStream>,
     }
 
-    /// The content of an attribute bracket.
-    pub enum AttributeInner {
-        /// `doc = "..."` — a doc comment.
-        Doc(DocAttr),
-        /// Anything else (forwarded verbatim).
-        Any(Vec<TokenTree>),
-    }
-
-    /// `doc = "some text"` inside `#[doc = "some text"]`.
-    pub struct DocAttr {
-        pub _kw: KDoc,
-        pub _eq: Eq,
-        /// The doc string value (including quotes in the raw token).
+    pub struct DocAttribute {
+        pub _doc: KDoc,
+        pub _assign: Assign,
         pub value: LiteralString,
     }
 
-    /// A single `async fn` declaration in the service trait body.
-    pub struct ServiceMethod {
-        /// Attributes on this method.
-        pub attributes: Vec<Attribute>,
-        pub _async_kw: KAsync,
-        pub _fn_kw: KFn,
-        /// Method name.
-        pub name: Ident,
-        /// Parameter list, including `&self`.
-        pub params: ParenthesisGroupContaining<MethodParams>,
-        /// Return type after `->`, if present.  Absent means `()`.
-        pub return_ty: Option<MethodReturnType>,
-        pub _semi: Semi,
+    pub enum Visibility {
+        Pub(KPub),
+        PubRestricted(Cons<KPub, ParenthesisGroupContaining<TokenStream>>),
     }
 
-    /// The contents of the parameter list `(...)`.
-    pub struct MethodParams {
-        pub items: CommaDelimitedVec<MethodParam>,
+    pub struct RefSelf {
+        pub _amp: unsynn::operator::names::And,
+        pub mutability: Option<KMut>,
+        pub name: KSelfKw,
     }
 
-    /// A single parameter — either the receiver (`&self`) or a named argument.
-    pub enum MethodParam {
-        /// `& (mut)? self`
-        Self_(SelfParam),
-        /// `name: Type`
-        Named(NamedParam),
-    }
-
-    /// The `&self` (or `&mut self`) receiver.
-    pub struct SelfParam {
-        pub _amp: Amp,
-        pub _mut: Option<KMut>,
-        pub _self: KSelf,
-    }
-
-    /// A named parameter `ident: Type`.
-    pub struct NamedParam {
-        /// Argument name.
+    pub struct MethodParam {
         pub name: Ident,
         pub _colon: Colon,
-        /// Argument type — everything up to the next `,` at this nesting level.
-        pub ty: VerbatimUntil<Comma>,
+        pub ty: Type,
     }
 
-    /// `-> ReturnType` on a method.
-    pub struct MethodReturnType {
-        pub _arrow: RArrow,
-        /// Parsed return type, with `Result<T, E>` distinguished from plain types.
-        pub kind: ReturnTyKind,
-    }
-
-    /// Either a `Result<Ok, Err>` return or any other type.
-    pub enum ReturnTyKind {
-        /// `Result<T, E>` — fallible method.
-        Result(ResultTy),
-        /// Anything else — infallible method (includes `()`).
-        Plain(PlainTy),
-    }
-
-    /// `Result<OkType, ErrType>`.
-    pub struct ResultTy {
-        pub _kw: KResult,
+    pub struct GenericParams {
         pub _lt: Lt,
-        /// The `Ok` type.
-        pub ok: VerbatimUntil<Comma>,
-        pub _comma: Comma,
-        /// The `Err` type.
-        pub err: VerbatimUntil<Gt>,
+        pub params: VerbatimUntil<Gt>,
         pub _gt: Gt,
     }
 
-    /// A plain (infallible) return type — everything up to the trailing `;`.
-    pub struct PlainTy {
-        pub tokens: VerbatimUntil<Semi>,
+    #[derive(Clone)]
+    pub struct TypePath {
+        pub leading: Option<PathSep>,
+        pub first: Ident,
+        pub rest: Any<Cons<PathSep, Ident>>,
+    }
+
+    #[derive(Clone)]
+    pub struct Lifetime {
+        pub _apo: Apostrophe,
+        pub ident: Ident,
+    }
+
+    #[derive(Clone)]
+    pub enum GenericArgument {
+        Lifetime(Lifetime),
+        Type(Type),
+    }
+
+    #[derive(Clone)]
+    pub enum Type {
+        Reference(TypeRef),
+        Tuple(TypeTuple),
+        PathWithGenerics(PathWithGenerics),
+        Path(TypePath),
+    }
+
+    #[derive(Clone)]
+    pub struct TypeRef {
+        pub _amp: unsynn::operator::names::And,
+        pub lifetime: Option<Cons<Apostrophe, Ident>>,
+        pub mutable: Option<KMut>,
+        pub inner: Box<Type>,
+    }
+
+    #[derive(Clone)]
+    pub struct TypeTuple(
+        pub ParenthesisGroupContaining<CommaDelimitedVec<Type>>,
+    );
+
+    #[derive(Clone)]
+    pub struct PathWithGenerics {
+        pub path: TypePath,
+        pub _lt: Lt,
+        pub args: CommaDelimitedVec<GenericArgument>,
+        pub _gt: Gt,
+    }
+
+    pub struct ReturnType {
+        pub _arrow: RArrow,
+        pub ty: Type,
+    }
+
+    pub struct WhereClause {
+        pub _where: KWhere,
+        pub bounds: VerbatimUntil<Semicolon>,
+    }
+
+    pub struct MethodParams {
+        pub receiver: RefSelf,
+        pub rest: Optional<Cons<Comma, CommaDelimitedVec<MethodParam>>>,
+    }
+
+    pub struct ServiceMethod {
+        pub attributes: Any<RawAttribute>,
+        pub _async: KAsync,
+        pub _fn: KFn,
+        pub name: Ident,
+        pub generics: Optional<GenericParams>,
+        pub params: ParenthesisGroupContaining<MethodParams>,
+        pub return_type: Optional<ReturnType>,
+        pub where_clause: Optional<WhereClause>,
+        pub _semi: Semicolon,
+    }
+
+    pub struct ServiceTrait {
+        pub attributes: Any<RawAttribute>,
+        pub vis: Optional<Visibility>,
+        pub _trait: KTrait,
+        pub name: Ident,
+        pub generics: Optional<GenericParams>,
+        pub body: BraceGroupContaining<Any<ServiceMethod>>,
+        pub _eos: EndOfStream,
     }
 }
 
 // ============================================================================
-// HELPERS
+// Helper methods for GenericArgument
 // ============================================================================
 
-/// Extract doc strings from a slice of [`Attribute`]s.
-///
-/// Returns one `String` per `#[doc = "..."]` attribute, in order.
-/// The strings are the raw literal values (no surrounding quotes, no leading space stripping).
-pub fn extract_doc(attributes: &[Attribute]) -> Vec<String> {
-    attributes
-        .iter()
-        .filter_map(|attr| match &attr.body.content {
-            AttributeInner::Doc(d) => Some(d.value.to_string()),
+impl GenericArgument {
+    pub fn has_lifetime(&self) -> bool {
+        match self {
+            GenericArgument::Lifetime(_) => true,
+            GenericArgument::Type(ty) => ty.has_lifetime(),
+        }
+    }
+
+    pub fn contains_channel(&self) -> bool {
+        match self {
+            GenericArgument::Lifetime(_) => false,
+            GenericArgument::Type(ty) => ty.contains_channel(),
+        }
+    }
+}
+
+// ============================================================================
+// Helper methods for Type
+// ============================================================================
+
+impl Type {
+    /// Extract Ok and Err types if this is Result<T, E>
+    pub fn as_result(&self) -> Option<(&Type, &Type)> {
+        match self {
+            Type::PathWithGenerics(PathWithGenerics { path, args, .. })
+                if path.last_segment().as_str() == "Result" && args.len() == 2 =>
+            {
+                let args_slice = args.as_slice();
+                match (&args_slice[0].value, &args_slice[1].value) {
+                    (GenericArgument::Type(ok), GenericArgument::Type(err)) => Some((ok, err)),
+                    _ => None,
+                }
+            }
             _ => None,
-        })
-        .collect()
-}
-
-/// Convert a [`VerbatimUntil`] capture to a [`TokenStream`].
-pub fn verbatim_to_ts<C>(v: &VerbatimUntil<C>) -> TokenStream {
-    let mut ts = TokenStream::new();
-    for item in v.iter() {
-        // Each item is Cons<Except<C>, AngleTokenTree>; the second field carries the token.
-        item.value.second.to_tokens(&mut ts);
-    }
-    ts
-}
-
-/// Emit the visibility modifier as a [`TokenStream`].
-pub fn vis_to_ts(vis: &Option<Vis>) -> TokenStream {
-    match vis {
-        Some(Vis::Pub(kw)) => kw.to_token_stream(),
-        Some(Vis::PubGroup(cons)) => {
-            let mut ts = TokenStream::new();
-            cons.first.to_tokens(&mut ts);
-            cons.second.to_tokens(&mut ts);
-            ts
         }
-        None => TokenStream::new(),
+    }
+
+    /// Check if type contains a lifetime anywhere in the tree
+    pub fn has_lifetime(&self) -> bool {
+        match self {
+            Type::Reference(TypeRef {
+                lifetime: Some(_), ..
+            }) => true,
+            Type::Reference(TypeRef { inner, .. }) => inner.has_lifetime(),
+            Type::PathWithGenerics(PathWithGenerics { args, .. }) => {
+                args.iter().any(|t| t.value.has_lifetime())
+            }
+            Type::Tuple(TypeTuple(group)) => group.content.iter().any(|t| t.value.has_lifetime()),
+            Type::Path(_) => false,
+        }
+    }
+
+    /// Check if type contains Tx or Rx at any nesting level
+    ///
+    /// Note: This is a heuristic based on type names. Proper validation should
+    /// happen at codegen time when we can resolve types properly.
+    pub fn contains_channel(&self) -> bool {
+        match self {
+            Type::Reference(TypeRef { inner, .. }) => inner.contains_channel(),
+            Type::Tuple(TypeTuple(group)) => {
+                group.content.iter().any(|t| t.value.contains_channel())
+            }
+            Type::PathWithGenerics(PathWithGenerics { path, args, .. }) => {
+                let seg = path.last_segment();
+                if seg == "Tx" || seg == "Rx" {
+                    return true;
+                }
+                args.iter().any(|t| t.value.contains_channel())
+            }
+            Type::Path(path) => {
+                let seg = path.last_segment();
+                seg == "Tx" || seg == "Rx"
+            }
+        }
     }
 }
 
 // ============================================================================
-// ENTRY POINT
+// Helper methods for TypePath
 // ============================================================================
 
-/// Parse a `#[roam::service]` trait definition.
-///
-/// The `input` token stream should be the item the attribute was applied to
-/// (i.e. the trait body), as passed to the `#[proc_macro_attribute]` handler.
-pub fn parse_service(input: TokenStream) -> Result<ServiceTrait, unsynn::Error> {
-    let mut iter = input.to_token_iter();
-    iter.parse()
-}
-
-// ============================================================================
-// TESTS
-// ============================================================================
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use quote::quote;
-
-    #[test]
-    fn parse_simple_infallible() {
-        let input = quote! {
-            pub trait Adder {
-                /// Add two numbers.
-                async fn add(&self, l: u32, r: u32) -> u32;
-            }
-        };
-
-        let svc = parse_service(input).expect("parse failed");
-        assert_eq!(svc.name.to_string(), "Adder");
-        assert!(matches!(svc.vis, Some(Vis::Pub(_))));
-
-        let methods: Vec<_> = svc.body.content.iter().map(|m| &m.value).collect();
-        assert_eq!(methods.len(), 1);
-
-        let add = methods[0];
-        assert_eq!(add.name.to_string(), "add");
-
-        let doc = extract_doc(&add.attributes);
-        assert_eq!(doc, vec![" Add two numbers."]);
-
-        let named: Vec<_> = add
-            .params
-            .content
-            .items
+impl TypePath {
+    /// Get the last segment (e.g., "Result" from "std::result::Result")
+    pub fn last_segment(&self) -> String {
+        self.rest
             .iter()
-            .filter_map(|p| match &p.value {
-                MethodParam::Named(n) => Some(n),
-                _ => None,
-            })
-            .collect();
+            .last()
+            .map(|seg| seg.value.second.to_string())
+            .unwrap_or_else(|| self.first.to_string())
+    }
+}
 
-        assert_eq!(named.len(), 2);
-        assert_eq!(named[0].name.to_string(), "l");
-        assert_eq!(verbatim_to_ts(&named[0].ty).to_string(), "u32");
-        assert_eq!(named[1].name.to_string(), "r");
-        assert_eq!(verbatim_to_ts(&named[1].ty).to_string(), "u32");
+// ============================================================================
+// Helper methods for ServiceTrait
+// ============================================================================
 
-        assert!(matches!(
-            add.return_ty.as_ref().unwrap().kind,
-            ReturnTyKind::Plain(_)
-        ));
+impl ServiceTrait {
+    /// Get the trait name as a string.
+    pub fn name(&self) -> String {
+        self.name.to_string()
     }
 
-    #[test]
-    fn parse_fallible() {
-        let input = quote! {
-            trait Calculator {
-                async fn divide(&self, a: f64, b: f64) -> Result<f64, DivideError>;
-            }
-        };
-
-        let svc = parse_service(input).expect("parse failed");
-        let method = &svc.body.content[0].value;
-
-        match &method.return_ty.as_ref().unwrap().kind {
-            ReturnTyKind::Result(r) => {
-                assert_eq!(verbatim_to_ts(&r.ok).to_string(), "f64");
-                assert_eq!(verbatim_to_ts(&r.err).to_string(), "DivideError");
-            }
-            _ => panic!("expected Result return type"),
-        }
+    /// Get the trait's doc string (collected from #[doc = "..."] attributes).
+    pub fn doc(&self) -> Option<String> {
+        collect_doc_string(&self.attributes)
     }
 
-    #[test]
-    fn parse_unit_return() {
-        let input = quote! {
-            trait Notifier {
-                async fn notify(&self, msg: String);
-            }
-        };
+    /// Get an iterator over the methods.
+    pub fn methods(&self) -> impl Iterator<Item = &ServiceMethod> {
+        self.body.content.iter().map(|entry| &entry.value)
+    }
+}
 
-        let svc = parse_service(input).expect("parse failed");
-        let method = &svc.body.content[0].value;
-        assert!(method.return_ty.is_none());
+// ============================================================================
+// Helper methods for ServiceMethod
+// ============================================================================
+
+impl ServiceMethod {
+    /// Get the method name as a string.
+    pub fn name(&self) -> String {
+        self.name.to_string()
     }
 
-    #[test]
-    fn parse_generic_arg() {
-        let input = quote! {
-            trait Streamer {
-                async fn stream(&self, items: Vec<String>) -> Option<u64>;
-            }
-        };
+    /// Get the method's doc string (collected from #[doc = "..."] attributes).
+    pub fn doc(&self) -> Option<String> {
+        collect_doc_string(&self.attributes)
+    }
 
-        let svc = parse_service(input).expect("parse failed");
-        let method = &svc.body.content[0].value;
-
-        let named: Vec<_> = method
-            .params
+    /// Get an iterator over the method's parameters (excluding &self).
+    pub fn args(&self) -> impl Iterator<Item = &MethodParam> {
+        self.params
             .content
-            .items
+            .rest
             .iter()
-            .filter_map(|p| match &p.value {
-                MethodParam::Named(n) => Some(n),
-                _ => None,
-            })
-            .collect();
+            .flat_map(|rest| rest.value.second.iter().map(|entry| &entry.value))
+    }
 
-        assert_eq!(named.len(), 1);
-        assert_eq!(named[0].name.to_string(), "items");
-        let ty = verbatim_to_ts(&named[0].ty).to_string();
-        assert_eq!(ty, "Vec < String >");
+    /// Get the return type, defaulting to () if not specified.
+    pub fn return_type(&self) -> Type {
+        self.return_type
+            .iter()
+            .next()
+            .map(|r| r.value.ty.clone())
+            .unwrap_or_else(unit_type)
+    }
 
-        match &method.return_ty.as_ref().unwrap().kind {
-            ReturnTyKind::Plain(p) => {
-                assert_eq!(verbatim_to_ts(&p.tokens).to_string(), "Option < u64 >");
-            }
-            _ => panic!("expected plain return type"),
+    /// Check if receiver is &mut self (not allowed for service methods).
+    pub fn is_mut_receiver(&self) -> bool {
+        self.params.content.receiver.mutability.is_some()
+    }
+
+    /// Check if method has generics.
+    pub fn has_generics(&self) -> bool {
+        !self.generics.is_empty()
+    }
+}
+
+// ============================================================================
+// Helper methods for MethodParam
+// ============================================================================
+
+impl MethodParam {
+    /// Get the parameter name as a string.
+    pub fn name(&self) -> String {
+        self.name.to_string()
+    }
+}
+
+// ============================================================================
+// Helper functions
+// ============================================================================
+
+/// Extract Ok and Err types from a return type.
+/// Returns (ok_type, Some(err_type)) for Result<T, E>, or (type, None) otherwise.
+pub fn method_ok_and_err_types(return_ty: &Type) -> (&Type, Option<&Type>) {
+    if let Some((ok, err)) = return_ty.as_result() {
+        (ok, Some(err))
+    } else {
+        (return_ty, None)
+    }
+}
+
+/// Returns the unit type `()`.
+fn unit_type() -> Type {
+    let mut iter = "()".to_token_iter();
+    Type::parse(&mut iter).expect("unit type should always parse")
+}
+
+/// Collect doc strings from attributes.
+fn collect_doc_string(attrs: &Any<RawAttribute>) -> Option<String> {
+    let mut docs = Vec::new();
+
+    for attr in attrs.iter() {
+        let mut body_iter = attr.value.body.content.clone().to_token_iter();
+        if let Ok(doc_attr) = DocAttribute::parse(&mut body_iter) {
+            let line = doc_attr
+                .value
+                .as_str()
+                .replace("\\\"", "\"")
+                .replace("\\'", "'");
+            docs.push(line);
         }
     }
 
-    #[test]
-    fn parse_multiple_methods() {
-        let input = quote! {
-            pub trait Echo {
-                async fn ping(&self) -> u64;
-                async fn echo(&self, msg: String) -> String;
-                async fn close(&self);
-            }
-        };
-
-        let svc = parse_service(input).expect("parse failed");
-        assert_eq!(svc.body.content.len(), 3);
-        assert_eq!(svc.body.content[0].value.name.to_string(), "ping");
-        assert_eq!(svc.body.content[1].value.name.to_string(), "echo");
-        assert_eq!(svc.body.content[2].value.name.to_string(), "close");
+    if docs.is_empty() {
+        None
+    } else {
+        Some(docs.join("\n"))
     }
+}
+
+/// Parse a trait definition from a token stream.
+#[allow(clippy::result_large_err)] // unsynn::Error is external, we can't box it
+pub fn parse_trait(tokens: &TokenStream2) -> Result<ServiceTrait, unsynn::Error> {
+    let mut iter = tokens.clone().to_token_iter();
+    ServiceTrait::parse(&mut iter)
 }

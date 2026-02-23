@@ -37,6 +37,8 @@ members = [
   "rust/roam-websocket",
   "rust/roam-shm",
   "rust/roam-macros-parse",
+  "rust/roam-macros-core",
+  "rust/roam-macros",
 ]
 exclude = ["fuzz"]
 
@@ -54,6 +56,7 @@ roam-types = { path = "rust/roam-types", version = "3.0.0" }
 roam-frame = { path = "rust/roam-frame", version = "3.0.0" }
 roam-hash = { path = "rust/roam-hash", version = "3.0.0" }
 roam-macros-parse = { path = "rust/roam-macros-parse", version = "3.0.0" }
+roam-macros-core = { path = "rust/roam-macros-core", version = "3.0.0" }
 roam-service-macros = { path = "rust/roam-macros", version = "3.0.0" }
 roam-schema = { path = "rust/roam-schema", version = "3.0.0" }
 roam-core = { path = "rust/roam-core", version = "3.0.0" }
