@@ -42,13 +42,28 @@ excluded, and what's still pending.
 - **Service identity negotiation** — not added. Method IDs already encode the
   service name; unknown methods get per-call errors. No upfront service check.
 
+## Ported (continued)
+
+- Metadata → `rpc.metadata.*` in `spec/rpc.md` (flags, keys, duplicates, unknown handling; no size limits)
+- Call pipelining → `rpc.pipelining` in `spec/rpc.md`
+- Channel binding → `rpc.channel.discovery`, `rpc.channel.payload-encoding`, `rpc.channel.binding` in `spec/rpc.md`
+- StableConduit → `spec/stable.md` (framing, seq/ack, handshake, resume, replay)
+- Shared memory transport → `spec/shm.md` (BipBuffers, VarSlotPool, signaling, peer lifecycle)
+
+## Deliberately excluded or changed (continued)
+
+- **Idempotency / Nonces** — old spec had `core.nonce.*` for cross-session idempotency.
+  Removed: StableConduit handles replay at the conduit level via seq/ack. Application-level
+  idempotency is the application's concern.
+- **Metadata size limits** — old spec enforced max 128 entries, 256-byte keys, 16KB values,
+  64KB total. Removed: not found necessary.
+- **SHM-specific message format** — old spec had ShmFrameHeader with msg_type, method_id, etc.
+  Removed: SHM now uses the same postcard-encoded Message as other transports, with only a
+  thin framing header (inline vs slot-ref) for delivery.
+- **Per-channel flow control in SHM** — old spec had per-channel credit counters in the
+  channel table. Deferred: flow control is a session-level concern to be specced separately.
+
 ## Still pending
 
-- **Metadata** — keys, unknown key handling, flag semantics (old spec lines 624-720)
-- **Idempotency** — idempotency keys, server dedup, client retry (old spec lines 300-393)
-- **Call pipelining** — multiple requests in flight concurrently (old spec lines 842-856)
-- **Flow control** — backpressure for channels (old spec lines 1783-1818)
-- **StableConduit / Reconnection** — resume tokens, replay, reconnection (old spec lines 1866-1917)
-- **Channel binding** — schema-driven channel discovery via facet walk (old spec lines 1918-1938)
+- **Flow control** — backpressure for channels (open design question)
 - **Topologies** — proxy patterns (old spec lines 395-405)
-- **Shared memory transport** — deserves its own spec document

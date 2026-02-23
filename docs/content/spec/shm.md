@@ -1,0 +1,534 @@
++++
+title = "shared memory transport"
+description = "SHM hub transport: BipBuffers, VarSlotPool, signaling, and peer lifecycle"
+weight = 15
++++
+
+# Shared Memory Transport
+
+> r[shm]
+>
+> The shared memory (SHM) transport implements the Link interface for
+> high-performance IPC on a single machine. Payloads are postcard-encoded
+> Messages — the same wire format as TCP and WebSocket transports. SHM
+> provides the delivery mechanism (BipBuffers, VarSlotPool, signaling),
+> not an alternative message format.
+
+> r[shm.architecture]
+>
+> This transport assumes:
+>
+>   * All processes sharing the segment run on the **same architecture**
+>     (same endianness, same word size, same atomic semantics)
+>   * Cross-process atomics are valid (typically true on modern OSes)
+>   * The shared memory region is cache-coherent
+>
+> Cross-architecture SHM is not supported.
+
+# Topology
+
+> r[shm.topology]
+>
+> The SHM transport uses a hub topology: exactly one **host** and zero
+> or more **guests**. The host creates and owns the shared memory segment.
+> Guests attach to communicate with the host.
+
+```aasvg
+         ┌─────────┐
+         │  Host   │
+         └────┬────┘
+              │
+    ┌─────────┼─────────┐
+    │         │         │
+┌───┴───┐ ┌───┴───┐ ┌───┴───┐
+│Guest 1│ │Guest 2│ │Guest 3│
+└───────┘ └───────┘ └───────┘
+```
+
+> r[shm.topology.communication]
+>
+> Guests communicate only with the host, not with each other. Each
+> guest has its own pair of BipBuffers within the shared segment.
+
+> r[shm.topology.bidirectional]
+>
+> Either the host or a guest can initiate calls. Communication is
+> bidirectional on each host-guest link.
+
+> r[shm.topology.max-guests]
+>
+> The maximum number of guests is 255 (peer IDs 1–255). The
+> `max_guests` field in the segment header MUST be ≤ 255.
+
+> r[shm.topology.peer-id]
+>
+> A guest's `peer_id` (u8) is `1 + index` in the peer table. The host
+> does not have a peer_id.
+
+# Segment Layout
+
+> r[shm.segment]
+>
+> The host creates a shared memory segment containing all communication
+> state. The segment is a memory-mapped file accessible to all
+> participating processes.
+
+## Segment Header
+
+> r[shm.segment.header]
+>
+> The segment MUST begin with a 128-byte header:
+>
+> ```text
+> Offset  Size  Field               Description
+> ──────  ────  ─────               ───────────
+> 0       8     magic               "ROAMHUB\x01"
+> 8       4     version             Segment format version
+> 12      4     header_size         128
+> 16      8     total_size          Segment size in bytes
+> 24      4     max_payload_size    Maximum payload per message
+> 28      4     inline_threshold    Max inline frame size (0 = default 256)
+> 32      4     max_guests          Maximum number of guests (≤ 255)
+> 36      4     bipbuf_capacity     BipBuffer data region size per direction
+> 40      8     peer_table_offset   Offset to peer table
+> 48      8     var_pool_offset     Offset to shared VarSlotPool
+> 56      8     heartbeat_interval  Heartbeat interval in nanoseconds (0 = disabled)
+> 64      4     host_goodbye        Host goodbye flag (0 = active)
+> 68      60    reserved            Reserved (zero)
+> ```
+
+> r[shm.segment.magic]
+>
+> The magic field MUST be exactly `ROAMHUB\x01` (8 bytes). A guest
+> MUST validate the magic before proceeding.
+
+> r[shm.segment.handshake]
+>
+> SHM does not use Hello/HelloYourself messages. The segment header
+> fields serve as the host's unilateral configuration. Guests accept
+> these values by attaching to the segment. A guest that cannot operate
+> within these limits MUST NOT attach.
+
+## Peer Table
+
+> r[shm.peer-table]
+>
+> The peer table contains one 64-byte entry per potential guest:
+>
+> ```text
+> Offset  Size  Field                Description
+> ──────  ────  ─────                ───────────
+> 0       4     state                0=Empty, 1=Attached, 2=Goodbye, 3=Reserved
+> 4       4     epoch                Incremented on each attach
+> 8       8     last_heartbeat       Monotonic clock reading (nanoseconds)
+> 16      8     ring_offset          Offset to this guest's BipBuffer pair
+> 24      40    reserved             Reserved (zero)
+> ```
+
+> r[shm.peer-table.states]
+>
+> Peer states:
+>
+>   * **Empty (0)** — slot available for a new guest
+>   * **Attached (1)** — guest is active
+>   * **Goodbye (2)** — guest is shutting down or has crashed
+>   * **Reserved (3)** — host has allocated the slot, guest not yet attached
+
+# BipBuffers
+
+Each guest has two BipBuffers (bipartite circular buffers):
+
+- **Guest→Host**: guest produces, host consumes
+- **Host→Guest**: host produces, guest consumes
+
+> r[shm.bipbuf]
+>
+> A BipBuffer is a lock-free single-producer single-consumer byte ring.
+> It guarantees contiguous grants (no wraparound mid-write), which
+> allows frames to be written and read without copying.
+
+> r[shm.bipbuf.layout]
+>
+> Each guest's area (at the peer entry's `ring_offset`) contains two
+> BipBuffers laid out sequentially:
+>
+>   1. Guest→Host BipBuffer: 128-byte header + `bipbuf_capacity` bytes
+>   2. Host→Guest BipBuffer: 128-byte header + `bipbuf_capacity` bytes
+
+> r[shm.bipbuf.header]
+>
+> Each BipBuffer has a 128-byte header (two cache lines):
+>
+> ```text
+> Cache line 0 (producer-owned):
+>   write: AtomicU32       — next write position (byte offset)
+>   watermark: AtomicU32   — wrap boundary (0 = no wrap active)
+>   capacity: u32          — data region size (immutable)
+>   padding: 52 bytes
+>
+> Cache line 1 (consumer-owned):
+>   read: AtomicU32        — consumed frontier (byte offset)
+>   padding: 60 bytes
+> ```
+>
+> Splitting producer and consumer fields onto separate cache lines
+> avoids false sharing.
+
+> r[shm.bipbuf.init]
+>
+> On segment creation, all BipBuffer memory MUST be zeroed (write=0,
+> watermark=0, read=0).
+
+## Grant / Commit / Release Protocol
+
+> r[shm.bipbuf.grant]
+>
+> To reserve `n` contiguous bytes for writing (**grant**):
+>
+>   1. If `write >= read`:
+>      - If `capacity - write >= n`: grant `[write..write+n)`.
+>      - Else if `read > 0`: set `watermark = write`, `write = 0`.
+>        If `n < read`, grant `[0..n)`. Else undo and return full.
+>      - Else: no room to wrap, return full.
+>   2. If `write < read`:
+>      - If `write + n < read`: grant `[write..write+n)`.
+>      - Else: return full.
+
+> r[shm.bipbuf.commit]
+>
+> After writing into a granted region, the producer commits by advancing
+> `write += n` with **Release** ordering. This makes the written bytes
+> visible to the consumer.
+
+> r[shm.bipbuf.read]
+>
+> To read available bytes:
+>
+>   1. Load `watermark` with **Acquire**.
+>   2. If `watermark != 0` (wrap active):
+>      - If `read < watermark`: readable is `[read..watermark)`.
+>      - If `read >= watermark`: set `read = 0`, `watermark = 0`, retry.
+>   3. If `watermark == 0`, load `write` with **Acquire**:
+>      - If `read < write`: readable is `[read..write)`.
+>      - Otherwise: empty.
+
+> r[shm.bipbuf.release]
+>
+> After processing `n` bytes, the consumer advances `read += n` with
+> **Release** ordering. If `read` reaches or exceeds `watermark`, set
+> `read = 0` and `watermark = 0`.
+
+> r[shm.bipbuf.backpressure]
+>
+> If the BipBuffer has no room for the requested grant, the producer
+> MUST wait. This is the backpressure point, equivalent to
+> `Link::reserve()` blocking. A full BipBuffer indicates a slow
+> consumer, not a protocol error.
+
+# SHM Framing
+
+> r[shm.framing]
+>
+> Each entry written to a BipBuffer has a small header that describes
+> how to find the payload. The payload itself is a postcard-encoded
+> roam Message — the same format used by TCP and WebSocket transports.
+
+> r[shm.framing.header]
+>
+> Each BipBuffer entry begins with an 8-byte header:
+>
+> ```text
+> Offset  Size  Field        Description
+> ──────  ────  ─────        ───────────
+> 0       4     total_len    Entry size in bytes (padded to 4-byte boundary)
+> 4       1     flags        Bit 0: SLOT_REF (payload in VarSlotPool)
+> 5       3     reserved     Reserved (zero)
+> ```
+
+> r[shm.framing.inline]
+>
+> When `SLOT_REF` is clear (flags bit 0 = 0), the payload bytes
+> immediately follow the 8-byte header inline in the BipBuffer.
+> The entry occupies `align4(8 + payload_len)` bytes.
+
+> r[shm.framing.slot-ref]
+>
+> When `SLOT_REF` is set (flags bit 0 = 1), a 12-byte slot reference
+> follows the header instead of inline payload:
+>
+> ```text
+> Offset  Size  Field            Description
+> ──────  ────  ─────            ───────────
+> 0       1     class_idx        Size class index in VarSlotPool
+> 1       1     extent_idx       Extent index within the class
+> 2       2     reserved         Reserved (zero)
+> 4       4     slot_idx         Slot index within the extent
+> 8       4     generation       ABA generation counter
+> ```
+>
+> The actual payload is stored in the VarSlotPool slot identified by
+> this reference. The entry occupies 20 bytes (`align4(8 + 12)`).
+
+> r[shm.framing.threshold]
+>
+> An entry with `8 + payload_len <= inline_threshold` SHOULD be sent
+> inline. Larger payloads MUST use a slot reference. The default inline
+> threshold is 256 bytes (configurable via the segment header;
+> 0 means use the default).
+
+> r[shm.framing.alignment]
+>
+> `total_len` MUST be padded to a 4-byte boundary. Padding bytes
+> SHOULD be zeroed.
+
+# VarSlotPool
+
+> r[shm.varslot]
+>
+> The VarSlotPool is a shared, lock-free allocator for payloads that
+> exceed the inline threshold. It is shared across all guests and the
+> host.
+
+## Size Classes
+
+> r[shm.varslot.classes]
+>
+> The pool consists of multiple **size classes**, each with its own
+> slot size and count. The specific configuration is application-
+> dependent. Example:
+>
+> | Class | Slot Size | Count | Total |
+> |-------|-----------|-------|-------|
+> | 0 | 1 KB | 1024 | 1 MB |
+> | 1 | 16 KB | 256 | 4 MB |
+> | 2 | 256 KB | 32 | 8 MB |
+
+> r[shm.varslot.selection]
+>
+> To allocate a slot for a payload of `N` bytes: find the smallest size
+> class where `slot_size >= N` and allocate from its free list. If
+> exhausted, try the next larger class. If all classes are exhausted,
+> the sender MUST wait (backpressure).
+
+## Slot Metadata
+
+> r[shm.varslot.slot-meta]
+>
+> Each slot has metadata for ownership tracking and free list management:
+>
+> ```text
+> generation: AtomicU32   — ABA counter, incremented on each allocation
+> state: AtomicU32        — 0=Free, 1=Allocated
+> owner_peer: AtomicU32   — peer_id of allocator (0 = host)
+> next_free: AtomicU32    — free list link (Treiber stack)
+> ```
+
+## Free List (Treiber Stack)
+
+> r[shm.varslot.freelist]
+>
+> Each size class maintains a lock-free free list using a Treiber stack.
+> The head is an `AtomicU64` packing `(index, generation)` to prevent
+> ABA problems.
+
+> r[shm.varslot.allocate]
+>
+> To allocate from a size class:
+>
+>   1. Load `free_head` with Acquire
+>   2. If empty (sentinel), class is exhausted
+>   3. Load the slot's `next_free`
+>   4. CAS `free_head` from current to next
+>   5. On success: increment slot's generation, set state to Allocated,
+>      set owner_peer
+>   6. On failure: retry from step 1
+
+> r[shm.varslot.free]
+>
+> To free a slot:
+>
+>   1. Verify generation matches (detect double-free)
+>   2. Set state to Free
+>   3. Load current `free_head`
+>   4. Set slot's `next_free` to current head
+>   5. CAS `free_head` to point to this slot
+>   6. On failure: retry from step 3
+>
+> The receiver frees slots after processing the message.
+
+## Extent-Based Growth
+
+> r[shm.varslot.extents]
+>
+> Size classes can grow dynamically via extents. When a class is
+> exhausted, additional extents can be appended to the segment file
+> (requiring remap by all participants). Each extent contains slot
+> metadata followed by slot data storage.
+
+> r[shm.varslot.crash-recovery]
+>
+> When a guest crashes, the host MUST scan the VarSlotPool for slots
+> with `owner_peer == crashed_peer_id` and return them to their
+> respective free lists.
+
+# Signaling
+
+> r[shm.signal]
+>
+> SHM uses out-of-band signaling to wake blocked producers and
+> consumers, avoiding busy-wait.
+
+## Doorbells
+
+> r[shm.signal.doorbell]
+>
+> A doorbell is a bidirectional notification channel between host and
+> guest. On Unix, it is implemented as a `socketpair(AF_UNIX, SOCK_STREAM)`.
+> The host keeps one end, the guest gets the other via the spawn ticket.
+
+> r[shm.signal.doorbell.signal]
+>
+> To signal the peer: write a single byte to the socket. The byte
+> value is ignored; only the wakeup matters.
+
+> r[shm.signal.doorbell.wait]
+>
+> To wait for a signal: `poll()` on the doorbell fd. `POLLIN` means
+> the peer signaled (drain the socket after waking). `POLLHUP` or
+> `POLLERR` means the peer process has died.
+
+> r[shm.signal.doorbell.death]
+>
+> When a process terminates, the kernel closes its end of the
+> socketpair. The surviving process sees `POLLHUP`/`POLLERR`,
+> providing immediate death notification without polling.
+
+> r[shm.signal.doorbell.integration]
+>
+> After committing a frame to the BipBuffer, signal the doorbell. The
+> receiver `poll()`s the doorbell and checks BipBuffers on wakeup.
+> This integrates with async I/O frameworks (epoll, kqueue, IOCP).
+
+> r[shm.signal.doorbell.optional]
+>
+> Doorbell support is OPTIONAL. Implementations MAY use polling with
+> backoff instead. Doorbells are recommended when death detection
+> latency matters or busy-waiting must be avoided.
+
+# Guest Lifecycle
+
+## Attaching
+
+> r[shm.guest.attach]
+>
+> To attach, a guest:
+>
+>   1. Opens and memory-maps the segment file
+>   2. Validates magic and version
+>   3. Finds an Empty peer table entry (or uses its Reserved entry
+>      if spawned by the host)
+>   4. Atomically sets state from Empty (or Reserved) to Attached (CAS)
+>   5. Increments epoch
+>   6. Begins processing
+
+> r[shm.guest.attach-failure]
+>
+> If no Empty or Reserved slots exist, the guest cannot attach.
+
+## Detaching
+
+> r[shm.guest.detach]
+>
+> To detach gracefully:
+>
+>   1. Set state to Goodbye
+>   2. Drain remaining messages
+>   3. Unmap segment
+
+## Spawning
+
+> r[shm.spawn]
+>
+> The host typically spawns guest processes. Before spawning, the host:
+>
+>   1. Allocates a peer table entry (sets state to Reserved)
+>   2. Creates a doorbell pair
+>   3. Spawns the guest process, passing:
+>      - Path to the segment file
+>      - Assigned peer ID
+>      - Guest's doorbell fd (Unix: via fd inheritance)
+
+> r[shm.spawn.fd-inheritance]
+>
+> On Unix, the doorbell fd MUST be inheritable by the child process.
+> The host MUST NOT set `O_CLOEXEC` on the guest's doorbell fd before
+> spawning.
+
+## Crash Detection
+
+> r[shm.crash.detection]
+>
+> The host MUST detect crashed guests using at least one of:
+>
+>   * **Doorbell**: `POLLHUP`/`POLLERR` on the socketpair (immediate)
+>   * **Process handle**: `pidfd_open()` on Linux, process handle on
+>     Windows (immediate)
+>   * **Heartbeat**: guest updates `last_heartbeat` periodically; host
+>     declares crash if `host_now - guest_heartbeat > 2 × heartbeat_interval`
+>   * **Epoch**: detects re-attach after crash (not real-time)
+
+> r[shm.crash.heartbeat-clock]
+>
+> Heartbeat values are monotonic clock readings in nanoseconds. All
+> processes read from the same system monotonic clock, so values are
+> directly comparable.
+
+> r[shm.crash.recovery]
+>
+> On detecting a crashed guest, the host MUST:
+>
+>   1. Set the peer state to Goodbye
+>   2. Reset both BipBuffer headers (write=0, read=0, watermark=0)
+>   3. Scan VarSlotPool for slots with `owner_peer == crashed_peer_id`
+>      and return them to their free lists
+>   4. Set state to Empty (allowing a new guest to attach)
+
+## Host Shutdown
+
+> r[shm.host.goodbye]
+>
+> The host signals shutdown by setting `host_goodbye` in the segment
+> header to a non-zero value. Guests MUST poll this field and detach
+> when it becomes non-zero. `host_goodbye` MUST be accessed atomically.
+
+# File-Backed Segments
+
+> r[shm.file]
+>
+> For cross-process communication, the segment is backed by a
+> memory-mapped file.
+
+> r[shm.file.create]
+>
+> To create a segment:
+>
+>   1. Create the file with read/write permissions
+>   2. Truncate to `total_size`
+>   3. Memory-map with `MAP_SHARED` (POSIX) or `CreateFileMapping` +
+>      `MapViewOfFile` (Windows)
+>   4. Initialize all data structures
+>   5. Write magic last (signals segment is ready)
+
+> r[shm.file.attach]
+>
+> To attach to an existing segment:
+>
+>   1. Open the file read/write
+>   2. Memory-map with `MAP_SHARED`
+>   3. Validate magic and version
+>   4. Proceed with guest attachment
+
+> r[shm.file.cleanup]
+>
+> The host SHOULD delete the segment file on graceful shutdown. Stale
+> files from crashes SHOULD be detected and recreated on startup.

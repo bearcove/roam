@@ -1,4 +1,3 @@
-use std::collections::VecDeque;
 use std::marker::PhantomData;
 use std::sync::Arc;
 
@@ -9,19 +8,11 @@ use roam_types::{
     RpcPlan, SelfRef, WriteSlot,
 };
 
+use crate::replay_buffer::{PacketAck, PacketSeq, ReplayBuffer};
+
 // ---------------------------------------------------------------------------
 // Frame — internal to StableConduit
 // ---------------------------------------------------------------------------
-
-#[derive(Facet, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[repr(transparent)]
-#[facet(transparent)]
-struct PacketSeq(u32);
-
-#[derive(Facet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
-struct PacketAck {
-    max_delivered: PacketSeq,
-}
 
 /// Opaque session identifier for reliability-layer resume.
 #[derive(Facet, Debug, Clone, PartialEq, Eq, Hash)]
@@ -90,8 +81,8 @@ struct Inner<LS: LinkSource> {
     resume_key: Option<ResumeKey>,
     next_send_seq: PacketSeq,
     last_received: Option<PacketSeq>,
-    /// (seq, encoded item bytes) — replayed on reconnect with fresh header.
-    replay: VecDeque<(PacketSeq, Vec<u8>)>,
+    /// Encoded item bytes buffered for replay on reconnect.
+    replay: ReplayBuffer,
 }
 
 impl<T: Facet<'static> + 'static, LS: LinkSource> StableConduit<T, LS> {
@@ -120,7 +111,7 @@ impl<T: Facet<'static> + 'static, LS: LinkSource> StableConduit<T, LS> {
             resume_key: Some(resume_key),
             next_send_seq: PacketSeq(0),
             last_received,
-            replay: VecDeque::new(),
+            replay: ReplayBuffer::new(),
         };
 
         Ok(Self {
@@ -298,7 +289,7 @@ impl<T: Facet<'static> + 'static, LS: LinkSource> ConduitTxPermit<T>
 
         // Encode the item for the replay buffer.
         let item_bytes = facet_postcard::to_vec(item).map_err(StableConduitError::Encode)?;
-        inner.replay.push_back((seq, item_bytes.clone()));
+        inner.replay.push(seq, item_bytes.clone());
 
         // Wire encoding = header bytes + item bytes (matches Frame<T> postcard layout).
         let header_bytes = facet_postcard::to_vec(&FrameHeader { seq, ack })
@@ -359,13 +350,7 @@ where
             let mut inner = self.inner.lock().await;
 
             if let Some(ack) = frame_self_ref.ack {
-                while inner
-                    .replay
-                    .front()
-                    .is_some_and(|(s, _)| *s <= ack.max_delivered)
-                {
-                    inner.replay.pop_front();
-                }
+                inner.replay.trim(ack);
             }
 
             match inner.last_received {

@@ -14,6 +14,8 @@ pub use bare_conduit::*;
 mod channel;
 pub use channel::*;
 
+mod replay_buffer;
+
 mod stable_conduit;
 pub use stable_conduit::*;
 

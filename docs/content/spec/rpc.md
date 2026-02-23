@@ -243,3 +243,115 @@ let result = caller.add(3, 5).await?;
 > Cancelling a request does not automatically close or reset any channels
 > that were created as part of that request. Channels have independent
 > lifecycles and MUST be closed or reset explicitly.
+
+# Pipelining
+
+> r[rpc.pipelining]
+>
+> Multiple requests MAY be in flight simultaneously on a connection. Each
+> request is independent; a slow or failed request MUST NOT block other
+> requests.
+
+# Metadata
+
+> r[rpc.metadata]
+>
+> Requests and Responses carry metadata: a list of `(key, value, flags)`
+> triples for out-of-band information such as tracing context, authentication
+> tokens, or deadlines.
+
+> r[rpc.metadata.value]
+>
+> A metadata value is one of three types:
+>
+>   * `String` — a UTF-8 string
+>   * `Bytes` — an opaque byte buffer
+>   * `U64` — a 64-bit unsigned integer
+
+> r[rpc.metadata.flags]
+>
+> Each metadata entry carries a `u64` flags bitfield that controls handling
+> behavior. Unknown flag bits MUST be preserved when forwarding metadata,
+> but MUST be ignored for handling decisions.
+>
+> | Bit | Name | Meaning |
+> |-----|------|---------|
+> | 0 | `SENSITIVE` | See `r[rpc.metadata.flags.sensitive]` |
+> | 1 | `NO_PROPAGATE` | See `r[rpc.metadata.flags.no-propagate]` |
+> | 2–63 | Reserved | MUST be zero when creating; MUST be preserved when forwarding |
+
+> r[rpc.metadata.flags.sensitive]
+>
+> When the `SENSITIVE` flag (bit 0) is set, the value MUST NOT be logged,
+> traced, or included in error messages. Implementations MUST take care
+> not to expose sensitive values in debug output, telemetry, or crash reports.
+
+> r[rpc.metadata.flags.no-propagate]
+>
+> When the `NO_PROPAGATE` flag (bit 1) is set, the value MUST NOT be
+> forwarded to downstream calls. A proxy or middleware that forwards
+> metadata MUST strip entries with this flag set.
+
+> r[rpc.metadata.keys]
+>
+> Metadata keys are case-sensitive UTF-8 strings. By convention, keys
+> use lowercase kebab-case (e.g. `authorization`, `trace-parent`,
+> `request-deadline`).
+
+> r[rpc.metadata.duplicates]
+>
+> Duplicate keys are allowed. When multiple entries share the same key,
+> all values MUST be preserved in order.
+
+> r[rpc.metadata.unknown]
+>
+> Unknown metadata keys MUST be ignored — they MUST NOT cause errors
+> or protocol violations.
+
+### Examples
+
+Authentication tokens should be marked sensitive to prevent logging:
+
+```rust
+metadata.push((
+    "authorization".into(),
+    MetadataValue::String("Bearer sk-...".into()),
+    MetadataFlags::SENSITIVE,
+));
+```
+
+Session tokens that shouldn't leak to downstream services:
+
+```rust
+metadata.push((
+    "session-id".into(),
+    MetadataValue::String(session_id),
+    MetadataFlags::SENSITIVE | MetadataFlags::NO_PROPAGATE,
+));
+```
+
+# Channel binding
+
+> r[rpc.channel.discovery]
+>
+> Channel IDs in `Request.channels` and `Response.channels` MUST be listed
+> in the order produced by a schema-driven traversal of the argument types
+> (for requests) or return type (for responses). The traversal visits struct
+> fields and active enum variant fields in declaration order. It MUST NOT
+> descend into collections (lists, arrays, maps, sets). Channels inside an
+> `Option` that is `None` at runtime are simply absent from the list.
+
+> r[rpc.channel.payload-encoding]
+>
+> `Tx<T>` and `Rx<T>` values in the serialized payload MUST be encoded as
+> unit placeholders. The actual channel IDs are carried out-of-band in the
+> `channels` field of the `Request` or `Response` message.
+
+> r[rpc.channel.binding]
+>
+> On the handler side, implementations MUST use the channel IDs from
+> `Request.channels` as authoritative, patching them into deserialized
+> argument values before binding streams. On the caller side, implementations
+> MUST use the channel IDs from `Response.channels` to bind return-type
+> channel handles. This separation enables transparent proxying: a proxy
+> can forward `Request` and `Response` messages without parsing payloads.
