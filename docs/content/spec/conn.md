@@ -335,6 +335,14 @@ documentation for more information.
 > parity is a protocol error. Sending `OpenConnection` with an ID that is already
 > in use is a protocol error.
 
+> r[connection.open.rejection]
+>
+> There is no negotiated protocol-level limit on the maximum number of virtual
+> connections a session may hold. Instead, peers MUST protect their own resources
+> by enforcing local limits. If a counterpart attempts to open too many connections
+> or if the peer lacks the resources to handle a new connection, the peer MUST
+> reply with a `RejectConnection` message.
+
 > r[connection.parity]
 >
 > When opening a virtual connection, a peer requests a certain parity, which impacts
@@ -347,6 +355,21 @@ documentation for more information.
 > connection with ID 13 (odd), with parity Even. Within that connection, Alice
 > will send requests with ID 2, 4, 6 and channels with ID 2, 4, 6 (in their
 > respective namespaces), etc.
+
+> r[connection.close]
+>
+> Either peer may gracefully terminate a virtual connection by sending a
+> `CloseConnection` message. After sending `CloseConnection`, a peer MUST NOT
+> send any further requests, responses, or channel messages on that connection ID.
+
+> r[connection.close.semantics]
+>
+> Upon receiving a `CloseConnection` message, a peer MUST treat the connection as
+> immediately terminated and release its associated resources. The receiving peer
+> SHOULD behave as if all in-flight requests on that connection received a
+> `CancelRequest`, and it MUST treat all active channels bound to that connection
+> as implicitly closed or reset. Sending any message on a connection ID after
+> receiving `CloseConnection` for it is a protocol error.
 
 The design objective is to allow proxies to map existing connections without
 having to translate request IDs or channel IDs.
