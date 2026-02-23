@@ -415,7 +415,7 @@ impl BipBufRaw {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(loom)))]
 mod tests {
     use super::*;
     use crate::region::HeapRegion;

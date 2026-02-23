@@ -94,8 +94,9 @@ weight = 15
 > 48      8     var_pool_offset     Offset to shared VarSlotPool
 > 56      8     heartbeat_interval  Heartbeat interval in nanoseconds (0 = disabled)
 > 64      4     host_goodbye        Host goodbye flag (0 = active)
-> 68      8     current_size        Current segment size in bytes (AtomicU64)
-> 76      52    reserved            Reserved (zero)
+> 68      4     _pad                Reserved (zero)
+> 72      8     current_size        Current segment size in bytes (AtomicU64)
+> 80      48    reserved            Reserved (zero)
 > ```
 
 > r[shm.segment.magic.v2]
