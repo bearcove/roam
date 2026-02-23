@@ -100,14 +100,15 @@ r[zerocopy.send.shm]
 
 **SHM links:** the send path depends on payload size:
 
-- **Small (below inline threshold):** serialize directly into the
+- **Small (`8 + payload_len <= inline_threshold`):** serialize directly into the
   BipBuffer ring. `LinkTx::alloc` returns a `WriteSlot` pointing into
   the ring.
-- **Medium (above inline threshold, below mmap threshold):** serialize
+- **Medium (`8 + payload_len > inline_threshold` and
+  `payload_len <= mmap_threshold`):** serialize
   into a VarSlot. `LinkTx::alloc` allocates a slot and returns a
   `WriteSlot` pointing into it. A slot-ref frame is written to the
   BipBuffer to notify the receiver.
-- **Large (above mmap threshold):** serialize into a memory-mapped
+- **Large (`payload_len > mmap_threshold`):** serialize into a memory-mapped
   region. A reference to the mapping is sent through the BipBuffer.
 
 In all cases, serialization writes directly into shared memory. Zero
@@ -147,19 +148,23 @@ internal buffering is not counted). Deserialization borrows from the box.
 
 r[zerocopy.recv.shm.inline]
 
-**SHM links (inline):** for messages below the inline threshold, `recv`
+**SHM links (inline):** for messages where
+`8 + payload_len <= inline_threshold`, `recv`
 returns a Backing that borrows from the BipBuffer ring. Zero copies —
 deserialization reads directly from shared memory.
 
 r[zerocopy.recv.shm.slotref]
 
-**SHM links (slot-ref):** for medium messages, `recv` returns a Backing
+**SHM links (slot-ref):** for messages where
+`8 + payload_len > inline_threshold` and `payload_len <= mmap_threshold`,
+`recv` returns a Backing
 that borrows from a VarSlot. Zero copies — deserialization reads from the
 slot, which is returned to the pool when the Backing drops.
 
 r[zerocopy.recv.shm.mmap]
 
-**SHM links (mmap):** for large payloads, `recv` maps the region and
+**SHM links (mmap):** for messages where `payload_len > mmap_threshold`,
+`recv` maps the region and
 returns a Backing that owns the mapping. Zero copies — deserialization
 reads from the mapping.
 
@@ -230,8 +235,14 @@ frame. The WebSocket protocol preserves message boundaries natively.
 r[zerocopy.framing.link.shm]
 
 **SHM links:** 8-byte frame header (total_len + flags + reserved)
-followed by either inline payload bytes (padded to 4-byte alignment) or
-a 12-byte slot-ref body pointing into the VarSlotPool. See the
+followed by one of:
+
+- inline payload bytes (padded to 4-byte alignment),
+- a 12-byte slot-ref body pointing into the VarSlotPool (`SLOT_REF`), or
+- a 24-byte mmap-ref body (`MMAP_REF`) containing mapping identifier,
+  generation, offset, and payload length.
+
+See the
 [SHM spec](@/spec/shm.md) for details.
 
 r[zerocopy.framing.link.memory]
