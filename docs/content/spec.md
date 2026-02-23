@@ -148,14 +148,61 @@ graph TD
 > Roam provides a shared memory transport. It is designed for high-performance
 > IPC on a single machine.
 
-Links are designed to avoid dropping messages.
-
 ## Conduits
 
-On top of the **Link** is the **Wire** which deals with serialization and
-deserialization to and from postcard.
+> r[conduit]
+> 
+> Conduits provide Postcard serialization/deserialization on top of links.
+> Like links, they use a permit system for sending.
 
-On top of the **Wire** sits the **Session**: it has a stable identifiers, can be
+> r[conduit.typeplan]
+> 
+> Conduits are built to serialize and deserialize _one_ type (typically an enum).
+> For deserialization, conduits MUST use a `TypePlan` to avoid re-planning on every
+> item.
+
+> r[conduit.bare]
+>
+> `BareConduit` does not provide any feature on top of serialization/deserialization.
+
+> r[conduit.stable]
+>
+> `StableConduit` provides automatic reconnection (over fresh links) and replay of
+> missed messages. It comes with its own Packet framing.
+
+> r[conduit.split]
+>
+> Conduits can be passed around whole, but before use, they MUST be split into
+> a Sender and a Receiver.
+
+> r[conduit.permit]
+>
+> A conduit's Sender MUST expose an async `reserve()` that returns a Permit.
+> 
+> `reserve()` may "block" (be "Pending") for a while, this is how a conduit can
+> apply backpressure. This method may also error out, as conduits can die.
+
+> r[conduit.permit.send]
+>
+> The returned permit MUST have a synchronous `send()` function, which consumes
+> the permit and enqueues the 
+>
+> The permit guarantees that one item can be sent — it is consumed synchronously.
+> Dropping the permit returns capacity to the conduit.
+
+Crucially, separating `.send()` from `Permit::send()` avoids losing items
+in-transit by accidentally cancelling (dropping) Futures blocked in a dual-purpose
+`send()`.
+
+
+See tokio's [Sender::reserve](https://docs.rs/tokio/latest/tokio/sync/mpsc/struct.Sender.html#method.reserve)
+documentation for more information.
+
+## Sessions
+
+## Connections
+
+On top of the **Conduit** sits the **Session**: it has a stable identifiers, can be
 resumed if we lose connectivity and have to re-create a new **Link**.
 
 Finally, a **Session** can host many connections, starting with the root
