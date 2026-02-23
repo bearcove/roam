@@ -145,6 +145,10 @@ impl PeerEntry {
     }
 
     /// Write the current heartbeat timestamp.
+    ///
+    /// `timestamp_ns` must be a monotonic clock reading in nanoseconds.
+    ///
+    /// r[impl shm.crash.heartbeat-clock]
     #[inline]
     pub fn update_heartbeat(&self, timestamp_ns: u64) {
         self.last_heartbeat.store(timestamp_ns, Ordering::Release);

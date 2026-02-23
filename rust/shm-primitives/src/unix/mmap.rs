@@ -24,7 +24,7 @@ pub enum FileCleanup {
 
 /// File-backed memory-mapped region for cross-process shared memory.
 ///
-/// r[impl shm.file.mmap-posix]
+/// r[impl shm.file]
 pub struct MmapRegion {
     /// Pointer to the mapped memory
     ptr: *mut u8,

@@ -163,6 +163,119 @@ r[zerocopy.recv.shm.mmap]
 returns a Backing that owns the mapping. Zero copies — deserialization
 reads from the mapping.
 
+## Framing layers
+
+r[zerocopy.framing]
+
+A message passes through three layers of framing between user code and
+the physical wire. Each layer has a distinct responsibility.
+
+### Layer 1: Value encoding
+
+r[zerocopy.framing.value]
+
+The user's Rust value is serialized using postcard (via facet-postcard).
+Postcard produces a compact binary encoding that supports zero-copy
+deserialization — string and byte slice fields can borrow directly from
+the input buffer.
+
+The output of this layer is a contiguous byte sequence representing the
+serialized value.
+
+### Layer 2: Conduit framing
+
+r[zerocopy.framing.conduit]
+
+The conduit wraps the serialized value bytes depending on the conduit
+type:
+
+r[zerocopy.framing.conduit.bare]
+
+**BareConduit** — no additional framing. The serialized value bytes are
+passed directly to the link. Suitable for transports where reliability
+is inherent or unnecessary (shared memory, in-process, localhost).
+
+r[zerocopy.framing.conduit.stable]
+
+**StableConduit** — serializes a `Frame<T>` instead of a bare `T`. The
+Frame struct contains:
+
+- `seq: u32` — monotonically increasing sequence number
+- `ack: Option<u32>` — highest sequence number received from the peer
+- `item: T` — the actual value
+
+The entire `Frame<T>` is serialized in one postcard pass — there is no
+separate header serialization step. The conduit framing fields are just
+the first fields of the serialized output. The conduit maintains a
+replay buffer of serialized frame bytes for retransmission after
+reconnection. Required for transports that may drop the underlying
+connection (TCP, WebSocket).
+
+### Layer 3: Link framing
+
+r[zerocopy.framing.link]
+
+The link adds transport-specific framing to preserve message boundaries:
+
+r[zerocopy.framing.link.stream]
+
+**Stream links (TCP, Unix sockets):** 4-byte little-endian length prefix
+followed by the payload bytes: `[len: u32 LE][payload]`.
+
+r[zerocopy.framing.link.websocket]
+
+**WebSocket links:** each message is sent as a single binary WebSocket
+frame. The WebSocket protocol preserves message boundaries natively.
+
+r[zerocopy.framing.link.shm]
+
+**SHM links:** 8-byte frame header (total_len + flags + reserved)
+followed by either inline payload bytes (padded to 4-byte alignment) or
+a 12-byte slot-ref body pointing into the VarSlotPool. See the
+[SHM spec](@/spec/shm.md) for details.
+
+r[zerocopy.framing.link.memory]
+
+**Memory links (in-process):** no framing. Messages are `Vec<u8>` passed
+through an MPSC channel. Used for testing and in-process communication.
+
+### Framing combinations
+
+r[zerocopy.framing.combinations]
+
+Not all conduit × link combinations are valid or useful:
+
+| Conduit       | Stream | WebSocket | SHM  | Memory |
+|---------------|--------|-----------|------|--------|
+| BareConduit   | —      | —         | yes  | yes    |
+| StableConduit | yes    | yes       | —    | —      |
+
+BareConduit is used with links that don't lose connections (SHM, memory).
+StableConduit is used with links that may disconnect (TCP, WebSocket) and
+need seq/ack for replay on reconnect.
+
+### Serialization timing
+
+r[zerocopy.framing.single-pass]
+
+Despite the three logical layers, serialization happens exactly once.
+The conduit is generic over the value type `T`, so:
+
+- **BareConduit** serializes `T` directly into the write slot.
+- **StableConduit** serializes `Frame<T>` directly into the write slot.
+
+In both cases, postcard writes the output into the buffer provided by
+`LinkTx::alloc`. There is no intermediate buffer between layers — the
+value encoding and conduit framing are a single serialization pass, and
+the link framing (length prefix, SHM frame header, etc.) is applied by
+the link at `commit()` time around the already-written bytes.
+
+r[zerocopy.framing.no-double-serialize]
+
+The conduit MUST NOT serialize the value into a temporary buffer and
+then copy it into the write slot. The conduit serializes the value (or
+`Frame<T>`) directly into the link's write slot in one pass.
+
 ## Payload representation
 
 r[zerocopy.payload]

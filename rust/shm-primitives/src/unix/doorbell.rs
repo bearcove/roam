@@ -2,6 +2,9 @@
 //!
 //! Uses a Unix domain socketpair (SOCK_STREAM) wrapped in `tokio::io::unix::AsyncFd`
 //! for efficient async notification between processes sharing memory.
+//!
+//! r[impl shm.signal]
+//! r[impl shm.signal.doorbell.optional]
 
 use std::io::{self, ErrorKind};
 use std::os::unix::io::{AsRawFd, FromRawFd, OwnedFd, RawFd};
@@ -170,6 +173,7 @@ impl Doorbell {
     /// Returns `SignalResult::PeerDead` if the peer has disconnected.
     ///
     /// r[impl shm.signal.doorbell.signal]
+    /// r[impl shm.signal.doorbell.integration]
     pub async fn signal(&self) -> SignalResult {
         let fd = self.async_fd.get_ref().as_raw_fd();
         let buf = [1u8];

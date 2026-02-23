@@ -57,6 +57,8 @@ impl BipBufHeader {
 ///
 /// This is a convenience wrapper around `BipBufRaw` that manages memory
 /// through a `Region`.
+///
+/// r[impl shm.bipbuf]
 pub struct BipBuf {
     #[allow(dead_code)]
     region: Region,
@@ -133,6 +135,11 @@ impl BipBuf {
     pub fn capacity(&self) -> u32 {
         self.inner.capacity()
     }
+
+    /// Reset all indices to zero (crash recovery).  See [`BipBufRaw::reset`].
+    pub fn reset(&self) {
+        self.inner.reset();
+    }
 }
 
 /// Producer handle for the BipBuffer.
@@ -155,7 +162,10 @@ impl<'a> BipBufProducer<'a> {
     /// On success, returns a mutable slice. The caller MUST write their
     /// data into this slice and then call `commit(len)` to make it visible.
     ///
-    /// Returns `None` if there isn't enough contiguous space.
+    /// Returns `None` if there isn't enough contiguous space. A full buffer
+    /// means the consumer is slow — the caller MUST wait and retry.
+    ///
+    /// r[impl shm.bipbuf.backpressure]
     pub fn try_grant(&mut self, len: u32) -> Option<&mut [u8]> {
         self.buf.inner.try_grant(len)
     }
@@ -402,6 +412,17 @@ impl BipBufRaw {
         } else {
             header.read.store(new_read, Ordering::Release);
         }
+    }
+
+    /// Reset all indices to zero (crash recovery).
+    ///
+    /// Discards all unread data.  Must only be called by the host after
+    /// confirming the peer is dead and before returning the slot to Empty.
+    pub fn reset(&self) {
+        let header = self.header();
+        header.write.store(0, Ordering::Release);
+        header.watermark.store(0, Ordering::Release);
+        header.read.store(0, Ordering::Release);
     }
 
     /// Check if the buffer appears empty.

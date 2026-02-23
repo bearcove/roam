@@ -51,7 +51,7 @@ pub trait ConduitTx<T: 'static>: Send + 'static {
 pub trait ConduitTxPermit<T: 'static> {
     type Error: std::error::Error + Send + Sync + 'static;
 
-    fn send(self, item: &T) -> Result<(), Self::Error>;
+    fn send(self, item: T) -> Result<(), Self::Error>;
 }
 
 /// Receiving half of a [`Conduit`].

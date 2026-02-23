@@ -106,8 +106,8 @@ impl<T: Facet<'static> + 'static, LTx: LinkTx> ConduitTxPermit<T>
 {
     type Error = BareConduitError;
 
-    fn send(self, item: &T) -> Result<(), Self::Error> {
-        let encoded = facet_postcard::to_vec(item).map_err(BareConduitError::Encode)?;
+    fn send(self, item: T) -> Result<(), Self::Error> {
+        let encoded = facet_postcard::to_vec(&item).map_err(BareConduitError::Encode)?;
 
         let mut slot = self
             .permit

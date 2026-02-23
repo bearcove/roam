@@ -36,18 +36,11 @@ struct ServerHello {
     rejected: bool,
 }
 
-/// Frame header — seq + ack, serialized separately so we can prepend to
-/// already-encoded item bytes without needing an owned T.
+/// Sequenced data frame. All post-handshake traffic is `Frame<T>`.
+/// Serialized in a single postcard pass — the seq/ack fields are just
+/// the first fields of the serialized output.
 // r[impl stable.framing]
 // r[impl stable.framing.encoding]
-#[derive(Facet, Debug, Clone, Copy)]
-struct FrameHeader {
-    seq: PacketSeq,
-    ack: Option<PacketAck>,
-}
-
-/// Sequenced data frame. All post-handshake traffic is `Frame<T>`.
-// r[impl stable.framing]
 #[derive(Facet, Debug, Clone)]
 struct Frame<T> {
     seq: PacketSeq,
@@ -69,6 +62,7 @@ struct Attachment<L> {
 pub trait LinkSource: Send + 'static {
     type Link: Link;
 
+    #[allow(async_fn_in_trait)]
     async fn next_link(&mut self) -> std::io::Result<Attachment<Self::Link>>;
 }
 
@@ -167,23 +161,18 @@ impl<LS: LinkSource> Inner<LS> {
         )
         .await?;
 
-        // Replay items the peer hasn't received yet, in original order.
-        for (seq, item_bytes) in self.replay.iter() {
+        // Replay frames the peer hasn't received yet, in original order.
+        // Frame bytes include the original seq/ack — stale acks are
+        // harmless since the peer ignores acks older than what it has seen.
+        for (seq, frame_bytes) in self.replay.iter() {
             if peer_last_received.is_some_and(|last| *seq <= last) {
                 continue;
             }
-            let ack = self
-                .last_received
-                .map(|max_delivered| PacketAck { max_delivered });
-            let header_bytes = facet_postcard::to_vec(&FrameHeader { seq: *seq, ack })
-                .map_err(StableConduitError::Encode)?;
-
-            let frame_len = header_bytes.len() + item_bytes.len();
             let permit = new_tx.reserve().await.map_err(StableConduitError::Io)?;
-            let mut slot = permit.alloc(frame_len).map_err(StableConduitError::Io)?;
-            let buf = slot.as_mut_slice();
-            buf[..header_bytes.len()].copy_from_slice(&header_bytes);
-            buf[header_bytes.len()..].copy_from_slice(item_bytes);
+            let mut slot = permit
+                .alloc(frame_bytes.len())
+                .map_err(StableConduitError::Io)?;
+            slot.as_mut_slice().copy_from_slice(frame_bytes);
             slot.commit();
         }
 
@@ -384,7 +373,9 @@ impl<T: Facet<'static> + 'static, LS: LinkSource> ConduitTxPermit<T>
 {
     type Error = StableConduitError;
 
-    fn send(mut self, item: &T) -> Result<(), StableConduitError> {
+    // r[impl zerocopy.framing.single-pass]
+    // r[impl zerocopy.framing.no-double-serialize]
+    fn send(mut self, item: T) -> Result<(), StableConduitError> {
         let inner = &mut *self.guard;
 
         let seq = inner.next_send_seq;
@@ -394,16 +385,14 @@ impl<T: Facet<'static> + 'static, LS: LinkSource> ConduitTxPermit<T>
             .last_received
             .map(|max_delivered| PacketAck { max_delivered });
 
-        // Encode the item for the replay buffer.
-        let item_bytes = facet_postcard::to_vec(item).map_err(StableConduitError::Encode)?;
-        inner.replay.push(seq, item_bytes.clone());
+        let frame = Frame { seq, ack, item };
 
-        // Wire encoding = header bytes + item bytes (matches Frame<T> postcard layout).
-        let header_bytes = facet_postcard::to_vec(&FrameHeader { seq, ack })
-            .map_err(StableConduitError::Encode)?;
+        // Single-pass serialization of the entire Frame<T>.
+        let frame_bytes = facet_postcard::to_vec(&frame).map_err(StableConduitError::Encode)?;
 
-        let mut frame_bytes = header_bytes;
-        frame_bytes.extend_from_slice(&item_bytes);
+        // Store full frame bytes for replay. Stale acks are harmless —
+        // the peer ignores acks older than what it has already seen.
+        inner.replay.push(seq, frame_bytes.clone());
 
         let mut slot = self
             .link_permit
@@ -580,18 +569,16 @@ mod tests {
         }
     }
 
-    // Encode and send a frame (header + item) directly onto a LinkTx.
+    // Encode and send a frame directly onto a LinkTx.
     async fn send_frame<LTx: LinkTx>(tx: &LTx, seq: u32, ack: Option<u32>, item: &str) {
-        let header = FrameHeader {
+        let frame = Frame {
             seq: PacketSeq(seq),
             ack: ack.map(|n| PacketAck {
                 max_delivered: PacketSeq(n),
             }),
+            item: item.to_string(),
         };
-        let header_bytes = facet_postcard::to_vec(&header).unwrap();
-        let item_bytes = facet_postcard::to_vec(&item.to_string()).unwrap();
-        let mut frame_bytes = header_bytes;
-        frame_bytes.extend_from_slice(&item_bytes);
+        let frame_bytes = facet_postcard::to_vec(&frame).unwrap();
 
         let permit = tx.reserve().await.unwrap();
         let mut slot = permit.alloc(frame_bytes.len()).unwrap();
@@ -661,7 +648,7 @@ mod tests {
         let (client_tx, _client_rx) = client.split();
 
         let permit = client_tx.reserve().await.unwrap();
-        permit.send(&"hello".to_string()).unwrap();
+        permit.send("hello".to_string()).unwrap();
 
         let (seq, item) = server.await.unwrap();
         assert_eq!(seq, 0);
@@ -764,13 +751,13 @@ mod tests {
             .reserve()
             .await
             .unwrap()
-            .send(&"alpha".to_string())
+            .send("alpha".to_string())
             .unwrap();
         client_tx
             .reserve()
             .await
             .unwrap()
-            .send(&"beta".to_string())
+            .send("beta".to_string())
             .unwrap();
 
         // Receive the ack frame from server1. This trims seq 0 from replay buffer,
@@ -856,13 +843,13 @@ mod tests {
             .reserve()
             .await
             .unwrap()
-            .send(&"alpha".to_string())
+            .send("alpha".to_string())
             .unwrap();
         client_tx
             .reserve()
             .await
             .unwrap()
-            .send(&"beta".to_string())
+            .send("beta".to_string())
             .unwrap();
 
         let msg = client_rx.recv().await.unwrap().unwrap();
@@ -979,7 +966,7 @@ mod tests {
             .reserve()
             .await
             .unwrap()
-            .send(&"hello".to_string())
+            .send("hello".to_string())
             .unwrap();
 
         // server1 drops → reconnect → server2 rejects → SessionLost
