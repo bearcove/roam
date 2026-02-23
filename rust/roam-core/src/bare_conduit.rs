@@ -123,7 +123,10 @@ impl<T, LTx: LinkTx> ConduitTxPermit for BareConduitPermit<'_, T, LTx> {
         // The item is a valid instance of T, so (ptr, shape) is consistent.
         #[allow(unsafe_code)]
         let peek = unsafe {
-            Peek::unchecked_new(PtrConst::new((&raw const item).cast()), self.send_shape)
+            Peek::unchecked_new(
+                PtrConst::new((&raw const item).cast::<u8>()),
+                self.send_shape,
+            )
         };
         let encoded = facet_postcard::peek_to_vec(peek).map_err(BareConduitError::Encode)?;
 

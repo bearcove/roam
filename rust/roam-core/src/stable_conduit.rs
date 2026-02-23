@@ -71,10 +71,10 @@ pub trait LinkSource: Send + 'static {
 // ---------------------------------------------------------------------------
 
 // r[impl stable]
-pub struct StableConduit<S: 'static, R: 'static, LS: LinkSource> {
+pub struct StableConduit<T: 'static, LS: LinkSource> {
     inner: Arc<tokio::sync::Mutex<Inner<LS>>>,
     frame_plan: Arc<TypePlanCore>,
-    _phantom: PhantomData<fn(S) -> R>,
+    _phantom: PhantomData<fn(T) -> T>,
 }
 
 struct Inner<LS: LinkSource> {
@@ -93,18 +93,16 @@ struct Inner<LS: LinkSource> {
     replay: ReplayBuffer,
 }
 
-impl<S: Facet<'static> + 'static, R: Facet<'static> + 'static, LS: LinkSource>
-    StableConduit<S, R, LS>
-{
+impl<T: Facet<'static> + 'static, LS: LinkSource> StableConduit<T, LS> {
     pub async fn new(mut source: LS, plan: &'static RpcPlan) -> Result<Self, StableConduitError> {
         assert!(
-            plan.shape == R::SHAPE,
+            plan.shape == T::SHAPE,
             "RpcPlan shape mismatch: plan is for {}, expected {}",
             plan.shape,
-            R::SHAPE,
+            T::SHAPE,
         );
 
-        let frame_plan = facet_reflect::TypePlan::<Frame<R>>::build()
+        let frame_plan = facet_reflect::TypePlan::<Frame<T>>::build()
             .map_err(|e| StableConduitError::Setup(e.to_string()))?
             .core();
 
@@ -267,18 +265,18 @@ fn fresh_key() -> Vec<u8> {
 }
 
 // ---------------------------------------------------------------------------
-// Conduit<S, R> impl
+// Conduit impl
 // ---------------------------------------------------------------------------
 
-impl<S: Facet<'static> + 'static, R: Facet<'static> + 'static, LS: LinkSource> Conduit<S, R>
-    for StableConduit<S, R, LS>
+impl<T: Facet<'static> + 'static, LS: LinkSource> Conduit for StableConduit<T, LS>
 where
     <LS::Link as Link>::Tx: Clone + Send + 'static,
     <LS::Link as Link>::Rx: Send + 'static,
     LS: Send + 'static,
 {
-    type Tx = StableConduitTx<S, LS>;
-    type Rx = StableConduitRx<R, LS>;
+    type Msg<'a> = T;
+    type Tx = StableConduitTx<T, LS>;
+    type Rx = StableConduitRx<T, LS>;
 
     fn split(self) -> (Self::Tx, Self::Rx) {
         (
@@ -299,19 +297,20 @@ where
 // Tx
 // ---------------------------------------------------------------------------
 
-pub struct StableConduitTx<S: 'static, LS: LinkSource> {
+pub struct StableConduitTx<T: 'static, LS: LinkSource> {
     inner: Arc<tokio::sync::Mutex<Inner<LS>>>,
-    _phantom: PhantomData<fn(S)>,
+    _phantom: PhantomData<fn(T)>,
 }
 
-impl<S: Facet<'static> + 'static, LS: LinkSource> ConduitTx<S> for StableConduitTx<S, LS>
+impl<T: Facet<'static> + 'static, LS: LinkSource> ConduitTx for StableConduitTx<T, LS>
 where
     <LS::Link as Link>::Tx: Clone + Send + 'static,
     <LS::Link as Link>::Rx: Send + 'static,
     LS: Send + 'static,
 {
+    type Msg<'a> = T;
     type Permit<'a>
-        = StableConduitPermit<'a, S, LS>
+        = StableConduitPermit<'a, T, LS>
     where
         Self: 'a;
 
@@ -365,20 +364,21 @@ where
 // Permit
 // ---------------------------------------------------------------------------
 
-pub struct StableConduitPermit<'a, S: 'static, LS: LinkSource> {
+pub struct StableConduitPermit<'a, T: 'static, LS: LinkSource> {
     guard: tokio::sync::MutexGuard<'a, Inner<LS>>,
     link_permit: <<LS::Link as Link>::Tx as LinkTx>::Permit,
-    _phantom: PhantomData<fn(S)>,
+    _phantom: PhantomData<fn(T)>,
 }
 
-impl<S: Facet<'static> + 'static, LS: LinkSource> ConduitTxPermit<S>
-    for StableConduitPermit<'_, S, LS>
+impl<T: Facet<'static> + 'static, LS: LinkSource> ConduitTxPermit
+    for StableConduitPermit<'_, T, LS>
 {
+    type Msg<'a> = T;
     type Error = StableConduitError;
 
     // r[impl zerocopy.framing.single-pass]
     // r[impl zerocopy.framing.no-double-serialize]
-    fn send(mut self, item: S) -> Result<(), StableConduitError> {
+    fn send(mut self, item: T) -> Result<(), StableConduitError> {
         let inner = &mut *self.guard;
 
         let seq = inner.next_send_seq;
@@ -390,7 +390,7 @@ impl<S: Facet<'static> + 'static, LS: LinkSource> ConduitTxPermit<S>
 
         let frame = Frame { seq, ack, item };
 
-        // Single-pass serialization of the entire Frame<S>.
+        // Single-pass serialization of the entire Frame<T>.
         let frame_bytes = facet_postcard::to_vec(&frame).map_err(StableConduitError::Encode)?;
 
         // Store full frame bytes for replay. Stale acks are harmless —
@@ -412,21 +412,22 @@ impl<S: Facet<'static> + 'static, LS: LinkSource> ConduitTxPermit<S>
 // Rx
 // ---------------------------------------------------------------------------
 
-pub struct StableConduitRx<R: 'static, LS: LinkSource> {
+pub struct StableConduitRx<T: 'static, LS: LinkSource> {
     inner: Arc<tokio::sync::Mutex<Inner<LS>>>,
     frame_plan: Arc<TypePlanCore>,
-    _phantom: PhantomData<fn() -> R>,
+    _phantom: PhantomData<fn() -> T>,
 }
 
-impl<R: Facet<'static> + 'static, LS: LinkSource> ConduitRx<R> for StableConduitRx<R, LS>
+impl<T: Facet<'static> + 'static, LS: LinkSource> ConduitRx for StableConduitRx<T, LS>
 where
     <LS::Link as Link>::Tx: Send + 'static,
     <LS::Link as Link>::Rx: Send + 'static,
     LS: Send + 'static,
 {
+    type Msg<'a> = T;
     type Error = StableConduitError;
 
-    async fn recv(&mut self) -> Result<Option<SelfRef<R>>, Self::Error> {
+    async fn recv(&mut self) -> Result<Option<SelfRef<T>>, Self::Error> {
         loop {
             // Phase 1: read raw bytes, reconnecting on link failure.
             let backing = {
@@ -446,7 +447,7 @@ where
 
             // Phase 2: deserialize the frame.
             let frame_plan = Arc::clone(&self.frame_plan);
-            let frame: SelfRef<Frame<R>> =
+            let frame: SelfRef<Frame<T>> =
                 SelfRef::try_new(backing, |bytes| deserialize_frame(&frame_plan, bytes))?;
 
             // Phase 3: update shared state; skip duplicates.
@@ -475,15 +476,15 @@ where
     }
 }
 
-fn deserialize_frame<R: 'static>(
+fn deserialize_frame<T: 'static>(
     plan: &Arc<TypePlanCore>,
     bytes: &[u8],
-) -> Result<Frame<R>, StableConduitError> {
+) -> Result<Frame<T>, StableConduitError> {
     use facet_format::{FormatDeserializer, MetaSource};
     use facet_postcard::PostcardParser;
     use facet_reflect::Partial;
 
-    let mut value = std::mem::MaybeUninit::<Frame<R>>::uninit();
+    let mut value = std::mem::MaybeUninit::<Frame<T>>::uninit();
     let ptr = facet_core::PtrUninit::new(value.as_mut_ptr().cast::<u8>());
     let root_id = plan.root_id();
 
@@ -645,7 +646,7 @@ mod tests {
             (seq, item)
         });
 
-        let client = StableConduit::<String, String, _>::new(source, string_plan())
+        let client = StableConduit::<String, _>::new(source, string_plan())
             .await
             .unwrap();
         let (client_tx, _client_rx) = client.split();
@@ -744,7 +745,7 @@ mod tests {
         let source = QueuedLinkSource {
             links: VecDeque::from([(c1, None), (c2, None)]),
         };
-        let client = StableConduit::<String, String, _>::new(source, string_plan())
+        let client = StableConduit::<String, _>::new(source, string_plan())
             .await
             .unwrap();
         let (client_tx, mut client_rx) = client.split();
@@ -837,7 +838,7 @@ mod tests {
         let source = QueuedLinkSource {
             links: VecDeque::from([(c1, None), (c2, None)]),
         };
-        let client = StableConduit::<String, String, _>::new(source, string_plan())
+        let client = StableConduit::<String, _>::new(source, string_plan())
             .await
             .unwrap();
         let (client_tx, mut client_rx) = client.split();
@@ -899,7 +900,7 @@ mod tests {
             send_frame(&s_tx, 1, None, "second").await;
         });
 
-        let client = StableConduit::<String, String, _>::new(source, string_plan())
+        let client = StableConduit::<String, _>::new(source, string_plan())
             .await
             .unwrap();
         let (_client_tx, mut client_rx) = client.split();
@@ -960,7 +961,7 @@ mod tests {
         let source = QueuedLinkSource {
             links: VecDeque::from([(c1, None), (c2, None)]),
         };
-        let client = StableConduit::<String, String, _>::new(source, string_plan())
+        let client = StableConduit::<String, _>::new(source, string_plan())
             .await
             .unwrap();
         let (client_tx, mut client_rx) = client.split();
