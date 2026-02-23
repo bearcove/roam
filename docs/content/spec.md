@@ -276,7 +276,7 @@ shared memory; but a roam connection sits several layers above a "TCP connection
 > r[conduit.permit.send]
 >
 > The returned permit MUST have a synchronous `send()` function, which consumes
-> the permit and enqueues the 
+> the permit and enqueues the item for sending.
 >
 > The permit guarantees that one item can be sent — it is consumed synchronously.
 > Dropping the permit returns capacity to the conduit.
@@ -321,9 +321,9 @@ documentation for more information.
 > r[session.message.connection_id]
 >
 > Every message is composed of a connection identifier and a payload. The
-> connection ID is meaningful for every message type except for the handshake,
-> i.e., the `Hello` and `HelloYourself` messages, for which the connection id
-> is set to zero.
+> connection ID is meaningful for every message type except for the handshake
+> (`Hello` and `HelloYourself`) and `ProtocolError`, all of which MUST use
+> connection ID 0.
 
 > r[session.message.payloads]
 >
@@ -362,9 +362,24 @@ documentation for more information.
 >
 > The idea is to partition the identifier space so that either peer can allocate
 > new identifiers without coordinating.
-> 
-> A peer that has claimed `Odd` parity at the session level can request virtual
-> connections with identifiers 1, 3, 5, 7, etc. Their 
+>
+> For example, if peer Alice initiates a session with `parity` set to `Odd`,
+> Alice may later open virtual connections with ID 1, 3, 5, 7, etc. whereas
+> Bob may open virtual connections with ID 2, 4, 6, 8, etc.
+
+> r[session.protocol-error]
+>
+> When their counterpart does something that violates the roam spec, a peer MUST
+> send a `ProtocolError` message describing the violation, and MUST tear down
+> the entire session, including its underlying conduit and link.
+>
+> `ProtocolError` is always sent on connection ID 0. Sending it on another connection
+> ID is itself, a protocol error.
+>
+> Any pending request MUST be resolved with an error indicating that there's been
+> a protocol error. Any live channel MUST be put in a state where any attempt to
+> send or recv from them MUST return an error indicating that there's been a protocol
+> error.
 
 ## Connections
 
@@ -376,6 +391,8 @@ documentation for more information.
 > 
 > A session can hold many connections: it starts with one, the root connection,
 > with ID 0. Trying to close the root connection is a protocol error.
+>
+> Each peer's parity on the root connection matches their session parity.
 
 > r[connection.virtual]
 >
@@ -385,18 +402,30 @@ documentation for more information.
 > r[connection.open]
 >
 > Either peer may allocate a new connection ID using its parity, and send a
-> `OpenConnection` message on the desired connection ID, Then wait until the
+> `OpenConnection` message on the desired connection ID, then wait until the
 > counterpart replies with either `AcceptConnection` or `RejectConnection`. Only
 > once `AcceptConnection` has been received may the peer send other messages on
 > that connection.
+>
+> Sending `OpenConnection` with an ID that does not match the sender's session
+> parity is a protocol error. Sending `OpenConnection` with an ID that is already
+> in use is a protocol error.
 
 > r[connection.parity]
 >
-> When opening a virtual connection, a peer requests a certain parity. That
-> parity doesn’t have to be the same as the session parity.
+> When opening a virtual connection, a peer requests a certain parity, which impacts
+> which IDs a peer may allocate for requests and channels, without coordination.
+> Request IDs and channel IDs have separate namespaces within a connection.
 >
-> The design objective is to allow proxies to map existing connections without
-> having to translate request IDs or channel IDs.
+> The parity of virtual connections needn't be the same as the session parity.
+>
+> For example, peer Alice may have session parity Odd: she might open a new
+> connection with ID 13 (odd), with parity Even. Within that connection, Alice
+> will send requests with ID 2, 4, 6 and channels with ID 2, 4, 6 (in their
+> respective namespaces), etc.
+
+The design objective is to allow proxies to map existing connections without
+having to translate request IDs or channel IDs.
 
 Case study: [dodeca](https://github.com/bearcove/dodeca) is a static site
 generator. It’s using roam RPC over the shared memory transport to communicate
@@ -410,14 +439,11 @@ live when new changes are made to the Markdown, etc.).
 The HTTP server cell finds itself in the middle of the host and the browser, and
 has to forward calls somehow:
 
-```mermaid
-graph LR
-    Host["Host (main binary)"]
-    Cell["HTTP Server Cell"]
-    Browser["Browser (DevTools)"]
-
-    Host <-->|"roam / SHM"| Cell
-    Cell <-->|"roam / WebSocket"| Browser
+```aasvg
+.----------------.   roam/SHM   .----------------.   roam/WebSocket   .----------------.
+| Host           |<------------>| HTTP Server    |<------------------>| Browser        |
+| (main binary)  |              | Cell           |                    | (DevTools)     |
+'----------------'              '----------------'                    '----------------'
 ```
 
 Instead of manually forwarding calls back to the host, the HTTP server cell can

@@ -8,6 +8,11 @@ use crate::{ChannelId, ConnectionId, Metadata, MethodId, RequestId};
 use facet::{Facet, PtrConst, Shape};
 
 /// Protocol message.
+// r[impl session]
+// r[impl session.message]
+// r[impl session.message.connection_id]
+// r[impl session.peer]
+// r[impl session.symmetry]
 #[derive(Debug, Clone, PartialEq, Eq, Facet)]
 pub struct Message<'payload> {
     /// Connection ID: 0 for control messages (Hello, HelloYourself)
@@ -19,6 +24,9 @@ pub struct Message<'payload> {
 
 /// Whether a peer will use odd or even IDs for requests and channels
 /// on a given connection.
+// r[impl session.parity]
+// r[impl session.role]
+// r[impl connection.parity]
 #[derive(Debug, Clone, PartialEq, Eq, Facet)]
 #[repr(u8)]
 pub enum Parity {
@@ -38,6 +46,7 @@ impl Parity {
 
 structstruck::strike! {
     #[repr(u8)]
+    // r[impl session.message.payloads]
     #[structstruck::each[derive(Debug, Clone, PartialEq, Eq, Facet)]]
     pub enum MessagePayload<'payload> {
         // ========================================================================
@@ -45,6 +54,7 @@ structstruck::strike! {
         // ========================================================================
 
         /// Sent by initiator to acceptor as the first message
+        // r[impl session.handshake]
         Hello(pub struct Hello {
             /// Must be equal to 7
             pub version: u32,
@@ -65,6 +75,7 @@ structstruck::strike! {
         /// Sent by either peer when the counterpart has violated the protocol.
         /// The sender closes the transport immediately after sending this message.
         /// No reply is expected or valid.
+        // r[impl session.protocol-error]
         ProtocolError(pub struct ProtocolError {
             /// Human-readable description of the protocol violation.
             pub description: String,
@@ -76,6 +87,8 @@ structstruck::strike! {
 
         /// Request a new virtual connection. This is sent on the desired connection
         /// ID, even though it doesn't exist yet.
+        // r[impl connection.open]
+        // r[impl connection.virtual]
         OpenConnection(pub struct OpenConnection {
             /// Metadata associated with the connection.
             pub metadata: Metadata,

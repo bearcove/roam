@@ -66,7 +66,7 @@ struct Attachment<L> {
     client_hello: Option<ClientHello>,
 }
 
-trait LinkSource: Send + 'static {
+pub trait LinkSource: Send + 'static {
     type Link: Link;
 
     async fn next_link(&mut self) -> std::io::Result<Attachment<Self::Link>>;

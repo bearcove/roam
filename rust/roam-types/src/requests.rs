@@ -1,5 +1,7 @@
 use facet::Facet;
 
+// r[impl connection]
+// r[impl connection.root]
 declare_id!(
     /// Connection ID identifying a virtual connection on a link.
     ///
