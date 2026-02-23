@@ -38,6 +38,7 @@ pub struct VarSlotMeta {
     pub next_free: AtomicU32,
 }
 
+#[cfg(not(loom))]
 const _: () = assert!(core::mem::size_of::<VarSlotMeta>() == 16);
 
 impl VarSlotMeta {

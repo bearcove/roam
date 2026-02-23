@@ -27,6 +27,7 @@ pub struct BipBufHeader {
     _pad1: [u8; 60],
 }
 
+#[cfg(not(loom))]
 const _: () = assert!(core::mem::size_of::<BipBufHeader>() == 128);
 
 /// Size of the BipBuffer header in bytes.

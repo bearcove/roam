@@ -37,5 +37,11 @@ windows-sys = { version = "0.61", features = [
     "Win32_System_Threading",
 ]}
 
+[target.'cfg(loom)'.dependencies]
+loom = { version = "0.7" }
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(loom)'] }
+
 [dev-dependencies]
 tempfile = "3"

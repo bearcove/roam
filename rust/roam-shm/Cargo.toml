@@ -11,8 +11,13 @@ description = "Shared-memory transport for roam — lock-free rings for zero-cop
 [package.metadata."docs.rs"]
 rustdoc-args = ["--html-in-header", "arborium-header.html"]
 
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(loom)'] }
+
 [dependencies]
 roam-types.workspace = true
 shm-primitives.workspace = true
 tokio = { workspace = true, features = ["sync"] }
 
+[target.'cfg(loom)'.dependencies]
+loom = { version = "0.7" }

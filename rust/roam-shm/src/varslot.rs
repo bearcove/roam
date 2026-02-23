@@ -18,8 +18,8 @@
 //! the `SizeClassConfig` slice stored in the segment header.
 
 use core::mem::size_of;
-use core::sync::atomic::{AtomicU64, Ordering};
 
+use shm_primitives::sync::{AtomicU64, Ordering};
 use shm_primitives::{Region, SlotState, VarSlotMeta};
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -94,6 +94,7 @@ pub struct SizeClassHeader {
     _pad: [u8; 48],
 }
 
+#[cfg(not(loom))]
 const _: () = assert!(size_of::<SizeClassHeader>() == 64);
 
 // ── VarSlotPool ──────────────────────────────────────────────────────────────
@@ -435,7 +436,7 @@ pub struct PoolLayout {
 
 // ── tests ─────────────────────────────────────────────────────────────────────
 
-#[cfg(test)]
+#[cfg(all(test, not(loom)))]
 mod tests {
     use super::*;
     use shm_primitives::HeapRegion;
@@ -620,5 +621,99 @@ mod tests {
 
         pool.free(s).unwrap();
         assert_eq!(meta.owner_peer.load(Ordering::Acquire), 0);
+    }
+}
+
+// ── loom tests ────────────────────────────────────────────────────────────────
+
+#[cfg(loom)]
+#[allow(dead_code)]
+mod loom_tests {
+    use super::*;
+    use loom::sync::Arc;
+    use shm_primitives::HeapRegion;
+
+    // Tiny pool: 1 class, 2 slots of 64 bytes. Enough to exercise races without
+    // blowing up loom's state-space budget.
+    const LOOM_CLASSES: &[SizeClassConfig] = &[SizeClassConfig {
+        slot_size: 64,
+        slot_count: 2,
+    }];
+
+    fn loom_pool() -> (HeapRegion, Arc<VarSlotPool>) {
+        let size = VarSlotPool::required_size(LOOM_CLASSES);
+        let region = HeapRegion::new_zeroed(size);
+        let pool = unsafe { VarSlotPool::init(region.region(), 0, LOOM_CLASSES) };
+        (region, Arc::new(pool))
+    }
+
+    /// Two threads concurrently allocate from a 2-slot pool.
+    /// They must get distinct slots (no aliasing).
+    #[test]
+    fn concurrent_alloc_no_aliasing() {
+        loom::model(|| {
+            let (_region, pool) = loom_pool();
+            let pool1 = pool.clone();
+            let pool2 = pool.clone();
+
+            let t1 = loom::thread::spawn(move || pool1.allocate(1, 1));
+            let t2 = loom::thread::spawn(move || pool2.allocate(1, 2));
+
+            let s1 = t1.join().unwrap().expect("thread 1 must get a slot");
+            let s2 = t2.join().unwrap().expect("thread 2 must get a slot");
+
+            // Both threads must have won different physical slots.
+            assert_ne!(s1.slot_idx, s2.slot_idx, "threads must not alias slots");
+
+            pool.free(s1).unwrap();
+            pool.free(s2).unwrap();
+        });
+    }
+
+    /// One thread allocates a slot, then a second thread frees it.
+    /// The generation must be consistent across the handoff.
+    #[test]
+    fn alloc_then_free_cross_thread() {
+        loom::model(|| {
+            let (_region, pool) = loom_pool();
+
+            let slot = pool.allocate(1, 0).expect("must allocate");
+
+            let pool2 = pool.clone();
+            let t = loom::thread::spawn(move || pool2.free(slot));
+
+            t.join().unwrap().expect("cross-thread free must succeed");
+        });
+    }
+
+    /// Concurrent alloc and free on a 2-slot pool: one thread allocates then
+    /// immediately frees in a loop; the other just allocates. Exercises the
+    /// Treiber stack CAS paths under all interleavings.
+    #[test]
+    fn concurrent_alloc_and_free() {
+        loom::model(|| {
+            let (_region, pool) = loom_pool();
+            let pool_alloc = pool.clone();
+            let pool_free = pool.clone();
+
+            // Pre-allocate one slot so the free thread always has something.
+            let initial = pool.allocate(1, 0).expect("initial alloc");
+
+            let t_free = loom::thread::spawn(move || {
+                pool_free.free(initial).expect("free must succeed");
+            });
+
+            let t_alloc = loom::thread::spawn(move || pool_alloc.allocate(1, 0));
+
+            t_free.join().unwrap();
+            let maybe_slot = t_alloc.join().unwrap();
+
+            // After the free, the pool has at least 1 slot available.
+            // The alloc thread may have run before or after the free; either way
+            // it should have found a slot (the pool had 2 to begin with, 1 pre-allocated).
+            if let Some(s) = maybe_slot {
+                pool.free(s).unwrap();
+            }
+        });
     }
 }
