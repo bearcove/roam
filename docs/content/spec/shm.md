@@ -489,10 +489,16 @@ Each guest has two BipBuffers (bipartite circular buffers):
 > On detecting a crashed guest, the host MUST:
 >
 >   1. Set the peer state to Goodbye
->   2. Reset both BipBuffer headers (write=0, read=0, watermark=0)
->   3. Scan VarSlotPool for slots with `owner_peer == crashed_peer_id`
+>   2. Scan the H2G BipBuffer for any `SLOT_REF` entries and free those
+>      slots (they are host-owned — `owner_peer == 0` — but were in
+>      flight to the crashed guest and will never be freed by the receiver)
+>   3. Reset both BipBuffer headers (write=0, read=0, watermark=0)
+>   4. Scan VarSlotPool for slots with `owner_peer == crashed_peer_id`
 >      and return them to their free lists
->   4. Set state to Empty (allowing a new guest to attach)
+>   5. Set state to Empty (allowing a new guest to attach)
+>
+> Step 2 MUST precede step 3: once the H2G BipBuffer is reset its
+> content is gone and the slot references cannot be recovered.
 
 ## Host Shutdown
 
