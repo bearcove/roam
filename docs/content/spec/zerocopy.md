@@ -57,22 +57,31 @@ borrow from the calling context.
 r[zerocopy.send.borrowed]
 
 A call like `client.method(&buf[..12]).await` passes a borrowed slice.
-The borrow is valid for the duration of the `.await` — the future
-captures the reference and serialization completes before the future
-resolves.
+The future returned by `method()` captures the reference. The caller's
+`.await` keeps the borrow alive for the future's entire lifetime —
+including across yield points (e.g. `reserve()` for backpressure).
 
 r[zerocopy.send.borrowed-in-struct]
 
 A call like `client.method(Context { name: &my_string }).await` passes a
 struct that borrows from the calling scope. This is valid for the same
-reason: the future holds the struct, which holds the borrow, and
-serialization happens within the future's lifetime.
+reason: the future captures the struct, which holds the borrow, and the
+caller's `.await` keeps everything alive until the future completes.
 
-r[zerocopy.send.serialize-before-yield]
+r[zerocopy.send.lifetime]
 
-Serialization of arguments MUST complete before the send future yields
-for the first time. This ensures borrowed data remains valid — the caller
-only needs to hold borrows until the first `.await` suspension point.
+The send future is not `'static` — it borrows from the caller's scope.
+This means it cannot be spawned as an independent task. It is driven to
+completion by the caller's `.await`, which guarantees all borrows remain
+valid. The actual sequence is:
+
+1. The future calls `reserve().await` — yields until the link has capacity
+2. The future calls `alloc(len)` — obtains a write slot
+3. The future serializes the borrowed value into the write slot
+4. The future calls `commit()` — publishes the bytes
+
+Serialization happens in step 3, after the backpressure yield. The
+borrowed data is valid because the caller is still awaiting.
 
 ### Link-specific send behavior
 

@@ -5,6 +5,7 @@
 //! borrows directly from the shared region.
 
 pub mod framing;
+pub mod peer_table;
 pub mod varslot;
 
 /// A [`Link`](roam_types::Link) over shared memory ring buffers.
