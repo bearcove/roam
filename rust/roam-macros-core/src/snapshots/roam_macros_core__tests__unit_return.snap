@@ -23,8 +23,7 @@ pub fn notifier_service_descriptor() -> &'static ::roam::session::ServiceDescrip
                 }],
                 return_shape: <() as ::roam::facet::Facet>::SHAPE,
                 args_plan: ::roam::rpc_plan::<(String,)>(),
-                ok_plan: ::roam::rpc_plan::<()>(),
-                err_plan: ::roam::rpc_plan::<::core::convert::Infallible>(),
+                ret_plan: ::roam::rpc_plan::<Result<(), ::roam::RoamError>>(),
                 doc: None,
             }))];
         Box::leak(Box::new(::roam::session::ServiceDescriptor {
@@ -99,7 +98,7 @@ where
         use std::mem::MaybeUninit;
         let desc = notifier_service_descriptor().methods[0usize];
         let args_plan = desc.args_plan;
-        let response_plan = desc.ok_plan;
+        let response_plan = desc.ret_plan;
         let handler = self.handler.clone();
         let middleware = self.middleware.clone();
         let driver_tx = registry.driver_tx();
@@ -165,18 +164,28 @@ where
                         .scope(cx.extensions.clone(), handler.notify(&cx, msg)),
                 )
                 .await;
-            let send_peek = unsafe {
-                let peek = ::roam::facet::Peek::unchecked_new(
-                    ::roam::facet_core::PtrConst::new((&result as *const ()).cast::<u8>()),
-                    <() as ::roam::facet::Facet>::SHAPE,
-                );
-                ::roam::session::SendPeek::new(peek)
-            };
             if !middleware.is_empty() {
+                let send_peek = unsafe {
+                    let peek = ::roam::facet::Peek::unchecked_new(
+                        ::roam::facet_core::PtrConst::new((&result as *const ()).cast::<u8>()),
+                        <() as ::roam::facet::Facet>::SHAPE,
+                    );
+                    ::roam::session::SendPeek::new(peek)
+                };
                 let outcome = ::roam::session::MethodOutcome::Ok(send_peek);
                 ::roam::session::run_post_middleware(&cx, outcome, &middleware).await;
             }
-            ::roam::session::send_ok_response(
+            let wrapped: Result<(), ::roam::RoamError> = Ok(result);
+            let send_peek = unsafe {
+                let peek = ::roam::facet::Peek::unchecked_new(
+                    ::roam::facet_core::PtrConst::new(
+                        (&wrapped as *const Result<(), ::roam::RoamError>).cast::<u8>(),
+                    ),
+                    <Result<(), ::roam::RoamError> as ::roam::facet::Facet>::SHAPE,
+                );
+                ::roam::session::SendPeek::new(peek)
+            };
+            ::roam::session::send_response(
                 send_peek,
                 response_plan,
                 &driver_tx,

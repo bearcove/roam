@@ -17,6 +17,9 @@ macro_rules! declare_id {
 mod rpc_plan;
 pub use rpc_plan::*;
 
+mod roam_error;
+pub use roam_error::*;
+
 mod services;
 pub use services::*;
 

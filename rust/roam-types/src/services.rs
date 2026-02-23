@@ -47,11 +47,9 @@ pub struct MethodDescriptor {
     /// Precomputed plan for the args tuple type.
     pub args_plan: &'static RpcPlan,
 
-    /// Precomputed plan for the Ok/return type.
-    pub ok_plan: &'static RpcPlan,
-
-    /// Precomputed plan for the Err type (Infallible if infallible).
-    pub err_plan: &'static RpcPlan,
+    /// Precomputed plan for the full return type: `Result<T, RoamError<E>>`.
+    /// For infallible methods, `E` is `Infallible` so this is `Result<T, RoamError>`.
+    pub ret_plan: &'static RpcPlan,
 
     /// Documentation string, if any.
     pub doc: Option<&'static str>,

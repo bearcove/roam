@@ -32,8 +32,7 @@ pub fn calc_service_descriptor() -> &'static ::roam::session::ServiceDescriptor 
                 ],
                 return_shape: <Result<f64, DivError> as ::roam::facet::Facet>::SHAPE,
                 args_plan: ::roam::rpc_plan::<(f64, f64)>(),
-                ok_plan: ::roam::rpc_plan::<f64>(),
-                err_plan: ::roam::rpc_plan::<DivError>(),
+                ret_plan: ::roam::rpc_plan::<Result<f64, ::roam::RoamError<DivError>>>(),
                 doc: None,
             }))];
         Box::leak(Box::new(::roam::session::ServiceDescriptor {
@@ -109,7 +108,7 @@ where
         use std::mem::MaybeUninit;
         let desc = calc_service_descriptor().methods[0usize];
         let args_plan = desc.args_plan;
-        let response_plan = desc.ok_plan;
+        let response_plan = desc.ret_plan;
         let handler = self.handler.clone();
         let middleware = self.middleware.clone();
         let driver_tx = registry.driver_tx();
@@ -177,48 +176,55 @@ where
                         .scope(cx.extensions.clone(), handler.div(&cx, a, b)),
                 )
                 .await;
-            match &result {
-                Ok(value) => {
-                    let send_peek = unsafe {
-                        let peek = ::roam::facet::Peek::unchecked_new(
-                            ::roam::facet_core::PtrConst::new((value as *const f64).cast::<u8>()),
-                            <f64 as ::roam::facet::Facet>::SHAPE,
-                        );
-                        ::roam::session::SendPeek::new(peek)
-                    };
-                    if !middleware.is_empty() {
+            if !middleware.is_empty() {
+                match &result {
+                    Ok(value) => {
+                        let send_peek = unsafe {
+                            let peek = ::roam::facet::Peek::unchecked_new(
+                                ::roam::facet_core::PtrConst::new(
+                                    (value as *const f64).cast::<u8>(),
+                                ),
+                                <f64 as ::roam::facet::Facet>::SHAPE,
+                            );
+                            ::roam::session::SendPeek::new(peek)
+                        };
                         let outcome = ::roam::session::MethodOutcome::Ok(send_peek);
                         ::roam::session::run_post_middleware(&cx, outcome, &middleware).await;
                     }
-                    ::roam::session::send_ok_response(
-                        send_peek,
-                        response_plan,
-                        &driver_tx,
-                        conn_id,
-                        request_id,
-                    )
-                    .await;
-                }
-                Err(error) => {
-                    let send_peek = unsafe {
-                        let peek = ::roam::facet::Peek::unchecked_new(
-                            ::roam::facet_core::PtrConst::new(
-                                (error as *const DivError).cast::<u8>(),
-                            ),
-                            <DivError as ::roam::facet::Facet>::SHAPE,
-                        );
-                        ::roam::session::SendPeek::new(peek)
-                    };
-                    if !middleware.is_empty() {
+                    Err(error) => {
+                        let send_peek = unsafe {
+                            let peek = ::roam::facet::Peek::unchecked_new(
+                                ::roam::facet_core::PtrConst::new(
+                                    (error as *const DivError).cast::<u8>(),
+                                ),
+                                <DivError as ::roam::facet::Facet>::SHAPE,
+                            );
+                            ::roam::session::SendPeek::new(peek)
+                        };
                         let outcome = ::roam::session::MethodOutcome::Err(send_peek);
                         ::roam::session::run_post_middleware(&cx, outcome, &middleware).await;
                     }
-                    ::roam::session::send_error_response(
-                        send_peek, &driver_tx, conn_id, request_id,
-                    )
-                    .await;
                 }
             }
+            let wrapped: Result<f64, ::roam::RoamError<DivError>> =
+                result.map_err(::roam::RoamError::User);
+            let send_peek = unsafe {
+                let peek = ::roam::facet::Peek::unchecked_new(
+                    ::roam::facet_core::PtrConst::new(
+                        (&wrapped as *const Result<f64, ::roam::RoamError<DivError>>).cast::<u8>(),
+                    ),
+                    <Result<f64, ::roam::RoamError<DivError>> as ::roam::facet::Facet>::SHAPE,
+                );
+                ::roam::session::SendPeek::new(peek)
+            };
+            ::roam::session::send_response(
+                send_peek,
+                response_plan,
+                &driver_tx,
+                conn_id,
+                request_id,
+            )
+            .await;
         })
     }
 }

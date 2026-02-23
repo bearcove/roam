@@ -169,14 +169,14 @@ fn generate_service_descriptor_fn(parsed: &ServiceTrait, roam: &TokenStream2) ->
             let return_type = m.return_type();
             let return_ty_tokens = return_type.to_token_stream();
 
-            // Ok type and Err type
-            let (ok_ty, err_ty) = if let Some((ok, err)) = return_type.as_result() {
-                (ok.to_token_stream(), err.to_token_stream())
+            // ret_plan type: Result<T, RoamError<E>> or Result<T, RoamError> for infallible
+            let ret_plan_ty = if let Some((ok_ty, err_ty)) = return_type.as_result() {
+                let ok = ok_ty.to_token_stream();
+                let err = err_ty.to_token_stream();
+                quote! { Result<#ok, #roam::RoamError<#err>> }
             } else {
-                (
-                    return_type.to_token_stream(),
-                    quote! { ::core::convert::Infallible },
-                )
+                let ty = return_type.to_token_stream();
+                quote! { Result<#ty, #roam::RoamError> }
             };
 
             let method_doc_expr = match m.doc() {
@@ -197,8 +197,7 @@ fn generate_service_descriptor_fn(parsed: &ServiceTrait, roam: &TokenStream2) ->
                     args: #args_expr,
                     return_shape: <#return_ty_tokens as #roam::facet::Facet>::SHAPE,
                     args_plan: #roam::rpc_plan::<#tuple_type>(),
-                    ok_plan: #roam::rpc_plan::<#ok_ty>(),
-                    err_plan: #roam::rpc_plan::<#err_ty>(),
+                    ret_plan: #roam::rpc_plan::<#ret_plan_ty>(),
                     doc: #method_doc_expr,
                 }))
             }
@@ -473,83 +472,87 @@ fn generate_dispatch_method(
         (return_type.to_token_stream(), None)
     };
 
-    // Generate the post-middleware and response sending code based on fallibility.
-    // We create SendPeek before calling the async functions to avoid capturing
-    // raw pointers in the Future state (raw pointers are not Send).
+    // Generate the post-middleware and response sending code.
+    // Middleware still observes the raw handler result (T or Result<T, E>).
+    // For wire encoding we wrap into Result<T, RoamError<E>> and call send_response.
     let send_response = if is_fallible {
         let err_ty = error_type.unwrap();
         quote! {
-            match &result {
-                Ok(value) => {
-                    // Create SendPeek before calling async function to avoid !Send pointer
-                    // SAFETY: value is valid, initialized, and Send
-                    let send_peek = unsafe {
-                        let peek = #roam::facet::Peek::unchecked_new(
-                            #roam::facet_core::PtrConst::new((value as *const #result_type).cast::<u8>()),
-                            <#result_type as #roam::facet::Facet>::SHAPE,
-                        );
-                        #roam::session::SendPeek::new(peek)
-                    };
-
-                    // Run post-middleware (observes outcome)
-                    if !middleware.is_empty() {
+            // Run post-middleware (observes raw handler result)
+            if !middleware.is_empty() {
+                match &result {
+                    Ok(value) => {
+                        // SAFETY: value is valid, initialized, and Send
+                        let send_peek = unsafe {
+                            let peek = #roam::facet::Peek::unchecked_new(
+                                #roam::facet_core::PtrConst::new((value as *const #result_type).cast::<u8>()),
+                                <#result_type as #roam::facet::Facet>::SHAPE,
+                            );
+                            #roam::session::SendPeek::new(peek)
+                        };
                         let outcome = #roam::session::MethodOutcome::Ok(send_peek);
                         #roam::session::run_post_middleware(&cx, outcome, &middleware).await;
                     }
-
-                    #roam::session::send_ok_response(
-                        send_peek,
-                        response_plan,
-                        &driver_tx,
-                        conn_id,
-                        request_id,
-                    ).await;
-                }
-                Err(error) => {
-                    // Create SendPeek before calling async function
-                    // SAFETY: error is valid, initialized, and Send
-                    let send_peek = unsafe {
-                        let peek = #roam::facet::Peek::unchecked_new(
-                            #roam::facet_core::PtrConst::new((error as *const #err_ty).cast::<u8>()),
-                            <#err_ty as #roam::facet::Facet>::SHAPE,
-                        );
-                        #roam::session::SendPeek::new(peek)
-                    };
-
-                    // Run post-middleware (observes outcome)
-                    if !middleware.is_empty() {
+                    Err(error) => {
+                        // SAFETY: error is valid, initialized, and Send
+                        let send_peek = unsafe {
+                            let peek = #roam::facet::Peek::unchecked_new(
+                                #roam::facet_core::PtrConst::new((error as *const #err_ty).cast::<u8>()),
+                                <#err_ty as #roam::facet::Facet>::SHAPE,
+                            );
+                            #roam::session::SendPeek::new(peek)
+                        };
                         let outcome = #roam::session::MethodOutcome::Err(send_peek);
                         #roam::session::run_post_middleware(&cx, outcome, &middleware).await;
                     }
-
-                    #roam::session::send_error_response(
-                        send_peek,
-                        &driver_tx,
-                        conn_id,
-                        request_id,
-                    ).await;
                 }
             }
-        }
-    } else {
-        quote! {
-            // Create SendPeek before calling async function to avoid !Send pointer
-            // SAFETY: result is valid, initialized, and Send
+
+            // Wrap into wire type and send
+            let wrapped: Result<#result_type, #roam::RoamError<#err_ty>> = result.map_err(#roam::RoamError::User);
+            // SAFETY: wrapped is valid, initialized, and Send
             let send_peek = unsafe {
                 let peek = #roam::facet::Peek::unchecked_new(
-                    #roam::facet_core::PtrConst::new((&result as *const #result_type).cast::<u8>()),
-                    <#result_type as #roam::facet::Facet>::SHAPE,
+                    #roam::facet_core::PtrConst::new((&wrapped as *const Result<#result_type, #roam::RoamError<#err_ty>>).cast::<u8>()),
+                    <Result<#result_type, #roam::RoamError<#err_ty>> as #roam::facet::Facet>::SHAPE,
                 );
                 #roam::session::SendPeek::new(peek)
             };
-
-            // Run post-middleware (observes outcome)
+            #roam::session::send_response(
+                send_peek,
+                response_plan,
+                &driver_tx,
+                conn_id,
+                request_id,
+            ).await;
+        }
+    } else {
+        quote! {
+            // Run post-middleware (observes raw handler result)
             if !middleware.is_empty() {
+                // SAFETY: result is valid, initialized, and Send
+                let send_peek = unsafe {
+                    let peek = #roam::facet::Peek::unchecked_new(
+                        #roam::facet_core::PtrConst::new((&result as *const #result_type).cast::<u8>()),
+                        <#result_type as #roam::facet::Facet>::SHAPE,
+                    );
+                    #roam::session::SendPeek::new(peek)
+                };
                 let outcome = #roam::session::MethodOutcome::Ok(send_peek);
                 #roam::session::run_post_middleware(&cx, outcome, &middleware).await;
             }
 
-            #roam::session::send_ok_response(
+            // Wrap into wire type and send
+            let wrapped: Result<#result_type, #roam::RoamError> = Ok(result);
+            // SAFETY: wrapped is valid, initialized, and Send
+            let send_peek = unsafe {
+                let peek = #roam::facet::Peek::unchecked_new(
+                    #roam::facet_core::PtrConst::new((&wrapped as *const Result<#result_type, #roam::RoamError>).cast::<u8>()),
+                    <Result<#result_type, #roam::RoamError> as #roam::facet::Facet>::SHAPE,
+                );
+                #roam::session::SendPeek::new(peek)
+            };
+            #roam::session::send_response(
                 send_peek,
                 response_plan,
                 &driver_tx,
@@ -571,7 +574,7 @@ fn generate_dispatch_method(
 
             let desc = #descriptor_fn_name().methods[#idx];
             let args_plan = desc.args_plan;
-            let response_plan = desc.ok_plan;
+            let response_plan = desc.ret_plan;
 
             let handler = self.handler.clone();
             let middleware = self.middleware.clone();

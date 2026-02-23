@@ -8,9 +8,29 @@ Define the contract behind `#[facet(opaque = thing)]` so Roam can:
 2. parse incoming envelopes before payload concrete type is known,
 3. defer payload decoding with low-copy behavior when possible.
 
+## Roam-types Source Cross-References
+
+1. Wire envelope and payload lifetime:
+   `Message<'payload>`, `MessagePayload<'payload>`, `Payload<'payload>` in
+   `rust/roam-types/src/message.rs`.
+2. Transport boundary:
+   `Link`, `LinkTx`, `LinkRx`, `LinkRx::recv -> Result<Option<Backing>, _>` in
+   `rust/roam-types/src/link.rs`.
+3. Conduit boundary:
+   `Conduit`, `ConduitRx`, `ConduitRx::recv -> Result<Option<SelfRef<T>>, _>` in
+   `rust/roam-types/src/conduit.rs`.
+4. Backing ownership and transform:
+   `SelfRef<T>`, `Backing`, `SelfRef::try_new`, `SelfRef::map` in
+   `rust/roam-types/src/selfref.rs`.
+5. Dispatch lookup and type plans:
+   `ServiceDescriptor::by_id`, `MethodDescriptor.args_plan` in
+   `rust/roam-types/src/services.rs`, and `RpcPlan`/`type_plan` in
+   `rust/roam-types/src/rpc_plan.rs`.
+
 ## Core Invariant
 
-For incoming data, the runtime object is `SelfRef<Message>`: `(Backing, Message)`.
+For incoming data, the runtime object is `SelfRef<Message<'static>>`:
+`(Backing, Message<'static>)`.
 
 `Backing` is single-owner and not split into sub-backings. Therefore deferred
 payload state inside `Message` stores either:
@@ -19,6 +39,14 @@ payload state inside `Message` stores either:
 2. owned bytes.
 
 It does not store a second `Backing` handle for a payload subrange.
+
+## Lifetime Model
+
+1. Incoming messages are held as `SelfRef<Message<'static>>`.
+2. Outgoing messages are created in call scope as `Message<'call>`.
+3. `Payload::Borrowed` is for outgoing `Message<'call>`.
+4. `Payload::RawBorrowed` is for incoming `Message<'static>` backed by
+   `SelfRef` ownership of the full frame backing.
 
 ## Annotation
 
@@ -87,22 +115,27 @@ Slicing belongs to parser/input logic, not to payload storage types.
 3. If parser internally tracks ranges, it resolves range -> slice before calling
    `deserialize_build`.
 
-## Roam Dispatch Transform
+## End-to-End Incoming Flow
 
 Incoming flow is:
 
-1. Parse envelope into `SelfRef<Message>`.
-2. Read `method_id` and resolve concrete args `(Shape, TypePlanCore)`.
-3. Consume/map `SelfRef<Message>` into `SelfRef<ConcreteArgs>` using the same
-   backing.
+1. Link layer receives bytes via `LinkRx::recv` and returns `Backing`.
+2. Conduit deserializes envelope via `ConduitRx::recv` using that backing and builds
+   `SelfRef<Message<'static>>`.
+3. Driver receives `SelfRef<Message<'static>>` and routes by message kind.
+4. Dispatch reads `method_id`, resolves concrete args `(Shape, TypePlanCore)`
+   through `ServiceDescriptor::by_id(...).args_plan`.
+5. Dispatch consumes/maps `SelfRef<Message<'static>>` into
+   `SelfRef<ConcreteArgs>` using the same backing (via `SelfRef::map`-style transform).
 
 This is a move/transform, not a backing split.
 
 ## Outgoing vs Incoming
 
-1. Incoming messages live in `SelfRef<Message>` and can use `RawBorrowed(&[u8])`.
-2. Outgoing messages are not in `SelfRef<Message>` and use erased outgoing form
-   (`Borrowed { ... }`) or owned raw bytes.
+1. Incoming driver-side value is `SelfRef<Message<'static>>` and can contain
+   `RawBorrowed(&[u8])`.
+2. Outgoing driver-side value is `Message<'call>` and uses erased outgoing form
+   (`Borrowed { ... }`) plus optional owned-raw forwarding form.
 
 ## Non-goals
 
