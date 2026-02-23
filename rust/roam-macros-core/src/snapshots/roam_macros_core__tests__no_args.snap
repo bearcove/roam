@@ -81,112 +81,13 @@ where
         self.middleware.push(mw);
         self
     }
-    #[allow(unsafe_code)]
     fn dispatch_ping(
         &self,
         cx: ::roam::Context,
         payload: Vec<u8>,
         registry: &mut ::roam::session::ChannelRegistry,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'static>> {
-        use std::mem::MaybeUninit;
-        let desc = ping_service_descriptor().methods[0usize];
-        let args_plan = desc.args_plan;
-        let response_plan = desc.ret_plan;
-        let handler = self.handler.clone();
-        let middleware = self.middleware.clone();
-        let driver_tx = registry.driver_tx();
-        let response_channel_ids = registry.response_channel_ids();
-        let channels = cx.channels.clone();
-        let conn_id = cx.conn_id;
-        let request_id = cx.request_id;
-        let mut args_slot = MaybeUninit::<()>::uninit();
-        if let Err(e) = unsafe {
-            ::roam::session::prepare_sync(
-                args_slot.as_mut_ptr().cast(),
-                args_plan,
-                &payload,
-                &channels,
-                registry,
-            )
-        } {
-            return Box::pin(async move {
-                ::roam::session::send_prepare_error(e, &driver_tx, conn_id, request_id).await;
-            });
-        }
-        let args: () = unsafe { args_slot.assume_init_read() };
-        Box::pin(async move {
-            let mut cx = cx;
-            cx.args = desc.args;
-            if !middleware.is_empty() {
-                let args_peek = unsafe {
-                    let peek = ::roam::facet::Peek::unchecked_new(
-                        ::roam::facet_core::PtrConst::new((&args as *const ()).cast::<u8>()),
-                        <() as ::roam::facet::Facet>::SHAPE,
-                    );
-                    ::roam::session::SendPeek::new(peek)
-                };
-                if let Err(rejection) =
-                    ::roam::session::run_pre_middleware(args_peek, &mut cx, &middleware).await
-                {
-                    ::roam::session::run_post_middleware(
-                        &cx,
-                        ::roam::session::MethodOutcome::Rejected(rejection.clone()),
-                        &middleware,
-                    )
-                    .await;
-                    ::roam::session::send_prepare_error(
-                        ::roam::session::PrepareError::Rejected(rejection),
-                        &driver_tx,
-                        conn_id,
-                        request_id,
-                    )
-                    .await;
-                    return;
-                }
-            }
-            let _args: () = args;
-            let dispatch_cx = ::roam::session::DispatchContext::new(
-                conn_id,
-                response_channel_ids,
-                driver_tx.clone(),
-            );
-            let result = ::roam::session::DISPATCH_CONTEXT
-                .scope(
-                    dispatch_cx,
-                    ::roam::session::CURRENT_EXTENSIONS
-                        .scope(cx.extensions.clone(), handler.ping(&cx)),
-                )
-                .await;
-            if !middleware.is_empty() {
-                let send_peek = unsafe {
-                    let peek = ::roam::facet::Peek::unchecked_new(
-                        ::roam::facet_core::PtrConst::new((&result as *const u64).cast::<u8>()),
-                        <u64 as ::roam::facet::Facet>::SHAPE,
-                    );
-                    ::roam::session::SendPeek::new(peek)
-                };
-                let outcome = ::roam::session::MethodOutcome::Ok(send_peek);
-                ::roam::session::run_post_middleware(&cx, outcome, &middleware).await;
-            }
-            let wrapped: Result<u64, ::roam::RoamError> = Ok(result);
-            let send_peek = unsafe {
-                let peek = ::roam::facet::Peek::unchecked_new(
-                    ::roam::facet_core::PtrConst::new(
-                        (&wrapped as *const Result<u64, ::roam::RoamError>).cast::<u8>(),
-                    ),
-                    <Result<u64, ::roam::RoamError> as ::roam::facet::Facet>::SHAPE,
-                );
-                ::roam::session::SendPeek::new(peek)
-            };
-            ::roam::session::send_response(
-                send_peek,
-                response_plan,
-                &driver_tx,
-                conn_id,
-                request_id,
-            )
-            .await;
-        })
+        todo!()
     }
 }
 impl<H> ::roam::session::ServiceDispatcher for PingDispatcher<H>

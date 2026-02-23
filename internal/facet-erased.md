@@ -79,15 +79,50 @@ pub enum OpaqueDeserialize<'de> {
 
 pub trait FacetOpaqueAdapter {
     type Error;
-    type SendValue;
+    type SendValue<'a>;
     type RecvValue<'de>;
 
     /// Outgoing path: map typed value to erased serialization inputs.
-    fn serialize_map(value: &Self::SendValue) -> OpaqueSerialize;
+    fn serialize_map(value: &Self::SendValue<'_>) -> OpaqueSerialize;
 
     /// Incoming path: build deferred payload representation.
     fn deserialize_build<'de>(input: OpaqueDeserialize<'de>)
         -> Result<Self::RecvValue<'de>, Self::Error>;
+}
+```
+
+## Sample Implementation
+
+```rust
+pub struct PayloadAdapter;
+
+impl FacetOpaqueAdapter for PayloadAdapter {
+    type Error = String;
+    type SendValue<'a> = Payload<'a>;
+    type RecvValue<'de> = Payload<'de>;
+
+    fn serialize_map(value: &Self::SendValue<'_>) -> OpaqueSerialize {
+        match value {
+            Payload::Borrowed { ptr, shape, plan, .. } => OpaqueSerialize {
+                ptr: *ptr,
+                shape,
+                plan: *plan,
+            },
+            // RawBorrowed/RawOwned are receive-side only — serializing
+            // them means the whole Message is being forwarded, which
+            // happens at the Message level, not through the adapter.
+            _ => unreachable!("serialize only called on outgoing messages"),
+        }
+    }
+
+    fn deserialize_build<'de>(input: OpaqueDeserialize<'de>)
+        -> Result<Self::RecvValue<'de>, Self::Error>
+    {
+        match input {
+            OpaqueDeserialize::Borrowed(bytes) => Ok(Payload::RawBorrowed(bytes)),
+            OpaqueDeserialize::Owned(bytes) => Ok(Payload::RawOwned(bytes)),
+        }
+    }
 }
 ```
 
