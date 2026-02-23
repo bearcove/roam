@@ -1,7 +1,7 @@
 +++
-title = "roam signature specification"
+title = "signatures"
 description = "Method identity and signature hash computation"
-weight = 11
+weight = 13
 +++
 
 # Method Identity

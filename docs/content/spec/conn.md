@@ -1,128 +1,31 @@
 +++
-title = "roam specification"
-description = "Formal roam RPC protocol specification"
-weight = 10
+title = "connectivity"
+description = "Links, conduits, sessions, and connections"
+weight = 11
 +++
 
-# Introduction
-
-*This is roam specification v7.0.0, last updated February 23, 2026. It
-canonically lives at <https://github.com/bearcove/roam> — where you can get the
-latest version.*
-
-## Defining a service
-
-> r[service-macro.is-source-of-truth]
-> 
-> roam is a **Rust-native** RPC protocol. There is no independent schema language;
-> Rust traits *are* the schema. Implementations for other languages (Swift,
-> TypeScript, etc.) are generated from Rust definitions.
-
-An application named `fantastic` would typically define services in `*-proto`.
-Crates, if it has only one, the `fantastic-proto` crate would contain something
-like:
-
-```rust
-#[roam::service]
-pub trait Adder {
-    /// Load a template by name.
-    async fn add(&self, l: u32, r: u32) -> u32;
-}
-```
-
-Proto crates are meant to only contain types and trait definitions (as much as
-possible, modulo orphan rules) so that they may be joined with roam codegen to
-generate client and server code for Swift and TypeScript.
-
-All types that occur as arguments or in return position must implement the
-`Facet` trait, from the [facet](https://docs.rs/facet) crate.
-
-## Implementing a service
-
-Given an `Adder` trait, the `roam::service` proc macro generates a trait
-also named `Adder`, but with an added `&Context` parameter in first position:
-
-```rust
-#[derive(Clone)]
-struct AdderHandler;
-
-impl Adder for AdderHandler {
-    /// Add two numbers.
-    async fn add(&self, _cx: &Context, l: u32, r: u32) -> u32 {
-        // we could fetch metadata etc. through `_cx`
-        l + r
-    };
-}
-```
-
-## Consuming a service
-
-The proc macro also generates a `{ServiceName}Client` struct, which provides the
-same async methods, without `&Context` this time: 
-
-```rust
-// Make a call
-let result = client.add(3, 5).await;
-assert_eq!(result, 8);
-```
-
-...because metadata can be passed to the future, before awaiting it:
-
-```rust
-// Make a call with custom metadata
-let result = client
-    .add(3, 5)
-    .with_metadata(meta)
-    .await;
-assert_eq!(result, 8);
-```
-
-But how do you obtain a client?
-
-# The connectivity stack
-
-To "handle" a call (ie. send a response to an incoming request), or to "make" a
-call (ie. send a request to the peer, expecting a response), one needs a connection.
-
-roam supports various transports, like memory, TCP and other sockets, WebSocket,
-shared memory; but a roam connection sits several layers above a "TCP connection".
-
-```aasvg
-+------------------------+
-| Requests / Channels    |  RPC calls and streaming data
-+------------------------+
-| Connections            |  request/channel ID namespace
-+------------------------+
-| Session                |  set of connections over a conduit
-+------------------------+
-| Conduit                |  serialization, reconnection
-+------------------------+
-| Link                   |  TCP, SHM, WebSocket, etc.
-+------------------------+
-```
-
-## Links and transports
+# Links and transports
 
 > r[link]
-> 
+>
 > A link provides a reliable way to send and receive payloads (byte buffers)
 > between two peers.
-> 
+>
 > A kind of link is called a "transport". If you use the TCP transport, then you
 > establish TCP links between your peers.
 
 > r[transport.memory]
-> 
+>
 > Roam provides an in-memory transport via `MemoryLink`, based on tokio MPSC
 > channels.
 
 > r[transport.stream]
-> 
+>
 > Roam provides a stream transport via `StreamLink`, which prefixes each payload
 > with its length: a 32-bit LE unsigned integer.
 
 > r[transport.stream.kinds]
-> 
+>
 > `StreamLink` must be constructible from arbitrary tokio `AsyncRead`/`AsyncWrite`
 > pairs. Convenience constructors are provided for:
 >
@@ -239,15 +142,15 @@ shared memory; but a roam connection sits several layers above a "TCP connection
 > When the peer has closed the link, `recv` MUST return `Ok(None)`. After `Ok(None)`
 > is returned once, all subsequent `recv` calls MUST return `Ok(None)` as well.
 
-## Conduits
+# Conduits
 
 > r[conduit]
-> 
+>
 > Conduits provide Postcard serialization/deserialization on top of links.
 > Like links, they use a permit system for sending.
 
 > r[conduit.typeplan]
-> 
+>
 > Conduits are built to serialize and deserialize _one_ type (typically an enum).
 > For deserialization, conduits MUST use a `TypePlan` to avoid re-planning on every
 > item.
@@ -269,7 +172,7 @@ shared memory; but a roam connection sits several layers above a "TCP connection
 > r[conduit.permit]
 >
 > A conduit's Sender MUST expose an async `reserve()` that returns a Permit.
-> 
+>
 > `reserve()` may "block" (be "Pending") for a while, this is how a conduit can
 > apply backpressure. This method may also error out, as conduits can die.
 
@@ -288,7 +191,7 @@ in-transit by accidentally cancelling (dropping) Futures blocked in a dual-purpo
 See tokio's [Sender::reserve](https://docs.rs/tokio/latest/tokio/sync/mpsc/struct.Sender.html#method.reserve)
 documentation for more information.
 
-## Sessions
+# Sessions
 
 > r[session]
 >
@@ -297,7 +200,7 @@ documentation for more information.
 > exchanged over channels.
 
 > r[session.peer]
-> 
+>
 > When talking about peers, the local peer is simply called "peer" and the remote
 > peer is called "counterpart".
 
@@ -311,7 +214,7 @@ documentation for more information.
 >
 > The role a peer plays in a session does not dictate whether they make or
 > handle requests, or whether they send or receive items over channels.
-> All sessions are fully bidirectional. 
+> All sessions are fully bidirectional.
 
 > r[session.message]
 >
@@ -351,10 +254,10 @@ documentation for more information.
 > the initiator.
 >
 > The counterpart must assert that the version is set to 7, adopt the opposite
-> parity, and send back a `HelloYourself` message. 
+> parity, and send back a `HelloYourself` message.
 
 > r[session.parity]
-> 
+>
 > Parity plays a role on two different levels:
 >
 >   * sessions (for connection IDs)
@@ -381,14 +284,14 @@ documentation for more information.
 > send or recv from them MUST return an error indicating that there's been a protocol
 > error.
 
-## Connections
+# Connections
 
 > r[connection]
-> 
-> A connection is a namespace for requests and channels inside of a session. 
+>
+> A connection is a namespace for requests and channels inside of a session.
 
 > r[connection.root]
-> 
+>
 > A session can hold many connections: it starts with one, the root connection,
 > with ID 0. Trying to close the root connection is a protocol error.
 >
@@ -397,7 +300,7 @@ documentation for more information.
 > r[connection.virtual]
 >
 > Connections that are dynamically opened in a session with identifiers strictly
-> greater than 0 are called "virtual connections". 
+> greater than 0 are called "virtual connections".
 
 > r[connection.open]
 >
@@ -428,7 +331,7 @@ The design objective is to allow proxies to map existing connections without
 having to translate request IDs or channel IDs.
 
 Case study: [dodeca](https://github.com/bearcove/dodeca) is a static site
-generator. It’s using roam RPC over the shared memory transport to communicate
+generator. It's using roam RPC over the shared memory transport to communicate
 the host (main binary) and cells, which implement basic functionality.
 
 Dodeca's HTTP server is implemented as a cell: on top of serving HTML, it also
@@ -449,103 +352,3 @@ has to forward calls somehow:
 Instead of manually forwarding calls back to the host, the HTTP server cell can
 simply open a virtual connection on its existing host session, matching the
 parity that the browser peer picked when connecting over WS.
-
-## RPC concepts
-
-> r[rpc]
->
-> The RPC layer sits on top of connections. It defines how requests are made,
-> how responses are returned, and how data flows over channels.
-
-> r[rpc.service]
->
-> A service is a set of methods. In Rust, a service is defined as a trait
-> annotated with `#[roam::service]`. Methods only take `&self` — a service
-> does not carry mutable state. Any state must be managed externally
-> (e.g. behind an `Arc<Mutex<_>>` or similar).
-
-> r[rpc.service.methods]
->
-> Each method in a service is an async function. Its arguments and return
-> type must implement `Facet`. The `#[roam::service]` macro adds a `&Context`
-> parameter in first position when generating the handler trait.
-
-> r[rpc.method-id]
->
-> Every method has a unique 64-bit identifier derived from its service name,
-> method name, and signature. This is what gets sent on the wire in `Request`
-> messages.
-
-> r[rpc.method-id.no-collisions]
->
-> The method ID ensures that different services can have methods with the same
-> name without collision, and that changing a method's signature produces a
-> different ID (making the change visibly incompatible rather than silently
-> wrong).
-
-> r[rpc.method-id.algorithm]
->
-> The exact algorithm for computing method IDs is defined in the
-> [signature specification](../spec-sig/). Other language implementations
-> receive pre-computed method IDs from code generation.
-
-> r[rpc.schema-evolution]
->
-> Adding new methods to a service is always safe — peers that don't know about
-> a method simply report it as unknown.
->
-> Most other changes are breaking:
->
->   * Renaming a service or method
->   * Changing argument types, order, or return type
->   * Changing the structure of any type used in the signature (field names,
->     order, enum variants)
->   * Substituting container types (e.g. `Vec<T>` → `HashSet<T>`)
->
-> Argument *names* are not part of the wire format and can be changed freely.
-> Only types and their order matter.
-
-> r[rpc.one-service-per-connection]
->
-> Each connection is bound to exactly one service. If a peer needs to talk
-> multiple protocols, it opens additional virtual connections — one per service.
-
-> r[rpc.handler]
->
-> A handler handles incoming requests on a connection. It is a user-provided
-> implementation of a service trait. The roam runtime takes care of
-> deserializing arguments, routing to the right method, and sending back responses.
-
-> r[rpc.caller]
->
-> A caller makes outgoing requests on a connection. It is a generated struct
-> (e.g. `AdderClient`) that provides the same async methods as the service trait,
-> and takes care of serialization and response handling internally.
-
-> r[rpc.session-setup]
->
-> When establishing a session, the user provides a handler for the root
-> connection. The session returns a typed caller for the root connection,
-> and a handle for accepting virtual connections.
-
-In code, this looks like:
-
-```rust
-let (caller, accept_handle) = session
-    .establish::<AdderClient>(my_adder_handler)
-    .await?;
-
-// caller is an AdderClient
-let result = caller.add(3, 5).await?;
-```
-
-> r[rpc.virtual-connection.accept]
->
-> When a virtual connection is opened by the counterpart, the accepting peer
-> receives the connection metadata, decides which handler to assign to it,
-> and obtains a typed caller for that virtual connection.
-
-> r[rpc.virtual-connection.open]
->
-> A peer may open a virtual connection on an existing session, providing a
-> handler and receiving a typed caller, just like during session establishment.
