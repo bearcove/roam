@@ -137,16 +137,38 @@ Variants MUST be encoded in declaration order.
 > r[signature.recursive]
 >
 > When encoding types that reference themselves (directly or indirectly),
-> implementations MUST detect cycles and emit a back-reference tag (`0x32`)
-> instead of infinitely recursing. Cycles can occur through any chain of
-> type references: containers, struct fields, enum variants, or combinations
+> implementations MUST detect cycles and emit a back-reference instead of
+> infinitely recursing. Cycles can occur through any chain of type
+> references: containers, struct fields, enum variants, or combinations
 > thereof.
+
+> r[signature.recursive.encoding]
 >
-> The back-reference tag is a single byte that indicates "this type was
-> already encoded earlier in this signature". This ensures:
+> A back-reference MUST be encoded as the tag byte `0x32` followed by a
+> `varint(depth)` indicating how many levels up the type stack the
+> reference points to. Depth 0 means the immediately enclosing type
+> (direct self-recursion), depth 1 means the type one level above
+> (mutual recursion through one intermediate type), and so on.
+>
+> This disambiguates mutually recursive structures. Without a depth
+> index, types like `A -> Option<B> -> Option<A>` and
+> `A -> Option<A>` could produce colliding encodings when their
+> field layouts happen to align.
+
+> r[signature.recursive.stack]
+>
+> Implementations MUST maintain a stack of types currently being
+> encoded. When a type is encountered that is already on the stack,
+> the encoder emits `0x32` + `varint(distance)` where `distance` is
+> the number of entries between the current position and the matching
+> stack entry (0-indexed from the top). After encoding a type's body,
+> it is popped from the stack.
+>
+> This ensures:
 > - No stack overflow during encoding
 > - Deterministic output (same type always produces same bytes)
 > - Finite signature size for recursive types
+> - Unambiguous back-references in mutually recursive type graphs
 
 ## Method Signature Encoding
 

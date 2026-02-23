@@ -72,28 +72,26 @@ fn encode_str(s: &str, out: &mut Vec<u8>) {
 // r[impl signature.struct]
 // r[impl signature.enum]
 // r[impl signature.recursive]
+// r[impl signature.recursive.encoding]
+// r[impl signature.recursive.stack]
 pub fn encode_shape(shape: &'static Shape, out: &mut Vec<u8>) {
-    let mut visited = std::collections::HashSet::new();
-    encode_shape_inner(shape, out, &mut visited);
+    let mut stack: Vec<&'static Shape> = Vec::new();
+    encode_shape_inner(shape, out, &mut stack);
 }
 
-fn encode_shape_inner(
-    shape: &'static Shape,
-    out: &mut Vec<u8>,
-    visited: &mut std::collections::HashSet<*const Shape>,
-) {
+fn encode_shape_inner(shape: &'static Shape, out: &mut Vec<u8>, stack: &mut Vec<&'static Shape>) {
     // Channel types
     if is_tx(shape) {
         out.push(sig::TX);
         if let Some(inner) = shape.type_params.first() {
-            encode_shape_inner(inner.shape, out, visited);
+            encode_shape_inner(inner.shape, out, stack);
         }
         return;
     }
     if is_rx(shape) {
         out.push(sig::RX);
         if let Some(inner) = shape.type_params.first() {
-            encode_shape_inner(inner.shape, out, visited);
+            encode_shape_inner(inner.shape, out, stack);
         }
         return;
     }
@@ -102,7 +100,7 @@ fn encode_shape_inner(
     if shape.is_transparent()
         && let Some(inner) = shape.inner
     {
-        encode_shape_inner(inner, out, visited);
+        encode_shape_inner(inner, out, stack);
         return;
     }
 
@@ -120,52 +118,58 @@ fn encode_shape_inner(
                 out.push(sig::BYTES);
             } else {
                 out.push(sig::LIST);
-                encode_shape_inner(list_def.t(), out, visited);
+                encode_shape_inner(list_def.t(), out, stack);
             }
             return;
         }
         Def::Array(array_def) => {
             out.push(sig::ARRAY);
             encode_varint_u64(array_def.n as u64, out);
-            encode_shape_inner(array_def.t(), out, visited);
+            encode_shape_inner(array_def.t(), out, stack);
             return;
         }
         Def::Slice(slice_def) => {
             out.push(sig::LIST);
-            encode_shape_inner(slice_def.t(), out, visited);
+            encode_shape_inner(slice_def.t(), out, stack);
             return;
         }
         Def::Map(map_def) => {
             out.push(sig::MAP);
-            encode_shape_inner(map_def.k(), out, visited);
-            encode_shape_inner(map_def.v(), out, visited);
+            encode_shape_inner(map_def.k(), out, stack);
+            encode_shape_inner(map_def.v(), out, stack);
             return;
         }
         Def::Set(set_def) => {
             out.push(sig::SET);
-            encode_shape_inner(set_def.t(), out, visited);
+            encode_shape_inner(set_def.t(), out, stack);
             return;
         }
         Def::Option(opt_def) => {
             out.push(sig::OPTION);
-            encode_shape_inner(opt_def.t(), out, visited);
+            encode_shape_inner(opt_def.t(), out, stack);
             return;
         }
         Def::Pointer(ptr_def) => {
             if let Some(pointee) = ptr_def.pointee {
-                encode_shape_inner(pointee, out, visited);
+                encode_shape_inner(pointee, out, stack);
                 return;
             }
         }
         _ => {}
     }
 
-    // Cycle detection for user-defined types
-    let shape_ptr = shape as *const Shape;
-    if !visited.insert(shape_ptr) {
+    // Cycle detection for user-defined types: check if this shape is
+    // already on the encoding stack (indicates recursion).
+    if let Some(pos) = stack.iter().rposition(|&s| s == shape) {
+        // Depth = distance from top of stack (0 = immediate parent)
+        let depth = stack.len() - 1 - pos;
         out.push(sig::BACKREF);
+        encode_varint_u64(depth as u64, out);
         return;
     }
+
+    // Push onto stack before encoding children, pop after.
+    stack.push(shape);
 
     match shape.ty {
         Type::User(UserType::Struct(struct_type)) => match struct_type.kind {
@@ -176,7 +180,7 @@ fn encode_shape_inner(
                 out.push(sig::TUPLE);
                 encode_varint_u64(struct_type.fields.len() as u64, out);
                 for field in struct_type.fields {
-                    encode_shape_inner(field.shape(), out, visited);
+                    encode_shape_inner(field.shape(), out, stack);
                 }
             }
             StructKind::Struct => {
@@ -184,7 +188,7 @@ fn encode_shape_inner(
                 encode_varint_u64(struct_type.fields.len() as u64, out);
                 for field in struct_type.fields {
                     encode_str(field.name, out);
-                    encode_shape_inner(field.shape(), out, visited);
+                    encode_shape_inner(field.shape(), out, stack);
                 }
             }
         },
@@ -200,13 +204,13 @@ fn encode_shape_inner(
                     StructKind::TupleStruct | StructKind::Tuple => {
                         if variant.data.fields.len() == 1 {
                             out.push(sig::VARIANT_NEWTYPE);
-                            encode_shape_inner(variant.data.fields[0].shape(), out, visited);
+                            encode_shape_inner(variant.data.fields[0].shape(), out, stack);
                         } else {
                             out.push(sig::VARIANT_STRUCT);
                             encode_varint_u64(variant.data.fields.len() as u64, out);
                             for (i, field) in variant.data.fields.iter().enumerate() {
                                 encode_str(&i.to_string(), out);
-                                encode_shape_inner(field.shape(), out, visited);
+                                encode_shape_inner(field.shape(), out, stack);
                             }
                         }
                     }
@@ -215,7 +219,7 @@ fn encode_shape_inner(
                         encode_varint_u64(variant.data.fields.len() as u64, out);
                         for field in variant.data.fields {
                             encode_str(field.name, out);
-                            encode_shape_inner(field.shape(), out, visited);
+                            encode_shape_inner(field.shape(), out, stack);
                         }
                     }
                 }
@@ -223,7 +227,7 @@ fn encode_shape_inner(
         }
         Type::Pointer(_) => {
             if let Some(inner) = shape.type_params.first() {
-                encode_shape_inner(inner.shape, out, visited);
+                encode_shape_inner(inner.shape, out, stack);
             } else {
                 out.push(sig::UNIT);
             }
@@ -232,6 +236,8 @@ fn encode_shape_inner(
             out.push(sig::UNIT);
         }
     }
+
+    stack.pop();
 }
 
 fn encode_scalar(scalar: ScalarType, out: &mut Vec<u8>) {
