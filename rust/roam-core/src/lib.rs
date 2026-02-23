@@ -9,10 +9,13 @@
 //!   bytes-based replay buffer. Handles reconnect transparently.
 
 mod bare_conduit;
-pub use bare_conduit::{BareConduit, BareConduitError};
+pub use bare_conduit::*;
+
+mod stable_conduit;
+pub use stable_conduit::*;
 
 mod memory_link;
-pub use memory_link::{MemoryLink, MemoryLinkRx, MemoryLinkTx, memory_link_pair};
+pub use memory_link::*;
 
 #[cfg(test)]
 mod tests;

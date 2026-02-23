@@ -6,7 +6,7 @@ weight = 10
 
 # Introduction
 
-*This is roam specification v7.0.0, last updated February 22, 2026. It
+*This is roam specification v7.0.0, last updated February 23, 2026. It
 canonically lives at <https://github.com/bearcove/roam> — where you can get the
 latest version.*
 
@@ -147,6 +147,87 @@ graph TD
 >
 > Roam provides a shared memory transport. It is designed for high-performance
 > IPC on a single machine.
+
+> r[link.split]
+>
+> A `Link` MUST be splittable into independent transmit and receive halves.
+> The halves MUST be safe to move to different tasks/threads.
+
+> r[link.message]
+>
+> A link is *message-oriented*: each send corresponds to exactly one received
+> payload (a byte buffer). Transports MUST preserve payload boundaries (no
+> implicit concatenation or splitting of payloads).
+
+> r[link.order]
+>
+> Links MUST deliver payloads reliably and in order: if payload A is committed
+> before payload B on the sender, then A MUST be observed before B by the
+> receiver, with no duplication.
+
+> r[link.tx.alloc]
+>
+> Sending MUST be a two-phase operation:
+>
+> 1. `alloc(len)` reserves space for exactly `len` bytes and yields a writable
+>    slot backed by transport-owned storage.
+> 2. The caller writes into the slot and then commits it.
+>
+> `alloc(len)` is the backpressure point: it MUST wait until the transport can
+> accommodate `len` bytes (or error).
+
+> r[link.message.empty]
+>
+> Links MUST support empty payloads (`len = 0`).
+
+> r[link.tx.alloc.limits]
+>
+> If a transport has a maximum payload size, `alloc(len)` MUST return an error
+> when `len` exceeds that maximum (it MUST NOT wait indefinitely).
+
+> r[link.tx.slot.len]
+>
+> A write slot returned by `alloc(len)` MUST expose a writable byte slice of
+> exactly length `len`.
+
+> r[link.tx.discard]
+>
+> Dropping a write slot without committing MUST discard it (no bytes become
+> visible to the peer) and MUST release any reserved capacity.
+
+> r[link.tx.commit]
+>
+> Committing a write slot MUST publish exactly one payload whose bytes are the
+> contents of the slot at the time of commit. Commit MUST be synchronous (it
+> only makes already-written bytes visible to the transport/receiver).
+
+> r[link.tx.cancel-safe]
+>
+> `alloc(len)` MUST be cancellation-safe: canceling/dropping the `alloc` future
+> MUST NOT publish a partial payload and MUST NOT leak reserved capacity.
+
+> r[link.tx.close]
+>
+> Links MUST support graceful close of the outbound direction. After a graceful
+> close completes, the peer MUST eventually observe end-of-stream (`Ok(None)`)
+> after it has received all payloads committed before the close began. A graceful
+> close MUST NOT cause loss or reordering of previously committed payloads.
+
+> r[link.rx.recv]
+>
+> Receiving MUST yield exactly one payload per `recv` call, as an owned backing
+> buffer/handle. The received bytes MUST remain valid and immutable until the
+> backing is dropped.
+
+> r[link.rx.error]
+>
+> If `recv` returns an error, the link MUST be treated as dead: the receiver
+> MUST NOT yield any further payloads after an error.
+
+> r[link.rx.eof]
+>
+> When the peer has closed the link, `recv` MUST return `Ok(None)`. After `Ok(None)`
+> is returned once, all subsequent `recv` calls MUST return `Ok(None)` as well.
 
 ## Conduits
 

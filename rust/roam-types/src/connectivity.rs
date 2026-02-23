@@ -360,95 +360,6 @@ pub trait ConduitRx<T: 'static>: Send + 'static {
 }
 
 // ---------------------------------------------------------------------------
-// Frame — internal to StableConduit
-// ---------------------------------------------------------------------------
-
-/// Packet sequence number (per direction).
-#[derive(Facet, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[repr(transparent)]
-#[facet(transparent)]
-pub struct PacketSeq(pub u32);
-
-/// Cumulative ACK: all packets up to `max_delivered` (inclusive) have been
-/// delivered to the upper layer.
-#[derive(Facet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct PacketAck {
-    pub max_delivered: PacketSeq,
-}
-
-/// Opaque session identifier for reliability-layer resume.
-///
-/// Assigned by the server on first connection. Sent by the client on
-/// reconnect so the server can route the new raw link to the correct
-/// StableConduit instance.
-#[derive(Facet, Debug, Clone, PartialEq, Eq, Hash)]
-pub struct ResumeKey(pub Vec<u8>);
-
-/// Client's opening handshake, sent as the first message on a new connection.
-///
-/// The server reads this to determine whether the connection is new or a
-/// reconnect, and routes accordingly.
-#[derive(Facet, Debug, Clone)]
-pub struct ClientHello {
-    /// `None` = new session (server assigns a key).
-    /// `Some` = reconnect to existing session.
-    pub resume_key: Option<ResumeKey>,
-
-    /// Last contiguous seq delivered to this peer's upper layer.
-    /// The other side replays everything after this.
-    pub last_received: Option<PacketSeq>,
-}
-
-/// Server's handshake response.
-///
-/// Always carries a resume key (assigned for new sessions, confirmed for
-/// reconnects).
-#[derive(Facet, Debug, Clone)]
-pub struct ServerHello {
-    /// The session's resume key. Always present.
-    pub resume_key: ResumeKey,
-
-    /// Last contiguous seq delivered to this peer's upper layer.
-    /// The other side replays everything after this.
-    pub last_received: Option<PacketSeq>,
-}
-
-/// Sequenced data frame, serialized by StableConduit over a raw Link.
-///
-/// Handshake messages (ClientHello / ServerHello) are exchanged before
-/// data flow begins — they're separate types, not part of this frame.
-/// After the handshake, all traffic is `Frame<T>`.
-#[derive(Facet, Debug, Clone)]
-pub struct Frame<T> {
-    pub seq: PacketSeq,
-    pub ack: Option<PacketAck>,
-    pub item: T,
-}
-
-// ---------------------------------------------------------------------------
-// Attachment / LinkSource — for StableConduit reconnect
-// ---------------------------------------------------------------------------
-
-/// A raw link bundled with the peer's Hello (if already consumed).
-///
-/// - **Client** (`client_hello = None`): Dialer connected, no Hello yet.
-/// - **Server** (`client_hello = Some`): acceptor already read client's Hello.
-pub struct Attachment<L> {
-    pub link: L,
-    pub client_hello: Option<ClientHello>,
-}
-
-/// Source of replacement [`Link`]s for [`StableConduit`] reconnect.
-///
-/// - **Client (pull)**: Dialer that connects and returns a new link.
-/// - **Server (push)**: channel receiver from the acceptor.
-pub trait LinkSource: Send + 'static {
-    type Link: Link;
-
-    async fn next_link(&mut self) -> std::io::Result<Attachment<Self::Link>>;
-}
-
-// ---------------------------------------------------------------------------
 // SessionAcceptor
 // ---------------------------------------------------------------------------
 
@@ -460,7 +371,7 @@ pub trait LinkSource: Send + 'static {
 ///
 /// User code calls `accept` in a loop and hands each Conduit to
 /// `Session::new`.
-pub trait SessionAcceptor<T: 'static> {
+pub trait ConduitAcceptor<T: 'static> {
     type Conduit: Conduit<T>;
 
     async fn accept(&mut self) -> std::io::Result<Self::Conduit>;
