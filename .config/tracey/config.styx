@@ -3,7 +3,7 @@
 specs (
     {
         name roam
-        include (docs/content/spec.md)
+        include (docs/content/spec.md docs/content/spec-sig.md)
         impls (
             {
                 name rust
