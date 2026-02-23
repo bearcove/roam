@@ -1,0 +1,319 @@
+#![deny(unsafe_code)]
+
+//! Hashing and method identity for roam.
+//!
+//! Encodes types using `facet::Shape` for signature hashing, following
+//! `docs/content/spec-sig.md`.
+
+use facet_core::{Def, ScalarType, Shape, StructKind, Type, UserType};
+use heck::ToKebabCase;
+use roam_core::{is_rx, is_tx};
+use roam_types::{MethodDescriptor, MethodId};
+
+/// Signature encoding tags for type serialization.
+mod sig {
+    // Primitives (0x01-0x11)
+    pub const BOOL: u8 = 0x01;
+    pub const U8: u8 = 0x02;
+    pub const U16: u8 = 0x03;
+    pub const U32: u8 = 0x04;
+    pub const U64: u8 = 0x05;
+    pub const U128: u8 = 0x06;
+    pub const I8: u8 = 0x07;
+    pub const I16: u8 = 0x08;
+    pub const I32: u8 = 0x09;
+    pub const I64: u8 = 0x0A;
+    pub const I128: u8 = 0x0B;
+    pub const F32: u8 = 0x0C;
+    pub const F64: u8 = 0x0D;
+    pub const CHAR: u8 = 0x0E;
+    pub const STRING: u8 = 0x0F;
+    pub const UNIT: u8 = 0x10;
+    pub const BYTES: u8 = 0x11;
+
+    // Containers (0x20-0x27)
+    pub const LIST: u8 = 0x20;
+    pub const OPTION: u8 = 0x21;
+    pub const ARRAY: u8 = 0x22;
+    pub const MAP: u8 = 0x23;
+    pub const SET: u8 = 0x24;
+    pub const TUPLE: u8 = 0x25;
+    pub const TX: u8 = 0x26;
+    pub const RX: u8 = 0x27;
+
+    // Composite (0x30-0x32)
+    pub const STRUCT: u8 = 0x30;
+    pub const ENUM: u8 = 0x31;
+    pub const BACKREF: u8 = 0x32;
+
+    // Variant payloads
+    pub const VARIANT_UNIT: u8 = 0x00;
+    pub const VARIANT_NEWTYPE: u8 = 0x01;
+    pub const VARIANT_STRUCT: u8 = 0x02;
+}
+
+// r[impl signature.varint]
+pub fn encode_varint_u64(mut value: u64, out: &mut Vec<u8>) {
+    while value >= 0x80 {
+        out.push((value as u8) | 0x80);
+        value >>= 7;
+    }
+    out.push(value as u8);
+}
+
+fn encode_str(s: &str, out: &mut Vec<u8>) {
+    encode_varint_u64(s.len() as u64, out);
+    out.extend_from_slice(s.as_bytes());
+}
+
+/// Encode a `Shape` into its canonical signature byte representation.
+// r[impl signature.primitive]
+// r[impl signature.container]
+// r[impl signature.struct]
+// r[impl signature.enum]
+// r[impl signature.recursive]
+pub fn encode_shape(shape: &'static Shape, out: &mut Vec<u8>) {
+    let mut visited = std::collections::HashSet::new();
+    encode_shape_inner(shape, out, &mut visited);
+}
+
+fn encode_shape_inner(
+    shape: &'static Shape,
+    out: &mut Vec<u8>,
+    visited: &mut std::collections::HashSet<*const Shape>,
+) {
+    // Channel types
+    if is_tx(shape) {
+        out.push(sig::TX);
+        if let Some(inner) = shape.type_params.first() {
+            encode_shape_inner(inner.shape, out, visited);
+        }
+        return;
+    }
+    if is_rx(shape) {
+        out.push(sig::RX);
+        if let Some(inner) = shape.type_params.first() {
+            encode_shape_inner(inner.shape, out, visited);
+        }
+        return;
+    }
+
+    // Transparent wrappers
+    if shape.is_transparent()
+        && let Some(inner) = shape.inner
+    {
+        encode_shape_inner(inner, out, visited);
+        return;
+    }
+
+    // Scalars
+    if let Some(scalar) = shape.scalar_type() {
+        encode_scalar(scalar, out);
+        return;
+    }
+
+    // Semantic definitions
+    match shape.def {
+        Def::List(list_def) => {
+            if let Some(ScalarType::U8) = list_def.t().scalar_type() {
+                // r[impl signature.bytes.equivalence]
+                out.push(sig::BYTES);
+            } else {
+                out.push(sig::LIST);
+                encode_shape_inner(list_def.t(), out, visited);
+            }
+            return;
+        }
+        Def::Array(array_def) => {
+            out.push(sig::ARRAY);
+            encode_varint_u64(array_def.n as u64, out);
+            encode_shape_inner(array_def.t(), out, visited);
+            return;
+        }
+        Def::Slice(slice_def) => {
+            out.push(sig::LIST);
+            encode_shape_inner(slice_def.t(), out, visited);
+            return;
+        }
+        Def::Map(map_def) => {
+            out.push(sig::MAP);
+            encode_shape_inner(map_def.k(), out, visited);
+            encode_shape_inner(map_def.v(), out, visited);
+            return;
+        }
+        Def::Set(set_def) => {
+            out.push(sig::SET);
+            encode_shape_inner(set_def.t(), out, visited);
+            return;
+        }
+        Def::Option(opt_def) => {
+            out.push(sig::OPTION);
+            encode_shape_inner(opt_def.t(), out, visited);
+            return;
+        }
+        Def::Pointer(ptr_def) => {
+            if let Some(pointee) = ptr_def.pointee {
+                encode_shape_inner(pointee, out, visited);
+                return;
+            }
+        }
+        _ => {}
+    }
+
+    // Cycle detection for user-defined types
+    let shape_ptr = shape as *const Shape;
+    if !visited.insert(shape_ptr) {
+        out.push(sig::BACKREF);
+        return;
+    }
+
+    match shape.ty {
+        Type::User(UserType::Struct(struct_type)) => match struct_type.kind {
+            StructKind::Unit => {
+                out.push(sig::UNIT);
+            }
+            StructKind::TupleStruct | StructKind::Tuple => {
+                out.push(sig::TUPLE);
+                encode_varint_u64(struct_type.fields.len() as u64, out);
+                for field in struct_type.fields {
+                    encode_shape_inner(field.shape(), out, visited);
+                }
+            }
+            StructKind::Struct => {
+                out.push(sig::STRUCT);
+                encode_varint_u64(struct_type.fields.len() as u64, out);
+                for field in struct_type.fields {
+                    encode_str(field.name, out);
+                    encode_shape_inner(field.shape(), out, visited);
+                }
+            }
+        },
+        Type::User(UserType::Enum(enum_type)) => {
+            out.push(sig::ENUM);
+            encode_varint_u64(enum_type.variants.len() as u64, out);
+            for variant in enum_type.variants {
+                encode_str(variant.name, out);
+                match variant.data.kind {
+                    StructKind::Unit => {
+                        out.push(sig::VARIANT_UNIT);
+                    }
+                    StructKind::TupleStruct | StructKind::Tuple => {
+                        if variant.data.fields.len() == 1 {
+                            out.push(sig::VARIANT_NEWTYPE);
+                            encode_shape_inner(variant.data.fields[0].shape(), out, visited);
+                        } else {
+                            out.push(sig::VARIANT_STRUCT);
+                            encode_varint_u64(variant.data.fields.len() as u64, out);
+                            for (i, field) in variant.data.fields.iter().enumerate() {
+                                encode_str(&i.to_string(), out);
+                                encode_shape_inner(field.shape(), out, visited);
+                            }
+                        }
+                    }
+                    StructKind::Struct => {
+                        out.push(sig::VARIANT_STRUCT);
+                        encode_varint_u64(variant.data.fields.len() as u64, out);
+                        for field in variant.data.fields {
+                            encode_str(field.name, out);
+                            encode_shape_inner(field.shape(), out, visited);
+                        }
+                    }
+                }
+            }
+        }
+        Type::Pointer(_) => {
+            if let Some(inner) = shape.type_params.first() {
+                encode_shape_inner(inner.shape, out, visited);
+            } else {
+                out.push(sig::UNIT);
+            }
+        }
+        _ => {
+            out.push(sig::UNIT);
+        }
+    }
+}
+
+fn encode_scalar(scalar: ScalarType, out: &mut Vec<u8>) {
+    match scalar {
+        ScalarType::Unit => out.push(sig::UNIT),
+        ScalarType::Bool => out.push(sig::BOOL),
+        ScalarType::Char => out.push(sig::CHAR),
+        ScalarType::Str | ScalarType::String | ScalarType::CowStr => out.push(sig::STRING),
+        ScalarType::F32 => out.push(sig::F32),
+        ScalarType::F64 => out.push(sig::F64),
+        ScalarType::U8 => out.push(sig::U8),
+        ScalarType::U16 => out.push(sig::U16),
+        ScalarType::U32 => out.push(sig::U32),
+        ScalarType::U64 => out.push(sig::U64),
+        ScalarType::U128 => out.push(sig::U128),
+        ScalarType::USize => out.push(sig::U64), // portable: usize → u64
+        ScalarType::I8 => out.push(sig::I8),
+        ScalarType::I16 => out.push(sig::I16),
+        ScalarType::I32 => out.push(sig::I32),
+        ScalarType::I64 => out.push(sig::I64),
+        ScalarType::I128 => out.push(sig::I128),
+        ScalarType::ISize => out.push(sig::I64), // portable: isize → i64
+        ScalarType::ConstTypeId => out.push(sig::U64),
+        _ => out.push(sig::UNIT),
+    }
+}
+
+/// Encode a method signature: arguments followed by return type.
+// r[impl signature.method]
+pub fn encode_method_signature(
+    args: &[&'static Shape],
+    return_type: &'static Shape,
+    out: &mut Vec<u8>,
+) {
+    out.push(sig::TUPLE);
+    encode_varint_u64(args.len() as u64, out);
+    for arg in args {
+        encode_shape(arg, out);
+    }
+    encode_shape(return_type, out);
+}
+
+/// Compute `sig_bytes`: the BLAKE3 hash of the canonical signature bytes.
+// r[impl signature.hash.algorithm]
+pub fn signature_hash(args: &[&'static Shape], return_type: &'static Shape) -> blake3::Hash {
+    let mut bytes = Vec::new();
+    encode_method_signature(args, return_type, &mut bytes);
+    blake3::hash(&bytes)
+}
+
+/// Compute the final 64-bit method ID.
+// r[impl method.identity.computation]
+// r[impl signature.endianness]
+pub fn method_id(service_name: &str, method_name: &str, sig_hash: blake3::Hash) -> u64 {
+    let mut input = Vec::new();
+    input.extend_from_slice(service_name.to_kebab_case().as_bytes());
+    input.push(b'.');
+    input.extend_from_slice(method_name.to_kebab_case().as_bytes());
+    input.extend_from_slice(sig_hash.as_bytes());
+    let h = blake3::hash(&input);
+    let first8: [u8; 8] = h.as_bytes()[0..8].try_into().expect("slice len");
+    u64::from_le_bytes(first8)
+}
+
+/// Compute method ID from a [`MethodDescriptor`].
+pub fn method_id_from_descriptor(descriptor: &MethodDescriptor) -> MethodId {
+    let args: Vec<&'static Shape> = descriptor.args.iter().map(|a| a.shape).collect();
+    let sig = signature_hash(&args, descriptor.return_shape);
+    MethodId(method_id(
+        descriptor.service_name,
+        descriptor.method_name,
+        sig,
+    ))
+}
+
+/// Compute method ID from shapes directly.
+pub fn method_id_from_shapes(
+    service_name: &str,
+    method_name: &str,
+    args: &[&'static Shape],
+    return_type: &'static Shape,
+) -> MethodId {
+    let sig = signature_hash(args, return_type);
+    MethodId(method_id(service_name, method_name, sig))
+}
