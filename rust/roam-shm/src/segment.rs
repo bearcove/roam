@@ -11,6 +11,7 @@ use std::path::Path;
 
 use shm_primitives::{
     BipBuf, FileCleanup, MmapRegion, PeerId, PeerState, SEGMENT_HEADER_SIZE, SegmentHeader,
+    SegmentHeaderInit,
 };
 
 use crate::framing::{self, OwnedFrame};
@@ -141,16 +142,16 @@ impl Segment {
         // Initialize segment header.
         let header: *mut SegmentHeader = unsafe { region.get_mut::<SegmentHeader>(0) };
         unsafe {
-            (*header).init(
-                layout.total_size as u64,
-                config.max_payload_size,
-                config.inline_threshold,
-                config.max_guests as u32,
-                config.bipbuf_capacity,
-                layout.peer_table_offset as u64,
-                layout.var_pool_offset as u64,
-                config.heartbeat_interval,
-            );
+            (*header).init(SegmentHeaderInit {
+                total_size: layout.total_size as u64,
+                max_payload_size: config.max_payload_size,
+                inline_threshold: config.inline_threshold,
+                max_guests: config.max_guests as u32,
+                bipbuf_capacity: config.bipbuf_capacity,
+                peer_table_offset: layout.peer_table_offset as u64,
+                var_pool_offset: layout.var_pool_offset as u64,
+                heartbeat_interval: config.heartbeat_interval,
+            });
         }
 
         // Initialize peer table and BipBuffer pairs.

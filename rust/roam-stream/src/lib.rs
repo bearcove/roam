@@ -315,17 +315,12 @@ mod tests {
 
     use super::*;
 
+    type DuplexRead = tokio::io::ReadHalf<tokio::io::DuplexStream>;
+    type DuplexWrite = tokio::io::WriteHalf<tokio::io::DuplexStream>;
+    type DuplexLink = StreamLink<DuplexRead, DuplexWrite>;
+
     /// Create a connected pair of StreamLinks backed by a tokio duplex pipe.
-    fn duplex_pair() -> (
-        StreamLink<
-            tokio::io::ReadHalf<tokio::io::DuplexStream>,
-            tokio::io::WriteHalf<tokio::io::DuplexStream>,
-        >,
-        StreamLink<
-            tokio::io::ReadHalf<tokio::io::DuplexStream>,
-            tokio::io::WriteHalf<tokio::io::DuplexStream>,
-        >,
-    ) {
+    fn duplex_pair() -> (DuplexLink, DuplexLink) {
         let (a, b) = tokio::io::duplex(4096);
         let (a_r, a_w) = split(a);
         let (b_r, b_w) = split(b);

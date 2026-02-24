@@ -11,6 +11,19 @@ pub const SEGMENT_VERSION: u32 = 7;
 /// Fixed size of the segment header in bytes.
 pub const SEGMENT_HEADER_SIZE: usize = 128;
 
+/// Parameters for initializing a fresh segment header.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SegmentHeaderInit {
+    pub total_size: u64,
+    pub max_payload_size: u32,
+    pub inline_threshold: u32,
+    pub max_guests: u32,
+    pub bipbuf_capacity: u32,
+    pub peer_table_offset: u64,
+    pub var_pool_offset: u64,
+    pub heartbeat_interval: u64,
+}
+
 /// The segment header lives at offset 0 of every roam SHM segment.
 ///
 /// All fields are set by the host at creation time and treated as read-only
@@ -62,31 +75,21 @@ impl SegmentHeader {
     /// # Safety
     ///
     /// `self` must point into exclusively-owned, zeroed memory.
-    pub unsafe fn init(
-        &mut self,
-        total_size: u64,
-        max_payload_size: u32,
-        inline_threshold: u32,
-        max_guests: u32,
-        bipbuf_capacity: u32,
-        peer_table_offset: u64,
-        var_pool_offset: u64,
-        heartbeat_interval: u64,
-    ) {
+    pub unsafe fn init(&mut self, init: SegmentHeaderInit) {
         self.magic = MAGIC;
         self.version = SEGMENT_VERSION;
         self.header_size = SEGMENT_HEADER_SIZE as u32;
-        self.total_size = total_size;
-        self.max_payload_size = max_payload_size;
-        self.inline_threshold = inline_threshold;
-        self.max_guests = max_guests;
-        self.bipbuf_capacity = bipbuf_capacity;
-        self.peer_table_offset = peer_table_offset;
-        self.var_pool_offset = var_pool_offset;
-        self.heartbeat_interval = heartbeat_interval;
+        self.total_size = init.total_size;
+        self.max_payload_size = init.max_payload_size;
+        self.inline_threshold = init.inline_threshold;
+        self.max_guests = init.max_guests;
+        self.bipbuf_capacity = init.bipbuf_capacity;
+        self.peer_table_offset = init.peer_table_offset;
+        self.var_pool_offset = init.var_pool_offset;
+        self.heartbeat_interval = init.heartbeat_interval;
         self.host_goodbye = AtomicU32::new(0);
         self._pad = 0;
-        self.current_size = AtomicU64::new(total_size);
+        self.current_size = AtomicU64::new(init.total_size);
         self._reserved = [0u8; 48];
     }
 
@@ -141,7 +144,16 @@ mod tests {
         let r = region.region();
         let hdr: *mut SegmentHeader = unsafe { r.get_mut::<SegmentHeader>(0) };
         unsafe {
-            (*hdr).init(65536, 65536, 0, 4, 16384, 128, 4096, 0);
+            (*hdr).init(SegmentHeaderInit {
+                total_size: 65536,
+                max_payload_size: 65536,
+                inline_threshold: 0,
+                max_guests: 4,
+                bipbuf_capacity: 16384,
+                peer_table_offset: 128,
+                var_pool_offset: 4096,
+                heartbeat_interval: 0,
+            });
         }
         (region, hdr)
     }

@@ -12,7 +12,7 @@ pub use bipbuf::{
 pub use peer::{PeerEntry, PeerId, PeerState};
 pub use region::HeapRegion;
 pub use region::Region;
-pub use segment::{MAGIC, SEGMENT_HEADER_SIZE, SEGMENT_VERSION, SegmentHeader};
+pub use segment::{MAGIC, SEGMENT_HEADER_SIZE, SEGMENT_VERSION, SegmentHeader, SegmentHeaderInit};
 pub use slot::{SlotState, VarSlotMeta};
 
 // OS-level primitives for SHM

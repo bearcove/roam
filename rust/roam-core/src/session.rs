@@ -682,8 +682,8 @@ where
 
 fn id_matches_parity(id: u64, parity: &Parity) -> bool {
     match parity {
-        Parity::Odd => id % 2 == 1,
-        Parity::Even => id % 2 == 0,
+        Parity::Odd => !id.is_multiple_of(2),
+        Parity::Even => id.is_multiple_of(2),
     }
 }
 
