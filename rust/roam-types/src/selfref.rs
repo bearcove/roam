@@ -1,20 +1,15 @@
 #![allow(unsafe_code)]
 
-use facet::Facet;
 use std::mem::ManuallyDrop;
 
 /// A decoded value `T` that may borrow from its own backing storage.
 ///
 /// Transports decode into storage they own (heap buffer, VarSlot, mmap).
-/// `SelfRef` keeps that storage alive so `T` can safely borrow from it
-/// (via Facet's `'static` lifetime + variance guarantee).
+/// `SelfRef` keeps that storage alive so `T` can safely borrow from it.
 ///
 /// Uses `ManuallyDrop` + custom `Drop` to guarantee drop order: value is
 /// dropped before backing, so borrowed references in `T` remain valid
 /// through `T`'s drop.
-///
-/// `T` must be covariant in any lifetime parameters (checked at construction
-/// via facet's variance tracking).
 pub struct SelfRef<T: 'static> {
     /// The decoded value, potentially borrowing from `backing`.
     value: ManuallyDrop<T>,
@@ -52,26 +47,16 @@ impl<T: 'static> Drop for SelfRef<T> {
     }
 }
 
-impl<T: 'static + Facet<'static>> SelfRef<T> {
+impl<T: 'static> SelfRef<T> {
     /// Construct a `SelfRef` from backing storage and a builder.
     ///
     /// The builder receives a `&'static [u8]` view of the backing bytes —
     /// sound because the backing is heap-allocated (stable address) and
     /// dropped after the value.
-    ///
-    /// Panics if `T` is not covariant (lifetime cannot safely shrink).
     pub fn try_new<E>(
         backing: Backing,
         builder: impl FnOnce(&'static [u8]) -> Result<T, E>,
     ) -> Result<Self, E> {
-        let variance = T::SHAPE.computed_variance();
-        assert!(
-            variance.can_shrink(),
-            "SelfRef<T> requires T to be covariant. Type {:?} has variance {:?}",
-            T::SHAPE.type_identifier,
-            variance
-        );
-
         // Create a 'static slice from the backing bytes.
         // Sound because:
         // - Backing is heap-allocated (stable address)
@@ -96,9 +81,6 @@ impl<T: 'static + Facet<'static>> SelfRef<T> {
         })
         .unwrap_or_else(|e: std::convert::Infallible| match e {})
     }
-}
-
-impl<T: 'static> SelfRef<T> {
     /// Wrap an owned value that does NOT borrow from backing.
     ///
     /// No variance check — the value is fully owned. The backing is kept
