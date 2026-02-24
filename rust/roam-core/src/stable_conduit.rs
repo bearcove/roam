@@ -302,7 +302,6 @@ pub struct StableConduitTx<F: MsgFamily, LS: LinkSource> {
 
 impl<F: MsgFamily, LS: LinkSource> ConduitTx for StableConduitTx<F, LS>
 where
-    F::Msg<'static>: Facet<'static>,
     <LS::Link as Link>::Tx: Clone + Send + 'static,
     <LS::Link as Link>::Rx: Send + 'static,
     LS: Send + 'static,
@@ -369,10 +368,7 @@ pub struct StableConduitPermit<'a, F: MsgFamily, LS: LinkSource> {
     _phantom: PhantomData<fn(F)>,
 }
 
-impl<F: MsgFamily, LS: LinkSource> ConduitTxPermit for StableConduitPermit<'_, F, LS>
-where
-    F::Msg<'static>: Facet<'static>,
-{
+impl<F: MsgFamily, LS: LinkSource> ConduitTxPermit for StableConduitPermit<'_, F, LS> {
     type Msg<'a> = F::Msg<'a>;
     type Error = StableConduitError;
 
