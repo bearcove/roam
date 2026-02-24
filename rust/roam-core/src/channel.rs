@@ -78,11 +78,12 @@ impl ReceiverSlot {
 /// Wire encoding is always unit (`()`), with channel IDs carried exclusively
 /// in `Message::{Request,Response}.channels`.
 #[derive(Facet)]
-#[facet(opaque, proxy = ())]
+#[facet(proxy = ())]
 pub struct Tx<T, const N: usize = 16> {
     pub(crate) conn_id: ConnectionId,
     pub(crate) channel_id: ChannelId,
     pub(crate) sink: SinkSlot,
+    #[facet(opaque)]
     _marker: PhantomData<T>,
 }
 
@@ -184,11 +185,12 @@ impl std::error::Error for TxError {}
 /// Wire encoding is always unit (`()`), with channel IDs carried exclusively
 /// in `Message::{Request,Response}.channels`.
 #[derive(Facet)]
-#[facet(opaque, proxy = ())]
+#[facet(proxy = ())]
 pub struct Rx<T, const N: usize = 16> {
     pub(crate) conn_id: ConnectionId,
     pub(crate) channel_id: ChannelId,
     pub(crate) receiver: ReceiverSlot,
+    #[facet(opaque)]
     _marker: PhantomData<T>,
 }
 
