@@ -1,11 +1,40 @@
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use roam_types::{
-    ChannelBody, ChannelId, ChannelMessage, Handler, ReplySink, RequestBody, RequestCall,
-    RequestId, RequestMessage, RequestResponse, RoamError, SelfRef, TxError,
+    ChannelBody, ChannelId, ChannelMessage, ConnectionId, Handler, Message, MessagePayload,
+    ReplySink, RequestBody, RequestId, RequestMessage, RequestResponse, SelfRef, TxError,
 };
 
-use crate::session::{ConnectionHandle, ConnectionMessage};
+use crate::session::{ConnectionHandle, ConnectionMessage, SessionCore};
+
+/// Owned response message, sent through a oneshot when a response arrives
+/// for an outgoing call. The caller unpacks the `SelfRef` on the other side.
+type ResponseSlot = tokio::sync::oneshot::Sender<SelfRef<RequestMessage<'static>>>;
+
+/// Concrete `ReplySink` implementation for the driver.
+/// Sends a response back through the session's conduit.
+pub struct DriverReplySink {
+    sess_core: Arc<SessionCore>,
+    connection_id: ConnectionId,
+    request_id: RequestId,
+}
+
+impl ReplySink for DriverReplySink {
+    async fn send_reply<'a>(&self, response: RequestResponse<'a>) -> Result<(), TxError> {
+        let message = Message {
+            connection_id: self.connection_id,
+            payload: MessagePayload::RequestMessage(RequestMessage {
+                id: self.request_id,
+                body: RequestBody::Response(response),
+            }),
+        };
+        self.sess_core
+            .send(message)
+            .await
+            .map_err(|_| TxError::Transport("session closed".into()))
+    }
+}
 
 // r[impl rpc.handler]
 // r[impl rpc.request]
@@ -13,13 +42,11 @@ use crate::session::{ConnectionHandle, ConnectionMessage};
 // r[impl rpc.pipelining]
 /// Per-connection driver. Handles in-flight request tracking, dispatches
 /// incoming calls to a Handler, and manages channel state/flow control.
-pub struct Driver<R: ReplySink> {
+pub struct Driver {
     handle: ConnectionHandle,
-    handler: Box<dyn Handler<R>>,
+    handler: Box<dyn Handler<DriverReplySink>>,
     /// In-flight outgoing requests (we sent a Call, waiting for Response).
-    /// Maps request ID -> response slot.
-    pending_responses:
-        BTreeMap<RequestId, tokio::sync::oneshot::Sender<SelfRef<RequestResponse<'static>>>>,
+    pending_responses: BTreeMap<RequestId, ResponseSlot>,
     /// Channels we know about on this connection.
     channels: BTreeMap<ChannelId, ChannelState>,
 }
@@ -29,8 +56,8 @@ struct ChannelState {
     credit: u32,
 }
 
-impl<R: ReplySink> Driver<R> {
-    pub fn new(handle: ConnectionHandle, handler: Box<dyn Handler<R>>) -> Self {
+impl Driver {
+    pub fn new(handle: ConnectionHandle, handler: Box<dyn Handler<DriverReplySink>>) -> Self {
         Self {
             handle,
             handler,
@@ -42,63 +69,76 @@ impl<R: ReplySink> Driver<R> {
     // r[impl rpc.pipelining]
     /// Main loop: receive messages from the session and dispatch them.
     pub async fn run(&mut self) {
+        // [TODO] SelfRef should have a more ergonomic way to match-and-move
+        // through enum variants without the peek-then-map dance.
         while let Some(msg) = self.handle.recv().await {
-            match msg.as_ref() {
-                ConnectionMessage::Request(req) => self.handle_request(&msg, req),
-                ConnectionMessage::Channel(chan) => self.handle_channel(&msg, chan),
+            let is_request = matches!(msg.as_ref(), ConnectionMessage::Request(_));
+            if is_request {
+                let msg = msg.map(|m| match m {
+                    ConnectionMessage::Request(r) => r,
+                    _ => unreachable!(),
+                });
+                self.handle_request(msg);
+            } else {
+                let msg = msg.map(|m| match m {
+                    ConnectionMessage::Channel(c) => c,
+                    _ => unreachable!(),
+                });
+                self.handle_channel(msg);
             }
         }
     }
 
-    fn handle_request(
-        &mut self,
-        msg: &SelfRef<ConnectionMessage<'static>>,
-        req: &RequestMessage<'_>,
-    ) {
-        match &req.body {
+    fn handle_request(&mut self, msg: SelfRef<RequestMessage<'static>>) {
+        // [TODO] same peek-then-map dance — needs SelfRef ergonomics
+        let req_id = msg.id;
+        let is_call = matches!(&msg.body, RequestBody::Call(_));
+        let is_response = matches!(&msg.body, RequestBody::Response(_));
+
+        if is_call {
             // r[impl rpc.request]
-            RequestBody::Call(_call) => {
-                // TODO: create a ReplySink, wrap in SinkCall, dispatch to handler
-                // Need to spawn the handler call so we don't block the driver loop
-            }
+            let reply = DriverReplySink {
+                sess_core: Arc::clone(&self.handle.sess_core),
+                connection_id: self.handle.connection_id,
+                request_id: req_id,
+            };
+            let call = msg.map(|m| match m.body {
+                RequestBody::Call(c) => c,
+                _ => unreachable!(),
+            });
+            // [TODO] spawn handler task so we don't block the driver loop
+            // self.handler.handle(call, reply)
+        } else if is_response {
             // r[impl rpc.response.one-per-request]
-            RequestBody::Response(_resp) => {
-                // Match against pending_responses, send to the oneshot
-                if let Some(tx) = self.pending_responses.remove(&req.id) {
-                    // TODO: repack the SelfRef to extract just the response
-                    let _ = tx; // placeholder
-                }
+            if let Some(tx) = self.pending_responses.remove(&req_id) {
+                let _ = tx.send(msg);
             }
+        } else {
             // r[impl rpc.cancel]
-            RequestBody::Cancel(_cancel) => {
-                // TODO: signal cancellation to in-flight handler task
-            }
+            // [TODO] signal cancellation to in-flight handler task
         }
     }
 
-    fn handle_channel(
-        &mut self,
-        _msg: &SelfRef<ConnectionMessage<'static>>,
-        chan: &ChannelMessage<'_>,
-    ) {
-        match &chan.body {
+    fn handle_channel(&mut self, msg: SelfRef<ChannelMessage<'static>>) {
+        let chan_id = msg.id;
+        match &msg.body {
             // r[impl rpc.channel.item]
             ChannelBody::Item(_item) => {
-                // TODO: route to the Rx's mpsc sender
+                // [TODO] route to the Rx's mpsc sender
             }
             // r[impl rpc.channel.close]
             ChannelBody::Close(_close) => {
-                // TODO: signal end-of-stream to the Rx
+                // [TODO] signal end-of-stream to the Rx
             }
             // r[impl rpc.channel.reset]
             ChannelBody::Reset(_reset) => {
-                // TODO: signal the Tx to stop sending
+                // [TODO] signal the Tx to stop sending
             }
             // r[impl rpc.flow-control.credit.grant]
             ChannelBody::GrantCredit(grant) => {
-                if let Some(state) = self.channels.get_mut(&chan.id) {
+                if let Some(state) = self.channels.get_mut(&chan_id) {
                     state.credit = state.credit.saturating_add(grant.additional);
-                    // TODO: wake any sender blocked on zero credit
+                    // [TODO] wake any sender blocked on zero credit
                 }
             }
         }
