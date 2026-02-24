@@ -844,7 +844,6 @@ dependencies = [
  "facet-core",
  "facet-path",
  "facet-postcard",
- "facet-reflect",
  "smallvec 1.15.1",
  "structstruck",
 ]

@@ -298,7 +298,6 @@ impl FacetOpaqueAdapter for PayloadAdapter {
 mod tests {
     use super::*;
     use facet::Facet;
-    use facet_reflect::Peek;
 
     /// A wrapper struct that contains a Payload, mimicking how Request/Response use it.
     #[derive(Debug, Facet)]
@@ -316,12 +315,6 @@ mod tests {
         }
     }
 
-    /// Serialize a non-'static value via Peek.
-    fn serialize_envelope(envelope: &Envelope<'_>) -> Vec<u8> {
-        let peek = Peek::new(envelope);
-        facet_postcard::peek_to_vec(peek).expect("serialize")
-    }
-
     #[test]
     fn payload_roundtrip_owned() {
         let data: Vec<u8> = vec![0xDE, 0xAD, 0xBE, 0xEF];
@@ -330,7 +323,7 @@ mod tests {
             payload: borrowed_payload(&data),
         };
 
-        let bytes = serialize_envelope(&envelope);
+        let bytes = facet_postcard::to_vec(&envelope).expect("serialize");
         let decoded: Envelope<'static> =
             facet_postcard::from_slice(&bytes).expect("deserialize owned");
 
@@ -352,7 +345,7 @@ mod tests {
             payload: borrowed_payload(&data),
         };
 
-        let bytes = serialize_envelope(&envelope);
+        let bytes = facet_postcard::to_vec(&envelope).expect("serialize");
         let decoded: Envelope<'_> =
             facet_postcard::from_slice_borrowed(&bytes).expect("deserialize borrowed");
 
@@ -375,7 +368,7 @@ mod tests {
             payload: borrowed_payload(&data),
         };
 
-        let bytes = serialize_envelope(&envelope);
+        let bytes = facet_postcard::to_vec(&envelope).expect("serialize");
         let decoded: Envelope<'_> =
             facet_postcard::from_slice_borrowed(&bytes).expect("deserialize borrowed");
 
@@ -401,7 +394,7 @@ mod tests {
             payload: borrowed_payload(&value),
         };
 
-        let bytes = serialize_envelope(&envelope);
+        let bytes = facet_postcard::to_vec(&envelope).expect("serialize");
         let decoded: Envelope<'static> =
             facet_postcard::from_slice(&bytes).expect("deserialize owned");
 

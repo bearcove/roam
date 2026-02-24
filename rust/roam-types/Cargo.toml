@@ -22,4 +22,3 @@ structstruck.workspace = true
 
 [dev-dependencies]
 facet-postcard.workspace = true
-facet-reflect.workspace = true
