@@ -88,7 +88,7 @@ pub struct Session<Tx, Rx> {
 
 impl<Tx, Rx> Session<Tx, Rx>
 where
-    Tx: ConduitTx<Msg<'static> = Message<'static>>,
+    Tx: for<'a> ConduitTx<Msg<'a> = Message<'a>>,
     Rx: ConduitRx<Msg<'static> = Message<'static>>,
     Rx::Error: std::fmt::Display,
     for<'a> <<Tx as ConduitTx>::Permit<'a> as ConduitTxPermit>::Error: std::fmt::Display,
@@ -262,7 +262,7 @@ where
         self.send(Message::new(conn_id, payload)).await
     }
 
-    pub async fn send_rpc_message(&self, msg: Message<'static>) -> Result<(), SessionError> {
+    pub async fn send_rpc_message<'msg>(&self, msg: Message<'msg>) -> Result<(), SessionError> {
         let conn_id = msg.connection_id();
         if !self.connections.contains_key(&conn_id) {
             return Err(SessionError::InvalidState(format!(
@@ -417,7 +417,7 @@ where
         }
     }
 
-    async fn send(&self, msg: Message<'static>) -> Result<(), SessionError> {
+    async fn send<'msg>(&self, msg: Message<'msg>) -> Result<(), SessionError> {
         let tx = self
             .tx
             .as_ref()
@@ -461,7 +461,7 @@ pub async fn establish_initiator<C>(
 ) -> Result<Session<C::Tx, C::Rx>, SessionError>
 where
     C: Conduit<Msg<'static> = Message<'static>>,
-    C::Tx: ConduitTx<Msg<'static> = Message<'static>>,
+    C::Tx: for<'a> ConduitTx<Msg<'a> = Message<'a>>,
     C::Rx: ConduitRx<Msg<'static> = Message<'static>>,
     <C::Rx as ConduitRx>::Error: std::fmt::Display,
     for<'a> <<C::Tx as ConduitTx>::Permit<'a> as ConduitTxPermit>::Error: std::fmt::Display,
@@ -523,7 +523,7 @@ pub async fn establish_acceptor<C>(
 ) -> Result<Session<C::Tx, C::Rx>, SessionError>
 where
     C: Conduit<Msg<'static> = Message<'static>>,
-    C::Tx: ConduitTx<Msg<'static> = Message<'static>>,
+    C::Tx: for<'a> ConduitTx<Msg<'a> = Message<'a>>,
     C::Rx: ConduitRx<Msg<'static> = Message<'static>>,
     <C::Rx as ConduitRx>::Error: std::fmt::Display,
     for<'a> <<C::Tx as ConduitTx>::Permit<'a> as ConduitTxPermit>::Error: std::fmt::Display,
@@ -582,9 +582,9 @@ where
     ))
 }
 
-async fn send_message<Tx>(tx: &Tx, msg: Message<'static>) -> Result<(), SessionError>
+async fn send_message<'msg, Tx>(tx: &Tx, msg: Message<'msg>) -> Result<(), SessionError>
 where
-    Tx: ConduitTx<Msg<'static> = Message<'static>>,
+    Tx: for<'a> ConduitTx<Msg<'a> = Message<'a>>,
     for<'a> <<Tx as ConduitTx>::Permit<'a> as ConduitTxPermit>::Error: std::fmt::Display,
 {
     let permit = tx
@@ -609,7 +609,7 @@ where
 
 async fn send_protocol_error_and_close<Tx>(tx: Tx, description: &str) -> Result<(), SessionError>
 where
-    Tx: ConduitTx<Msg<'static> = Message<'static>>,
+    Tx: for<'a> ConduitTx<Msg<'a> = Message<'a>>,
     for<'a> <<Tx as ConduitTx>::Permit<'a> as ConduitTxPermit>::Error: std::fmt::Display,
 {
     let protocol_error = Message::new(

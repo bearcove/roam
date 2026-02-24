@@ -2,10 +2,11 @@ use crate::{
     BareConduit, ConnectionState, MemoryLink, PROTOCOL_VERSION, SessionError, SessionEvent,
     establish_acceptor, establish_initiator, memory_link_pair,
 };
+use facet::Facet;
 use roam_types::{
     CancelRequest, ChannelId, CloseChannel, Conduit, ConduitRx, ConduitTx, ConduitTxPermit,
-    ConnectionId, ConnectionSettings, Hello, Message, MessageFamily, MessagePayload, Parity,
-    RequestId,
+    ConnectionId, ConnectionSettings, Hello, Message, MessageFamily, MessagePayload, MethodId,
+    Parity, Payload, Request, RequestId,
 };
 
 type MessageConduit = BareConduit<MessageFamily, MemoryLink>;
@@ -270,4 +271,55 @@ async fn send_rpc_message_rejects_non_rpc_payloads_and_unknown_connections() {
         }
         other => panic!("expected InvalidState, got {other}"),
     }
+}
+
+#[derive(Facet)]
+struct BorrowedArgs<'a> {
+    label: &'a str,
+}
+
+#[derive(Facet)]
+struct OwnedArgs {
+    label: String,
+}
+
+#[tokio::test]
+async fn send_rpc_message_supports_borrowed_payload_lifetimes() {
+    let (initiator_conduit, acceptor_conduit) = conduit_pair();
+    let (initiator, acceptor) = tokio::join!(
+        establish_initiator(initiator_conduit, Parity::Odd, default_settings(10), vec![]),
+        establish_acceptor(acceptor_conduit, default_settings(20), vec![])
+    );
+    let initiator = initiator.expect("initiator handshake");
+    let mut acceptor = acceptor.expect("acceptor handshake");
+
+    let backing = String::from("borrowed-through-session");
+    let args = BorrowedArgs { label: &backing };
+    initiator
+        .send_rpc_message(Message::new(
+            ConnectionId::ROOT,
+            MessagePayload::Request(Request {
+                request_id: RequestId(5),
+                method_id: MethodId(99),
+                args: Payload::borrowed(&args),
+                channels: vec![],
+                metadata: vec![],
+            }),
+        ))
+        .await
+        .expect("send borrowed request payload");
+
+    let ev = acceptor.recv_event().await.expect("recv request");
+    let SessionEvent::IncomingMessage(msg) = ev else {
+        panic!("expected IncomingMessage event");
+    };
+    let MessagePayload::Request(request) = msg.payload() else {
+        panic!("expected Request payload");
+    };
+    let bytes = request
+        .args
+        .as_incoming_bytes()
+        .expect("incoming request payload bytes");
+    let decoded: OwnedArgs = facet_postcard::from_slice(bytes).expect("decode request args");
+    assert_eq!(decoded.label, "borrowed-through-session");
 }
