@@ -3,9 +3,9 @@ use facet::Facet;
 /// Metadata value.
 #[repr(u8)]
 #[derive(Debug, Clone, PartialEq, Eq, Facet)]
-pub enum MetadataValue {
-    String(String) = 0,
-    Bytes(Vec<u8>) = 1,
+pub enum MetadataValue<'a> {
+    String(&'a str) = 0,
+    Bytes(&'a [u8]) = 1,
     U64(u64) = 2,
 }
 
@@ -58,5 +58,4 @@ impl std::ops::BitAndAssign for MetadataFlags {
 }
 
 /// Metadata entry: (key, value, flags).
-/// [FIXME] make those all borrowed because we can now!
-pub type Metadata = Vec<(String, MetadataValue, MetadataFlags)>;
+pub type Metadata<'a> = Vec<(&'a str, MetadataValue<'a>, MetadataFlags)>;

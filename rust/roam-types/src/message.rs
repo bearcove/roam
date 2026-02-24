@@ -152,7 +152,7 @@ structstruck::strike! {
         /// Sent by initiator to acceptor as the first message
         // r[impl session.handshake]
         // r[impl session.connection-settings.hello]
-        Hello(pub struct Hello {
+        Hello(pub struct Hello<'payload> {
             /// Must be equal to 7
             pub version: u32,
 
@@ -163,26 +163,26 @@ structstruck::strike! {
             pub connection_settings: ConnectionSettings,
 
             /// Metadata associated with the connection.
-            pub metadata: Metadata,
+            pub metadata: Metadata<'payload>,
         }),
 
         /// Sent by acceptor back to initiator. Poetic on purpose, I'm not changing the name.
         // r[impl session.connection-settings.hello]
-        HelloYourself(pub struct HelloYourself {
+        HelloYourself(pub struct HelloYourself<'payload> {
             /// Connection limits advertised by the acceptor for the root connection.
             pub connection_settings: ConnectionSettings,
 
             /// You can _also_ have metadata if you want.
-            pub metadata: Metadata,
+            pub metadata: Metadata<'payload>,
         }),
 
         /// Sent by either peer when the counterpart has violated the protocol.
         /// The sender closes the transport immediately after sending this message.
         /// No reply is expected or valid.
         // r[impl session.protocol-error]
-        ProtocolError(pub struct ProtocolError {
+        ProtocolError(pub struct ProtocolError<'payload> {
             /// Human-readable description of the protocol violation.
-            pub description: String,
+            pub description: &'payload str,
         }),
 
         // ========================================================================
@@ -194,7 +194,7 @@ structstruck::strike! {
         // r[impl connection.open]
         // r[impl connection.virtual]
         // r[impl session.connection-settings.open]
-        OpenConnection(pub struct OpenConnection {
+        OpenConnection(pub struct OpenConnection<'payload> {
             /// Parity requested by the opener for this virtual connection.
             pub parity: Parity,
 
@@ -202,29 +202,29 @@ structstruck::strike! {
             pub connection_settings: ConnectionSettings,
 
             /// Metadata associated with the connection.
-            pub metadata: Metadata,
+            pub metadata: Metadata<'payload>,
         }),
 
         /// Accept a virtual connection request — sent on the connection ID requested.
         // r[impl session.connection-settings.open]
-        AcceptConnection(pub struct AcceptConnection {
+        AcceptConnection(pub struct AcceptConnection<'payload> {
             /// Connection limits advertised by the accepter.
             pub connection_settings: ConnectionSettings,
 
             /// Metadata associated with the connection.
-            pub metadata: Metadata,
+            pub metadata: Metadata<'payload>,
         }),
 
         /// Reject a virtual connection request — sent on the connection ID requested.
-        RejectConnection(pub struct RejectConnection {
+        RejectConnection(pub struct RejectConnection<'payload> {
             /// Metadata associated with the rejection.
-            pub metadata: Metadata,
+            pub metadata: Metadata<'payload>,
         }),
 
         /// Close a virtual connection. Trying to close conn 0 is a protocol error.
-        CloseConnection(pub struct CloseConnection {
+        CloseConnection(pub struct CloseConnection<'payload> {
             /// Metadata associated with the close.
-            pub metadata: Metadata,
+            pub metadata: Metadata<'payload>,
         }),
 
 
@@ -254,7 +254,7 @@ structstruck::strike! {
                             pub channels: &'payload [ChannelId],
 
                             /// Metadata associated with this call
-                            pub metadata: Metadata,
+                            pub metadata: Metadata<'payload>,
                         }),
 
                         /// Respond to a request
@@ -266,13 +266,13 @@ structstruck::strike! {
                             pub channels: &'payload [ChannelId],
 
                             /// Arbitrary response metadata
-                            pub metadata: Metadata,
+                            pub metadata: Metadata<'payload>,
                         }),
 
                         /// Cancel processing of a request.
-                        RequestCancel(struct RequestCancel {
+                        RequestCancel(struct RequestCancel<'payload> {
                             /// Arbitrary cancel metadata
-                            pub metadata: Metadata,
+                            pub metadata: Metadata<'payload>,
                         }),
                     },
             }
@@ -282,45 +282,45 @@ structstruck::strike! {
         // Channels
         // ========================================================================
 
-        /// Send an item on a channel. Channels are not "opened", they are created
-        /// implicitly by calls.
-        ChannelItem(struct ChannelItem<'payload> {
-            /// Channel ID (unique per-connection) for the channel to send data on.
-            pub channel_id: ChannelId,
+        ChannelMessage(
+            pub struct ChannelMessage<'payload> {
+                /// Channel ID (unique per-connection)
+                pub id: ChannelId,
 
-            /// The item itself
-            pub item: Payload<'payload>,
-        }),
+                /// Channel message body
+                pub body:
+                    #[repr(u8)]
+                    pub enum Channel<'payload> {
+                        /// Send an item on a channel. Channels are not "opened", they are created
+                        /// implicitly by calls.
+                        ChannelItem(pub struct ChannelItem<'payload> {
+                            /// The item itself
+                            pub item: Payload<'payload>,
+                        }),
 
-        /// Close a channel — sent by the sender of the channel when they're gracefully done
-        /// with a channel.
-        CloseChannel(struct CloseChannel {
-            /// Channel ID (unique per-connection) for the channel to close.
-            pub channel_id: ChannelId,
+                        /// Close a channel — sent by the sender of the channel when they're gracefully done
+                        /// with a channel.
+                        CloseChannel(pub struct CloseChannel<'payload> {
+                            /// Metadata associated with closing the channel.
+                            pub metadata: Metadata<'payload>,
+                        }),
 
-            /// Metadata associated with closing the channel.
-            pub metadata: Metadata,
-        }),
+                        /// Reset a channel — sent by the receiver of a channel when they would like the sender
+                        /// to please, stop sending items through.
+                        ResetChannel(pub struct ResetChannel<'payload> {
+                            /// Metadata associated with resetting the channel.
+                            pub metadata: Metadata<'payload>,
+                        }),
 
-        /// Reset a channel — sent by the receiver of a channel when they would like the sender
-        /// to please, stop sending items through.
-        ResetChannel(struct ResetChannel {
-            /// Channel ID (unique per-connection) for the channel to reset.
-            pub channel_id: ChannelId,
-
-            /// Metadata associated with resetting the channel.
-            pub metadata: Metadata,
-        }),
-
-        /// Grant additional send credit to a channel sender.
-        // r[impl rpc.flow-control.credit.grant]
-        GrantCredit(struct GrantCredit {
-            /// Channel ID to grant credit on.
-            pub channel_id: ChannelId,
-
-            /// Number of additional items the sender may send.
-            pub additional: u32,
-        }),
+                        /// Grant additional send credit to a channel sender.
+                        // r[impl rpc.flow-control.credit.grant]
+                        GrantCredit(pub struct GrantCredit {
+                            /// Number of additional items the sender may send.
+                            pub additional: u32,
+                        }),
+                    },
+            }
+        ),
 
     }
 }
