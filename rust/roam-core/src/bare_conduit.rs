@@ -1,12 +1,11 @@
 use std::marker::PhantomData;
 
-use facet::Facet;
 use facet_core::{PtrConst, Shape};
 use facet_reflect::Peek;
 
 use roam_types::{
-    Conduit, ConduitRx, ConduitTx, ConduitTxPermit, Link, LinkTx, LinkTxPermit, RpcPlan, SelfRef,
-    WriteSlot,
+    Conduit, ConduitRx, ConduitTx, ConduitTxPermit, Link, LinkTx, LinkTxPermit, MsgFamily, RpcPlan,
+    SelfRef, WriteSlot,
 };
 
 /// Wraps a [`Link`] with postcard serialization. No reconnect, no reliability.
@@ -14,44 +13,45 @@ use roam_types::{
 /// If the link dies, the conduit is dead. For localhost, SHM, or any
 /// transport where reconnect isn't needed.
 ///
-/// `T` is the message type family. The send path accepts `T` with any
-/// lifetime (borrowed data serialized in place via `Peek`). The receive
-/// path yields `SelfRef<T<'static>>` (owned).
+/// `F` is a [`MsgFamily`] — it maps lifetimes to concrete message types.
+/// The send path accepts `F::Msg<'a>` (borrowed data serialized in place
+/// via `Peek`). The recv path yields `SelfRef<F::Msg<'static>>` (owned).
 // r[impl conduit.bare]
 // r[impl conduit.typeplan]
-pub struct BareConduit<T: 'static, L: Link> {
+pub struct BareConduit<F: MsgFamily, L: Link> {
     link: L,
     shape: &'static Shape,
-    _phantom: PhantomData<fn(T) -> T>,
+    _phantom: PhantomData<fn(F) -> F>,
 }
 
-impl<T: Facet<'static> + 'static, L: Link> BareConduit<T, L> {
+impl<F: MsgFamily, L: Link> BareConduit<F, L> {
     /// Create a new BareConduit.
     ///
-    /// Panics if the plan's shape doesn't match `T::SHAPE`.
+    /// Panics if the plan's shape doesn't match `F::shape()`.
     pub fn new(link: L, plan: &'static RpcPlan) -> Self {
+        let shape = F::shape();
         assert!(
-            plan.shape == T::SHAPE,
+            plan.shape == shape,
             "RpcPlan shape mismatch: plan is for {}, expected {}",
             plan.shape,
-            T::SHAPE,
+            shape,
         );
         Self {
             link,
-            shape: T::SHAPE,
+            shape,
             _phantom: PhantomData,
         }
     }
 }
 
-impl<T: Facet<'static> + 'static, L: Link> Conduit for BareConduit<T, L>
+impl<F: MsgFamily, L: Link> Conduit for BareConduit<F, L>
 where
     L::Tx: Send + 'static,
     L::Rx: Send + 'static,
 {
-    type Msg<'a> = T;
-    type Tx = BareConduitTx<T, L::Tx>;
-    type Rx = BareConduitRx<T, L::Rx>;
+    type Msg<'a> = F::Msg<'a>;
+    type Tx = BareConduitTx<F, L::Tx>;
+    type Rx = BareConduitRx<F, L::Rx>;
 
     fn split(self) -> (Self::Tx, Self::Rx) {
         let (tx, rx) = self.link.split();
@@ -74,16 +74,16 @@ where
 // Tx
 // ---------------------------------------------------------------------------
 
-pub struct BareConduitTx<T, LTx: LinkTx> {
+pub struct BareConduitTx<F: MsgFamily, LTx: LinkTx> {
     link_tx: LTx,
     shape: &'static Shape,
-    _phantom: PhantomData<fn(T)>,
+    _phantom: PhantomData<fn(F)>,
 }
 
-impl<T, LTx: LinkTx + Send + 'static> ConduitTx for BareConduitTx<T, LTx> {
-    type Msg<'a> = T;
+impl<F: MsgFamily, LTx: LinkTx + Send + 'static> ConduitTx for BareConduitTx<F, LTx> {
+    type Msg<'a> = F::Msg<'a>;
     type Permit<'a>
-        = BareConduitPermit<'a, T, LTx>
+        = BareConduitPermit<'a, F, LTx>
     where
         Self: 'a;
 
@@ -105,19 +105,20 @@ impl<T, LTx: LinkTx + Send + 'static> ConduitTx for BareConduitTx<T, LTx> {
 // Permit
 // ---------------------------------------------------------------------------
 
-pub struct BareConduitPermit<'a, T, LTx: LinkTx> {
+pub struct BareConduitPermit<'a, F: MsgFamily, LTx: LinkTx> {
     permit: LTx::Permit,
     shape: &'static Shape,
-    _phantom: PhantomData<fn(T, &'a ())>,
+    _phantom: PhantomData<fn(F, &'a ())>,
 }
 
-impl<T, LTx: LinkTx> ConduitTxPermit for BareConduitPermit<'_, T, LTx> {
-    type Msg<'a> = T;
+impl<F: MsgFamily, LTx: LinkTx> ConduitTxPermit for BareConduitPermit<'_, F, LTx> {
+    type Msg<'a> = F::Msg<'a>;
     type Error = BareConduitError;
 
-    fn send(self, item: T) -> Result<(), Self::Error> {
-        // SAFETY: send_shape was set from T::SHAPE at construction time.
-        // The item is a valid instance of T, so (ptr, shape) is consistent.
+    fn send(self, item: F::Msg<'_>) -> Result<(), Self::Error> {
+        // SAFETY: shape was set from F::shape() at construction time.
+        // The item is a valid instance of F::Msg<'_>, which shares the same
+        // layout and shape as F::Msg<'static>.
         #[allow(unsafe_code)]
         let peek = unsafe {
             Peek::unchecked_new(PtrConst::new((&raw const item).cast::<u8>()), self.shape)
@@ -139,20 +140,20 @@ impl<T, LTx: LinkTx> ConduitTxPermit for BareConduitPermit<'_, T, LTx> {
 // Rx
 // ---------------------------------------------------------------------------
 
-pub struct BareConduitRx<T: 'static, LRx> {
+pub struct BareConduitRx<F: MsgFamily, LRx> {
     link_rx: LRx,
     recv_shape: &'static Shape,
-    _phantom: PhantomData<fn() -> T>,
+    _phantom: PhantomData<fn() -> F>,
 }
 
-impl<T: Facet<'static> + 'static, LRx> ConduitRx for BareConduitRx<T, LRx>
+impl<F: MsgFamily, LRx> ConduitRx for BareConduitRx<F, LRx>
 where
     LRx: roam_types::LinkRx + Send + 'static,
 {
-    type Msg<'a> = T;
+    type Msg<'a> = F::Msg<'a>;
     type Error = BareConduitError;
 
-    async fn recv(&mut self) -> Result<Option<SelfRef<T>>, Self::Error> {
+    async fn recv(&mut self) -> Result<Option<SelfRef<F::Msg<'static>>>, Self::Error> {
         let backing = match self
             .link_rx
             .recv()
@@ -164,7 +165,10 @@ where
         };
 
         let shape = self.recv_shape;
-        SelfRef::try_new(backing, |bytes| deserialize_with_shape::<T>(shape, bytes)).map(Some)
+        SelfRef::try_new(backing, |bytes| {
+            deserialize_with_shape::<F::Msg<'static>>(shape, bytes)
+        })
+        .map(Some)
     }
 }
 
@@ -184,7 +188,7 @@ fn deserialize_with_shape<T: 'static>(
     let ptr = facet_core::PtrUninit::new(value.as_mut_ptr().cast::<u8>());
 
     // SAFETY: ptr points to valid, aligned, properly-sized memory for T.
-    // shape comes from T::SHAPE, set at BareConduit construction time.
+    // shape comes from F::shape(), set at BareConduit construction time.
     #[allow(unsafe_code)]
     let partial: Partial<'_, false> = unsafe { Partial::from_raw_with_shape(ptr, shape) }
         .map_err(|e| BareConduitError::Decode(e.into()))?;

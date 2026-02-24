@@ -1,6 +1,22 @@
 #![allow(async_fn_in_trait)]
 
+use facet_core::Shape;
+
 use crate::SelfRef;
+
+/// Maps a lifetime to a concrete message type.
+///
+/// Rust doesn't have higher-kinded types, so this trait bridges the gap:
+/// `F::Msg<'a>` gives you the message type for any lifetime `'a`.
+///
+/// The send path uses `Msg<'a>` (borrowed data serialized in place).
+/// The recv path uses `Msg<'static>` (owned, via `SelfRef`).
+pub trait MsgFamily: 'static {
+    type Msg<'a>: 'a;
+
+    /// The shape shared by all `Msg<'a>` instantiations.
+    fn shape() -> &'static Shape;
+}
 
 /// Bidirectional typed transport. Wraps a [`Link`](crate::Link) and owns serialization.
 ///

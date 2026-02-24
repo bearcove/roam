@@ -294,6 +294,17 @@ impl FacetOpaqueAdapter for PayloadAdapter {
     }
 }
 
+/// Type-level tag for [`Message`] as a [`MsgFamily`](crate::MsgFamily).
+pub struct MessageFamily;
+
+impl crate::MsgFamily for MessageFamily {
+    type Msg<'a> = Message<'a>;
+
+    fn shape() -> &'static facet_core::Shape {
+        <Message<'static> as Facet<'static>>::SHAPE
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

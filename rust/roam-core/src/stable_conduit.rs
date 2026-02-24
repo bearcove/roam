@@ -5,7 +5,7 @@ use facet::Facet;
 use facet_core::Shape;
 use roam_types::{
     Backing, Conduit, ConduitRx, ConduitTx, ConduitTxPermit, Link, LinkRx, LinkTx, LinkTxPermit,
-    RpcPlan, SelfRef, WriteSlot,
+    MsgFamily, RpcPlan, SelfRef, WriteSlot,
 };
 
 use crate::replay_buffer::{PacketAck, PacketSeq, ReplayBuffer};
@@ -71,10 +71,10 @@ pub trait LinkSource: Send + 'static {
 // ---------------------------------------------------------------------------
 
 // r[impl stable]
-pub struct StableConduit<T: 'static, LS: LinkSource> {
+pub struct StableConduit<F: MsgFamily, LS: LinkSource> {
     inner: Arc<tokio::sync::Mutex<Inner<LS>>>,
     frame_shape: &'static Shape,
-    _phantom: PhantomData<fn(T) -> T>,
+    _phantom: PhantomData<fn(F) -> F>,
 }
 
 struct Inner<LS: LinkSource> {
@@ -93,13 +93,17 @@ struct Inner<LS: LinkSource> {
     replay: ReplayBuffer,
 }
 
-impl<T: Facet<'static> + 'static, LS: LinkSource> StableConduit<T, LS> {
+impl<F: MsgFamily, LS: LinkSource> StableConduit<F, LS>
+where
+    F::Msg<'static>: Facet<'static>,
+{
     pub async fn new(mut source: LS, plan: &'static RpcPlan) -> Result<Self, StableConduitError> {
+        let shape = F::shape();
         assert!(
-            plan.shape == T::SHAPE,
+            plan.shape == shape,
             "RpcPlan shape mismatch: plan is for {}, expected {}",
             plan.shape,
-            T::SHAPE,
+            shape,
         );
 
         let attachment = source.next_link().await.map_err(StableConduitError::Io)?;
@@ -122,7 +126,7 @@ impl<T: Facet<'static> + 'static, LS: LinkSource> StableConduit<T, LS> {
 
         Ok(Self {
             inner: Arc::new(tokio::sync::Mutex::new(inner)),
-            frame_shape: Frame::<T>::SHAPE,
+            frame_shape: Frame::<F::Msg<'static>>::SHAPE,
             _phantom: PhantomData,
         })
     }
@@ -264,15 +268,16 @@ fn fresh_key() -> Vec<u8> {
 // Conduit impl
 // ---------------------------------------------------------------------------
 
-impl<T: Facet<'static> + 'static, LS: LinkSource> Conduit for StableConduit<T, LS>
+impl<F: MsgFamily, LS: LinkSource> Conduit for StableConduit<F, LS>
 where
+    F::Msg<'static>: Facet<'static>,
     <LS::Link as Link>::Tx: Clone + Send + 'static,
     <LS::Link as Link>::Rx: Send + 'static,
     LS: Send + 'static,
 {
-    type Msg<'a> = T;
-    type Tx = StableConduitTx<T, LS>;
-    type Rx = StableConduitRx<T, LS>;
+    type Msg<'a> = F::Msg<'a>;
+    type Tx = StableConduitTx<F, LS>;
+    type Rx = StableConduitRx<F, LS>;
 
     fn split(self) -> (Self::Tx, Self::Rx) {
         (
@@ -293,20 +298,21 @@ where
 // Tx
 // ---------------------------------------------------------------------------
 
-pub struct StableConduitTx<T: 'static, LS: LinkSource> {
+pub struct StableConduitTx<F: MsgFamily, LS: LinkSource> {
     inner: Arc<tokio::sync::Mutex<Inner<LS>>>,
-    _phantom: PhantomData<fn(T)>,
+    _phantom: PhantomData<fn(F)>,
 }
 
-impl<T: Facet<'static> + 'static, LS: LinkSource> ConduitTx for StableConduitTx<T, LS>
+impl<F: MsgFamily, LS: LinkSource> ConduitTx for StableConduitTx<F, LS>
 where
+    F::Msg<'static>: Facet<'static>,
     <LS::Link as Link>::Tx: Clone + Send + 'static,
     <LS::Link as Link>::Rx: Send + 'static,
     LS: Send + 'static,
 {
-    type Msg<'a> = T;
+    type Msg<'a> = F::Msg<'a>;
     type Permit<'a>
-        = StableConduitPermit<'a, T, LS>
+        = StableConduitPermit<'a, F, LS>
     where
         Self: 'a;
 
@@ -360,21 +366,22 @@ where
 // Permit
 // ---------------------------------------------------------------------------
 
-pub struct StableConduitPermit<'a, T: 'static, LS: LinkSource> {
+pub struct StableConduitPermit<'a, F: MsgFamily, LS: LinkSource> {
     guard: tokio::sync::MutexGuard<'a, Inner<LS>>,
     link_permit: <<LS::Link as Link>::Tx as LinkTx>::Permit,
-    _phantom: PhantomData<fn(T)>,
+    _phantom: PhantomData<fn(F)>,
 }
 
-impl<T: Facet<'static> + 'static, LS: LinkSource> ConduitTxPermit
-    for StableConduitPermit<'_, T, LS>
+impl<F: MsgFamily, LS: LinkSource> ConduitTxPermit for StableConduitPermit<'_, F, LS>
+where
+    F::Msg<'static>: Facet<'static>,
 {
-    type Msg<'a> = T;
+    type Msg<'a> = F::Msg<'a>;
     type Error = StableConduitError;
 
     // r[impl zerocopy.framing.single-pass]
     // r[impl zerocopy.framing.no-double-serialize]
-    fn send(mut self, item: T) -> Result<(), StableConduitError> {
+    fn send(mut self, item: F::Msg<'_>) -> Result<(), StableConduitError> {
         let inner = &mut *self.guard;
 
         let seq = inner.next_send_seq;
@@ -408,22 +415,23 @@ impl<T: Facet<'static> + 'static, LS: LinkSource> ConduitTxPermit
 // Rx
 // ---------------------------------------------------------------------------
 
-pub struct StableConduitRx<T: 'static, LS: LinkSource> {
+pub struct StableConduitRx<F: MsgFamily, LS: LinkSource> {
     inner: Arc<tokio::sync::Mutex<Inner<LS>>>,
     frame_shape: &'static Shape,
-    _phantom: PhantomData<fn() -> T>,
+    _phantom: PhantomData<fn() -> F>,
 }
 
-impl<T: Facet<'static> + 'static, LS: LinkSource> ConduitRx for StableConduitRx<T, LS>
+impl<F: MsgFamily, LS: LinkSource> ConduitRx for StableConduitRx<F, LS>
 where
+    F::Msg<'static>: Facet<'static>,
     <LS::Link as Link>::Tx: Send + 'static,
     <LS::Link as Link>::Rx: Send + 'static,
     LS: Send + 'static,
 {
-    type Msg<'a> = T;
+    type Msg<'a> = F::Msg<'a>;
     type Error = StableConduitError;
 
-    async fn recv(&mut self) -> Result<Option<SelfRef<T>>, Self::Error> {
+    async fn recv(&mut self) -> Result<Option<SelfRef<F::Msg<'static>>>, Self::Error> {
         loop {
             // Phase 1: read raw bytes, reconnecting on link failure.
             let backing = {
@@ -443,7 +451,7 @@ where
 
             // Phase 2: deserialize the frame.
             let frame_shape = self.frame_shape;
-            let frame: SelfRef<Frame<T>> =
+            let frame: SelfRef<Frame<F::Msg<'static>>> =
                 SelfRef::try_new(backing, |bytes| deserialize_frame(frame_shape, bytes))?;
 
             // Phase 3: update shared state; skip duplicates.
@@ -543,11 +551,23 @@ mod tests {
     use std::collections::VecDeque;
     use std::sync::OnceLock;
 
-    use roam_types::{Conduit, ConduitRx, ConduitTx, ConduitTxPermit, LinkRx, LinkTx, RpcPlan};
+    use roam_types::{
+        Conduit, ConduitRx, ConduitTx, ConduitTxPermit, LinkRx, LinkTx, MsgFamily, RpcPlan,
+    };
 
     use crate::{MemoryLink, memory_link_pair};
 
     use super::*;
+
+    struct StringFamily;
+
+    impl MsgFamily for StringFamily {
+        type Msg<'a> = String;
+
+        fn shape() -> &'static facet_core::Shape {
+            String::SHAPE
+        }
+    }
 
     fn string_plan() -> &'static RpcPlan {
         static PLAN: OnceLock<RpcPlan> = OnceLock::new();
@@ -638,7 +658,7 @@ mod tests {
             (seq, item)
         });
 
-        let client = StableConduit::<String, _>::new(source, string_plan())
+        let client = StableConduit::<StringFamily, _>::new(source, string_plan())
             .await
             .unwrap();
         let (client_tx, _client_rx) = client.split();
@@ -737,7 +757,7 @@ mod tests {
         let source = QueuedLinkSource {
             links: VecDeque::from([(c1, None), (c2, None)]),
         };
-        let client = StableConduit::<String, _>::new(source, string_plan())
+        let client = StableConduit::<StringFamily, _>::new(source, string_plan())
             .await
             .unwrap();
         let (client_tx, mut client_rx) = client.split();
@@ -830,7 +850,7 @@ mod tests {
         let source = QueuedLinkSource {
             links: VecDeque::from([(c1, None), (c2, None)]),
         };
-        let client = StableConduit::<String, _>::new(source, string_plan())
+        let client = StableConduit::<StringFamily, _>::new(source, string_plan())
             .await
             .unwrap();
         let (client_tx, mut client_rx) = client.split();
@@ -892,7 +912,7 @@ mod tests {
             send_frame(&s_tx, 1, None, "second").await;
         });
 
-        let client = StableConduit::<String, _>::new(source, string_plan())
+        let client = StableConduit::<StringFamily, _>::new(source, string_plan())
             .await
             .unwrap();
         let (_client_tx, mut client_rx) = client.split();
@@ -953,7 +973,7 @@ mod tests {
         let source = QueuedLinkSource {
             links: VecDeque::from([(c1, None), (c2, None)]),
         };
-        let client = StableConduit::<String, _>::new(source, string_plan())
+        let client = StableConduit::<StringFamily, _>::new(source, string_plan())
             .await
             .unwrap();
         let (client_tx, mut client_rx) = client.split();

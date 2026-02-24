@@ -1,13 +1,24 @@
+use facet::Facet;
 use facet_core::ConstParamKind;
 
 use std::sync::OnceLock;
 
 use crate::{Rx, Tx};
-use roam_types::{Conduit, ConduitRx, ConduitTx, ConduitTxPermit, RpcPlan};
+use roam_types::{Conduit, ConduitRx, ConduitTx, ConduitTxPermit, MsgFamily, RpcPlan};
 
 use crate::{BareConduit, MemoryLink, memory_link_pair};
 
-type StringConduit = BareConduit<String, MemoryLink>;
+struct StringFamily;
+
+impl MsgFamily for StringFamily {
+    type Msg<'a> = String;
+
+    fn shape() -> &'static facet_core::Shape {
+        String::SHAPE
+    }
+}
+
+type StringConduit = BareConduit<StringFamily, MemoryLink>;
 
 fn string_plan() -> &'static RpcPlan {
     static PLAN: OnceLock<RpcPlan> = OnceLock::new();
@@ -110,8 +121,6 @@ async fn interleaved_send_recv() {
 
 #[test]
 fn tx_rx_const_param_n() {
-    use facet::Facet;
-
     let tx_shape = Tx::<String, 32>::SHAPE;
     let cp = tx_shape.const_params;
     assert_eq!(cp.len(), 1);
