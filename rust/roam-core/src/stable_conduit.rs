@@ -93,10 +93,7 @@ struct Inner<LS: LinkSource> {
     replay: ReplayBuffer,
 }
 
-impl<F: MsgFamily, LS: LinkSource> StableConduit<F, LS>
-where
-    F::Msg<'static>: Facet<'static>,
-{
+impl<F: MsgFamily, LS: LinkSource> StableConduit<F, LS> {
     pub async fn new(mut source: LS, plan: &'static RpcPlan) -> Result<Self, StableConduitError> {
         let shape = F::shape();
         assert!(

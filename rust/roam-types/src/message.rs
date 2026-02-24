@@ -299,10 +299,6 @@ pub struct MessageFamily;
 
 impl crate::MsgFamily for MessageFamily {
     type Msg<'a> = Message<'a>;
-
-    fn shape() -> &'static facet_core::Shape {
-        <Message<'static> as Facet<'static>>::SHAPE
-    }
 }
 
 #[cfg(test)]

@@ -1,5 +1,6 @@
 #![allow(async_fn_in_trait)]
 
+use facet::Facet;
 use facet_core::Shape;
 
 use crate::SelfRef;
@@ -12,10 +13,11 @@ use crate::SelfRef;
 /// The send path uses `Msg<'a>` (borrowed data serialized in place).
 /// The recv path uses `Msg<'static>` (owned, via `SelfRef`).
 pub trait MsgFamily: 'static {
-    type Msg<'a>: 'a;
+    type Msg<'a>: Facet<'a> + 'a;
 
-    /// The shape shared by all `Msg<'a>` instantiations.
-    fn shape() -> &'static Shape;
+    fn shape() -> &'static facet_core::Shape {
+        <Self::Msg<'static> as Facet<'static>>::SHAPE
+    }
 }
 
 /// Bidirectional typed transport. Wraps a [`Link`](crate::Link) and owns serialization.
