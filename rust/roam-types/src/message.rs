@@ -326,7 +326,7 @@ structstruck::strike! {
 ///
 /// Uses `#[facet(opaque = PayloadAdapter)]` so that format crates handle
 /// serialization/deserialization through the adapter contract:
-/// - **Send path:** `serialize_map` extracts `(ptr, shape)` from `Borrowed`.
+/// - **Send path:** `serialize_map` extracts `(ptr, shape)` from `Borrowed` or `Owned`.
 /// - **Recv path:** `deserialize_build` produces `RawBorrowed` or `RawOwned`.
 // r[impl zerocopy.payload]
 #[derive(Debug, Facet)]
@@ -336,6 +336,16 @@ pub enum Payload<'payload> {
     // r[impl zerocopy.payload.borrowed]
     /// Outgoing: type-erased pointer to caller-owned memory + its Shape.
     Borrowed {
+        ptr: PtrConst,
+        shape: &'static Shape,
+        _lt: PhantomData<&'payload ()>,
+    },
+
+    /// Outgoing: type-erased pointer + shape where liveness is guaranteed by caller.
+    ///
+    /// This is an explicit footgun. It is valid only if the pointed value remains alive
+    /// until serialization is complete.
+    Owned {
         ptr: PtrConst,
         shape: &'static Shape,
         _lt: PhantomData<&'payload ()>,
@@ -359,12 +369,25 @@ impl<'payload> Payload<'payload> {
         }
     }
 
+    /// Construct an outgoing owned payload from a raw pointer + shape.
+    ///
+    /// # Safety
+    ///
+    /// The pointed value must remain alive until serialization has completed.
+    pub unsafe fn owned_unchecked(ptr: PtrConst, shape: &'static Shape) -> Self {
+        Self::Owned {
+            ptr,
+            shape,
+            _lt: PhantomData,
+        }
+    }
+
     /// Access incoming bytes when this payload is decoded (`RawBorrowed` / `RawOwned`).
     pub fn as_incoming_bytes(&self) -> Option<&[u8]> {
         match self {
             Self::RawBorrowed(bytes) => Some(bytes),
             Self::RawOwned(bytes) => Some(bytes.as_slice()),
-            Self::Borrowed { .. } => None,
+            Self::Borrowed { .. } | Self::Owned { .. } => None,
         }
     }
 }
@@ -379,8 +402,10 @@ impl FacetOpaqueAdapter for PayloadAdapter {
 
     fn serialize_map(value: &Self::SendValue<'_>) -> OpaqueSerialize {
         match value {
-            Payload::Borrowed { ptr, shape, .. } => OpaqueSerialize { ptr: *ptr, shape },
-            _ => unreachable!("serialize_map is only called on outgoing Payload::Borrowed"),
+            Payload::Borrowed { ptr, shape, .. } | Payload::Owned { ptr, shape, .. } => {
+                OpaqueSerialize { ptr: *ptr, shape }
+            }
+            _ => unreachable!("serialize_map is only called on outgoing Payload variants"),
         }
     }
 

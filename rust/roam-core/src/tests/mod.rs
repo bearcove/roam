@@ -1,7 +1,7 @@
 use facet::Facet;
 use facet_core::ConstParamKind;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use crate::{ChannelSink, IncomingChannelMessage, Rx, Tx};
 use roam_types::{
@@ -140,6 +140,7 @@ struct TestSink {
     gate: Arc<Notify>,
     send_count: Arc<AtomicUsize>,
     close_count: Arc<AtomicUsize>,
+    saw_owned_payload: Arc<AtomicBool>,
 }
 
 impl TestSink {
@@ -148,6 +149,7 @@ impl TestSink {
             gate: Arc::new(Notify::new()),
             send_count: Arc::new(AtomicUsize::new(0)),
             close_count: Arc::new(AtomicUsize::new(0)),
+            saw_owned_payload: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -165,7 +167,11 @@ impl ChannelSink for TestSink {
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), crate::TxError>> + 'a>> {
         let gate = self.gate.clone();
         let send_count = self.send_count.clone();
+        let saw_owned_payload = self.saw_owned_payload.clone();
         Box::pin(async move {
+            if matches!(payload, Payload::Owned { .. }) {
+                saw_owned_payload.store(true, Ordering::SeqCst);
+            }
             gate.notified().await;
             let _ = Message::channel_item(conn_id, channel_id, payload);
             send_count.fetch_add(1, Ordering::SeqCst);
@@ -198,7 +204,7 @@ async fn tx_send_waits_for_sink_completion() {
     tx.bind(ConnectionId(1), ChannelId(9), sink.clone());
 
     let payload = "hello".to_string();
-    let fut = tx.send(&payload);
+    let fut = tx.send(payload);
     tokio::pin!(fut);
     tokio::select! {
         res = &mut fut => panic!("send completed too early: {res:?}"),
@@ -217,15 +223,13 @@ struct BorrowedMsg<'a> {
 
 #[tokio::test]
 async fn tx_send_accepts_borrowed_payloads() {
-    type Schema = BorrowedMsg<'static>;
-
-    let mut tx = Tx::<Schema>::unbound();
+    let mut tx: Tx<BorrowedMsg<'_>> = Tx::unbound();
     let sink = Arc::new(TestSink::new());
     tx.bind(ConnectionId(3), ChannelId(5), sink.clone());
 
     let backing = String::from("borrowed");
     let msg = BorrowedMsg { text: &backing };
-    let fut = tx.send(&msg);
+    let fut = tx.send(msg);
     tokio::pin!(fut);
     tokio::select! {
         res = &mut fut => panic!("send completed too early: {res:?}"),
@@ -233,6 +237,10 @@ async fn tx_send_accepts_borrowed_payloads() {
     }
     sink.open_gate();
     fut.await.expect("borrowed send should succeed");
+    assert!(
+        sink.saw_owned_payload.load(Ordering::SeqCst),
+        "send(value) should route through Payload::Owned"
+    );
 }
 
 #[tokio::test]

@@ -5,6 +5,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use facet::Facet;
+use facet_core::PtrConst;
 use roam_types::{ChannelId, ConnectionId, Message, Metadata, Payload, SelfRef};
 use tokio::sync::mpsc;
 
@@ -12,7 +13,7 @@ use tokio::sync::mpsc;
 ///
 /// Both ends start hollow and must be hydrated by the session driver using
 /// channel IDs from `Message::{Request,Response}.channels`.
-pub fn channel<T: 'static, const N: usize>() -> (Tx<T, N>, Rx<T, N>) {
+pub fn channel<T, const N: usize>() -> (Tx<T, N>, Rx<T, N>) {
     (Tx::unbound(), Rx::unbound())
 }
 
@@ -77,16 +78,15 @@ impl ReceiverSlot {
 /// Wire encoding is always unit (`()`), with channel IDs carried exclusively
 /// in `Message::{Request,Response}.channels`.
 #[derive(Facet)]
-#[facet(proxy = ())]
-pub struct Tx<T: 'static, const N: usize = 16> {
+#[facet(opaque, proxy = ())]
+pub struct Tx<T, const N: usize = 16> {
     pub(crate) conn_id: ConnectionId,
     pub(crate) channel_id: ChannelId,
     pub(crate) sink: SinkSlot,
-    #[facet(opaque)]
     _marker: PhantomData<T>,
 }
 
-impl<T: 'static, const N: usize> Tx<T, N> {
+impl<T, const N: usize> Tx<T, N> {
     pub fn unbound() -> Self {
         Self {
             conn_id: ConnectionId::ROOT,
@@ -108,20 +108,20 @@ impl<T: 'static, const N: usize> Tx<T, N> {
         self.is_bound().then_some(self.channel_id)
     }
 
-    pub async fn send<'value, U>(&self, value: &'value U) -> Result<(), TxError>
+    pub async fn send<'value>(&self, value: T) -> Result<(), TxError>
     where
-        U: Facet<'value>,
-        T: Facet<'static>,
+        T: Facet<'value>,
     {
-        if U::SHAPE != T::SHAPE {
-            return Err(TxError::ShapeMismatch {
-                expected: T::SHAPE,
-                got: U::SHAPE,
-            });
-        }
         let sink = self.sink.inner.as_ref().ok_or(TxError::Unbound)?;
-        sink.send_payload(self.conn_id, self.channel_id, Payload::borrowed::<U>(value))
-            .await
+        let ptr = PtrConst::new((&value as *const T).cast::<u8>());
+        // SAFETY: `value` is explicitly dropped only after `await`, so the pointer
+        // remains valid for the whole send operation.
+        let payload = unsafe { Payload::owned_unchecked(ptr, T::SHAPE) };
+        let result = sink
+            .send_payload(self.conn_id, self.channel_id, payload)
+            .await;
+        drop(value);
+        result
     }
 
     pub async fn close(&self, metadata: Metadata) -> Result<(), TxError> {
@@ -144,7 +144,7 @@ impl<T: 'static, const N: usize> Tx<T, N> {
 }
 
 #[allow(clippy::infallible_try_from)]
-impl<T: 'static, const N: usize> TryFrom<&Tx<T, N>> for () {
+impl<T, const N: usize> TryFrom<&Tx<T, N>> for () {
     type Error = Infallible;
 
     fn try_from(_value: &Tx<T, N>) -> Result<Self, Self::Error> {
@@ -153,7 +153,7 @@ impl<T: 'static, const N: usize> TryFrom<&Tx<T, N>> for () {
 }
 
 #[allow(clippy::infallible_try_from)]
-impl<T: 'static, const N: usize> TryFrom<()> for Tx<T, N> {
+impl<T, const N: usize> TryFrom<()> for Tx<T, N> {
     type Error = Infallible;
 
     fn try_from(_value: ()) -> Result<Self, Self::Error> {
@@ -165,10 +165,6 @@ impl<T: 'static, const N: usize> TryFrom<()> for Tx<T, N> {
 #[derive(Debug)]
 pub enum TxError {
     Unbound,
-    ShapeMismatch {
-        expected: &'static facet_core::Shape,
-        got: &'static facet_core::Shape,
-    },
     Transport(String),
 }
 
@@ -176,9 +172,6 @@ impl std::fmt::Display for TxError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Unbound => write!(f, "channel is not bound"),
-            Self::ShapeMismatch { expected, got } => {
-                write!(f, "shape mismatch: expected {expected}, got {got}")
-            }
             Self::Transport(msg) => write!(f, "transport error: {msg}"),
         }
     }
@@ -191,16 +184,15 @@ impl std::error::Error for TxError {}
 /// Wire encoding is always unit (`()`), with channel IDs carried exclusively
 /// in `Message::{Request,Response}.channels`.
 #[derive(Facet)]
-#[facet(proxy = ())]
-pub struct Rx<T: 'static, const N: usize = 16> {
+#[facet(opaque, proxy = ())]
+pub struct Rx<T, const N: usize = 16> {
     pub(crate) conn_id: ConnectionId,
     pub(crate) channel_id: ChannelId,
     pub(crate) receiver: ReceiverSlot,
-    #[facet(opaque)]
     _marker: PhantomData<T>,
 }
 
-impl<T: 'static, const N: usize> Rx<T, N> {
+impl<T, const N: usize> Rx<T, N> {
     pub fn unbound() -> Self {
         Self {
             conn_id: ConnectionId::ROOT,
@@ -264,7 +256,7 @@ impl<T: 'static, const N: usize> Rx<T, N> {
 }
 
 #[allow(clippy::infallible_try_from)]
-impl<T: 'static, const N: usize> TryFrom<&Rx<T, N>> for () {
+impl<T, const N: usize> TryFrom<&Rx<T, N>> for () {
     type Error = Infallible;
 
     fn try_from(_value: &Rx<T, N>) -> Result<Self, Self::Error> {
@@ -273,7 +265,7 @@ impl<T: 'static, const N: usize> TryFrom<&Rx<T, N>> for () {
 }
 
 #[allow(clippy::infallible_try_from)]
-impl<T: 'static, const N: usize> TryFrom<()> for Rx<T, N> {
+impl<T, const N: usize> TryFrom<()> for Rx<T, N> {
     type Error = Infallible;
 
     fn try_from(_value: ()) -> Result<Self, Self::Error> {
