@@ -3,7 +3,7 @@ use roam_types::{
 };
 use tokio::sync::mpsc;
 
-use crate::{Session, SessionError};
+use super::{Session, SessionError};
 
 // r[impl session.role]
 pub fn initiator<C>(conduit: C) -> SessionInitiatorBuilder<'static, C> {
@@ -11,7 +11,7 @@ pub fn initiator<C>(conduit: C) -> SessionInitiatorBuilder<'static, C> {
 }
 
 // r[impl session.role]
-pub fn acceptor<C>(conduit: C) -> SessionAcceptorBuilder<C> {
+pub fn acceptor<C>(conduit: C) -> SessionAcceptorBuilder<'static, C> {
     SessionAcceptorBuilder::new(conduit)
 }
 

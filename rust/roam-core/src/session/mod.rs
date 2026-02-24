@@ -122,12 +122,46 @@ impl ConnectionHandle {
     }
 }
 
+/// Errors that can occur during session establishment or operation.
+#[derive(Debug)]
+pub enum SessionError {
+    Io(std::io::Error),
+    Protocol(String),
+}
+
+impl std::fmt::Display for SessionError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Io(e) => write!(f, "io error: {e}"),
+            Self::Protocol(msg) => write!(f, "protocol error: {msg}"),
+        }
+    }
+}
+
+impl std::error::Error for SessionError {}
+
 impl<C> Session<C>
 where
     C: Conduit<Msg = MessageFamily>,
 {
-    async fn establish(conduit: C) -> () {
-        todo!("should establish a connection")
+    fn pre_handshake(_tx: C::Tx, _rx: C::Rx) -> Self {
+        todo!()
+    }
+
+    async fn establish_as_initiator(
+        &mut self,
+        _settings: ConnectionSettings,
+        _metadata: Metadata<'_>,
+    ) -> Result<mpsc::Receiver<SelfRef<RequestMessage<'static>>>, SessionError> {
+        todo!()
+    }
+
+    async fn establish_as_acceptor(
+        &mut self,
+        _settings: ConnectionSettings,
+        _metadata: Metadata<'_>,
+    ) -> Result<mpsc::Receiver<SelfRef<RequestMessage<'static>>>, SessionError> {
+        todo!()
     }
 }
 
