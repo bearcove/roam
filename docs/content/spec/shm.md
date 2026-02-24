@@ -82,7 +82,7 @@ weight = 15
 > ```text
 > Offset  Size  Field               Description
 > ──────  ────  ─────               ───────────
-> 0       8     magic               "ROAMHUB\x02"
+> 0       8     magic               "ROAMHUB\x07"
 > 8       4     version             Segment format version
 > 12      4     header_size         128
 > 16      8     total_size          Segment size in bytes
@@ -99,9 +99,9 @@ weight = 15
 > 80      48    reserved            Reserved (zero)
 > ```
 
-> r[shm.segment.magic.v2]
+> r[shm.segment.magic.v7]
 >
-> The magic field MUST be exactly `ROAMHUB\x02` (8 bytes). A guest
+> The magic field MUST be exactly `ROAMHUB\x07` (8 bytes). A guest
 > MUST validate the magic before proceeding.
 
 > r[shm.segment.config]
