@@ -45,11 +45,11 @@ pub(crate) fn deserialize_postcard<T: facet::Facet<'static>>(
 
         // SAFETY: ptr points to valid, aligned, properly-sized memory for T.
         #[allow(unsafe_code)]
-        let partial: Partial<'_, false> = unsafe { Partial::from_raw_with_shape(ptr, T::SHAPE) }
+        let partial: Partial<'_, true> = unsafe { Partial::from_raw_with_shape(ptr, T::SHAPE) }
             .map_err(facet_format::DeserializeError::from)?;
 
         let mut parser = PostcardParser::new(bytes);
-        let mut deserializer = FormatDeserializer::new_owned(&mut parser);
+        let mut deserializer = FormatDeserializer::new(&mut parser);
         let partial = deserializer.deserialize_into(partial, MetaSource::FromEvents)?;
 
         partial

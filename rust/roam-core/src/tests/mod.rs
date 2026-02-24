@@ -263,3 +263,23 @@ async fn rx_recv_decodes_channel_items() {
         .expect("send close to rx");
     assert_eq!(rx.recv().await.expect("recv close"), None);
 }
+
+#[test]
+fn test_deser_postcard_borrowed() {
+    // A reply
+    #[derive(Facet)]
+    struct Reply<'a> {
+        s: &'a str,
+    }
+
+    let payload = facet_postcard::to_vec(&Reply {
+        s: "IAMA borrowed string AMA",
+    })
+    .unwrap();
+
+    let backing = Backing::Boxed(payload.into_boxed_slice());
+
+    // now deser with Backing
+    let reply = crate::deserialize_postcard::<Reply>(backing).unwrap();
+    assert_eq!(reply.s, "IAMA borrowed string AMA")
+}
