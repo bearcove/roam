@@ -786,6 +786,7 @@ dependencies = [
  "roam-types",
  "smallvec 1.15.1",
  "tokio",
+ "zerocopy",
 ]
 
 [[package]]

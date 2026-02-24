@@ -32,6 +32,29 @@ impl LinkSource for QueuedLinkSource {
     }
 }
 
+fn server_hello(resume_key: ResumeKey, last_received: Option<u32>, rejected: bool) -> ServerHello {
+    let mut flags = 0u8;
+    if rejected {
+        flags |= SH_REJECTED;
+    }
+    if last_received.is_some() {
+        flags |= SH_HAS_LAST_RECEIVED;
+    }
+    ServerHello {
+        magic: LeU32::new(SERVER_HELLO_MAGIC),
+        flags,
+        resume_key,
+        last_received: LeU32::new(last_received.unwrap_or(0)),
+    }
+}
+
+fn resume_key(b: &[u8]) -> ResumeKey {
+    let mut key = [0u8; 16];
+    let len = b.len().min(16);
+    key[..len].copy_from_slice(&b[..len]);
+    ResumeKey(key)
+}
+
 // Encode and send a frame directly onto a LinkTx.
 async fn send_frame<LTx: LinkTx>(tx: &LTx, seq: u32, ack: Option<u32>, item: &str) {
     let frame = Frame {
@@ -82,17 +105,10 @@ async fn stable_send_recv_single() {
     // Server-side: complete handshake then send a frame.
     let server = tokio::spawn(async move {
         let (s_tx, mut s_rx) = s.split();
-        let _hello: ClientHello = recv_msg(&mut s_rx).await.unwrap();
-        send_msg(
-            &s_tx,
-            &ServerHello {
-                resume_key: ResumeKey(b"key".to_vec()),
-                last_received: None,
-                rejected: false,
-            },
-        )
-        .await
-        .unwrap();
+        let _hello = recv_handshake::<_, ClientHello>(&mut s_rx).await.unwrap();
+        send_handshake(&s_tx, &server_hello(resume_key(b"key"), None, false))
+            .await
+            .unwrap();
 
         // Receive one frame from client.
         let raw = recv_raw(&mut s_rx).await;
@@ -127,14 +143,10 @@ async fn reconnect_replays_unacked_frames() {
     let server1 = tokio::spawn(async move {
         let (s1_tx, mut s1_rx) = s1.split();
 
-        let _hello: ClientHello = recv_msg(&mut s1_rx).await.unwrap();
-        send_msg(
+        let _hello = recv_handshake::<_, ClientHello>(&mut s1_rx).await.unwrap();
+        send_handshake(
             &s1_tx,
-            &ServerHello {
-                resume_key: ResumeKey(b"resume-key-for-test".to_vec()),
-                last_received: None,
-                rejected: false,
-            },
+            &server_hello(resume_key(b"resume-key-for-test"), None, false),
         )
         .await
         .unwrap();
@@ -162,20 +174,17 @@ async fn reconnect_replays_unacked_frames() {
     let server2 = tokio::spawn(async move {
         let (s2_tx, mut s2_rx) = s2.split();
 
-        let hello: ClientHello = recv_msg(&mut s2_rx).await.unwrap();
+        let hello = recv_handshake::<_, ClientHello>(&mut s2_rx).await.unwrap();
         // Client should present a resume key.
-        assert!(hello.resume_key.is_some());
+        assert!(hello.flags & CH_HAS_RESUME_KEY != 0);
         // Client received one frame from server (seq 0), so last_received = Some(0).
-        assert_eq!(hello.last_received, Some(PacketSeq(0)));
+        assert!(hello.flags & CH_HAS_LAST_RECEIVED != 0);
+        assert_eq!(hello.last_received.get(), 0);
 
         // Server says it received up to seq 0 from the client (it saw A but not B).
-        send_msg(
+        send_handshake(
             &s2_tx,
-            &ServerHello {
-                resume_key: ResumeKey(b"resume-key-2".to_vec()),
-                last_received: Some(PacketSeq(0)),
-                rejected: false,
-            },
+            &server_hello(resume_key(b"resume-key-2"), Some(0), false),
         )
         .await
         .unwrap();
@@ -240,17 +249,10 @@ async fn reconnect_no_replay_when_all_acked() {
 
     let server1 = tokio::spawn(async move {
         let (s1_tx, mut s1_rx) = s1.split();
-        let _: ClientHello = recv_msg(&mut s1_rx).await.unwrap();
-        send_msg(
-            &s1_tx,
-            &ServerHello {
-                resume_key: ResumeKey(b"key1".to_vec()),
-                last_received: None,
-                rejected: false,
-            },
-        )
-        .await
-        .unwrap();
+        let _ = recv_handshake::<_, ClientHello>(&mut s1_rx).await.unwrap();
+        send_handshake(&s1_tx, &server_hello(resume_key(b"key1"), None, false))
+            .await
+            .unwrap();
 
         // Receive A and B.
         recv_raw(&mut s1_rx).await;
@@ -263,20 +265,13 @@ async fn reconnect_no_replay_when_all_acked() {
 
     let server2 = tokio::spawn(async move {
         let (s2_tx, mut s2_rx) = s2.split();
-        let hello: ClientHello = recv_msg(&mut s2_rx).await.unwrap();
-        assert!(hello.resume_key.is_some());
+        let hello = recv_handshake::<_, ClientHello>(&mut s2_rx).await.unwrap();
+        assert!(hello.flags & CH_HAS_RESUME_KEY != 0);
 
         // Server has seen everything (up to seq 1).
-        send_msg(
-            &s2_tx,
-            &ServerHello {
-                resume_key: ResumeKey(b"key2".to_vec()),
-                last_received: Some(PacketSeq(1)),
-                rejected: false,
-            },
-        )
-        .await
-        .unwrap();
+        send_handshake(&s2_tx, &server_hello(resume_key(b"key2"), Some(1), false))
+            .await
+            .unwrap();
 
         // Only the new message (seq 2) should arrive — no replay.
         let raw = recv_raw(&mut s2_rx).await;
@@ -330,17 +325,10 @@ async fn duplicate_frames_are_skipped() {
 
     let server = tokio::spawn(async move {
         let (s_tx, mut s_rx) = s.split();
-        let _: ClientHello = recv_msg(&mut s_rx).await.unwrap();
-        send_msg(
-            &s_tx,
-            &ServerHello {
-                resume_key: ResumeKey(b"k".to_vec()),
-                last_received: None,
-                rejected: false,
-            },
-        )
-        .await
-        .unwrap();
+        let _ = recv_handshake::<_, ClientHello>(&mut s_rx).await.unwrap();
+        send_handshake(&s_tx, &server_hello(resume_key(b"k"), None, false))
+            .await
+            .unwrap();
 
         // Send seq 0, then a duplicate seq 0, then seq 1.
         send_frame(&s_tx, 0, None, "first").await;
@@ -371,17 +359,10 @@ async fn reconnect_failure_surfaces_session_lost() {
     // Server 1: accept initial connection, send ack, then drop.
     let server1 = tokio::spawn(async move {
         let (s1_tx, mut s1_rx) = s1.split();
-        let _: ClientHello = recv_msg(&mut s1_rx).await.unwrap();
-        send_msg(
-            &s1_tx,
-            &ServerHello {
-                resume_key: ResumeKey(b"known-key".to_vec()),
-                last_received: None,
-                rejected: false,
-            },
-        )
-        .await
-        .unwrap();
+        let _ = recv_handshake::<_, ClientHello>(&mut s1_rx).await.unwrap();
+        send_handshake(&s1_tx, &server_hello(resume_key(b"known-key"), None, false))
+            .await
+            .unwrap();
         recv_raw(&mut s1_rx).await;
         // Drop — triggers reconnect on client.
     });
@@ -389,19 +370,12 @@ async fn reconnect_failure_surfaces_session_lost() {
     // Server 2: receives reconnect attempt but rejects the resume_key.
     let server2 = tokio::spawn(async move {
         let (s2_tx, mut s2_rx) = s2.split();
-        let hello: ClientHello = recv_msg(&mut s2_rx).await.unwrap();
-        assert!(hello.resume_key.is_some());
+        let hello = recv_handshake::<_, ClientHello>(&mut s2_rx).await.unwrap();
+        assert!(hello.flags & CH_HAS_RESUME_KEY != 0);
         // Reject the resume attempt.
-        send_msg(
-            &s2_tx,
-            &ServerHello {
-                resume_key: ResumeKey(vec![]),
-                last_received: None,
-                rejected: true,
-            },
-        )
-        .await
-        .unwrap();
+        send_handshake(&s2_tx, &server_hello(ResumeKey([0u8; 16]), None, true))
+            .await
+            .unwrap();
     });
 
     let source = QueuedLinkSource {

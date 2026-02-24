@@ -9,34 +9,73 @@ use roam_types::{
     Conduit, ConduitRx, ConduitTx, ConduitTxPermit, Link, LinkRx, LinkTx, LinkTxPermit, MsgFamily,
     SelfRef, WriteSlot,
 };
+use zerocopy::little_endian::U32 as LeU32;
 
 mod replay_buffer;
 use replay_buffer::{PacketAck, PacketSeq, ReplayBuffer};
 
 // ---------------------------------------------------------------------------
-// Frame — internal to StableConduit
+// Handshake wire types
 // ---------------------------------------------------------------------------
 
-/// Opaque session identifier for reliability-layer resume.
-#[derive(Facet, Debug, Clone, PartialEq, Eq, Hash)]
-struct ResumeKey(Vec<u8>);
+/// 16-byte CSPRNG-generated session resumption key.
+#[derive(
+    Clone,
+    Copy,
+    zerocopy::FromBytes,
+    zerocopy::IntoBytes,
+    zerocopy::KnownLayout,
+    zerocopy::Immutable,
+)]
+#[repr(C)]
+struct ResumeKey([u8; 16]);
 
-/// Client's opening handshake.
-#[derive(Facet, Debug, Clone)]
+const CLIENT_HELLO_MAGIC: u32 = u32::from_le_bytes(*b"ROCH");
+const SERVER_HELLO_MAGIC: u32 = u32::from_le_bytes(*b"ROSH");
+
+// ClientHello flags
+const CH_HAS_RESUME_KEY: u8 = 0b0000_0001;
+const CH_HAS_LAST_RECEIVED: u8 = 0b0000_0010;
+
+// ServerHello flags
+const SH_REJECTED: u8 = 0b0000_0001;
+const SH_HAS_LAST_RECEIVED: u8 = 0b0000_0010;
+
+/// Client's opening handshake — fixed-size, cast directly from wire bytes.
+// r[impl stable.handshake.client-hello]
+#[derive(
+    Clone,
+    Copy,
+    zerocopy::FromBytes,
+    zerocopy::IntoBytes,
+    zerocopy::KnownLayout,
+    zerocopy::Immutable,
+)]
+#[repr(C)]
 struct ClientHello {
-    resume_key: Option<ResumeKey>,
-    last_received: Option<PacketSeq>,
+    magic: LeU32,
+    flags: u8,
+    resume_key: ResumeKey,
+    last_received: LeU32,
 }
 
-/// Server's handshake response.
-#[derive(Facet, Debug, Clone)]
+/// Server's handshake response — fixed-size, cast directly from wire bytes.
+// r[impl stable.handshake.server-hello]
+// r[impl stable.reconnect.failure]
+#[derive(
+    Clone,
+    Copy,
+    zerocopy::FromBytes,
+    zerocopy::IntoBytes,
+    zerocopy::KnownLayout,
+    zerocopy::Immutable,
+)]
+#[repr(C)]
 struct ServerHello {
+    magic: LeU32,
+    flags: u8,
     resume_key: ResumeKey,
-    last_received: Option<PacketSeq>,
-    // r[impl stable.reconnect.failure]
-    /// If true, the server did not recognize the resume_key and the client
-    /// must treat this as a session loss.
-    rejected: bool,
+    last_received: LeU32,
 }
 
 /// Sequenced data frame. All post-handshake traffic is `Frame<T>`.
@@ -188,12 +227,7 @@ impl<LS: LinkSource> Shared<LS> {
                 .iter()
                 .map(|(seq, bytes)| (*seq, bytes.clone()))
                 .collect::<Vec<_>>();
-            (
-                source,
-                inner.resume_key.clone(),
-                inner.last_received,
-                replay_frames,
-            )
+            (source, inner.resume_key, inner.last_received, replay_frames)
         };
 
         let reconnect_result = async {
@@ -253,8 +287,6 @@ impl<LS: LinkSource> Shared<LS> {
 ///   - `peer_last_received`: the highest seq the peer has already seen,
 ///     used to decide which replay-buffer entries to re-send
 // r[impl stable.handshake]
-// r[impl stable.handshake.client-hello]
-// r[impl stable.handshake.server-hello]
 async fn handshake<L: Link>(
     tx: &L::Tx,
     rx: &mut L::Rx,
@@ -265,59 +297,89 @@ async fn handshake<L: Link>(
     match client_hello {
         None => {
             // r[impl stable.reconnect]
+            let mut flags = 0u8;
+            if resume_key.is_some() {
+                flags |= CH_HAS_RESUME_KEY;
+            }
+            if last_received.is_some() {
+                flags |= CH_HAS_LAST_RECEIVED;
+            }
             let hello = ClientHello {
-                resume_key,
-                last_received,
+                magic: LeU32::new(CLIENT_HELLO_MAGIC),
+                flags,
+                resume_key: resume_key.unwrap_or(ResumeKey([0u8; 16])),
+                last_received: LeU32::new(last_received.map_or(0, |s| s.0)),
             };
-            send_msg(tx, &hello).await?;
-            let server_hello: ServerHello = recv_msg(rx).await?;
+            send_handshake(tx, &hello).await?;
+
+            let sh = recv_handshake::<_, ServerHello>(rx).await?;
+            if sh.magic.get() != SERVER_HELLO_MAGIC {
+                return Err(StableConduitError::Setup(
+                    "ServerHello magic mismatch".into(),
+                ));
+            }
             // r[impl stable.reconnect.failure]
-            if server_hello.rejected {
+            if sh.flags & SH_REJECTED != 0 {
                 return Err(StableConduitError::SessionLost);
             }
-            Ok((server_hello.resume_key, server_hello.last_received))
+            let peer_last_received =
+                (sh.flags & SH_HAS_LAST_RECEIVED != 0).then(|| PacketSeq(sh.last_received.get()));
+            Ok((sh.resume_key, peer_last_received))
         }
-        Some(client_hello) => {
+        Some(ch) => {
             // r[impl stable.resume-key]
-            let key = ResumeKey(fresh_key()?);
+            let key = fresh_key()?;
+            let mut flags = 0u8;
+            if last_received.is_some() {
+                flags |= SH_HAS_LAST_RECEIVED;
+            }
             let hello = ServerHello {
-                resume_key: key.clone(),
-                last_received,
-                rejected: false,
+                magic: LeU32::new(SERVER_HELLO_MAGIC),
+                flags,
+                resume_key: key,
+                last_received: LeU32::new(last_received.map_or(0, |s| s.0)),
             };
-            send_msg(tx, &hello).await?;
-            Ok((key, client_hello.last_received))
+            send_handshake(tx, &hello).await?;
+
+            let peer_last_received =
+                (ch.flags & CH_HAS_LAST_RECEIVED != 0).then(|| PacketSeq(ch.last_received.get()));
+            Ok((key, peer_last_received))
         }
     }
 }
 
-async fn send_msg<LTx: LinkTx, M: Facet<'static>>(
+async fn send_handshake<LTx: LinkTx, M: zerocopy::IntoBytes + zerocopy::Immutable>(
     tx: &LTx,
     msg: &M,
 ) -> Result<(), StableConduitError> {
-    let bytes = facet_postcard::to_vec(msg).map_err(StableConduitError::Encode)?;
+    let bytes = msg.as_bytes();
     let permit = tx.reserve().await.map_err(StableConduitError::Io)?;
     let mut slot = permit.alloc(bytes.len()).map_err(StableConduitError::Io)?;
-    slot.as_mut_slice().copy_from_slice(&bytes);
+    slot.as_mut_slice().copy_from_slice(bytes);
     slot.commit();
     Ok(())
 }
 
-async fn recv_msg<LRx: LinkRx, M: Facet<'static>>(rx: &mut LRx) -> Result<M, StableConduitError> {
+async fn recv_handshake<
+    LRx: LinkRx,
+    M: zerocopy::FromBytes + zerocopy::KnownLayout + zerocopy::Immutable,
+>(
+    rx: &mut LRx,
+) -> Result<M, StableConduitError> {
     let backing = rx
         .recv()
         .await
         .map_err(|_| StableConduitError::LinkDead)?
         .ok_or(StableConduitError::LinkDead)?;
-    let bytes = backing.as_bytes();
-    facet_postcard::from_slice(bytes).map_err(StableConduitError::Decode)
+    M::read_from_bytes(backing.as_bytes())
+        .map_err(|_| StableConduitError::Setup("handshake message size mismatch".into()))
 }
 
-fn fresh_key() -> Result<Vec<u8>, StableConduitError> {
-    let mut buf = [0u8; 16];
-    getrandom::getrandom(&mut buf)
+fn fresh_key() -> Result<ResumeKey, StableConduitError> {
+    let mut key = ResumeKey([0u8; 16]);
+    getrandom::getrandom(&mut key.0)
         .map_err(|e| StableConduitError::Setup(format!("failed to generate resume key: {e}")))?;
-    Ok(buf.to_vec())
+    Ok(key)
 }
 
 // ---------------------------------------------------------------------------

@@ -22,6 +22,7 @@ facet-postcard.workspace = true
 tokio.workspace = true
 smallvec.workspace = true
 getrandom.workspace = true
+zerocopy.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
