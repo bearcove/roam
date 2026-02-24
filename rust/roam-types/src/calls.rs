@@ -112,6 +112,24 @@ pub trait ReplySink: Send + Sync + 'static {
     /// to the link's write buffer.
     #[allow(async_fn_in_trait)]
     async fn send_reply<'a>(&self, response: RequestResponse<'a>) -> Result<(), TxError>;
+
+    /// Send a protocol-level error back to the caller.
+    ///
+    /// Uses `Result::<(), RoamError>::Err(err)` — valid for any `Result<T, RoamError<E>>`
+    /// on the caller side since postcard's `Err` encoding is independent of `T`.
+    #[allow(async_fn_in_trait)]
+    async fn send_error(&self, err: RoamError) {
+        use crate::{Payload, RequestResponse};
+        let wire: Result<(), RoamError> = Err(err);
+        let ret = Payload::outgoing(&wire);
+        self.send_reply(RequestResponse {
+            ret,
+            channels: &[],
+            metadata: Default::default(),
+        })
+        .await
+        .ok();
+    }
 }
 
 /// Type-erased handler for incoming service calls.

@@ -57,12 +57,18 @@ where
         let method_id = call.method_id;
         let args_bytes = match &call.args {
             ::roam::Payload::Incoming(bytes) => bytes,
-            _ => return,
+            _ => {
+                reply.send_error(::roam::RoamError::InvalidPayload).await;
+                return;
+            }
         };
         if method_id == notifier_service_descriptor().methods[0usize].id {
             let args: (String,) = match ::roam::facet_postcard::from_slice_borrowed(args_bytes) {
                 Ok(v) => v,
-                Err(_) => return,
+                Err(_) => {
+                    reply.send_error(::roam::RoamError::InvalidPayload).await;
+                    return;
+                }
             };
             let (msg,) = args;
             let sink_call = ::roam::SinkCall::new(reply);
