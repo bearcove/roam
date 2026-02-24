@@ -9,15 +9,7 @@ pub fn calc_service_descriptor() -> &'static ::roam::session::ServiceDescriptor 
     DESCRIPTOR.get_or_init(|| {
         let methods: Vec<&'static ::roam::session::MethodDescriptor> =
             vec![Box::leak(Box::new(::roam::session::MethodDescriptor {
-                id: ::roam::hash::method_id_from_shapes(
-                    "Calc",
-                    "div",
-                    &[
-                        <f64 as ::roam::facet::Facet>::SHAPE,
-                        <f64 as ::roam::facet::Facet>::SHAPE,
-                    ],
-                    <Result<f64, DivError> as ::roam::facet::Facet>::SHAPE,
-                ),
+                id: ::roam::hash::method_id::<(f64, f64), Result<f64, DivError>>("Calc", "div"),
                 service_name: "Calc",
                 method_name: "div",
                 args: &[

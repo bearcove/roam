@@ -9,15 +9,7 @@ pub fn adder_service_descriptor() -> &'static ::roam::session::ServiceDescriptor
     DESCRIPTOR.get_or_init(|| {
         let methods: Vec<&'static ::roam::session::MethodDescriptor> =
             vec![Box::leak(Box::new(::roam::session::MethodDescriptor {
-                id: ::roam::hash::method_id_from_shapes(
-                    "Adder",
-                    "add",
-                    &[
-                        <i32 as ::roam::facet::Facet>::SHAPE,
-                        <i32 as ::roam::facet::Facet>::SHAPE,
-                    ],
-                    <i32 as ::roam::facet::Facet>::SHAPE,
-                ),
+                id: ::roam::hash::method_id::<(i32, i32), i32>("Adder", "add"),
                 service_name: "Adder",
                 method_name: "add",
                 args: &[

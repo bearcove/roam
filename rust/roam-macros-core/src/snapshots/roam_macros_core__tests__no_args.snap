@@ -9,12 +9,7 @@ pub fn ping_service_descriptor() -> &'static ::roam::session::ServiceDescriptor 
     DESCRIPTOR.get_or_init(|| {
         let methods: Vec<&'static ::roam::session::MethodDescriptor> =
             vec![Box::leak(Box::new(::roam::session::MethodDescriptor {
-                id: ::roam::hash::method_id_from_shapes(
-                    "Ping",
-                    "ping",
-                    &[],
-                    <u64 as ::roam::facet::Facet>::SHAPE,
-                ),
+                id: ::roam::hash::method_id::<(), u64>("Ping", "ping"),
                 service_name: "Ping",
                 method_name: "ping",
                 args: &[],
