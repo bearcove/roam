@@ -11,6 +11,10 @@ description = "Byte-stream transport (TCP, Unix, stdio) for roam — length-pref
 [package.metadata."docs.rs"]
 rustdoc-args = ["--html-in-header", "arborium-header.html"]
 
+[features]
+default = []
+diagnostics = []
+
 [dependencies]
 roam-types.workspace = true
 tokio = { workspace = true, features = ["net", "io-util", "io-std", "rt", "sync"] }

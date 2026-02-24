@@ -38,7 +38,7 @@ members = [
   "rust/roam-shm",
   "rust/roam-macros-parse",
   "rust/roam-macros-core",
-  "rust/roam-macros",
+  "rust/roam-macros", "rust/roam",
 ]
 exclude = ["fuzz"]
 
