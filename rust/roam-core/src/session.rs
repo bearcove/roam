@@ -89,8 +89,6 @@ pub struct Session<C: Conduit> {
 impl<C> Session<C>
 where
     C: Conduit<Msg = MessageFamily>,
-    C::Tx: ConduitTx<Msg = MessageFamily>,
-    C::Rx: ConduitRx<Msg = MessageFamily>,
 {
     fn new(
         tx: C::Tx,
@@ -106,8 +104,8 @@ where
             ConnectionId::ROOT,
             ConnectionState {
                 id: ConnectionId::ROOT,
-                local_parity: local_session_parity.clone(),
-                peer_parity: peer_session_parity.clone(),
+                local_parity: local_session_parity,
+                peer_parity: peer_session_parity,
                 local_settings: local_root_settings,
                 peer_settings: peer_root_settings,
             },
@@ -179,7 +177,7 @@ where
         }
 
         let payload = MessagePayload::OpenConnection(OpenConnection {
-            parity: local_parity.clone(),
+            parity: local_parity,
             connection_settings: local_settings.clone(),
             metadata,
         });
@@ -211,7 +209,7 @@ where
             ConnectionState {
                 id: conn_id,
                 local_parity,
-                peer_parity: pending.peer_parity.clone(),
+                peer_parity: pending.peer_parity,
                 local_settings: local_settings.clone(),
                 peer_settings: pending.peer_settings,
             },
@@ -328,14 +326,14 @@ where
                 self.pending_inbound.insert(
                     conn_id,
                     PendingInboundOpen {
-                        peer_parity: open.parity.clone(),
+                        peer_parity: open.parity,
                         peer_settings: open.connection_settings.clone(),
                     },
                 );
 
                 Ok(SessionEvent::IncomingConnectionOpen {
                     conn_id,
-                    peer_parity: open.parity.clone(),
+                    peer_parity: open.parity,
                     peer_settings: open.connection_settings.clone(),
                     metadata: open.metadata.clone(),
                 })
@@ -356,7 +354,7 @@ where
                     conn_id,
                     ConnectionState {
                         id: conn_id,
-                        local_parity: pending.local_parity.clone(),
+                        local_parity: pending.local_parity,
                         peer_parity: pending.local_parity.other(),
                         local_settings: pending.local_settings,
                         peer_settings: accept.connection_settings.clone(),
@@ -500,8 +498,6 @@ impl<C> SessionInitiatorBuilder<C> {
     pub async fn establish(self) -> Result<Session<C>, SessionError>
     where
         C: Conduit<Msg = MessageFamily>,
-        C::Tx: ConduitTx<Msg = MessageFamily>,
-        C::Rx: ConduitRx<Msg = MessageFamily>,
     {
         let (tx, mut rx) = self.conduit.split();
 
@@ -509,7 +505,7 @@ impl<C> SessionInitiatorBuilder<C> {
             ConnectionId::ROOT,
             MessagePayload::Hello(Hello {
                 version: PROTOCOL_VERSION,
-                parity: self.parity.clone(),
+                parity: self.parity,
                 connection_settings: self.root_settings.clone(),
                 metadata: self.metadata,
             }),
@@ -535,7 +531,7 @@ impl<C> SessionInitiatorBuilder<C> {
                     tx,
                     rx,
                     SessionRole::Initiator,
-                    self.parity.clone(),
+                    self.parity,
                     self.parity.other(),
                     self.root_settings,
                     reply.connection_settings.clone(),
@@ -588,8 +584,6 @@ impl<C> SessionAcceptorBuilder<C> {
     pub async fn establish(self) -> Result<Session<C>, SessionError>
     where
         C: Conduit<Msg = MessageFamily>,
-        C::Tx: ConduitTx<Msg = MessageFamily>,
-        C::Rx: ConduitRx<Msg = MessageFamily>,
     {
         let (tx, mut rx) = self.conduit.split();
         let first = recv_message(&mut rx)
@@ -622,7 +616,7 @@ impl<C> SessionAcceptorBuilder<C> {
         }
 
         let local_parity = hello.parity.other();
-        let peer_parity = hello.parity.clone();
+        let peer_parity = hello.parity;
         let peer_root_settings = hello.connection_settings.clone();
 
         let reply = Message::new(
@@ -644,42 +638,6 @@ impl<C> SessionAcceptorBuilder<C> {
             peer_root_settings,
         ))
     }
-}
-
-pub async fn establish_initiator<C>(
-    conduit: C,
-    parity: Parity,
-    local_root_settings: ConnectionSettings,
-    metadata: Metadata,
-) -> Result<Session<C>, SessionError>
-where
-    C: Conduit<Msg = MessageFamily>,
-    C::Tx: ConduitTx<Msg = MessageFamily>,
-    C::Rx: ConduitRx<Msg = MessageFamily>,
-{
-    initiator(conduit)
-        .parity(parity)
-        .root_settings(local_root_settings)
-        .metadata(metadata)
-        .establish()
-        .await
-}
-
-pub async fn establish_acceptor<C>(
-    conduit: C,
-    local_root_settings: ConnectionSettings,
-    metadata: Metadata,
-) -> Result<Session<C>, SessionError>
-where
-    C: Conduit<Msg = MessageFamily>,
-    C::Tx: ConduitTx<Msg = MessageFamily>,
-    C::Rx: ConduitRx<Msg = MessageFamily>,
-{
-    acceptor(conduit)
-        .root_settings(local_root_settings)
-        .metadata(metadata)
-        .establish()
-        .await
 }
 
 async fn send_message<'msg, Tx>(tx: &Tx, msg: Message<'msg>) -> Result<(), SessionError>
