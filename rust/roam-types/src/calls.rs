@@ -10,22 +10,29 @@ use crate::{RequestCall, RequestResponse, RoamError, SelfRef, TxError};
 // Would expand to the following caller:
 //
 // impl HashClient {
-//   async fn hash(&self, payload: &[u8]) -> Result<&[u8], RoamError<E>>;
+//   async fn hash(&self, payload: &[u8]) -> Result<SelfRef<&[u8]>, RoamError<E>>;
 // }
 //
-// Would expand to the following handler:
+// Would expand to a handler trait (what users implement):
 //
 // trait HashServer {
-//   async fn hash(&self, call: Call<Result<&[u8], E>>, payload: &[u8]);
+//   async fn hash(&self, call: impl Call<&[u8], E>, payload: &[u8]);
 // }
 //
-// Why? So that the HashServer can reply with something _borrowed_.
+// And a HashDispatcher<S: HashServer> that implements Handler<R: ReplySink>:
+// it deserializes args, constructs an ErasedCall<T, E> from the ReplySink,
+// and routes to the appropriate HashServer method by method ID.
 //
-// For example, a HashServer implementation could compute the hash result
-// into a stack-allocated buffer and reply with a borrow of it:
+// HashDispatcher<S> implements Handler<R>, and can be stored as
+// Box<dyn Handler<R>> to erase both S and the service type.
+//
+// Why impl Call in HashServer? So that the server can reply with something
+// _borrowed_ from its own stack frame.
+//
+// For example:
 //
 // impl HashServer for MyHasher {
-//   async fn hash(&self, call: Call<Result<&[u8], E>>, payload: &[u8]) {
+//   async fn hash(&self, call: impl Call<&[u8], E>, payload: &[u8]) {
 //     let result: [u8; 16] = compute_hash(payload);
 //     call.ok(&result).await;
 //   }
