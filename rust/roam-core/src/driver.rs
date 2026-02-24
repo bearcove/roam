@@ -63,20 +63,24 @@ impl<H: Handler<DriverReplySink>> Driver<H> {
         // [TODO] SelfRef should have a more ergonomic way to match-and-move
         // through enum variants without the peek-then-map dance.
         while let Some(msg) = self.handle.recv().await {
-            let is_request = matches!(&*msg, ConnectionMessage::Request(_));
-            if is_request {
-                let msg = msg.map(|m| match m {
-                    ConnectionMessage::Request(r) => r,
-                    _ => unreachable!(),
-                });
-                self.handle_request(msg);
-            } else {
-                let msg = msg.map(|m| match m {
-                    ConnectionMessage::Channel(c) => c,
-                    _ => unreachable!(),
-                });
-                self.handle_channel(msg);
-            }
+            self.handle_msg(msg).await;
+        }
+    }
+
+    async fn handle_msg(&mut self, msg: SelfRef<ConnectionMessage<'static>>) {
+        let is_request = matches!(&*msg, ConnectionMessage::Request(_));
+        if is_request {
+            let msg = msg.map(|m| match m {
+                ConnectionMessage::Request(r) => r,
+                _ => unreachable!(),
+            });
+            self.handle_request(msg);
+        } else {
+            let msg = msg.map(|m| match m {
+                ConnectionMessage::Channel(c) => c,
+                _ => unreachable!(),
+            });
+            self.handle_channel(msg);
         }
     }
 
