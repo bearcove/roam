@@ -278,7 +278,10 @@ fn encode_method_signature(args: &'static Shape, return_type: &'static Shape, ou
 /// `A` is the args tuple type (e.g. `(f64, f64)`), `R` is the return type.
 // r[impl method.identity.computation]
 // r[impl signature.endianness]
-pub fn method_id<A: Facet, R: Facet>(service_name: &str, method_name: &str) -> MethodId {
+pub fn method_id<'a, 'r, A: Facet<'a>, R: Facet<'r>>(
+    service_name: &str,
+    method_name: &str,
+) -> MethodId {
     let mut sig_bytes = Vec::new();
     encode_method_signature(A::SHAPE, R::SHAPE, &mut sig_bytes);
     let sig_hash = blake3::hash(&sig_bytes);
@@ -297,7 +300,7 @@ pub fn method_id<A: Facet, R: Facet>(service_name: &str, method_name: &str) -> M
 ///
 /// Called once per method inside a `OnceLock::get_or_init` in macro-generated code.
 /// `A` is the args tuple type, `R` is the return type.
-pub fn method_descriptor<A: Facet, R: Facet>(
+pub fn method_descriptor<'a, 'r, A: Facet<'a>, R: Facet<'r>>(
     service_name: &'static str,
     method_name: &'static str,
     arg_names: &[&'static str],
