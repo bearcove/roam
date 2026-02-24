@@ -1,10 +1,15 @@
-use std::{collections::BTreeMap, pin::Pin, sync::Arc};
+use std::{
+    collections::BTreeMap,
+    pin::Pin,
+    sync::{Arc, Mutex},
+};
 
 use futures_util::StreamExt as _;
 use futures_util::stream::FuturesUnordered;
 use roam_types::{
-    ChannelBody, ChannelId, ChannelMessage, Handler, ReplySink, RequestBody, RequestId,
-    RequestMessage, RequestResponse, SelfRef, TxError,
+    Caller, ChannelBody, ChannelId, ChannelMessage, Handler, IdAllocator, Parity, ReplySink,
+    RequestBody, RequestCall, RequestId, RequestMessage, RequestResponse, RoamError, SelfRef,
+    TxError,
 };
 
 use crate::session::{ConnectionHandle, ConnectionMessage, ConnectionSender};
@@ -15,6 +20,12 @@ type ResponseSlot = tokio::sync::oneshot::Sender<SelfRef<RequestMessage<'static>
 
 /// A boxed, Send future representing an in-flight handler task.
 type HandlerFuture = Pin<Box<dyn std::future::Future<Output = ()> + Send>>;
+
+/// State shared between the driver loop and any DriverCaller handles.
+struct DriverShared {
+    pending_responses: Mutex<BTreeMap<RequestId, ResponseSlot>>,
+    request_ids: Mutex<IdAllocator<RequestId>>,
+}
 
 /// Concrete `ReplySink` implementation for the driver.
 /// Sends a response back through the connection's sender.
@@ -33,6 +44,66 @@ impl ReplySink for DriverReplySink {
     }
 }
 
+/// Cloneable handle for making outgoing calls through a connection.
+///
+/// Implements [`Caller`]: allocates a request ID, registers a response slot,
+/// sends the call through the connection, and awaits the response.
+#[derive(Clone)]
+pub struct DriverCaller {
+    sender: ConnectionSender,
+    shared: Arc<DriverShared>,
+}
+
+impl Caller for DriverCaller {
+    async fn call<'a>(
+        &self,
+        call: RequestCall<'a>,
+    ) -> Result<SelfRef<RequestResponse<'static>>, RoamError> {
+        // Allocate a request ID.
+        let req_id = self.shared.request_ids.lock().unwrap().next();
+
+        // Register the response slot before sending, so the driver can
+        // route the response even if it arrives before we start awaiting.
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        self.shared
+            .pending_responses
+            .lock()
+            .unwrap()
+            .insert(req_id, tx);
+
+        // Send the call. This awaits the conduit permit and serializes
+        // the borrowed payload all the way to the link's write buffer.
+        let send_result = self
+            .sender
+            .send(ConnectionMessage::Request(RequestMessage {
+                id: req_id,
+                body: RequestBody::Call(call),
+            }))
+            .await;
+
+        if send_result.is_err() {
+            // Clean up the pending slot.
+            self.shared
+                .pending_responses
+                .lock()
+                .unwrap()
+                .remove(&req_id);
+            return Err(RoamError::Cancelled);
+        }
+
+        // Await the response from the driver loop.
+        let response_msg = rx.await.map_err(|_| RoamError::Cancelled)?;
+
+        // Extract the Response variant from the RequestMessage.
+        let response = response_msg.map(|m| match m.body {
+            RequestBody::Response(r) => r,
+            _ => unreachable!("pending_responses only gets Response variants"),
+        });
+
+        Ok(response)
+    }
+}
+
 // r[impl rpc.handler]
 // r[impl rpc.request]
 // r[impl rpc.response]
@@ -42,8 +113,7 @@ impl ReplySink for DriverReplySink {
 pub struct Driver<H: Handler<DriverReplySink>> {
     handle: ConnectionHandle,
     handler: Arc<H>,
-    /// In-flight outgoing requests (we sent a Call, waiting for Response).
-    pending_responses: BTreeMap<RequestId, ResponseSlot>,
+    shared: Arc<DriverShared>,
     /// Channels we know about on this connection.
     channels: BTreeMap<ChannelId, ChannelState>,
 }
@@ -54,12 +124,23 @@ struct ChannelState {
 }
 
 impl<H: Handler<DriverReplySink>> Driver<H> {
-    pub fn new(handle: ConnectionHandle, handler: H) -> Self {
+    pub fn new(handle: ConnectionHandle, handler: H, parity: Parity) -> Self {
         Self {
             handle,
             handler: Arc::new(handler),
-            pending_responses: BTreeMap::new(),
+            shared: Arc::new(DriverShared {
+                pending_responses: Mutex::new(BTreeMap::new()),
+                request_ids: Mutex::new(IdAllocator::new(parity)),
+            }),
             channels: BTreeMap::new(),
+        }
+    }
+
+    /// Get a cloneable caller handle for making outgoing calls.
+    pub fn caller(&self) -> DriverCaller {
+        DriverCaller {
+            sender: self.handle.sender().clone(),
+            shared: Arc::clone(&self.shared),
         }
     }
 
@@ -126,7 +207,13 @@ impl<H: Handler<DriverReplySink>> Driver<H> {
             }))
         } else if is_response {
             // r[impl rpc.response.one-per-request]
-            if let Some(tx) = self.pending_responses.remove(&req_id) {
+            if let Some(tx) = self
+                .shared
+                .pending_responses
+                .lock()
+                .unwrap()
+                .remove(&req_id)
+            {
                 let _ = tx.send(msg);
             }
             None

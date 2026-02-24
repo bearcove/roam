@@ -22,7 +22,48 @@ macro_rules! declare_id {
             }
         }
 
+        impl crate::IdType for $name {
+            fn from_raw(raw: u64) -> Self {
+                Self(raw as $inner)
+            }
+        }
+
     };
+}
+
+/// Trait implemented by all `declare_id!` types, enabling generic ID allocation.
+pub trait IdType: Copy {
+    fn from_raw(raw: u64) -> Self;
+}
+
+/// Allocates IDs with a given parity (odd or even), stepping by 2.
+///
+/// Odd parity: 1, 3, 5, 7, ...
+/// Even parity: 2, 4, 6, 8, ...
+pub struct IdAllocator<T: IdType> {
+    next: u64,
+    _phantom: std::marker::PhantomData<T>,
+}
+
+impl<T: IdType> IdAllocator<T> {
+    /// Create a new allocator for the given parity.
+    pub fn new(parity: Parity) -> Self {
+        let next = match parity {
+            Parity::Odd => 1,
+            Parity::Even => 2,
+        };
+        Self {
+            next,
+            _phantom: std::marker::PhantomData,
+        }
+    }
+
+    /// Allocate the next ID.
+    pub fn next(&mut self) -> T {
+        let id = T::from_raw(self.next);
+        self.next += 2;
+        id
+    }
 }
 
 mod rpc_plan;

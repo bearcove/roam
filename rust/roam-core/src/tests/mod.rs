@@ -269,6 +269,8 @@ async fn rx_recv_decodes_channel_items() {
     assert!(rx.recv().await.expect("recv close").is_none());
 }
 
+mod driver_tests;
+
 #[test]
 fn test_deser_postcard_borrowed() {
     // A reply
