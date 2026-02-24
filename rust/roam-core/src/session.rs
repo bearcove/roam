@@ -75,9 +75,9 @@ struct PendingOutboundOpen {
     local_settings: ConnectionSettings,
 }
 
-pub struct Session<Tx, Rx> {
-    tx: Option<Tx>,
-    rx: Rx,
+pub struct Session<C: Conduit> {
+    tx: Option<C::Tx>,
+    rx: C::Rx,
     role: SessionRole,
     local_session_parity: Parity,
     peer_session_parity: Parity,
@@ -86,16 +86,15 @@ pub struct Session<Tx, Rx> {
     pending_outbound: BTreeMap<ConnectionId, PendingOutboundOpen>,
 }
 
-impl<Tx, Rx> Session<Tx, Rx>
+impl<C> Session<C>
 where
-    Tx: for<'a> ConduitTx<Msg<'a> = Message<'a>>,
-    Rx: ConduitRx<Msg<'static> = Message<'static>>,
-    Rx::Error: std::fmt::Display,
-    for<'a> <<Tx as ConduitTx>::Permit<'a> as ConduitTxPermit>::Error: std::fmt::Display,
+    C: Conduit<Msg<'static> = Message<'static>>,
+    C::Tx: for<'a> ConduitTx<Msg<'a> = Message<'a>>,
+    C::Rx: ConduitRx<Msg<'static> = Message<'static>>,
 {
     fn new(
-        tx: Tx,
-        rx: Rx,
+        tx: C::Tx,
+        rx: C::Rx,
         role: SessionRole,
         local_session_parity: Parity,
         peer_session_parity: Parity,
@@ -131,11 +130,11 @@ where
     }
 
     pub fn local_session_parity(&self) -> Parity {
-        self.local_session_parity.clone()
+        self.local_session_parity
     }
 
     pub fn peer_session_parity(&self) -> Parity {
-        self.peer_session_parity.clone()
+        self.peer_session_parity
     }
 
     pub fn connection(&self, conn_id: ConnectionId) -> Option<&ConnectionState> {
@@ -453,139 +452,239 @@ where
     }
 }
 
+pub fn initiator<C>(conduit: C) -> SessionInitiatorBuilder<C> {
+    SessionInitiatorBuilder::new(conduit)
+}
+
+pub fn acceptor<C>(conduit: C) -> SessionAcceptorBuilder<C> {
+    SessionAcceptorBuilder::new(conduit)
+}
+
+pub struct SessionInitiatorBuilder<C> {
+    conduit: C,
+    parity: Parity,
+    root_settings: ConnectionSettings,
+    metadata: Metadata,
+}
+
+impl<C> SessionInitiatorBuilder<C> {
+    fn new(conduit: C) -> Self {
+        Self {
+            conduit,
+            parity: Parity::Odd,
+            root_settings: ConnectionSettings::default(),
+            metadata: vec![],
+        }
+    }
+
+    pub fn parity(mut self, parity: Parity) -> Self {
+        self.parity = parity;
+        self
+    }
+
+    pub fn root_settings(mut self, settings: ConnectionSettings) -> Self {
+        self.root_settings = settings;
+        self
+    }
+
+    pub fn max_concurrent_requests(mut self, max_concurrent_requests: u32) -> Self {
+        self.root_settings.max_concurrent_requests = max_concurrent_requests;
+        self
+    }
+
+    pub fn metadata(mut self, metadata: Metadata) -> Self {
+        self.metadata = metadata;
+        self
+    }
+
+    pub async fn establish(self) -> Result<Session<C>, SessionError>
+    where
+        C: Conduit<Msg<'static> = Message<'static>>,
+        C::Tx: for<'a> ConduitTx<Msg<'a> = Message<'a>>,
+        C::Rx: ConduitRx<Msg<'static> = Message<'static>>,
+    {
+        let (tx, mut rx) = self.conduit.split();
+
+        let hello = Message::new(
+            ConnectionId::ROOT,
+            MessagePayload::Hello(Hello {
+                version: PROTOCOL_VERSION,
+                parity: self.parity.clone(),
+                connection_settings: self.root_settings.clone(),
+                metadata: self.metadata,
+            }),
+        );
+        send_message(&tx, hello).await?;
+
+        let first = recv_message(&mut rx)
+            .await?
+            .ok_or(SessionError::UnexpectedEof("waiting for HelloYourself"))?;
+
+        match first.payload() {
+            MessagePayload::HelloYourself(reply) => {
+                if !first.connection_id().is_root() {
+                    let _ =
+                        send_protocol_error_and_close(tx, "HelloYourself must use connection ID 0")
+                            .await;
+                    return Err(SessionError::ProtocolViolation(
+                        "HelloYourself used non-root connection ID".into(),
+                    ));
+                }
+
+                Ok(Session::new(
+                    tx,
+                    rx,
+                    SessionRole::Initiator,
+                    self.parity.clone(),
+                    self.parity.other(),
+                    self.root_settings,
+                    reply.connection_settings.clone(),
+                ))
+            }
+            MessagePayload::ProtocolError(err) => {
+                let _ = tx.close().await;
+                Err(SessionError::RemoteProtocolError(err.description.clone()))
+            }
+            _ => {
+                let _ = send_protocol_error_and_close(tx, "expected HelloYourself").await;
+                Err(SessionError::ProtocolViolation(
+                    "expected HelloYourself during handshake".into(),
+                ))
+            }
+        }
+    }
+}
+
+pub struct SessionAcceptorBuilder<C> {
+    conduit: C,
+    root_settings: ConnectionSettings,
+    metadata: Metadata,
+}
+
+impl<C> SessionAcceptorBuilder<C> {
+    fn new(conduit: C) -> Self {
+        Self {
+            conduit,
+            root_settings: ConnectionSettings::default(),
+            metadata: vec![],
+        }
+    }
+
+    pub fn root_settings(mut self, settings: ConnectionSettings) -> Self {
+        self.root_settings = settings;
+        self
+    }
+
+    pub fn max_concurrent_requests(mut self, max_concurrent_requests: u32) -> Self {
+        self.root_settings.max_concurrent_requests = max_concurrent_requests;
+        self
+    }
+
+    pub fn metadata(mut self, metadata: Metadata) -> Self {
+        self.metadata = metadata;
+        self
+    }
+
+    pub async fn establish(self) -> Result<Session<C>, SessionError>
+    where
+        C: Conduit<Msg<'static> = Message<'static>>,
+        C::Tx: for<'a> ConduitTx<Msg<'a> = Message<'a>>,
+        C::Rx: ConduitRx<Msg<'static> = Message<'static>>,
+    {
+        let (tx, mut rx) = self.conduit.split();
+        let first = recv_message(&mut rx)
+            .await?
+            .ok_or(SessionError::UnexpectedEof("waiting for Hello"))?;
+
+        let MessagePayload::Hello(hello) = first.payload() else {
+            if let MessagePayload::ProtocolError(err) = first.payload() {
+                let _ = tx.close().await;
+                return Err(SessionError::RemoteProtocolError(err.description.clone()));
+            }
+            let _ = send_protocol_error_and_close(tx, "expected Hello").await;
+            return Err(SessionError::ProtocolViolation(
+                "expected Hello during handshake".into(),
+            ));
+        };
+
+        if !first.connection_id().is_root() {
+            let _ = send_protocol_error_and_close(tx, "Hello must use connection ID 0").await;
+            return Err(SessionError::ProtocolViolation(
+                "Hello used non-root connection ID".into(),
+            ));
+        }
+        if hello.version != PROTOCOL_VERSION {
+            let _ = send_protocol_error_and_close(tx, "unsupported Hello version").await;
+            return Err(SessionError::ProtocolViolation(format!(
+                "unsupported Hello version {}",
+                hello.version
+            )));
+        }
+
+        let local_parity = hello.parity.other();
+        let peer_parity = hello.parity.clone();
+        let peer_root_settings = hello.connection_settings.clone();
+
+        let reply = Message::new(
+            ConnectionId::ROOT,
+            MessagePayload::HelloYourself(HelloYourself {
+                connection_settings: self.root_settings.clone(),
+                metadata: self.metadata,
+            }),
+        );
+        send_message(&tx, reply).await?;
+
+        Ok(Session::new(
+            tx,
+            rx,
+            SessionRole::Acceptor,
+            local_parity,
+            peer_parity,
+            self.root_settings,
+            peer_root_settings,
+        ))
+    }
+}
+
 pub async fn establish_initiator<C>(
     conduit: C,
     parity: Parity,
     local_root_settings: ConnectionSettings,
     metadata: Metadata,
-) -> Result<Session<C::Tx, C::Rx>, SessionError>
+) -> Result<Session<C>, SessionError>
 where
     C: Conduit<Msg<'static> = Message<'static>>,
     C::Tx: for<'a> ConduitTx<Msg<'a> = Message<'a>>,
     C::Rx: ConduitRx<Msg<'static> = Message<'static>>,
-    <C::Rx as ConduitRx>::Error: std::fmt::Display,
-    for<'a> <<C::Tx as ConduitTx>::Permit<'a> as ConduitTxPermit>::Error: std::fmt::Display,
 {
-    let (tx, mut rx) = conduit.split();
-
-    let hello = Message::new(
-        ConnectionId::ROOT,
-        MessagePayload::Hello(Hello {
-            version: PROTOCOL_VERSION,
-            parity: parity.clone(),
-            connection_settings: local_root_settings.clone(),
-            metadata,
-        }),
-    );
-    send_message(&tx, hello).await?;
-
-    let first = recv_message(&mut rx)
-        .await?
-        .ok_or(SessionError::UnexpectedEof("waiting for HelloYourself"))?;
-
-    match first.payload() {
-        MessagePayload::HelloYourself(reply) => {
-            if !first.connection_id().is_root() {
-                let _ = send_protocol_error_and_close(tx, "HelloYourself must use connection ID 0")
-                    .await;
-                return Err(SessionError::ProtocolViolation(
-                    "HelloYourself used non-root connection ID".into(),
-                ));
-            }
-
-            Ok(Session::new(
-                tx,
-                rx,
-                SessionRole::Initiator,
-                parity.clone(),
-                parity.other(),
-                local_root_settings,
-                reply.connection_settings.clone(),
-            ))
-        }
-        MessagePayload::ProtocolError(err) => {
-            let _ = tx.close().await;
-            Err(SessionError::RemoteProtocolError(err.description.clone()))
-        }
-        _ => {
-            let _ = send_protocol_error_and_close(tx, "expected HelloYourself").await;
-            Err(SessionError::ProtocolViolation(
-                "expected HelloYourself during handshake".into(),
-            ))
-        }
-    }
+    initiator(conduit)
+        .parity(parity)
+        .root_settings(local_root_settings)
+        .metadata(metadata)
+        .establish()
+        .await
 }
 
 pub async fn establish_acceptor<C>(
     conduit: C,
     local_root_settings: ConnectionSettings,
     metadata: Metadata,
-) -> Result<Session<C::Tx, C::Rx>, SessionError>
+) -> Result<Session<C>, SessionError>
 where
     C: Conduit<Msg<'static> = Message<'static>>,
     C::Tx: for<'a> ConduitTx<Msg<'a> = Message<'a>>,
     C::Rx: ConduitRx<Msg<'static> = Message<'static>>,
-    <C::Rx as ConduitRx>::Error: std::fmt::Display,
-    for<'a> <<C::Tx as ConduitTx>::Permit<'a> as ConduitTxPermit>::Error: std::fmt::Display,
 {
-    let (tx, mut rx) = conduit.split();
-    let first = recv_message(&mut rx)
-        .await?
-        .ok_or(SessionError::UnexpectedEof("waiting for Hello"))?;
-
-    let MessagePayload::Hello(hello) = first.payload() else {
-        if let MessagePayload::ProtocolError(err) = first.payload() {
-            let _ = tx.close().await;
-            return Err(SessionError::RemoteProtocolError(err.description.clone()));
-        }
-        let _ = send_protocol_error_and_close(tx, "expected Hello").await;
-        return Err(SessionError::ProtocolViolation(
-            "expected Hello during handshake".into(),
-        ));
-    };
-
-    if !first.connection_id().is_root() {
-        let _ = send_protocol_error_and_close(tx, "Hello must use connection ID 0").await;
-        return Err(SessionError::ProtocolViolation(
-            "Hello used non-root connection ID".into(),
-        ));
-    }
-    if hello.version != PROTOCOL_VERSION {
-        let _ = send_protocol_error_and_close(tx, "unsupported Hello version").await;
-        return Err(SessionError::ProtocolViolation(format!(
-            "unsupported Hello version {}",
-            hello.version
-        )));
-    }
-
-    let local_parity = hello.parity.other();
-    let peer_parity = hello.parity.clone();
-    let peer_root_settings = hello.connection_settings.clone();
-
-    let reply = Message::new(
-        ConnectionId::ROOT,
-        MessagePayload::HelloYourself(HelloYourself {
-            connection_settings: local_root_settings.clone(),
-            metadata,
-        }),
-    );
-    send_message(&tx, reply).await?;
-
-    Ok(Session::new(
-        tx,
-        rx,
-        SessionRole::Acceptor,
-        local_parity,
-        peer_parity,
-        local_root_settings,
-        peer_root_settings,
-    ))
+    acceptor(conduit)
+        .root_settings(local_root_settings)
+        .metadata(metadata)
+        .establish()
+        .await
 }
 
 async fn send_message<'msg, Tx>(tx: &Tx, msg: Message<'msg>) -> Result<(), SessionError>
 where
     Tx: for<'a> ConduitTx<Msg<'a> = Message<'a>>,
-    for<'a> <<Tx as ConduitTx>::Permit<'a> as ConduitTxPermit>::Error: std::fmt::Display,
 {
     let permit = tx
         .reserve()
@@ -600,7 +699,6 @@ where
 async fn recv_message<Rx>(rx: &mut Rx) -> Result<Option<SelfRef<Message<'static>>>, SessionError>
 where
     Rx: ConduitRx<Msg<'static> = Message<'static>>,
-    Rx::Error: std::fmt::Display,
 {
     rx.recv()
         .await
@@ -610,7 +708,6 @@ where
 async fn send_protocol_error_and_close<Tx>(tx: Tx, description: &str) -> Result<(), SessionError>
 where
     Tx: for<'a> ConduitTx<Msg<'a> = Message<'a>>,
-    for<'a> <<Tx as ConduitTx>::Permit<'a> as ConduitTxPermit>::Error: std::fmt::Display,
 {
     let protocol_error = Message::new(
         ConnectionId::ROOT,

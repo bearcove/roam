@@ -31,6 +31,9 @@ pub enum ChannelKind {
     Tx,
 }
 
+// [FIXME]
+// 1) no need to be generic over Tx and Rx anymore now that they're in roam-types
+// 2) only public constructor should go through cache: no separate `_cached` endpoints
 impl RpcPlan {
     /// Build an RpcPlan for the given shape.
     ///
@@ -116,6 +119,7 @@ impl RpcPlan {
 
 /// Visitor that discovers Rx/Tx channel locations in a type structure.
 struct ChannelDiscovery {
+    // [FIXME] no need, Tx/Rx live in roam-types now
     tx_decl_id: DeclId,
     rx_decl_id: DeclId,
     locations: Vec<ChannelLocation>,

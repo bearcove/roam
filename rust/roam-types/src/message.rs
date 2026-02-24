@@ -123,7 +123,7 @@ impl<'payload> Message<'payload> {
 // r[impl session.parity]
 // r[impl session.role]
 // r[impl connection.parity]
-#[derive(Debug, Clone, PartialEq, Eq, Facet)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Facet)]
 #[repr(u8)]
 pub enum Parity {
     Odd,
@@ -132,7 +132,7 @@ pub enum Parity {
 
 impl Parity {
     /// Returns the opposite parity.
-    pub fn other(&self) -> Self {
+    pub fn other(self) -> Self {
         match self {
             Parity::Odd => Parity::Even,
             Parity::Even => Parity::Odd,

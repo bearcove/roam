@@ -1,6 +1,6 @@
 use crate::{
     BareConduit, ConnectionState, MemoryLink, PROTOCOL_VERSION, SessionError, SessionEvent,
-    establish_acceptor, establish_initiator, memory_link_pair,
+    acceptor, initiator, memory_link_pair,
 };
 use facet::Facet;
 use roam_types::{
@@ -26,9 +26,12 @@ fn default_settings(max_concurrent_requests: u32) -> ConnectionSettings {
 async fn handshake_establishes_root_connection() {
     let (initiator_conduit, acceptor_conduit) = conduit_pair();
 
-    let initiator_fut =
-        establish_initiator(initiator_conduit, Parity::Odd, default_settings(17), vec![]);
-    let acceptor_fut = establish_acceptor(acceptor_conduit, default_settings(33), vec![]);
+    let initiator_fut = initiator(initiator_conduit)
+        .max_concurrent_requests(17)
+        .establish();
+    let acceptor_fut = acceptor(acceptor_conduit)
+        .max_concurrent_requests(33)
+        .establish();
 
     let (initiator, acceptor) = tokio::join!(initiator_fut, acceptor_fut);
     let initiator = initiator.expect("initiator handshake should succeed");
@@ -50,8 +53,12 @@ async fn handshake_establishes_root_connection() {
 async fn open_accept_and_close_virtual_connection() {
     let (initiator_conduit, acceptor_conduit) = conduit_pair();
     let (initiator, acceptor) = tokio::join!(
-        establish_initiator(initiator_conduit, Parity::Odd, default_settings(10), vec![]),
-        establish_acceptor(acceptor_conduit, default_settings(20), vec![])
+        initiator(initiator_conduit)
+            .max_concurrent_requests(10)
+            .establish(),
+        acceptor(acceptor_conduit)
+            .max_concurrent_requests(20)
+            .establish()
     );
     let mut initiator = initiator.expect("initiator handshake");
     let mut acceptor = acceptor.expect("acceptor handshake");
@@ -159,7 +166,9 @@ async fn acceptor_rejects_invalid_hello_version_with_protocol_error() {
 
     let (protocol_response, acceptor_result) = tokio::join!(
         initiator_fut,
-        establish_acceptor(acceptor_conduit, default_settings(1), vec![])
+        acceptor(acceptor_conduit)
+            .max_concurrent_requests(1)
+            .establish()
     );
     match protocol_response.payload() {
         MessagePayload::ProtocolError(err) => {
@@ -180,8 +189,12 @@ async fn acceptor_rejects_invalid_hello_version_with_protocol_error() {
 async fn recv_event_surfaces_incoming_rpc_and_channel_messages() {
     let (initiator_conduit, acceptor_conduit) = conduit_pair();
     let (initiator, acceptor) = tokio::join!(
-        establish_initiator(initiator_conduit, Parity::Odd, default_settings(10), vec![]),
-        establish_acceptor(acceptor_conduit, default_settings(20), vec![])
+        initiator(initiator_conduit)
+            .max_concurrent_requests(10)
+            .establish(),
+        acceptor(acceptor_conduit)
+            .max_concurrent_requests(20)
+            .establish()
     );
     let initiator = initiator.expect("initiator handshake");
     let mut acceptor = acceptor.expect("acceptor handshake");
@@ -232,8 +245,12 @@ async fn recv_event_surfaces_incoming_rpc_and_channel_messages() {
 async fn send_rpc_message_rejects_non_rpc_payloads_and_unknown_connections() {
     let (initiator_conduit, acceptor_conduit) = conduit_pair();
     let (initiator, _acceptor) = tokio::join!(
-        establish_initiator(initiator_conduit, Parity::Odd, default_settings(10), vec![]),
-        establish_acceptor(acceptor_conduit, default_settings(20), vec![])
+        initiator(initiator_conduit)
+            .max_concurrent_requests(10)
+            .establish(),
+        acceptor(acceptor_conduit)
+            .max_concurrent_requests(20)
+            .establish()
     );
     let initiator = initiator.expect("initiator handshake");
 
@@ -287,8 +304,12 @@ struct OwnedArgs {
 async fn send_rpc_message_supports_borrowed_payload_lifetimes() {
     let (initiator_conduit, acceptor_conduit) = conduit_pair();
     let (initiator, acceptor) = tokio::join!(
-        establish_initiator(initiator_conduit, Parity::Odd, default_settings(10), vec![]),
-        establish_acceptor(acceptor_conduit, default_settings(20), vec![])
+        initiator(initiator_conduit)
+            .max_concurrent_requests(10)
+            .establish(),
+        acceptor(acceptor_conduit)
+            .max_concurrent_requests(20)
+            .establish()
     );
     let initiator = initiator.expect("initiator handshake");
     let mut acceptor = acceptor.expect("acceptor handshake");
