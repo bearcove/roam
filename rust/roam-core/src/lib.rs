@@ -22,6 +22,9 @@ pub use stable_conduit::*;
 mod memory_link;
 pub use memory_link::*;
 
+mod session;
+pub use session::*;
+
 /// Build a `&'static RpcPlan` for type `T`, using `Tx<()>` / `Rx<()>` as the
 /// channel sentinels, via the process-global RpcPlan cache.
 ///

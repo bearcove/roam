@@ -38,6 +38,36 @@ pub struct Message<'payload> {
     payload: MessagePayload<'payload>,
 }
 
+impl<'payload> Message<'payload> {
+    /// Create a message from connection ID + payload.
+    pub fn new(connection_id: ConnectionId, payload: MessagePayload<'payload>) -> Self {
+        Self {
+            connection_id,
+            payload,
+        }
+    }
+
+    /// Message connection ID.
+    pub fn connection_id(&self) -> ConnectionId {
+        self.connection_id
+    }
+
+    /// Borrow the message payload.
+    pub fn payload(&self) -> &MessagePayload<'payload> {
+        &self.payload
+    }
+
+    /// Mutably borrow the message payload.
+    pub fn payload_mut(&mut self) -> &mut MessagePayload<'payload> {
+        &mut self.payload
+    }
+
+    /// Split a message into `(connection_id, payload)`.
+    pub fn into_parts(self) -> (ConnectionId, MessagePayload<'payload>) {
+        (self.connection_id, self.payload)
+    }
+}
+
 /// Whether a peer will use odd or even IDs for requests and channels
 /// on a given connection.
 // r[impl session.parity]

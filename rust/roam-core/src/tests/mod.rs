@@ -8,6 +8,8 @@ use roam_types::{Conduit, ConduitRx, ConduitTx, ConduitTxPermit, MsgFamily, RpcP
 
 use crate::{BareConduit, MemoryLink, memory_link_pair};
 
+mod session;
+
 struct StringFamily;
 
 impl MsgFamily for StringFamily {
