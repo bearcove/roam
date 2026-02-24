@@ -40,7 +40,7 @@ where
     L::Tx: Send + 'static,
     L::Rx: Send + 'static,
 {
-    type Msg<'a> = F::Msg<'a>;
+    type Msg = F;
     type Tx = BareConduitTx<F, L::Tx>;
     type Rx = BareConduitRx<F, L::Rx>;
 
@@ -72,7 +72,7 @@ pub struct BareConduitTx<F: MsgFamily, LTx: LinkTx> {
 }
 
 impl<F: MsgFamily, LTx: LinkTx + Send + 'static> ConduitTx for BareConduitTx<F, LTx> {
-    type Msg<'a> = F::Msg<'a>;
+    type Msg = F;
     type Permit<'a>
         = BareConduitPermit<'a, F, LTx>
     where
@@ -103,7 +103,7 @@ pub struct BareConduitPermit<'a, F: MsgFamily, LTx: LinkTx> {
 }
 
 impl<F: MsgFamily, LTx: LinkTx> ConduitTxPermit for BareConduitPermit<'_, F, LTx> {
-    type Msg<'a> = F::Msg<'a>;
+    type Msg = F;
     type Error = BareConduitError;
 
     // r[impl zerocopy.framing.single-pass]
@@ -144,7 +144,7 @@ impl<F: MsgFamily, LRx> ConduitRx for BareConduitRx<F, LRx>
 where
     LRx: roam_types::LinkRx + Send + 'static,
 {
-    type Msg<'a> = F::Msg<'a>;
+    type Msg = F;
     type Error = BareConduitError;
 
     async fn recv(&mut self) -> Result<Option<SelfRef<F::Msg<'static>>>, Self::Error> {

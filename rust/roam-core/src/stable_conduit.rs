@@ -336,7 +336,7 @@ where
     <LS::Link as Link>::Rx: Send + 'static,
     LS: Send + 'static,
 {
-    type Msg<'a> = F::Msg<'a>;
+    type Msg = F;
     type Tx = StableConduitTx<F, LS>;
     type Rx = StableConduitRx<F, LS>;
 
@@ -370,7 +370,7 @@ where
     <LS::Link as Link>::Rx: Send + 'static,
     LS: Send + 'static,
 {
-    type Msg<'a> = F::Msg<'a>;
+    type Msg = F;
     type Permit<'a>
         = StableConduitPermit<F, LS>
     where
@@ -443,7 +443,7 @@ pub struct StableConduitPermit<F: MsgFamily, LS: LinkSource> {
 }
 
 impl<F: MsgFamily, LS: LinkSource> ConduitTxPermit for StableConduitPermit<F, LS> {
-    type Msg<'a> = F::Msg<'a>;
+    type Msg = F;
     type Error = StableConduitError;
 
     // r[impl zerocopy.framing.single-pass]
@@ -516,7 +516,7 @@ where
     <LS::Link as Link>::Rx: Send + 'static,
     LS: Send + 'static,
 {
-    type Msg<'a> = F::Msg<'a>;
+    type Msg = F;
     type Error = StableConduitError;
 
     async fn recv(&mut self) -> Result<Option<SelfRef<F::Msg<'static>>>, Self::Error> {

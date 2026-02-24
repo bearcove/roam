@@ -30,9 +30,9 @@ pub trait MsgFamily: 'static {
 
 /// Bidirectional typed transport. Wraps a [`Link`](crate::Link) and owns serialization.
 ///
-/// Uses a GAT `Msg<'a>` so that the same type family serves both sides:
-/// - Send: `Msg<'a>` for any `'a` (borrowed data serialized in place)
-/// - Recv: `Msg<'static>` (owned, via `SelfRef`)
+/// Uses a `MsgFamily` so that the same type family serves both sides:
+/// - Send: `MsgFamily::Msg<'a>` for any `'a` (borrowed data serialized in place)
+/// - Recv: `MsgFamily::Msg<'static>` (owned, via `SelfRef`)
 ///
 /// Two implementations:
 /// - `BareConduit`: Link + postcard. If the link dies, it's dead.

@@ -2,8 +2,8 @@ use std::collections::BTreeMap;
 
 use roam_types::{
     AcceptConnection, CloseConnection, Conduit, ConduitRx, ConduitTx, ConduitTxPermit,
-    ConnectionId, ConnectionSettings, Hello, HelloYourself, Message, MessagePayload, Metadata,
-    OpenConnection, Parity, ProtocolError, RejectConnection, SelfRef, SessionRole,
+    ConnectionId, ConnectionSettings, Hello, HelloYourself, Message, MessageFamily, MessagePayload,
+    Metadata, OpenConnection, Parity, ProtocolError, RejectConnection, SelfRef, SessionRole,
 };
 
 /// Current roam session protocol version.
@@ -88,9 +88,9 @@ pub struct Session<C: Conduit> {
 
 impl<C> Session<C>
 where
-    C: Conduit<Msg<'static> = Message<'static>>,
-    C::Tx: for<'a> ConduitTx<Msg<'a> = Message<'a>>,
-    C::Rx: ConduitRx<Msg<'static> = Message<'static>>,
+    C: Conduit<Msg = MessageFamily>,
+    C::Tx: ConduitTx<Msg = MessageFamily>,
+    C::Rx: ConduitRx<Msg = MessageFamily>,
 {
     fn new(
         tx: C::Tx,
@@ -499,9 +499,9 @@ impl<C> SessionInitiatorBuilder<C> {
 
     pub async fn establish(self) -> Result<Session<C>, SessionError>
     where
-        C: Conduit<Msg<'static> = Message<'static>>,
-        C::Tx: for<'a> ConduitTx<Msg<'a> = Message<'a>>,
-        C::Rx: ConduitRx<Msg<'static> = Message<'static>>,
+        C: Conduit<Msg = MessageFamily>,
+        C::Tx: ConduitTx<Msg = MessageFamily>,
+        C::Rx: ConduitRx<Msg = MessageFamily>,
     {
         let (tx, mut rx) = self.conduit.split();
 
@@ -587,9 +587,9 @@ impl<C> SessionAcceptorBuilder<C> {
 
     pub async fn establish(self) -> Result<Session<C>, SessionError>
     where
-        C: Conduit<Msg<'static> = Message<'static>>,
-        C::Tx: for<'a> ConduitTx<Msg<'a> = Message<'a>>,
-        C::Rx: ConduitRx<Msg<'static> = Message<'static>>,
+        C: Conduit<Msg = MessageFamily>,
+        C::Tx: ConduitTx<Msg = MessageFamily>,
+        C::Rx: ConduitRx<Msg = MessageFamily>,
     {
         let (tx, mut rx) = self.conduit.split();
         let first = recv_message(&mut rx)
@@ -653,9 +653,9 @@ pub async fn establish_initiator<C>(
     metadata: Metadata,
 ) -> Result<Session<C>, SessionError>
 where
-    C: Conduit<Msg<'static> = Message<'static>>,
-    C::Tx: for<'a> ConduitTx<Msg<'a> = Message<'a>>,
-    C::Rx: ConduitRx<Msg<'static> = Message<'static>>,
+    C: Conduit<Msg = MessageFamily>,
+    C::Tx: ConduitTx<Msg = MessageFamily>,
+    C::Rx: ConduitRx<Msg = MessageFamily>,
 {
     initiator(conduit)
         .parity(parity)
@@ -671,9 +671,9 @@ pub async fn establish_acceptor<C>(
     metadata: Metadata,
 ) -> Result<Session<C>, SessionError>
 where
-    C: Conduit<Msg<'static> = Message<'static>>,
-    C::Tx: for<'a> ConduitTx<Msg<'a> = Message<'a>>,
-    C::Rx: ConduitRx<Msg<'static> = Message<'static>>,
+    C: Conduit<Msg = MessageFamily>,
+    C::Tx: ConduitTx<Msg = MessageFamily>,
+    C::Rx: ConduitRx<Msg = MessageFamily>,
 {
     acceptor(conduit)
         .root_settings(local_root_settings)
@@ -684,7 +684,7 @@ where
 
 async fn send_message<'msg, Tx>(tx: &Tx, msg: Message<'msg>) -> Result<(), SessionError>
 where
-    Tx: for<'a> ConduitTx<Msg<'a> = Message<'a>>,
+    Tx: ConduitTx<Msg = MessageFamily>,
 {
     let permit = tx
         .reserve()
@@ -698,7 +698,7 @@ where
 
 async fn recv_message<Rx>(rx: &mut Rx) -> Result<Option<SelfRef<Message<'static>>>, SessionError>
 where
-    Rx: ConduitRx<Msg<'static> = Message<'static>>,
+    Rx: ConduitRx<Msg = MessageFamily>,
 {
     rx.recv()
         .await
@@ -707,7 +707,7 @@ where
 
 async fn send_protocol_error_and_close<Tx>(tx: Tx, description: &str) -> Result<(), SessionError>
 where
-    Tx: for<'a> ConduitTx<Msg<'a> = Message<'a>>,
+    Tx: ConduitTx<Msg = MessageFamily>,
 {
     let protocol_error = Message::new(
         ConnectionId::ROOT,
