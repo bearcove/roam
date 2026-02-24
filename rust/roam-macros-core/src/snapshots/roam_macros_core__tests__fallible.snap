@@ -107,12 +107,10 @@ impl<C: ::roam::Caller> CalcClient<C> {
         b: f64,
     ) -> Result<::roam::SelfRef<::roam::ResponseParts<'static, f64>>, ::roam::RoamError<DivError>>
     {
-        let args_tuple = (a, b);
         let method_id = calc_service_descriptor().methods[0usize].id;
-        let args = ::roam::Payload::outgoing(&args_tuple);
         let req = ::roam::RequestCall {
             method_id,
-            args,
+            args: ::roam::Payload::outgoing(&(a, b)),
             channels: &[],
             metadata: Default::default(),
         };

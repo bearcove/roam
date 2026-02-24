@@ -132,20 +132,10 @@ fn generate_service_descriptor_fn(parsed: &ServiceTrait, roam: &TokenStream2) ->
                 quote! { &[#(#arg_descriptors),*] }
             };
 
-            // Build arg shapes for method ID hashing
-            let arg_shapes_for_id: Vec<TokenStream2> = m
-                .args()
-                .map(|arg| {
-                    let ty = arg.ty.to_token_stream();
-                    quote! { <#ty as #roam::facet::Facet>::SHAPE }
-                })
-                .collect();
-
-            let args_shapes_for_id = if arg_shapes_for_id.is_empty() {
-                quote! { &[] }
-            } else {
-                quote! { &[#(#arg_shapes_for_id),*] }
-            };
+            // Build args tuple type and return type for method ID
+            let arg_types: Vec<TokenStream2> =
+                m.args().map(|arg| arg.ty.to_token_stream()).collect();
+            let args_tuple_ty = quote! { (#(#arg_types,)*) };
 
             // Return type
             let return_type = m.return_type();
@@ -158,11 +148,9 @@ fn generate_service_descriptor_fn(parsed: &ServiceTrait, roam: &TokenStream2) ->
 
             quote! {
                 Box::leak(Box::new(#roam::session::MethodDescriptor {
-                    id: #roam::hash::method_id_from_shapes(
+                    id: #roam::hash::method_id::<#args_tuple_ty, #return_ty_tokens>(
                         #service_name,
                         #method_name_str,
-                        #args_shapes_for_id,
-                        <#return_ty_tokens as #roam::facet::Facet>::SHAPE,
                     ),
                     service_name: #service_name,
                     method_name: #method_name_str,
@@ -459,12 +447,10 @@ fn generate_client_method(
     quote! {
         #method_doc
         pub async fn #method_name(&self, #(#params),*) -> #client_return {
-            let args_tuple = #args_tuple;
             let method_id = #descriptor_fn_name().methods[#idx].id;
-            let args = #roam::Payload::outgoing(&args_tuple);
             let req = #roam::RequestCall {
                 method_id,
-                args,
+                args: #roam::Payload::outgoing(&#args_tuple),
                 channels: &[],
                 metadata: Default::default(),
             };

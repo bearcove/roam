@@ -1,44 +1,47 @@
 ---
 source: rust/roam-macros-core/src/lib.rs
-expression: "generate(quote! { trait Notifier { async fn notify(&self, msg: String); } })"
+assertion_line: 587
+expression: "generate(quote!\n{ pub trait Adder { async fn add(&self, a: i32, b: i32) -> i32; } })"
 ---
 #[allow(non_snake_case, clippy::all)]
-pub fn notifier_service_descriptor() -> &'static ::roam::session::ServiceDescriptor {
+pub fn adder_service_descriptor() -> &'static ::roam::session::ServiceDescriptor {
     static DESCRIPTOR: std::sync::OnceLock<&'static ::roam::session::ServiceDescriptor> =
         std::sync::OnceLock::new();
     DESCRIPTOR.get_or_init(|| {
         let methods: Vec<&'static ::roam::session::MethodDescriptor> =
             vec![Box::leak(Box::new(::roam::session::MethodDescriptor {
-                id: ::roam::hash::method_id_from_shapes(
-                    "Notifier",
-                    "notify",
-                    &[<String as ::roam::facet::Facet>::SHAPE],
-                    <() as ::roam::facet::Facet>::SHAPE,
-                ),
-                service_name: "Notifier",
-                method_name: "notify",
-                args: &[::roam::session::ArgDescriptor {
-                    name: "msg",
-                    shape: <String as ::roam::facet::Facet>::SHAPE,
-                }],
-                return_shape: <() as ::roam::facet::Facet>::SHAPE,
+                id: ::roam::hash::method_id::<(i32, i32), i32>("Adder", "add"),
+                service_name: "Adder",
+                method_name: "add",
+                args: &[
+                    ::roam::session::ArgDescriptor {
+                        name: "a",
+                        shape: <i32 as ::roam::facet::Facet>::SHAPE,
+                    },
+                    ::roam::session::ArgDescriptor {
+                        name: "b",
+                        shape: <i32 as ::roam::facet::Facet>::SHAPE,
+                    },
+                ],
+                return_shape: <i32 as ::roam::facet::Facet>::SHAPE,
                 doc: None,
             }))];
         Box::leak(Box::new(::roam::session::ServiceDescriptor {
-            service_name: "Notifier",
+            service_name: "Adder",
             methods: Box::leak(methods.into_boxed_slice()),
             doc: None,
         }))
     })
 }
-pub trait NotifierServer
+pub trait AdderServer
 where
     Self: Send + Sync,
 {
-    fn notify(
+    fn add(
         &self,
-        call: impl ::roam::Call<(), ::core::convert::Infallible>,
-        msg: String,
+        call: impl ::roam::Call<i32, ::core::convert::Infallible>,
+        a: i32,
+        b: i32,
     ) -> impl std::future::Future<Output = ()> + Send;
 }
 #[doc = r" Dispatcher for this service."]
@@ -46,59 +49,60 @@ where
 #[doc = r" Wraps a handler and implements [`#roam::Handler`] by routing incoming"]
 #[doc = r" calls to the appropriate trait method by method ID."]
 #[derive(Clone)]
-pub struct NotifierDispatcher<H> {
+pub struct AdderDispatcher<H> {
     handler: H,
 }
-impl<H> NotifierDispatcher<H>
+impl<H> AdderDispatcher<H>
 where
-    H: NotifierServer + Clone + Send + Sync + 'static,
+    H: AdderServer + Clone + Send + Sync + 'static,
 {
     #[doc = r" Create a new dispatcher wrapping the given handler."]
     pub fn new(handler: H) -> Self {
         Self { handler }
     }
 }
-impl<H, R> ::roam::Handler<R> for NotifierDispatcher<H>
+impl<H, R> ::roam::Handler<R> for AdderDispatcher<H>
 where
-    H: NotifierServer + Clone + Send + Sync + 'static,
+    H: AdderServer + Clone + Send + Sync + 'static,
     R: ::roam::ReplySink,
 {
     async fn handle(&self, call: ::roam::SelfRef<::roam::RequestCall<'static>>, reply: R) {
         let method_id = call.method_id;
-        if method_id == notifier_service_descriptor().methods[0usize].id {
+        if method_id == adder_service_descriptor().methods[0usize].id {
             let args_bytes = match &call.args {
                 ::roam::Payload::Incoming(bytes) => bytes,
                 _ => return,
             };
-            let args: (String,) = match ::roam::facet_postcard::from_slice_borrowed(args_bytes) {
+            let args: (i32, i32) = match ::roam::facet_postcard::from_slice_borrowed(args_bytes) {
                 Ok(v) => v,
                 Err(_) => return,
             };
-            let (msg,) = args;
+            let (a, b) = args;
             let sink_call = ::roam::SinkCall::new(reply);
-            self.handler.notify(sink_call, msg).await;
+            self.handler.add(sink_call, a, b).await;
             return;
         }
     }
 }
-#[doc = "Client for the `Notifier` service.\n\nGeneric over any [`Caller`](:: roam::Caller) implementation."]
+#[doc = "Client for the `Adder` service.\n\nGeneric over any [`Caller`](:: roam::Caller) implementation."]
 #[derive(Clone)]
-pub struct NotifierClient<C: ::roam::Caller> {
+pub struct AdderClient<C: ::roam::Caller> {
     caller: C,
 }
-impl<C: ::roam::Caller> NotifierClient<C> {
+impl<C: ::roam::Caller> AdderClient<C> {
     #[doc = r" Create a new client wrapping the given caller."]
     pub fn new(caller: C) -> Self {
         Self { caller }
     }
-    pub async fn notify(
+    pub async fn add(
         &self,
-        msg: String,
-    ) -> Result<::roam::SelfRef<::roam::ResponseParts<'static, ()>>, ::roam::RoamError> {
-        let method_id = notifier_service_descriptor().methods[0usize].id;
+        a: i32,
+        b: i32,
+    ) -> Result<::roam::SelfRef<::roam::ResponseParts<'static, i32>>, ::roam::RoamError> {
+        let method_id = adder_service_descriptor().methods[0usize].id;
         let req = ::roam::RequestCall {
             method_id,
-            args: ::roam::Payload::outgoing(&(msg,)),
+            args: ::roam::Payload::outgoing(&(a, b)),
             channels: &[],
             metadata: Default::default(),
         };
@@ -108,7 +112,7 @@ impl<C: ::roam::Caller> NotifierClient<C> {
                 ::roam::Payload::Incoming(bytes) => bytes,
                 _ => return Err(::roam::RoamError::InvalidPayload),
             };
-            let result: Result<(), ::roam::RoamError<::core::convert::Infallible>> =
+            let result: Result<i32, ::roam::RoamError<::core::convert::Infallible>> =
                 ::roam::facet_postcard::from_slice_borrowed(ret_bytes)
                     .map_err(|_| ::roam::RoamError::InvalidPayload)?;
             let ret = result?;
@@ -120,17 +124,23 @@ impl<C: ::roam::Caller> NotifierClient<C> {
     }
 }
 #[doc = r" Returns the service detail for codegen."]
-pub fn notifier_service_detail() -> ::roam::schema::ServiceDetail {
+pub fn adder_service_detail() -> ::roam::schema::ServiceDetail {
     ::roam::schema::ServiceDetail {
-        name: "Notifier".into(),
+        name: "Adder".into(),
         methods: vec![::roam::schema::MethodDetail {
-            service_name: "Notifier".into(),
-            method_name: "notify".into(),
-            args: vec![::roam::schema::ArgDetail {
-                name: "msg".into(),
-                ty: <String as ::roam::facet::Facet>::SHAPE,
-            }],
-            return_type: <() as ::roam::facet::Facet>::SHAPE,
+            service_name: "Adder".into(),
+            method_name: "add".into(),
+            args: vec![
+                ::roam::schema::ArgDetail {
+                    name: "a".into(),
+                    ty: <i32 as ::roam::facet::Facet>::SHAPE,
+                },
+                ::roam::schema::ArgDetail {
+                    name: "b".into(),
+                    ty: <i32 as ::roam::facet::Facet>::SHAPE,
+                },
+            ],
+            return_type: <i32 as ::roam::facet::Facet>::SHAPE,
             doc: None,
         }],
         doc: None,

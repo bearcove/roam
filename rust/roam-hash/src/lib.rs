@@ -5,9 +5,9 @@
 //! Encodes types using `facet::Shape` for signature hashing, following
 //! `docs/content/spec-sig.md`.
 
-use facet_core::{Def, ScalarType, Shape, StructKind, Type, UserType};
+use facet_core::{Def, Facet, ScalarType, Shape, StructKind, Type, UserType};
 use heck::ToKebabCase;
-use roam_types::{MethodDescriptor, MethodId};
+use roam_types::MethodId;
 use roam_types::{is_rx, is_tx};
 
 /// Signature encoding tags for type serialization.
@@ -53,7 +53,7 @@ mod sig {
 }
 
 // r[impl signature.varint]
-pub fn encode_varint_u64(mut value: u64, out: &mut Vec<u8>) {
+fn encode_varint_u64(mut value: u64, out: &mut Vec<u8>) {
     while value >= 0x80 {
         out.push((value as u8) | 0x80);
         value >>= 7;
@@ -74,7 +74,7 @@ fn encode_str(s: &str, out: &mut Vec<u8>) {
 // r[impl signature.recursive]
 // r[impl signature.recursive.encoding]
 // r[impl signature.recursive.stack]
-pub fn encode_shape(shape: &'static Shape, out: &mut Vec<u8>) {
+fn encode_shape(shape: &'static Shape, out: &mut Vec<u8>) {
     let mut stack: Vec<&'static Shape> = Vec::new();
     encode_shape_inner(shape, out, &mut stack);
 }
@@ -265,33 +265,24 @@ fn encode_scalar(scalar: ScalarType, out: &mut Vec<u8>) {
     }
 }
 
-/// Encode a method signature: arguments followed by return type.
+/// Encode a method signature: args tuple type followed by return type.
 // r[impl signature.method]
-pub fn encode_method_signature(
-    args: &[&'static Shape],
-    return_type: &'static Shape,
-    out: &mut Vec<u8>,
-) {
-    out.push(sig::TUPLE);
-    encode_varint_u64(args.len() as u64, out);
-    for arg in args {
-        encode_shape(arg, out);
-    }
+// r[impl signature.hash.algorithm]
+fn encode_method_signature(args: &'static Shape, return_type: &'static Shape, out: &mut Vec<u8>) {
+    encode_shape(args, out);
     encode_shape(return_type, out);
 }
 
-/// Compute `sig_bytes`: the BLAKE3 hash of the canonical signature bytes.
-// r[impl signature.hash.algorithm]
-pub fn signature_hash(args: &[&'static Shape], return_type: &'static Shape) -> blake3::Hash {
-    let mut bytes = Vec::new();
-    encode_method_signature(args, return_type, &mut bytes);
-    blake3::hash(&bytes)
-}
-
-/// Compute the final 64-bit method ID.
+/// Compute the final method ID from type parameters.
+///
+/// `A` is the args tuple type (e.g. `(f64, f64)`), `R` is the return type.
 // r[impl method.identity.computation]
 // r[impl signature.endianness]
-pub fn method_id(service_name: &str, method_name: &str, sig_hash: blake3::Hash) -> u64 {
+pub fn method_id<A: Facet, R: Facet>(service_name: &str, method_name: &str) -> MethodId {
+    let mut sig_bytes = Vec::new();
+    encode_method_signature(A::SHAPE, R::SHAPE, &mut sig_bytes);
+    let sig_hash = blake3::hash(&sig_bytes);
+
     let mut input = Vec::new();
     input.extend_from_slice(service_name.to_kebab_case().as_bytes());
     input.push(b'.');
@@ -299,27 +290,5 @@ pub fn method_id(service_name: &str, method_name: &str, sig_hash: blake3::Hash) 
     input.extend_from_slice(sig_hash.as_bytes());
     let h = blake3::hash(&input);
     let first8: [u8; 8] = h.as_bytes()[0..8].try_into().expect("slice len");
-    u64::from_le_bytes(first8)
-}
-
-/// Compute method ID from a [`MethodDescriptor`].
-pub fn method_id_from_descriptor(descriptor: &MethodDescriptor) -> MethodId {
-    let args: Vec<&'static Shape> = descriptor.args.iter().map(|a| a.shape).collect();
-    let sig = signature_hash(&args, descriptor.return_shape);
-    MethodId(method_id(
-        descriptor.service_name,
-        descriptor.method_name,
-        sig,
-    ))
-}
-
-/// Compute method ID from shapes directly.
-pub fn method_id_from_shapes(
-    service_name: &str,
-    method_name: &str,
-    args: &[&'static Shape],
-    return_type: &'static Shape,
-) -> MethodId {
-    let sig = signature_hash(args, return_type);
-    MethodId(method_id(service_name, method_name, sig))
+    MethodId(u64::from_le_bytes(first8))
 }

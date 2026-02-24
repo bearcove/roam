@@ -106,12 +106,10 @@ impl<C: ::roam::Caller> AdderClient<C> {
         a: i32,
         b: i32,
     ) -> Result<::roam::SelfRef<::roam::ResponseParts<'static, i32>>, ::roam::RoamError> {
-        let args_tuple = (a, b);
         let method_id = adder_service_descriptor().methods[0usize].id;
-        let args = ::roam::Payload::outgoing(&args_tuple);
         let req = ::roam::RequestCall {
             method_id,
-            args,
+            args: ::roam::Payload::outgoing(&(a, b)),
             channels: &[],
             metadata: Default::default(),
         };

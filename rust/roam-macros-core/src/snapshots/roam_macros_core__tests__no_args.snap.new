@@ -1,44 +1,36 @@
 ---
 source: rust/roam-macros-core/src/lib.rs
-expression: "generate(quote! { trait Notifier { async fn notify(&self, msg: String); } })"
+assertion_line: 601
+expression: "generate(quote! { trait Ping { async fn ping(&self) -> u64; } })"
 ---
 #[allow(non_snake_case, clippy::all)]
-pub fn notifier_service_descriptor() -> &'static ::roam::session::ServiceDescriptor {
+pub fn ping_service_descriptor() -> &'static ::roam::session::ServiceDescriptor {
     static DESCRIPTOR: std::sync::OnceLock<&'static ::roam::session::ServiceDescriptor> =
         std::sync::OnceLock::new();
     DESCRIPTOR.get_or_init(|| {
         let methods: Vec<&'static ::roam::session::MethodDescriptor> =
             vec![Box::leak(Box::new(::roam::session::MethodDescriptor {
-                id: ::roam::hash::method_id_from_shapes(
-                    "Notifier",
-                    "notify",
-                    &[<String as ::roam::facet::Facet>::SHAPE],
-                    <() as ::roam::facet::Facet>::SHAPE,
-                ),
-                service_name: "Notifier",
-                method_name: "notify",
-                args: &[::roam::session::ArgDescriptor {
-                    name: "msg",
-                    shape: <String as ::roam::facet::Facet>::SHAPE,
-                }],
-                return_shape: <() as ::roam::facet::Facet>::SHAPE,
+                id: ::roam::hash::method_id::<(), u64>("Ping", "ping"),
+                service_name: "Ping",
+                method_name: "ping",
+                args: &[],
+                return_shape: <u64 as ::roam::facet::Facet>::SHAPE,
                 doc: None,
             }))];
         Box::leak(Box::new(::roam::session::ServiceDescriptor {
-            service_name: "Notifier",
+            service_name: "Ping",
             methods: Box::leak(methods.into_boxed_slice()),
             doc: None,
         }))
     })
 }
-pub trait NotifierServer
+pub trait PingServer
 where
     Self: Send + Sync,
 {
-    fn notify(
+    fn ping(
         &self,
-        call: impl ::roam::Call<(), ::core::convert::Infallible>,
-        msg: String,
+        call: impl ::roam::Call<u64, ::core::convert::Infallible>,
     ) -> impl std::future::Future<Output = ()> + Send;
 }
 #[doc = r" Dispatcher for this service."]
@@ -46,59 +38,58 @@ where
 #[doc = r" Wraps a handler and implements [`#roam::Handler`] by routing incoming"]
 #[doc = r" calls to the appropriate trait method by method ID."]
 #[derive(Clone)]
-pub struct NotifierDispatcher<H> {
+pub struct PingDispatcher<H> {
     handler: H,
 }
-impl<H> NotifierDispatcher<H>
+impl<H> PingDispatcher<H>
 where
-    H: NotifierServer + Clone + Send + Sync + 'static,
+    H: PingServer + Clone + Send + Sync + 'static,
 {
     #[doc = r" Create a new dispatcher wrapping the given handler."]
     pub fn new(handler: H) -> Self {
         Self { handler }
     }
 }
-impl<H, R> ::roam::Handler<R> for NotifierDispatcher<H>
+impl<H, R> ::roam::Handler<R> for PingDispatcher<H>
 where
-    H: NotifierServer + Clone + Send + Sync + 'static,
+    H: PingServer + Clone + Send + Sync + 'static,
     R: ::roam::ReplySink,
 {
     async fn handle(&self, call: ::roam::SelfRef<::roam::RequestCall<'static>>, reply: R) {
         let method_id = call.method_id;
-        if method_id == notifier_service_descriptor().methods[0usize].id {
+        if method_id == ping_service_descriptor().methods[0usize].id {
             let args_bytes = match &call.args {
                 ::roam::Payload::Incoming(bytes) => bytes,
                 _ => return,
             };
-            let args: (String,) = match ::roam::facet_postcard::from_slice_borrowed(args_bytes) {
+            let args: () = match ::roam::facet_postcard::from_slice_borrowed(args_bytes) {
                 Ok(v) => v,
                 Err(_) => return,
             };
-            let (msg,) = args;
+            let () = args;
             let sink_call = ::roam::SinkCall::new(reply);
-            self.handler.notify(sink_call, msg).await;
+            self.handler.ping(sink_call).await;
             return;
         }
     }
 }
-#[doc = "Client for the `Notifier` service.\n\nGeneric over any [`Caller`](:: roam::Caller) implementation."]
+#[doc = "Client for the `Ping` service.\n\nGeneric over any [`Caller`](:: roam::Caller) implementation."]
 #[derive(Clone)]
-pub struct NotifierClient<C: ::roam::Caller> {
+pub struct PingClient<C: ::roam::Caller> {
     caller: C,
 }
-impl<C: ::roam::Caller> NotifierClient<C> {
+impl<C: ::roam::Caller> PingClient<C> {
     #[doc = r" Create a new client wrapping the given caller."]
     pub fn new(caller: C) -> Self {
         Self { caller }
     }
-    pub async fn notify(
+    pub async fn ping(
         &self,
-        msg: String,
-    ) -> Result<::roam::SelfRef<::roam::ResponseParts<'static, ()>>, ::roam::RoamError> {
-        let method_id = notifier_service_descriptor().methods[0usize].id;
+    ) -> Result<::roam::SelfRef<::roam::ResponseParts<'static, u64>>, ::roam::RoamError> {
+        let method_id = ping_service_descriptor().methods[0usize].id;
         let req = ::roam::RequestCall {
             method_id,
-            args: ::roam::Payload::outgoing(&(msg,)),
+            args: ::roam::Payload::outgoing(&()),
             channels: &[],
             metadata: Default::default(),
         };
@@ -108,7 +99,7 @@ impl<C: ::roam::Caller> NotifierClient<C> {
                 ::roam::Payload::Incoming(bytes) => bytes,
                 _ => return Err(::roam::RoamError::InvalidPayload),
             };
-            let result: Result<(), ::roam::RoamError<::core::convert::Infallible>> =
+            let result: Result<u64, ::roam::RoamError<::core::convert::Infallible>> =
                 ::roam::facet_postcard::from_slice_borrowed(ret_bytes)
                     .map_err(|_| ::roam::RoamError::InvalidPayload)?;
             let ret = result?;
@@ -120,17 +111,14 @@ impl<C: ::roam::Caller> NotifierClient<C> {
     }
 }
 #[doc = r" Returns the service detail for codegen."]
-pub fn notifier_service_detail() -> ::roam::schema::ServiceDetail {
+pub fn ping_service_detail() -> ::roam::schema::ServiceDetail {
     ::roam::schema::ServiceDetail {
-        name: "Notifier".into(),
+        name: "Ping".into(),
         methods: vec![::roam::schema::MethodDetail {
-            service_name: "Notifier".into(),
-            method_name: "notify".into(),
-            args: vec![::roam::schema::ArgDetail {
-                name: "msg".into(),
-                ty: <String as ::roam::facet::Facet>::SHAPE,
-            }],
-            return_type: <() as ::roam::facet::Facet>::SHAPE,
+            service_name: "Ping".into(),
+            method_name: "ping".into(),
+            args: vec![],
+            return_type: <u64 as ::roam::facet::Facet>::SHAPE,
             doc: None,
         }],
         doc: None,

@@ -1,5 +1,6 @@
 ---
 source: rust/roam-macros-core/src/lib.rs
+assertion_line: 608
 expression: "generate(quote! { trait Notifier { async fn notify(&self, msg: String); } })"
 ---
 #[allow(non_snake_case, clippy::all)]
@@ -9,12 +10,7 @@ pub fn notifier_service_descriptor() -> &'static ::roam::session::ServiceDescrip
     DESCRIPTOR.get_or_init(|| {
         let methods: Vec<&'static ::roam::session::MethodDescriptor> =
             vec![Box::leak(Box::new(::roam::session::MethodDescriptor {
-                id: ::roam::hash::method_id_from_shapes(
-                    "Notifier",
-                    "notify",
-                    &[<String as ::roam::facet::Facet>::SHAPE],
-                    <() as ::roam::facet::Facet>::SHAPE,
-                ),
+                id: ::roam::hash::method_id::<(String,), ()>("Notifier", "notify"),
                 service_name: "Notifier",
                 method_name: "notify",
                 args: &[::roam::session::ArgDescriptor {

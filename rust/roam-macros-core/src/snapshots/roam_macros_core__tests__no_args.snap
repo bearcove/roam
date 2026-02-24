@@ -90,12 +90,10 @@ impl<C: ::roam::Caller> PingClient<C> {
     pub async fn ping(
         &self,
     ) -> Result<::roam::SelfRef<::roam::ResponseParts<'static, u64>>, ::roam::RoamError> {
-        let args_tuple = ();
         let method_id = ping_service_descriptor().methods[0usize].id;
-        let args = ::roam::Payload::outgoing(&args_tuple);
         let req = ::roam::RequestCall {
             method_id,
-            args,
+            args: ::roam::Payload::outgoing(&()),
             channels: &[],
             metadata: Default::default(),
         };

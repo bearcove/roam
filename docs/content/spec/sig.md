@@ -174,15 +174,16 @@ Variants MUST be encoded in declaration order.
 
 > r[signature.method]
 >
-> A method signature MUST be encoded as a tuple of its arguments followed
-> by the return type:
+> A method signature MUST be encoded as the args tuple type followed by
+> the return type:
 > ```
-> 0x25 + varint(arg_count) + encode(arg1) + ... + encode(argN) + encode(return_type)
+> encode(ArgTuple) + encode(ReturnType)
 > ```
+> Where `ArgTuple` is the tuple of argument types `(A1, A2, ..., AN)`,
+> encoded as a regular tuple (tag `0x25` + varint(N) + each element).
 
-This structure ensures unambiguous parsing — without the argument count,
-`fn add(a: i32, b: i32) -> i64` would have the same bytes as
-`fn foo(a: i32, b: i32, c: i64)` (which returns unit).
+Since `ArgTuple` is a tuple, a zero-argument method uses `()` (unit, tag `0x10`).
+This structure ensures unambiguous parsing — the arg count is implicit in the tuple length.
 
 ## Example
 
@@ -193,7 +194,7 @@ async fn add(&self, a: i32, b: i32) -> i64;
 
 The canonical bytes would be:
 ```
-0x25          // Tuple tag (method signature)
+0x25          // Tuple tag for (i32, i32)
 0x02          // 2 arguments
 0x09          // a: i32
 0x09          // b: i32
