@@ -6,8 +6,9 @@ use std::sync::Arc;
 
 use facet::Facet;
 use facet_core::PtrConst;
-use roam_types::{ChannelId, ConnectionId, Message, Metadata, Payload, SelfRef};
 use tokio::sync::mpsc;
+
+use crate::{Message, Metadata, Payload, SelfRef};
 
 /// Create an unbound channel pair.
 ///
@@ -17,9 +18,6 @@ pub fn channel<T, const N: usize>() -> (Tx<T, N>, Rx<T, N>) {
     (Tx::unbound(), Rx::unbound())
 }
 
-type SendFut<'a> = Pin<Box<dyn Future<Output = Result<(), TxError>> + 'a>>;
-type CloseFut = Pin<Box<dyn Future<Output = Result<(), TxError>> + 'static>>;
-
 /// Runtime sink implemented by the session driver.
 ///
 /// The contract is strict: successful completion means the item has gone
@@ -27,17 +25,13 @@ type CloseFut = Pin<Box<dyn Future<Output = Result<(), TxError>> + 'static>>;
 pub trait ChannelSink: Send + Sync + 'static {
     fn send_payload<'payload>(
         &self,
-        conn_id: ConnectionId,
-        channel_id: ChannelId,
         payload: Payload<'payload>,
-    ) -> SendFut<'payload>;
+    ) -> Pin<Box<dyn Future<Output = Result<(), TxError>> + 'payload>>;
 
     fn close_channel(
         &self,
-        conn_id: ConnectionId,
-        channel_id: ChannelId,
         metadata: Metadata,
-    ) -> CloseFut;
+    ) -> Pin<Box<dyn Future<Output = Result<(), TxError>> + 'static>>;
 }
 
 /// Message delivered to an `Rx` by the driver.
@@ -80,8 +74,6 @@ impl ReceiverSlot {
 #[derive(Facet)]
 #[facet(proxy = ())]
 pub struct Tx<T, const N: usize = 16> {
-    pub(crate) conn_id: ConnectionId,
-    pub(crate) channel_id: ChannelId,
     pub(crate) sink: SinkSlot,
     #[facet(opaque)]
     _marker: PhantomData<T>,
@@ -90,23 +82,13 @@ pub struct Tx<T, const N: usize = 16> {
 impl<T, const N: usize> Tx<T, N> {
     pub fn unbound() -> Self {
         Self {
-            conn_id: ConnectionId::ROOT,
-            channel_id: ChannelId::RESERVED,
             sink: SinkSlot::empty(),
             _marker: PhantomData,
         }
     }
 
     pub fn is_bound(&self) -> bool {
-        self.sink.inner.is_some() && self.channel_id != ChannelId::RESERVED
-    }
-
-    pub fn connection_id(&self) -> Option<ConnectionId> {
-        self.is_bound().then_some(self.conn_id)
-    }
-
-    pub fn channel_id(&self) -> Option<ChannelId> {
-        self.is_bound().then_some(self.channel_id)
+        self.sink.inner.is_some()
     }
 
     pub async fn send<'value>(&self, value: T) -> Result<(), TxError>
@@ -118,28 +100,18 @@ impl<T, const N: usize> Tx<T, N> {
         // SAFETY: `value` is explicitly dropped only after `await`, so the pointer
         // remains valid for the whole send operation.
         let payload = unsafe { Payload::owned_unchecked(ptr, T::SHAPE) };
-        let result = sink
-            .send_payload(self.conn_id, self.channel_id, payload)
-            .await;
+        let result = sink.send_payload(payload).await;
         drop(value);
         result
     }
 
     pub async fn close(&self, metadata: Metadata) -> Result<(), TxError> {
         let sink = self.sink.inner.as_ref().ok_or(TxError::Unbound)?;
-        sink.close_channel(self.conn_id, self.channel_id, metadata)
-            .await
+        sink.close_channel(metadata).await
     }
 
-    #[allow(dead_code)]
-    pub(crate) fn bind(
-        &mut self,
-        conn_id: ConnectionId,
-        channel_id: ChannelId,
-        sink: Arc<dyn ChannelSink>,
-    ) {
-        self.conn_id = conn_id;
-        self.channel_id = channel_id;
+    #[doc(hidden)]
+    pub fn bind(&mut self, sink: Arc<dyn ChannelSink>) {
         self.sink.inner = Some(sink);
     }
 }
@@ -187,8 +159,6 @@ impl std::error::Error for TxError {}
 #[derive(Facet)]
 #[facet(proxy = ())]
 pub struct Rx<T, const N: usize = 16> {
-    pub(crate) conn_id: ConnectionId,
-    pub(crate) channel_id: ChannelId,
     pub(crate) receiver: ReceiverSlot,
     #[facet(opaque)]
     _marker: PhantomData<T>,
@@ -197,23 +167,13 @@ pub struct Rx<T, const N: usize = 16> {
 impl<T, const N: usize> Rx<T, N> {
     pub fn unbound() -> Self {
         Self {
-            conn_id: ConnectionId::ROOT,
-            channel_id: ChannelId::RESERVED,
             receiver: ReceiverSlot::empty(),
             _marker: PhantomData,
         }
     }
 
     pub fn is_bound(&self) -> bool {
-        self.receiver.inner.is_some() && self.channel_id != ChannelId::RESERVED
-    }
-
-    pub fn connection_id(&self) -> Option<ConnectionId> {
-        self.is_bound().then_some(self.conn_id)
-    }
-
-    pub fn channel_id(&self) -> Option<ChannelId> {
-        self.is_bound().then_some(self.channel_id)
+        self.receiver.inner.is_some()
     }
 
     pub async fn recv(&mut self) -> Result<Option<T>, RxError>
@@ -225,16 +185,9 @@ impl<T, const N: usize> Rx<T, N> {
             Some(IncomingChannelMessage::Close) | None => Ok(None),
             Some(IncomingChannelMessage::Reset) => Err(RxError::Reset),
             Some(IncomingChannelMessage::Data(msg)) => {
-                let Some((conn_id, channel_id, payload)) = msg.as_channel_item() else {
+                let Some((_conn_id, _channel_id, payload)) = msg.as_channel_item() else {
                     return Err(RxError::Protocol("expected ChannelItem message".into()));
                 };
-                if conn_id != self.conn_id || channel_id != self.channel_id {
-                    return Err(RxError::Protocol(format!(
-                        "received item for unexpected channel: got ({conn_id}, {channel_id}) expected ({}, {})",
-                        self.conn_id, self.channel_id
-                    )));
-                }
-
                 let bytes = payload.as_incoming_bytes().ok_or_else(|| {
                     RxError::Protocol("incoming channel item payload was not decoded bytes".into())
                 })?;
@@ -244,15 +197,8 @@ impl<T, const N: usize> Rx<T, N> {
         }
     }
 
-    #[allow(dead_code)]
-    pub(crate) fn bind(
-        &mut self,
-        conn_id: ConnectionId,
-        channel_id: ChannelId,
-        receiver: mpsc::Receiver<IncomingChannelMessage>,
-    ) {
-        self.conn_id = conn_id;
-        self.channel_id = channel_id;
+    #[doc(hidden)]
+    pub fn bind(&mut self, receiver: mpsc::Receiver<IncomingChannelMessage>) {
         self.receiver.inner = Some(receiver);
     }
 }

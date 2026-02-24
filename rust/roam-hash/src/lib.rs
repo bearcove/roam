@@ -7,8 +7,8 @@
 
 use facet_core::{Def, ScalarType, Shape, StructKind, Type, UserType};
 use heck::ToKebabCase;
-use roam_core::{is_rx, is_tx};
 use roam_types::{MethodDescriptor, MethodId};
+use roam_types::{is_rx, is_tx};
 
 /// Signature encoding tags for type serialization.
 mod sig {

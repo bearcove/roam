@@ -3,10 +3,9 @@ use facet_core::ConstParamKind;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
-use crate::{ChannelSink, IncomingChannelMessage, Rx, Tx};
 use roam_types::{
-    Backing, ChannelId, Conduit, ConduitRx, ConduitTx, ConduitTxPermit, ConnectionId, Message,
-    Metadata, MsgFamily, Payload, SelfRef,
+    Backing, ChannelId, ChannelSink, Conduit, ConduitRx, ConduitTx, ConduitTxPermit, ConnectionId,
+    IncomingChannelMessage, Message, Metadata, MsgFamily, Payload, Rx, SelfRef, Tx, TxError,
 };
 use tokio::sync::{Notify, mpsc};
 
@@ -161,10 +160,8 @@ impl TestSink {
 impl ChannelSink for TestSink {
     fn send_payload<'a>(
         &self,
-        conn_id: ConnectionId,
-        channel_id: ChannelId,
         payload: Payload<'a>,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), crate::TxError>> + 'a>> {
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), TxError>> + 'a>> {
         let gate = self.gate.clone();
         let send_count = self.send_count.clone();
         let saw_owned_payload = self.saw_owned_payload.clone();
@@ -173,7 +170,7 @@ impl ChannelSink for TestSink {
                 saw_owned_payload.store(true, Ordering::SeqCst);
             }
             gate.notified().await;
-            let _ = Message::channel_item(conn_id, channel_id, payload);
+            let _ = payload;
             send_count.fetch_add(1, Ordering::SeqCst);
             Ok(())
         })
@@ -181,16 +178,13 @@ impl ChannelSink for TestSink {
 
     fn close_channel(
         &self,
-        conn_id: ConnectionId,
-        channel_id: ChannelId,
         metadata: Metadata,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), crate::TxError>> + 'static>>
-    {
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), TxError>> + 'static>> {
         let gate = self.gate.clone();
         let close_count = self.close_count.clone();
         Box::pin(async move {
             gate.notified().await;
-            let _ = Message::close_channel(conn_id, channel_id, metadata);
+            let _ = metadata;
             close_count.fetch_add(1, Ordering::SeqCst);
             Ok(())
         })
@@ -201,7 +195,7 @@ impl ChannelSink for TestSink {
 async fn tx_send_waits_for_sink_completion() {
     let mut tx = Tx::<String>::unbound();
     let sink = Arc::new(TestSink::new());
-    tx.bind(ConnectionId(1), ChannelId(9), sink.clone());
+    tx.bind(sink.clone());
 
     let payload = "hello".to_string();
     let fut = tx.send(payload);
@@ -225,7 +219,7 @@ struct BorrowedMsg<'a> {
 async fn tx_send_accepts_borrowed_payloads() {
     let mut tx: Tx<BorrowedMsg<'_>> = Tx::unbound();
     let sink = Arc::new(TestSink::new());
-    tx.bind(ConnectionId(3), ChannelId(5), sink.clone());
+    tx.bind(sink.clone());
 
     let backing = String::from("borrowed");
     let msg = BorrowedMsg { text: &backing };
@@ -247,7 +241,7 @@ async fn tx_send_accepts_borrowed_payloads() {
 async fn rx_recv_decodes_channel_items() {
     let mut rx = Rx::<u32>::unbound();
     let (tx_items, rx_items) = mpsc::channel(4);
-    rx.bind(ConnectionId(11), ChannelId(15), rx_items);
+    rx.bind(rx_items);
 
     let payload_bytes = facet_postcard::to_vec(&42_u32).expect("serialize channel item");
     let item_msg = Message::channel_item(

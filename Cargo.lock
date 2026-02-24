@@ -846,6 +846,7 @@ dependencies = [
  "facet-postcard",
  "smallvec 1.15.1",
  "structstruck",
+ "tokio",
 ]
 
 [[package]]

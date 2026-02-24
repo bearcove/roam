@@ -40,3 +40,6 @@ pub use conduit::*;
 
 mod metadata;
 pub use metadata::*;
+
+mod channel;
+pub use channel::*;

@@ -11,9 +11,6 @@
 mod bare_conduit;
 pub use bare_conduit::*;
 
-mod channel;
-pub use channel::*;
-
 mod replay_buffer;
 
 mod stable_conduit;
@@ -30,7 +27,7 @@ pub use session::*;
 ///
 /// Kept as a convenience helper for call sites that need a plan on demand.
 pub fn rpc_plan<T: facet::Facet<'static>>() -> &'static roam_types::RpcPlan {
-    roam_types::RpcPlan::for_type_cached::<T, crate::Tx<()>, crate::Rx<()>>()
+    roam_types::RpcPlan::for_type_cached::<T, roam_types::Tx<()>, roam_types::Rx<()>>()
 }
 
 #[cfg(test)]

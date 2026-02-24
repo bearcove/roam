@@ -19,6 +19,7 @@ facet-core.workspace = true
 facet-path.workspace = true
 smallvec.workspace = true
 structstruck.workspace = true
+tokio.workspace = true
+facet-postcard.workspace = true
 
 [dev-dependencies]
-facet-postcard.workspace = true
