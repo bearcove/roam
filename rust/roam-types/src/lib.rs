@@ -41,5 +41,8 @@ pub use conduit::*;
 mod metadata;
 pub use metadata::*;
 
+mod calls;
+pub use calls::*;
+
 mod channel;
 pub use channel::*;

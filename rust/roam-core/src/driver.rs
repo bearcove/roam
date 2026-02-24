@@ -12,7 +12,6 @@ impl<C> Driver<C>
 where
     C: Conduit<Msg = MessageFamily>,
 {
-    // what should the API be?
     async fn work(self) {
         loop {
             let ev = self.session.recv_event().await;
