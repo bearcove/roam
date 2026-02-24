@@ -80,7 +80,6 @@ pub struct Session<C: Conduit> {
     rx: C::Rx,
     role: SessionRole,
     local_session_parity: Parity,
-    peer_session_parity: Parity,
     connections: BTreeMap<ConnectionId, ConnectionState>,
     pending_inbound: BTreeMap<ConnectionId, PendingInboundOpen>,
     pending_outbound: BTreeMap<ConnectionId, PendingOutboundOpen>,
@@ -95,7 +94,6 @@ where
         rx: C::Rx,
         role: SessionRole,
         local_session_parity: Parity,
-        peer_session_parity: Parity,
         local_root_settings: ConnectionSettings,
         peer_root_settings: ConnectionSettings,
     ) -> Self {
@@ -105,7 +103,7 @@ where
             ConnectionState {
                 id: ConnectionId::ROOT,
                 local_parity: local_session_parity,
-                peer_parity: peer_session_parity,
+                peer_parity: local_session_parity.other(),
                 local_settings: local_root_settings,
                 peer_settings: peer_root_settings,
             },
@@ -116,7 +114,6 @@ where
             rx,
             role,
             local_session_parity,
-            peer_session_parity,
             connections,
             pending_inbound: BTreeMap::new(),
             pending_outbound: BTreeMap::new(),
@@ -132,7 +129,7 @@ where
     }
 
     pub fn peer_session_parity(&self) -> Parity {
-        self.peer_session_parity
+        self.local_session_parity.other()
     }
 
     pub fn connection(&self, conn_id: ConnectionId) -> Option<&ConnectionState> {
@@ -309,7 +306,7 @@ where
                         .protocol_violation("OpenConnection cannot use connection 0")
                         .await);
                 }
-                if !id_matches_parity(conn_id.0, &self.peer_session_parity) {
+                if !id_matches_parity(conn_id.0, &self.peer_session_parity()) {
                     return Err(self
                         .protocol_violation("OpenConnection ID parity mismatch")
                         .await);
@@ -532,7 +529,6 @@ impl<C> SessionInitiatorBuilder<C> {
                     rx,
                     SessionRole::Initiator,
                     self.parity,
-                    self.parity.other(),
                     self.root_settings,
                     reply.connection_settings.clone(),
                 ))
@@ -616,7 +612,6 @@ impl<C> SessionAcceptorBuilder<C> {
         }
 
         let local_parity = hello.parity.other();
-        let peer_parity = hello.parity;
         let peer_root_settings = hello.connection_settings.clone();
 
         let reply = Message::new(
@@ -633,7 +628,6 @@ impl<C> SessionAcceptorBuilder<C> {
             rx,
             SessionRole::Acceptor,
             local_parity,
-            peer_parity,
             self.root_settings,
             peer_root_settings,
         ))

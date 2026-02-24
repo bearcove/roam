@@ -109,6 +109,7 @@ static_assertions = "1.1.0"
 ulid = "1"
 
 smallvec = "1.15.1"
+getrandom = "0.2.16"
 
 # [patch."https://github.com/facet-rs/facet"]
 # facet = { path = "../facet/facet" }

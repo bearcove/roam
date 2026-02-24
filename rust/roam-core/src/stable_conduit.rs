@@ -6,8 +6,8 @@ use facet::Facet;
 use facet_core::{PtrConst, Shape};
 use facet_reflect::Peek;
 use roam_types::{
-    Backing, Conduit, ConduitRx, ConduitTx, ConduitTxPermit, Link, LinkRx, LinkTx, LinkTxPermit,
-    MsgFamily, SelfRef, WriteSlot,
+    Conduit, ConduitRx, ConduitTx, ConduitTxPermit, Link, LinkRx, LinkTx, LinkTxPermit, MsgFamily,
+    SelfRef, WriteSlot,
 };
 
 use crate::replay_buffer::{PacketAck, PacketSeq, ReplayBuffer};
@@ -280,7 +280,7 @@ async fn handshake<L: Link>(
         }
         Some(client_hello) => {
             // r[impl stable.resume-key]
-            let key = ResumeKey(fresh_key());
+            let key = ResumeKey(fresh_key()?);
             let hello = ServerHello {
                 resume_key: key.clone(),
                 last_received,
@@ -310,20 +310,15 @@ async fn recv_msg<LRx: LinkRx, M: Facet<'static>>(rx: &mut LRx) -> Result<M, Sta
         .await
         .map_err(|_| StableConduitError::LinkDead)?
         .ok_or(StableConduitError::LinkDead)?;
-    let bytes: &[u8] = match &backing {
-        Backing::Boxed(b) => b,
-    };
+    let bytes = backing.as_bytes();
     facet_postcard::from_slice(bytes).map_err(StableConduitError::Decode)
 }
 
-fn fresh_key() -> Vec<u8> {
-    // TODO: use a proper CSPRNG
-    let t = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default();
+fn fresh_key() -> Result<Vec<u8>, StableConduitError> {
     let mut buf = [0u8; 16];
-    buf[..8].copy_from_slice(&t.as_nanos().to_le_bytes()[..8]);
-    buf.to_vec()
+    getrandom::getrandom(&mut buf)
+        .map_err(|e| StableConduitError::Setup(format!("failed to generate resume key: {e}")))?;
+    Ok(buf.to_vec())
 }
 
 // ---------------------------------------------------------------------------

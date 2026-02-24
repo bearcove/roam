@@ -21,6 +21,7 @@ facet-format.workspace = true
 facet-postcard.workspace = true
 tokio.workspace = true
 smallvec.workspace = true
+getrandom.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

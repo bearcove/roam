@@ -30,7 +30,7 @@ pub enum Backing {
 
 impl Backing {
     /// Access the backing bytes.
-    fn as_bytes(&self) -> &[u8] {
+    pub fn as_bytes(&self) -> &[u8] {
         match self {
             Backing::Boxed(b) => b,
         }
