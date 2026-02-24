@@ -192,38 +192,16 @@ impl<T, const N: usize> Rx<T, N> {
                 // TODO: handle properly
                 Ok(None)
             }
-            Some(IncomingChannelMessage::Item(msg)) => {
-                // Extract the payload bytes before consuming `msg` so we can choose
-                // the right deserialization path.
-                let use_owned = matches!(msg.item, Payload::RawOwned(_));
-                if use_owned {
-                    // RawOwned: bytes live in a Vec inside the SelfRef, not the backing.
-                    // Deserialize owned (one allocation, unavoidable).
-                    msg.try_map(|item| {
-                        let bytes = item.item.as_incoming_bytes().ok_or_else(|| {
-                            RxError::Protocol(
-                                "incoming channel item payload was not decoded bytes".into(),
-                            )
-                        })?;
-                        facet_postcard::from_slice(bytes).map_err(RxError::Deserialize)
-                    })
-                    .map(Some)
-                } else {
-                    // RawBorrowed: bytes point into the backing — borrow zero-copy.
-                    msg.try_repack(|item, backing_bytes| {
-                        let payload_bytes = item.item.as_incoming_bytes().ok_or_else(|| {
-                            RxError::Protocol(
-                                "incoming channel item payload was not decoded bytes".into(),
-                            )
-                        })?;
-                        let offset =
-                            payload_bytes.as_ptr() as usize - backing_bytes.as_ptr() as usize;
-                        let slice = &backing_bytes[offset..offset + payload_bytes.len()];
-                        facet_postcard::from_slice_borrowed(slice).map_err(RxError::Deserialize)
-                    })
-                    .map(Some)
-                }
-            }
+            Some(IncomingChannelMessage::Item(msg)) => msg
+                .try_repack(|item, _backing_bytes| {
+                    let Payload::Incoming(bytes) = item.item else {
+                        return Err(RxError::Protocol(
+                            "incoming channel item payload was not Incoming".into(),
+                        ));
+                    };
+                    facet_postcard::from_slice_borrowed(bytes).map_err(RxError::Deserialize)
+                })
+                .map(Some),
         }
     }
 

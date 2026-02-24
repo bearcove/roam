@@ -245,10 +245,13 @@ async fn rx_recv_decodes_channel_items() {
     rx.bind(rx_items);
 
     let payload_bytes = facet_postcard::to_vec(&42_u32).expect("serialize channel item");
-    let item = ChannelItem {
-        item: Payload::RawOwned(payload_bytes),
-    };
-    let item_ref = SelfRef::owning(Backing::Boxed(Box::<[u8]>::default()), item);
+    let backing = Backing::Boxed(payload_bytes.into_boxed_slice());
+    let item_ref = SelfRef::try_new(backing, |bytes| {
+        Ok::<_, std::convert::Infallible>(ChannelItem {
+            item: Payload::Incoming(bytes),
+        })
+    })
+    .unwrap();
     tx_items
         .send(IncomingChannelMessage::Item(item_ref))
         .await
