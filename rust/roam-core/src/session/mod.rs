@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 
+use facet::Facet;
 use roam_types::{
     Conduit, ConduitRx, ConduitTx, ConduitTxPermit, ConnectionAccept, ConnectionClose,
     ConnectionId, ConnectionOpen, ConnectionReject, ConnectionSettings, Hello, HelloYourself,
@@ -23,50 +24,6 @@ pub struct ConnectionState {
     pub req_tx: mpsc::Sender<SelfRef<RequestMessage<'static>>>,
 }
 
-/// Connection lifecycle event surfaced by [`Session::recv_event`].
-pub enum ConnEvent {
-    IncomingConnectionOpen {
-        conn_id: ConnectionId,
-        peer_settings: ConnectionSettings,
-        metadata: Metadata,
-    },
-    OutgoingConnectionAccepted {
-        conn_id: ConnectionId,
-        req_rx: mpsc::Receiver<SelfRef<RequestMessage<'static>>>,
-    },
-    OutgoingConnectionRejected {
-        conn_id: ConnectionId,
-        metadata: Metadata,
-    },
-    ConnectionClosed {
-        conn_id: ConnectionId,
-        metadata: Metadata,
-    },
-}
-
-#[derive(Debug)]
-pub enum SessionError {
-    Transport(String),
-    ProtocolViolation(String),
-    RemoteProtocolError(String),
-    UnexpectedEof(&'static str),
-    InvalidState(String),
-}
-
-impl std::fmt::Display for SessionError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Transport(msg) => write!(f, "transport error: {msg}"),
-            Self::ProtocolViolation(msg) => write!(f, "protocol violation: {msg}"),
-            Self::RemoteProtocolError(msg) => write!(f, "remote protocol error: {msg}"),
-            Self::UnexpectedEof(ctx) => write!(f, "unexpected eof while {ctx}"),
-            Self::InvalidState(msg) => write!(f, "invalid state: {msg}"),
-        }
-    }
-}
-
-impl std::error::Error for SessionError {}
-
 #[derive(Debug, Clone)]
 struct PendingInboundOpen {
     peer_settings: ConnectionSettings,
@@ -84,15 +41,32 @@ enum ConnectionSlot {
     PendingOutbound(PendingOutboundOpen),
 }
 
+/// Session state machine,
 // r[impl session]
 pub struct Session<C: Conduit> {
+    /// Conduit sender, torn down on protocol error
     tx: Option<C::Tx>,
+
+    /// Conduit receiver
     rx: C::Rx,
+
     // r[impl session.role]
     role: SessionRole,
+
+    /// Our local parity - when opening connections we'll use that.
     // r[impl session.parity]
-    local_session_parity: Parity,
-    slots: BTreeMap<ConnectionId, ConnectionSlot>,
+    parity: Parity,
+
+    /// Connection state (including inbound/outbound)
+    conns: BTreeMap<ConnectionId, ConnectionSlot>,
+}
+
+/// Just add more as error conditions add up
+#[derive(Facet, Debug)]
+#[facet(derive(Error))]
+#[repr(u8)]
+pub enum SessionError {
+    ExpectedHelloYourselfGotEof,
 }
 
 impl<C> Session<C>
@@ -106,27 +80,27 @@ where
             tx: Some(tx),
             rx,
             role: SessionRole::Initiator,
-            local_session_parity: Parity::Odd,
-            slots: BTreeMap::new(),
+            parity: Parity::Odd,
+            conns: BTreeMap::new(),
         }
     }
 
     // r[impl session.handshake]
     // r[impl session.connection-settings.hello]
     // r[impl rpc.session-setup]
-    async fn establish_as_initiator(
+    async fn establish_as_initiator<'a>(
         &mut self,
         root_settings: ConnectionSettings,
-        metadata: Metadata,
+        metadata: Metadata<'a>,
     ) -> Result<mpsc::Receiver<SelfRef<RequestMessage<'static>>>, SessionError> {
-        let hello = Message::new(
-            ConnectionId::ROOT,
-            MessagePayload::Hello(Hello {
+        let hello = Message {
+            connection_id: ConnectionId::ROOT,
+            payload: MessagePayload::Hello(Hello {
                 version: PROTOCOL_VERSION,
                 connection_settings: root_settings.clone(),
                 metadata,
             }),
-        );
+        };
         self.send(hello).await?;
 
         let first = self
@@ -199,13 +173,13 @@ where
         let mut local_root_settings = root_settings.clone();
         local_root_settings.parity = local_parity;
 
-        let reply = Message::new(
-            ConnectionId::ROOT,
-            MessagePayload::HelloYourself(HelloYourself {
+        let reply = Message {
+            connection_id: ConnectionId::ROOT,
+            payload: MessagePayload::HelloYourself(HelloYourself {
                 connection_settings: local_root_settings.clone(),
                 metadata,
             }),
-        );
+        };
         self.send(reply).await?;
 
         let req_rx = self.finish_handshake(
@@ -224,10 +198,10 @@ where
         peer_root_settings: ConnectionSettings,
     ) -> mpsc::Receiver<SelfRef<RequestMessage<'static>>> {
         self.role = role;
-        self.local_session_parity = local_root_settings.parity;
+        self.parity = local_root_settings.parity;
         let cap = peer_root_settings.max_concurrent_requests as usize;
         let (req_tx, req_rx) = mpsc::channel(cap.max(1));
-        self.slots.insert(
+        self.conns.insert(
             ConnectionId::ROOT,
             ConnectionSlot::Active(ConnectionState {
                 id: ConnectionId::ROOT,
@@ -263,15 +237,15 @@ where
     }
 
     pub(crate) fn local_session_parity(&self) -> Parity {
-        self.local_session_parity
+        self.parity
     }
 
     pub(crate) fn peer_session_parity(&self) -> Parity {
-        self.local_session_parity.other()
+        self.parity.other()
     }
 
     pub(crate) fn connection(&self, conn_id: ConnectionId) -> Option<&ConnectionState> {
-        match self.slots.get(&conn_id) {
+        match self.conns.get(&conn_id) {
             Some(ConnectionSlot::Active(state)) => Some(state),
             _ => None,
         }
@@ -301,13 +275,13 @@ where
                 "cannot open root connection".into(),
             ));
         }
-        if !id_matches_parity(conn_id.0, &self.local_session_parity) {
+        if !id_matches_parity(conn_id.0, &self.parity) {
             return Err(SessionError::InvalidState(format!(
                 "connection id {} does not match local session parity {:?}",
-                conn_id, self.local_session_parity
+                conn_id, self.parity
             )));
         }
-        if self.slots.contains_key(&conn_id) {
+        if self.conns.contains_key(&conn_id) {
             return Err(SessionError::InvalidState(format!(
                 "connection id {} already in use",
                 conn_id
@@ -318,9 +292,13 @@ where
             connection_settings: local_settings.clone(),
             metadata,
         });
-        self.send(Message::new(conn_id, payload)).await?;
+        self.send(Message {
+            connection_id: conn_id,
+            payload,
+        })
+        .await?;
 
-        self.slots.insert(
+        self.conns.insert(
             conn_id,
             ConnectionSlot::PendingOutbound(PendingOutboundOpen { local_settings }),
         );
@@ -335,7 +313,7 @@ where
         local_settings: ConnectionSettings,
         metadata: Metadata,
     ) -> Result<mpsc::Receiver<SelfRef<RequestMessage<'static>>>, SessionError> {
-        let Some(ConnectionSlot::PendingInbound(pending)) = self.slots.get(&conn_id) else {
+        let Some(ConnectionSlot::PendingInbound(pending)) = self.conns.get(&conn_id) else {
             return Err(SessionError::InvalidState(format!(
                 "no pending inbound open for {}",
                 conn_id.0
@@ -349,11 +327,15 @@ where
             connection_settings: local_settings.clone(),
             metadata,
         });
-        self.send(Message::new(conn_id, payload)).await?;
+        self.send(Message {
+            connection_id: conn_id,
+            payload,
+        })
+        .await?;
 
         let cap = peer_settings.max_concurrent_requests as usize;
         let (req_tx, req_rx) = mpsc::channel(cap.max(1));
-        self.slots.insert(
+        self.conns.insert(
             conn_id,
             ConnectionSlot::Active(ConnectionState {
                 id: conn_id,
@@ -372,7 +354,7 @@ where
         metadata: Metadata,
     ) -> Result<(), SessionError> {
         if !matches!(
-            self.slots.get(&conn_id),
+            self.conns.get(&conn_id),
             Some(ConnectionSlot::PendingInbound(_))
         ) {
             return Err(SessionError::InvalidState(format!(
@@ -382,9 +364,13 @@ where
         }
 
         let payload = MessagePayload::ConnectionReject(ConnectionReject { metadata });
-        self.send(Message::new(conn_id, payload)).await?;
+        self.send(Message {
+            connection_id: conn_id,
+            payload,
+        })
+        .await?;
 
-        self.slots.remove(&conn_id);
+        self.conns.remove(&conn_id);
         Ok(())
     }
 
@@ -400,7 +386,7 @@ where
                 "cannot close root connection".into(),
             ));
         }
-        if !matches!(self.slots.get(&conn_id), Some(ConnectionSlot::Active(_))) {
+        if !matches!(self.conns.get(&conn_id), Some(ConnectionSlot::Active(_))) {
             return Err(SessionError::InvalidState(format!(
                 "connection {} is not active",
                 conn_id.0
@@ -408,9 +394,13 @@ where
         }
 
         let payload = MessagePayload::ConnectionClose(ConnectionClose { metadata });
-        self.send(Message::new(conn_id, payload)).await?;
+        self.send(Message {
+            connection_id: conn_id,
+            payload,
+        })
+        .await?;
 
-        self.slots.remove(&conn_id);
+        self.conns.remove(&conn_id);
         Ok(())
     }
 
@@ -420,7 +410,7 @@ where
         msg: Message<'msg>,
     ) -> Result<(), SessionError> {
         let conn_id = msg.connection_id();
-        if !matches!(self.slots.get(&conn_id), Some(ConnectionSlot::Active(_))) {
+        if !matches!(self.conns.get(&conn_id), Some(ConnectionSlot::Active(_))) {
             return Err(SessionError::InvalidState(format!(
                 "connection {} is not active",
                 conn_id.0
@@ -474,12 +464,12 @@ where
                             .protocol_violation("OpenConnection ID parity mismatch")
                             .await);
                     }
-                    if self.slots.contains_key(&conn_id) {
+                    if self.conns.contains_key(&conn_id) {
                         return Err(self
                             .protocol_violation("OpenConnection for already-used ID")
                             .await);
                     }
-                    self.slots.insert(
+                    self.conns.insert(
                         conn_id,
                         ConnectionSlot::PendingInbound(PendingInboundOpen {
                             peer_settings: open.connection_settings.clone(),
@@ -498,7 +488,7 @@ where
                             .protocol_violation("AcceptConnection cannot use connection 0")
                             .await);
                     }
-                    let Some(slot) = self.slots.remove(&conn_id) else {
+                    let Some(slot) = self.conns.remove(&conn_id) else {
                         return Err(self
                             .protocol_violation("AcceptConnection without matching outbound open")
                             .await);
@@ -506,7 +496,7 @@ where
                     let pending = match slot {
                         ConnectionSlot::PendingOutbound(pending) => pending,
                         ConnectionSlot::Active(_) | ConnectionSlot::PendingInbound(_) => {
-                            self.slots.insert(conn_id, slot);
+                            self.conns.insert(conn_id, slot);
                             return Err(self
                                 .protocol_violation(
                                     "AcceptConnection without matching outbound open",
@@ -517,7 +507,7 @@ where
                     let peer_settings = accept.connection_settings.clone();
                     let cap = peer_settings.max_concurrent_requests as usize;
                     let (req_tx, req_rx) = mpsc::channel(cap.max(1));
-                    self.slots.insert(
+                    self.conns.insert(
                         conn_id,
                         ConnectionSlot::Active(ConnectionState {
                             id: conn_id,
@@ -535,10 +525,10 @@ where
                             .protocol_violation("RejectConnection cannot use connection 0")
                             .await);
                     }
-                    let slot = self.slots.remove(&conn_id);
+                    let slot = self.conns.remove(&conn_id);
                     let Some(ConnectionSlot::PendingOutbound(_)) = slot else {
                         if let Some(slot) = slot {
-                            self.slots.insert(conn_id, slot);
+                            self.conns.insert(conn_id, slot);
                         }
                         return Err(self
                             .protocol_violation("RejectConnection without matching outbound open")
@@ -557,10 +547,10 @@ where
                             .protocol_violation("CloseConnection cannot use connection 0")
                             .await);
                     }
-                    let slot = self.slots.remove(&conn_id);
+                    let slot = self.conns.remove(&conn_id);
                     let Some(ConnectionSlot::Active(_)) = slot else {
                         if let Some(slot) = slot {
-                            self.slots.insert(conn_id, slot);
+                            self.conns.insert(conn_id, slot);
                         }
                         return Err(self
                             .protocol_violation("CloseConnection for unknown ID")
@@ -572,7 +562,7 @@ where
                     });
                 }
                 MessagePayload::RequestMessage(req) => {
-                    let Some(ConnectionSlot::Active(state)) = self.slots.get(&conn_id) else {
+                    let Some(ConnectionSlot::Active(state)) = self.conns.get(&conn_id) else {
                         return Err(self
                             .protocol_violation("request message for unknown connection")
                             .await);
@@ -593,7 +583,7 @@ where
                     // loop to get next event
                 }
                 MessagePayload::ChannelMessage(_) => {
-                    if !matches!(self.slots.get(&conn_id), Some(ConnectionSlot::Active(_))) {
+                    if !matches!(self.conns.get(&conn_id), Some(ConnectionSlot::Active(_))) {
                         return Err(self
                             .protocol_violation("channel message for unknown connection")
                             .await);
@@ -630,19 +620,19 @@ where
     async fn protocol_violation(&mut self, description: &str) -> SessionError {
         let error = SessionError::ProtocolViolation(description.to_string());
         if let Some(tx) = self.tx.take() {
-            let protocol_error = Message::new(
-                ConnectionId::ROOT,
-                MessagePayload::ProtocolError(ProtocolError {
+            let protocol_error = Message {
+                connection_id: ConnectionId::ROOT,
+                payload: MessagePayload::ProtocolError(ProtocolError {
                     description: description.to_string(),
                 }),
-            );
+            };
             // Best-effort: ignore send/close failures during violation teardown
             if let Ok(permit) = tx.reserve().await {
                 let _ = permit.send(protocol_error);
             }
             let _ = tx.close().await;
         }
-        self.slots.clear();
+        self.conns.clear();
         error
     }
 
@@ -650,7 +640,7 @@ where
         if let Some(tx) = self.tx.take() {
             let _ = tx.close().await;
         }
-        self.slots.clear();
+        self.conns.clear();
     }
 }
 
@@ -760,25 +750,4 @@ impl<C> SessionAcceptorBuilder<C> {
             .await?;
         Ok((session, req_rx))
     }
-}
-
-// r[impl session.parity]
-fn id_matches_parity(id: u64, parity: &Parity) -> bool {
-    match parity {
-        Parity::Odd => !id.is_multiple_of(2),
-        Parity::Even => id.is_multiple_of(2),
-    }
-}
-
-fn is_rpc_or_channel_payload(payload: &MessagePayload<'_>) -> bool {
-    matches!(
-        payload,
-        MessagePayload::Request(_)
-            | MessagePayload::Response(_)
-            | MessagePayload::CancelRequest(_)
-            | MessagePayload::ChannelItem(_)
-            | MessagePayload::CloseChannel(_)
-            | MessagePayload::ResetChannel(_)
-            | MessagePayload::GrantCredit(_)
-    )
 }

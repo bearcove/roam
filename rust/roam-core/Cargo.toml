@@ -24,6 +24,7 @@ tracing.workspace = true
 smallvec.workspace = true
 getrandom.workspace = true
 zerocopy.workspace = true
+facet-error = "0.43.2"
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

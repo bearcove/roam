@@ -11,6 +11,17 @@ macro_rules! declare_id {
                 write!(f, "{}", self.0)
             }
         }
+
+        impl $name {
+            /// Returns `true` if this ID has the given parity (even or odd).
+            pub fn has_parity(self, parity: crate::Parity) -> bool {
+                match parity {
+                    crate::Parity::Even => self.0.is_multiple_of(2),
+                    crate::Parity::Odd => !self.0.is_multiple_of(2),
+                }
+            }
+        }
+
     };
 }
 
