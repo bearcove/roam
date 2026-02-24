@@ -1,3 +1,4 @@
+use moire::task::FutureExt;
 use roam_types::{Conduit, ConduitTx, ConnectionSettings, MessageFamily, Metadata, Parity};
 
 use super::{ConnectionHandle, Session, SessionError};

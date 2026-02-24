@@ -853,9 +853,24 @@ dependencies = [
 name = "moire"
 version = "0.1.0"
 dependencies = [
+ "moire-macros",
+ "moire-macros-noop",
  "moire-tokio",
  "moire-wasm",
 ]
+
+[[package]]
+name = "moire-macros"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "unsynn",
+]
+
+[[package]]
+name = "moire-macros-noop"
+version = "0.1.0"
 
 [[package]]
 name = "moire-runtime"
@@ -916,6 +931,7 @@ dependencies = [
  "futures-channel",
  "futures-util",
  "gloo-timers",
+ "moire-types",
  "wasm-bindgen-futures",
 ]
 
