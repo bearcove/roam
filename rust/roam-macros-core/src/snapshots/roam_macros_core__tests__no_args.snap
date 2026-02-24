@@ -28,11 +28,14 @@ pub fn ping_service_descriptor() -> &'static ::roam::session::ServiceDescriptor 
         }))
     })
 }
-pub trait Ping
+pub trait PingServer
 where
     Self: Send + Sync,
 {
-    fn ping(&self) -> impl std::future::Future<Output = u64> + Send;
+    fn ping(
+        &self,
+        call: impl ::roam::Call<u64, ::core::convert::Infallible>,
+    ) -> impl std::future::Future<Output = ()> + Send;
 }
 #[doc = r" Dispatcher for this service."]
 #[doc = r""]
@@ -44,7 +47,7 @@ pub struct PingDispatcher<H> {
 }
 impl<H> PingDispatcher<H>
 where
-    H: Ping + Clone + Send + Sync + 'static,
+    H: PingServer + Clone + Send + Sync + 'static,
 {
     #[doc = r" Create a new dispatcher wrapping the given handler."]
     pub fn new(handler: H) -> Self {
@@ -53,7 +56,7 @@ where
 }
 impl<H, R> ::roam::Handler<R> for PingDispatcher<H>
 where
-    H: Ping + Clone + Send + Sync + 'static,
+    H: PingServer + Clone + Send + Sync + 'static,
     R: ::roam::ReplySink,
 {
     async fn handle(&self, call: ::roam::SelfRef<::roam::RequestCall<'static>>, reply: R) {
@@ -68,17 +71,8 @@ where
                 Err(_) => return,
             };
             let () = args;
-            let result = self.handler.ping().await;
-            let wire_result: Result<u64, ::roam::RoamError> = Ok(result);
-            let ret = ::roam::Payload::outgoing(&wire_result);
-            reply
-                .send_reply(::roam::RequestResponse {
-                    ret,
-                    channels: &[],
-                    metadata: Default::default(),
-                })
-                .await
-                .ok();
+            let sink_call = ::roam::SinkCall::new(reply);
+            self.handler.ping(sink_call).await;
             return;
         }
     }
@@ -93,7 +87,9 @@ impl<C: ::roam::Caller> PingClient<C> {
     pub fn new(caller: C) -> Self {
         Self { caller }
     }
-    pub async fn ping(&self) -> Result<u64, ::roam::RoamError> {
+    pub async fn ping(
+        &self,
+    ) -> Result<::roam::SelfRef<::roam::ResponseParts<'static, u64>>, ::roam::RoamError> {
         static ARGS_PLAN_0: ::std::sync::OnceLock<&'static ::roam::RpcPlan> =
             ::std::sync::OnceLock::new();
         static OK_PLAN_0: ::std::sync::OnceLock<&'static ::roam::RpcPlan> =
@@ -114,14 +110,20 @@ impl<C: ::roam::Caller> PingClient<C> {
             metadata: Default::default(),
         };
         let response = self.caller.call(req).await?;
-        let ret_bytes = match &response.ret {
-            ::roam::Payload::Incoming(bytes) => bytes,
-            _ => return Err(::roam::RoamError::InvalidPayload),
-        };
-        let result: Result<u64, ::roam::RoamError<::core::convert::Infallible>> =
-            ::roam::facet_postcard::from_slice_borrowed(ret_bytes)
-                .map_err(|_| ::roam::RoamError::InvalidPayload)?;
-        result
+        response.try_repack(|resp, _bytes| {
+            let ret_bytes = match &resp.ret {
+                ::roam::Payload::Incoming(bytes) => bytes,
+                _ => return Err(::roam::RoamError::InvalidPayload),
+            };
+            let result: Result<u64, ::roam::RoamError<::core::convert::Infallible>> =
+                ::roam::facet_postcard::from_slice_borrowed(ret_bytes)
+                    .map_err(|_| ::roam::RoamError::InvalidPayload)?;
+            let ret = result?;
+            Ok(::roam::ResponseParts {
+                ret,
+                metadata: resp.metadata,
+            })
+        })
     }
 }
 #[doc = r" Returns the service detail for codegen."]

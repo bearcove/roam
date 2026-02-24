@@ -40,11 +40,16 @@ pub fn adder_service_descriptor() -> &'static ::roam::session::ServiceDescriptor
         }))
     })
 }
-pub trait Adder
+pub trait AdderServer
 where
     Self: Send + Sync,
 {
-    fn add(&self, a: i32, b: i32) -> impl std::future::Future<Output = i32> + Send;
+    fn add(
+        &self,
+        call: impl ::roam::Call<i32, ::core::convert::Infallible>,
+        a: i32,
+        b: i32,
+    ) -> impl std::future::Future<Output = ()> + Send;
 }
 #[doc = r" Dispatcher for this service."]
 #[doc = r""]
@@ -56,7 +61,7 @@ pub struct AdderDispatcher<H> {
 }
 impl<H> AdderDispatcher<H>
 where
-    H: Adder + Clone + Send + Sync + 'static,
+    H: AdderServer + Clone + Send + Sync + 'static,
 {
     #[doc = r" Create a new dispatcher wrapping the given handler."]
     pub fn new(handler: H) -> Self {
@@ -65,7 +70,7 @@ where
 }
 impl<H, R> ::roam::Handler<R> for AdderDispatcher<H>
 where
-    H: Adder + Clone + Send + Sync + 'static,
+    H: AdderServer + Clone + Send + Sync + 'static,
     R: ::roam::ReplySink,
 {
     async fn handle(&self, call: ::roam::SelfRef<::roam::RequestCall<'static>>, reply: R) {
@@ -80,17 +85,8 @@ where
                 Err(_) => return,
             };
             let (a, b) = args;
-            let result = self.handler.add(a, b).await;
-            let wire_result: Result<i32, ::roam::RoamError> = Ok(result);
-            let ret = ::roam::Payload::outgoing(&wire_result);
-            reply
-                .send_reply(::roam::RequestResponse {
-                    ret,
-                    channels: &[],
-                    metadata: Default::default(),
-                })
-                .await
-                .ok();
+            let sink_call = ::roam::SinkCall::new(reply);
+            self.handler.add(sink_call, a, b).await;
             return;
         }
     }
@@ -105,7 +101,11 @@ impl<C: ::roam::Caller> AdderClient<C> {
     pub fn new(caller: C) -> Self {
         Self { caller }
     }
-    pub async fn add(&self, a: i32, b: i32) -> Result<i32, ::roam::RoamError> {
+    pub async fn add(
+        &self,
+        a: i32,
+        b: i32,
+    ) -> Result<::roam::SelfRef<::roam::ResponseParts<'static, i32>>, ::roam::RoamError> {
         static ARGS_PLAN_0: ::std::sync::OnceLock<&'static ::roam::RpcPlan> =
             ::std::sync::OnceLock::new();
         static OK_PLAN_0: ::std::sync::OnceLock<&'static ::roam::RpcPlan> =
@@ -126,14 +126,20 @@ impl<C: ::roam::Caller> AdderClient<C> {
             metadata: Default::default(),
         };
         let response = self.caller.call(req).await?;
-        let ret_bytes = match &response.ret {
-            ::roam::Payload::Incoming(bytes) => bytes,
-            _ => return Err(::roam::RoamError::InvalidPayload),
-        };
-        let result: Result<i32, ::roam::RoamError<::core::convert::Infallible>> =
-            ::roam::facet_postcard::from_slice_borrowed(ret_bytes)
-                .map_err(|_| ::roam::RoamError::InvalidPayload)?;
-        result
+        response.try_repack(|resp, _bytes| {
+            let ret_bytes = match &resp.ret {
+                ::roam::Payload::Incoming(bytes) => bytes,
+                _ => return Err(::roam::RoamError::InvalidPayload),
+            };
+            let result: Result<i32, ::roam::RoamError<::core::convert::Infallible>> =
+                ::roam::facet_postcard::from_slice_borrowed(ret_bytes)
+                    .map_err(|_| ::roam::RoamError::InvalidPayload)?;
+            let ret = result?;
+            Ok(::roam::ResponseParts {
+                ret,
+                metadata: resp.metadata,
+            })
+        })
     }
 }
 #[doc = r" Returns the service detail for codegen."]

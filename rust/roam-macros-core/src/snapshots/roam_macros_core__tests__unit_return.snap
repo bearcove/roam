@@ -31,11 +31,15 @@ pub fn notifier_service_descriptor() -> &'static ::roam::session::ServiceDescrip
         }))
     })
 }
-pub trait Notifier
+pub trait NotifierServer
 where
     Self: Send + Sync,
 {
-    fn notify(&self, msg: String) -> impl std::future::Future<Output = ()> + Send;
+    fn notify(
+        &self,
+        call: impl ::roam::Call<(), ::core::convert::Infallible>,
+        msg: String,
+    ) -> impl std::future::Future<Output = ()> + Send;
 }
 #[doc = r" Dispatcher for this service."]
 #[doc = r""]
@@ -47,7 +51,7 @@ pub struct NotifierDispatcher<H> {
 }
 impl<H> NotifierDispatcher<H>
 where
-    H: Notifier + Clone + Send + Sync + 'static,
+    H: NotifierServer + Clone + Send + Sync + 'static,
 {
     #[doc = r" Create a new dispatcher wrapping the given handler."]
     pub fn new(handler: H) -> Self {
@@ -56,7 +60,7 @@ where
 }
 impl<H, R> ::roam::Handler<R> for NotifierDispatcher<H>
 where
-    H: Notifier + Clone + Send + Sync + 'static,
+    H: NotifierServer + Clone + Send + Sync + 'static,
     R: ::roam::ReplySink,
 {
     async fn handle(&self, call: ::roam::SelfRef<::roam::RequestCall<'static>>, reply: R) {
@@ -71,17 +75,8 @@ where
                 Err(_) => return,
             };
             let (msg,) = args;
-            let result = self.handler.notify(msg).await;
-            let wire_result: Result<(), ::roam::RoamError> = Ok(result);
-            let ret = ::roam::Payload::outgoing(&wire_result);
-            reply
-                .send_reply(::roam::RequestResponse {
-                    ret,
-                    channels: &[],
-                    metadata: Default::default(),
-                })
-                .await
-                .ok();
+            let sink_call = ::roam::SinkCall::new(reply);
+            self.handler.notify(sink_call, msg).await;
             return;
         }
     }
@@ -96,7 +91,10 @@ impl<C: ::roam::Caller> NotifierClient<C> {
     pub fn new(caller: C) -> Self {
         Self { caller }
     }
-    pub async fn notify(&self, msg: String) -> Result<(), ::roam::RoamError> {
+    pub async fn notify(
+        &self,
+        msg: String,
+    ) -> Result<::roam::SelfRef<::roam::ResponseParts<'static, ()>>, ::roam::RoamError> {
         static ARGS_PLAN_0: ::std::sync::OnceLock<&'static ::roam::RpcPlan> =
             ::std::sync::OnceLock::new();
         static OK_PLAN_0: ::std::sync::OnceLock<&'static ::roam::RpcPlan> =
@@ -117,14 +115,20 @@ impl<C: ::roam::Caller> NotifierClient<C> {
             metadata: Default::default(),
         };
         let response = self.caller.call(req).await?;
-        let ret_bytes = match &response.ret {
-            ::roam::Payload::Incoming(bytes) => bytes,
-            _ => return Err(::roam::RoamError::InvalidPayload),
-        };
-        let result: Result<(), ::roam::RoamError<::core::convert::Infallible>> =
-            ::roam::facet_postcard::from_slice_borrowed(ret_bytes)
-                .map_err(|_| ::roam::RoamError::InvalidPayload)?;
-        result
+        response.try_repack(|resp, _bytes| {
+            let ret_bytes = match &resp.ret {
+                ::roam::Payload::Incoming(bytes) => bytes,
+                _ => return Err(::roam::RoamError::InvalidPayload),
+            };
+            let result: Result<(), ::roam::RoamError<::core::convert::Infallible>> =
+                ::roam::facet_postcard::from_slice_borrowed(ret_bytes)
+                    .map_err(|_| ::roam::RoamError::InvalidPayload)?;
+            let ret = result?;
+            Ok(::roam::ResponseParts {
+                ret,
+                metadata: resp.metadata,
+            })
+        })
     }
 }
 #[doc = r" Returns the service detail for codegen."]

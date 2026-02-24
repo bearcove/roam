@@ -202,7 +202,7 @@ fn generate_service_descriptor_fn(parsed: &ServiceTrait, roam: &TokenStream2) ->
 // ============================================================================
 
 fn generate_service_trait(parsed: &ServiceTrait, roam: &TokenStream2) -> TokenStream2 {
-    let trait_name = format_ident!("{}", parsed.name());
+    let trait_name = format_ident!("{}Server", parsed.name());
 
     let trait_doc = parsed.doc().map(|d| quote! { #[doc = #d] });
 
@@ -226,7 +226,16 @@ fn generate_trait_method(method: &ServiceMethod, roam: &TokenStream2) -> TokenSt
     let method_name = format_ident!("{}", method.name().to_snake_case());
     let method_doc = method.doc().map(|d| quote! { #[doc = #d] });
 
-    // Parameters - cx: &Context comes first
+    let return_type = method.return_type();
+    let (ok_ty, err_ty) = if let Some((ok, err)) = return_type.as_result() {
+        (ok.to_token_stream(), err.to_token_stream())
+    } else {
+        (
+            return_type.to_token_stream(),
+            quote! { ::core::convert::Infallible },
+        )
+    };
+
     let params: Vec<TokenStream2> = method
         .args()
         .map(|arg| {
@@ -235,19 +244,11 @@ fn generate_trait_method(method: &ServiceMethod, roam: &TokenStream2) -> TokenSt
             quote! { #name: #ty }
         })
         .collect();
-    // Return type - wrap in Result<T, RoamError<E>> or Result<T, RoamError<Never>>
-    let return_type = method.return_type();
-    let full_return = format_handler_return_type(&return_type, roam);
 
     quote! {
         #method_doc
-        fn #method_name(&self, #(#params),*) -> impl std::future::Future<Output = #full_return> + Send;
+        fn #method_name(&self, call: impl #roam::Call<#ok_ty, #err_ty>, #(#params),*) -> impl std::future::Future<Output = ()> + Send;
     }
-}
-
-/// Format the return type for handler trait - uses original type as-is.
-fn format_handler_return_type(return_type: &Type, _roam: &TokenStream2) -> TokenStream2 {
-    return_type.to_token_stream()
 }
 
 // ============================================================================
@@ -255,7 +256,7 @@ fn format_handler_return_type(return_type: &Type, _roam: &TokenStream2) -> Token
 // ============================================================================
 
 fn generate_dispatcher(parsed: &ServiceTrait, roam: &TokenStream2) -> TokenStream2 {
-    let trait_name = format_ident!("{}", parsed.name());
+    let trait_name = format_ident!("{}Server", parsed.name());
     let dispatcher_name = format_ident!("{}Dispatcher", parsed.name());
     let descriptor_fn_name = format_ident!("{}_service_descriptor", parsed.name().to_snake_case());
 
@@ -345,44 +346,7 @@ fn generate_dispatch_arm(
         _ => quote! { let (#(#arg_names),*) = args; },
     };
 
-    // Build the reply payload — for fallible methods wrap in RoamError
-    let return_type = method.return_type();
-    let (send_reply, ok_plan, err_plan) = if let Some((ok_ty, err_ty)) = return_type.as_result() {
-        let ok_tokens = ok_ty.to_token_stream();
-        let err_tokens = err_ty.to_token_stream();
-        (
-            quote! {
-                let wire_result: Result<#ok_tokens, #roam::RoamError<#err_tokens>> =
-                    result.map_err(#roam::RoamError::User);
-                let ret = #roam::Payload::outgoing(&wire_result);
-                reply.send_reply(#roam::RequestResponse {
-                    ret,
-                    channels: &[],
-                    metadata: Default::default(),
-                }).await.ok();
-            },
-            quote! { #roam::RpcPlan::for_type::<#ok_tokens>() },
-            quote! { #roam::RpcPlan::for_type::<#err_tokens>() },
-        )
-    } else {
-        let ty_tokens = return_type.to_token_stream();
-        (
-            quote! {
-                let wire_result: Result<#ty_tokens, #roam::RoamError> =
-                    Ok(result);
-                let ret = #roam::Payload::outgoing(&wire_result);
-                reply.send_reply(#roam::RequestResponse {
-                    ret,
-                    channels: &[],
-                    metadata: Default::default(),
-                }).await.ok();
-            },
-            quote! { #roam::RpcPlan::for_type::<#ty_tokens>() },
-            quote! { #roam::RpcPlan::for_type::<::core::convert::Infallible>() },
-        )
-    };
-
-    let _ = (ok_plan, err_plan, idx);
+    let _ = idx;
 
     quote! {
         if method_id == #descriptor_fn_name().methods[#idx].id {
@@ -395,8 +359,8 @@ fn generate_dispatch_arm(
                 Err(_) => return,
             };
             #destructure
-            let result = self.handler.#method_fn(#(#arg_names),*).await;
-            #send_reply
+            let sink_call = #roam::SinkCall::new(reply);
+            self.handler.#method_fn(sink_call, #(#arg_names),*).await;
             return;
         }
     }
@@ -492,14 +456,14 @@ fn generate_client_method(
         (
             ok_t.clone(),
             err_t.clone(),
-            quote! { Result<#ok_t, #roam::RoamError<#err_t>> },
+            quote! { Result<#roam::SelfRef<#roam::ResponseParts<'static, #ok_t>>, #roam::RoamError<#err_t>> },
         )
     } else {
         let t = return_type.to_token_stream();
         (
             t.clone(),
             quote! { ::core::convert::Infallible },
-            quote! { Result<#t, #roam::RoamError> },
+            quote! { Result<#roam::SelfRef<#roam::ResponseParts<'static, #t>>, #roam::RoamError> },
         )
     };
 
@@ -529,14 +493,17 @@ fn generate_client_method(
                 metadata: Default::default(),
             };
             let response = self.caller.call(req).await?;
-            let ret_bytes = match &response.ret {
-                #roam::Payload::Incoming(bytes) => bytes,
-                _ => return Err(#roam::RoamError::InvalidPayload),
-            };
-            let result: Result<#ok_ty, #roam::RoamError<#err_ty>> =
-                #roam::facet_postcard::from_slice_borrowed(ret_bytes)
-                    .map_err(|_| #roam::RoamError::InvalidPayload)?;
-            result
+            response.try_repack(|resp, _bytes| {
+                let ret_bytes = match &resp.ret {
+                    #roam::Payload::Incoming(bytes) => bytes,
+                    _ => return Err(#roam::RoamError::InvalidPayload),
+                };
+                let result: Result<#ok_ty, #roam::RoamError<#err_ty>> =
+                    #roam::facet_postcard::from_slice_borrowed(ret_bytes)
+                        .map_err(|_| #roam::RoamError::InvalidPayload)?;
+                let ret = result?;
+                Ok(#roam::ResponseParts { ret, metadata: resp.metadata })
+            })
         }
     }
 }

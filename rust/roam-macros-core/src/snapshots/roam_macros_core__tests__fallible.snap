@@ -40,15 +40,16 @@ pub fn calc_service_descriptor() -> &'static ::roam::session::ServiceDescriptor 
         }))
     })
 }
-pub trait Calc
+pub trait CalcServer
 where
     Self: Send + Sync,
 {
     fn div(
         &self,
+        call: impl ::roam::Call<f64, DivError>,
         a: f64,
         b: f64,
-    ) -> impl std::future::Future<Output = Result<f64, DivError>> + Send;
+    ) -> impl std::future::Future<Output = ()> + Send;
 }
 #[doc = r" Dispatcher for this service."]
 #[doc = r""]
@@ -60,7 +61,7 @@ pub struct CalcDispatcher<H> {
 }
 impl<H> CalcDispatcher<H>
 where
-    H: Calc + Clone + Send + Sync + 'static,
+    H: CalcServer + Clone + Send + Sync + 'static,
 {
     #[doc = r" Create a new dispatcher wrapping the given handler."]
     pub fn new(handler: H) -> Self {
@@ -69,7 +70,7 @@ where
 }
 impl<H, R> ::roam::Handler<R> for CalcDispatcher<H>
 where
-    H: Calc + Clone + Send + Sync + 'static,
+    H: CalcServer + Clone + Send + Sync + 'static,
     R: ::roam::ReplySink,
 {
     async fn handle(&self, call: ::roam::SelfRef<::roam::RequestCall<'static>>, reply: R) {
@@ -84,18 +85,8 @@ where
                 Err(_) => return,
             };
             let (a, b) = args;
-            let result = self.handler.div(a, b).await;
-            let wire_result: Result<f64, ::roam::RoamError<DivError>> =
-                result.map_err(::roam::RoamError::User);
-            let ret = ::roam::Payload::outgoing(&wire_result);
-            reply
-                .send_reply(::roam::RequestResponse {
-                    ret,
-                    channels: &[],
-                    metadata: Default::default(),
-                })
-                .await
-                .ok();
+            let sink_call = ::roam::SinkCall::new(reply);
+            self.handler.div(sink_call, a, b).await;
             return;
         }
     }
@@ -110,7 +101,12 @@ impl<C: ::roam::Caller> CalcClient<C> {
     pub fn new(caller: C) -> Self {
         Self { caller }
     }
-    pub async fn div(&self, a: f64, b: f64) -> Result<f64, ::roam::RoamError<DivError>> {
+    pub async fn div(
+        &self,
+        a: f64,
+        b: f64,
+    ) -> Result<::roam::SelfRef<::roam::ResponseParts<'static, f64>>, ::roam::RoamError<DivError>>
+    {
         static ARGS_PLAN_0: ::std::sync::OnceLock<&'static ::roam::RpcPlan> =
             ::std::sync::OnceLock::new();
         static OK_PLAN_0: ::std::sync::OnceLock<&'static ::roam::RpcPlan> =
@@ -130,14 +126,20 @@ impl<C: ::roam::Caller> CalcClient<C> {
             metadata: Default::default(),
         };
         let response = self.caller.call(req).await?;
-        let ret_bytes = match &response.ret {
-            ::roam::Payload::Incoming(bytes) => bytes,
-            _ => return Err(::roam::RoamError::InvalidPayload),
-        };
-        let result: Result<f64, ::roam::RoamError<DivError>> =
-            ::roam::facet_postcard::from_slice_borrowed(ret_bytes)
-                .map_err(|_| ::roam::RoamError::InvalidPayload)?;
-        result
+        response.try_repack(|resp, _bytes| {
+            let ret_bytes = match &resp.ret {
+                ::roam::Payload::Incoming(bytes) => bytes,
+                _ => return Err(::roam::RoamError::InvalidPayload),
+            };
+            let result: Result<f64, ::roam::RoamError<DivError>> =
+                ::roam::facet_postcard::from_slice_borrowed(ret_bytes)
+                    .map_err(|_| ::roam::RoamError::InvalidPayload)?;
+            let ret = result?;
+            Ok(::roam::ResponseParts {
+                ret,
+                metadata: resp.metadata,
+            })
+        })
     }
 }
 #[doc = r" Returns the service detail for codegen."]

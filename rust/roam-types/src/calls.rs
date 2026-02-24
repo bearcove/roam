@@ -1,4 +1,4 @@
-use crate::{RequestCall, RequestResponse, RoamError, SelfRef, TxError};
+use crate::{Metadata, RequestCall, RequestResponse, RoamError, SelfRef, TxError};
 
 // As a recap, a service defined like so:
 //
@@ -140,4 +140,59 @@ pub trait Handler<R: ReplySink>: Send + Sync + 'static {
     /// Dispatch an incoming call to the appropriate method implementation.
     #[allow(async_fn_in_trait)]
     async fn handle(&self, call: SelfRef<crate::RequestCall<'static>>, reply: R);
+}
+
+/// A decoded response value paired with its response metadata.
+///
+/// Returned by generated client methods. `Deref`s to `T` so existing
+/// field/method access works without changes; opt into metadata via
+/// `.metadata`.
+pub struct ResponseParts<'a, T> {
+    /// The decoded return value.
+    pub ret: T,
+    /// Metadata attached to the response by the server.
+    pub metadata: Metadata<'a>,
+}
+
+impl<'a, T> std::ops::Deref for ResponseParts<'a, T> {
+    type Target = T;
+    fn deref(&self) -> &T {
+        &self.ret
+    }
+}
+
+/// Concrete [`Call`] implementation backed by a [`ReplySink`].
+///
+/// Constructed by the dispatcher and handed to the server method.
+/// When the server calls [`Call::reply`], the result is serialized and
+/// sent through the sink.
+pub struct SinkCall<R: ReplySink> {
+    reply: R,
+}
+
+impl<R: ReplySink> SinkCall<R> {
+    pub fn new(reply: R) -> Self {
+        Self { reply }
+    }
+}
+
+impl<T, E, R> Call<T, E> for SinkCall<R>
+where
+    T: facet::Facet<'static>,
+    E: facet::Facet<'static>,
+    R: ReplySink,
+{
+    async fn reply(self, result: Result<T, E>) {
+        use crate::{Payload, RequestResponse};
+        let wire: Result<T, crate::RoamError<E>> = result.map_err(crate::RoamError::User);
+        let ret = Payload::outgoing(&wire);
+        self.reply
+            .send_reply(RequestResponse {
+                ret,
+                channels: &[],
+                metadata: Default::default(),
+            })
+            .await
+            .ok();
+    }
 }
