@@ -1,8 +1,6 @@
-use std::{
-    collections::BTreeMap,
-    pin::Pin,
-    sync::{Arc, Mutex},
-};
+use std::{collections::BTreeMap, pin::Pin, sync::Arc};
+
+use moire::sync::Mutex;
 
 use futures_util::StreamExt as _;
 use futures_util::stream::FuturesUnordered;
@@ -14,9 +12,7 @@ use roam_types::{
 
 use crate::session::{ConnectionHandle, ConnectionMessage, ConnectionSender};
 
-/// Owned response message, sent through a oneshot when a response arrives
-/// for an outgoing call. The caller unpacks the `SelfRef` on the other side.
-type ResponseSlot = tokio::sync::oneshot::Sender<SelfRef<RequestMessage<'static>>>;
+type ResponseSlot = moire::sync::oneshot::Sender<SelfRef<RequestMessage<'static>>>;
 
 /// A boxed, Send future representing an in-flight handler task.
 type HandlerFuture = Pin<Box<dyn std::future::Future<Output = ()> + Send>>;
@@ -64,7 +60,7 @@ impl Caller for DriverCaller {
 
         // Register the response slot before sending, so the driver can
         // route the response even if it arrives before we start awaiting.
-        let (tx, rx) = tokio::sync::oneshot::channel();
+        let (tx, rx) = moire::sync::oneshot::channel("driver.response");
         self.shared
             .pending_responses
             .lock()
@@ -129,8 +125,8 @@ impl<H: Handler<DriverReplySink>> Driver<H> {
             handle,
             handler: Arc::new(handler),
             shared: Arc::new(DriverShared {
-                pending_responses: Mutex::new(BTreeMap::new()),
-                request_ids: Mutex::new(IdAllocator::new(parity)),
+                pending_responses: Mutex::new("driver.pending_responses", BTreeMap::new()),
+                request_ids: Mutex::new("driver.request_ids", IdAllocator::new(parity)),
             }),
             channels: BTreeMap::new(),
         }

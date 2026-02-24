@@ -12,6 +12,10 @@ description = "Core implementations: ReliableLink, ReliableAcceptor, Session"
 [package.metadata."docs.rs"]
 rustdoc-args = ["--html-in-header", "arborium-header.html"]
 
+[features]
+default = []
+diagnostics = ["moire/diagnostics"]
+
 [dependencies]
 roam-types.workspace = true
 facet.workspace = true
@@ -21,6 +25,7 @@ facet-format.workspace = true
 facet-postcard.workspace = true
 futures-util.workspace = true
 tokio.workspace = true
+moire.workspace = true
 tracing.workspace = true
 smallvec.workspace = true
 getrandom.workspace = true

@@ -74,8 +74,8 @@ async fn echo_call_across_memory_link() {
         default_settings(Parity::Odd),
     );
     let mut server_driver = Driver::new(server_handle, EchoHandler, Parity::Even);
-    tokio::spawn(server_recv_loop);
-    tokio::spawn(async move { server_driver.run().await });
+    moire::task::spawn(server_recv_loop).named("server_recv_loop");
+    moire::task::spawn(async move { server_driver.run().await }).named("server_driver");
 
     // Set up client side.
     let (client_handle, client_recv_loop) = session_no_handshake(
@@ -85,8 +85,8 @@ async fn echo_call_across_memory_link() {
     );
     let mut client_driver = Driver::new(client_handle, NoopHandler, Parity::Odd);
     let caller = client_driver.caller();
-    tokio::spawn(client_recv_loop);
-    tokio::spawn(async move { client_driver.run().await });
+    moire::task::spawn(client_recv_loop).named("client_recv_loop");
+    moire::task::spawn(async move { client_driver.run().await }).named("client_driver");
 
     // Make a call: serialize a u32 as the args payload.
     let args_value: u32 = 42;

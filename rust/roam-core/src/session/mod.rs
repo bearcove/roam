@@ -1,11 +1,11 @@
 use std::{collections::BTreeMap, future::Future, pin::Pin, sync::Arc};
 
+use moire::sync::mpsc;
 use roam_types::{
     ChannelMessage, Conduit, ConduitRx, ConduitTx, ConduitTxPermit, ConnectionId,
     ConnectionSettings, Message, MessageFamily, MessagePayload, Metadata, Parity, RequestBody,
     RequestId, RequestMessage, RequestResponse, SelfRef, SessionRole,
 };
-use tokio::sync::mpsc;
 
 mod builders;
 pub use builders::*;
@@ -193,7 +193,8 @@ where
     let (conduit_tx, mut conduit_rx) = conduit.split();
 
     // Create the mpsc channel for routing incoming messages to the driver.
-    let (conn_tx, conn_rx) = mpsc::channel::<SelfRef<ConnectionMessage<'static>>>(64);
+    let (conn_tx, conn_rx) =
+        mpsc::channel::<SelfRef<ConnectionMessage<'static>>>("session.conn0", 64);
 
     // Build the session core (shared, for sending).
     let sess_core = Arc::new(SessionCore {

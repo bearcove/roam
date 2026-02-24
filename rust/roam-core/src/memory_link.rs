@@ -16,8 +16,8 @@ pub struct MemoryLink {
 ///
 /// Returns `(a, b)` where sending on `a` delivers to `b` and vice versa.
 pub fn memory_link_pair(buffer: usize) -> (MemoryLink, MemoryLink) {
-    let (tx_a, rx_b) = mpsc::channel(buffer);
-    let (tx_b, rx_a) = mpsc::channel(buffer);
+    let (tx_a, rx_b) = mpsc::channel("memory_link.a→b", buffer);
+    let (tx_b, rx_a) = mpsc::channel("memory_link.b→a", buffer);
 
     let a = MemoryLink { tx: tx_a, rx: rx_a };
     let b = MemoryLink { tx: tx_b, rx: rx_b };
