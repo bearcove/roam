@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, future::Future, pin::Pin, sync::Arc};
+use std::{collections::BTreeMap, pin::Pin, sync::Arc};
 
 use moire::sync::mpsc;
 use roam_types::{
@@ -29,6 +29,9 @@ pub struct Session<C: Conduit> {
     /// Our local parity - when opening connections we'll use that.
     // r[impl session.parity]
     parity: Parity,
+
+    /// Shared core (for sending) — also held by all ConnectionSenders.
+    sess_core: Arc<SessionCore>,
 
     /// Connection state (including inbound/outbound)
     conns: BTreeMap<ConnectionId, ConnectionSlot>,
@@ -72,9 +75,11 @@ enum ConnectionSlot {
 pub(crate) struct ConnectionSender {
     connection_id: ConnectionId,
     sess_core: Arc<SessionCore>,
+    failures: Arc<mpsc::UnboundedSender<(RequestId, &'static str)>>,
 }
 
 impl ConnectionSender {
+    /// Send an arbitrary connection message
     pub async fn send<'a>(&self, msg: ConnectionMessage<'a>) -> Result<(), ()> {
         let payload = match msg {
             ConnectionMessage::Request(r) => MessagePayload::RequestMessage(r),
@@ -87,6 +92,7 @@ impl ConnectionSender {
         self.sess_core.send(message).await.map_err(|_| ())
     }
 
+    /// Send a response specifically
     pub async fn send_response<'a>(
         &self,
         request_id: RequestId,
@@ -98,11 +104,18 @@ impl ConnectionSender {
         }))
         .await
     }
+
+    /// Mark a request as failed by removing any pending response slot.
+    /// Called when a send error occurs or no reply was sent.
+    pub fn mark_failure(&self, request_id: RequestId, reason: &'static str) {
+        let _ = self.failures.send((request_id, reason));
+    }
 }
 
 pub(crate) struct ConnectionHandle {
-    sender: ConnectionSender,
+    pub(crate) sender: ConnectionSender,
     rx: mpsc::Receiver<SelfRef<ConnectionMessage<'static>>>,
+    pub(crate) failures_rx: mpsc::UnboundedReceiver<(RequestId, &'static str)>,
 }
 
 pub(crate) enum ConnectionMessage<'payload> {
@@ -141,25 +154,193 @@ impl std::error::Error for SessionError {}
 impl<C> Session<C>
 where
     C: Conduit<Msg = MessageFamily>,
+    C::Tx: Send + Sync + 'static,
+    for<'p> <C::Tx as ConduitTx>::Permit<'p>: Send,
+    C::Rx: Send,
 {
-    fn pre_handshake(_tx: C::Tx, _rx: C::Rx) -> Self {
-        todo!()
+    fn pre_handshake(tx: C::Tx, rx: C::Rx) -> Self {
+        let sess_core = Arc::new(SessionCore { tx: Box::new(tx) });
+        Session {
+            tx: None, // owned by sess_core now
+            rx,
+            role: SessionRole::Initiator, // overwritten in establish_as_*
+            parity: Parity::Odd,          // overwritten in establish_as_*
+            sess_core,
+            conns: BTreeMap::new(),
+        }
     }
 
+    // r[impl session.handshake]
     async fn establish_as_initiator(
         &mut self,
-        _settings: ConnectionSettings,
-        _metadata: Metadata<'_>,
-    ) -> Result<mpsc::Receiver<SelfRef<RequestMessage<'static>>>, SessionError> {
-        todo!()
+        settings: ConnectionSettings,
+        metadata: Metadata<'_>,
+    ) -> Result<ConnectionHandle, SessionError> {
+        use roam_types::{Hello, MessagePayload};
+
+        self.role = SessionRole::Initiator;
+        self.parity = settings.parity;
+
+        // Send Hello
+        self.sess_core
+            .send(Message {
+                connection_id: ConnectionId::ROOT,
+                payload: MessagePayload::Hello(Hello {
+                    version: PROTOCOL_VERSION,
+                    connection_settings: settings,
+                    metadata,
+                }),
+            })
+            .await
+            .map_err(|_| SessionError::Protocol("failed to send Hello".into()))?;
+
+        // Receive HelloYourself
+        let peer_settings = match self.rx.recv().await {
+            Ok(Some(msg)) => match msg.into_inner().payload {
+                MessagePayload::HelloYourself(hy) => hy.connection_settings,
+                MessagePayload::ProtocolError(e) => {
+                    return Err(SessionError::Protocol(e.description.to_owned()));
+                }
+                _ => {
+                    return Err(SessionError::Protocol("expected HelloYourself".into()));
+                }
+            },
+            Ok(None) => {
+                return Err(SessionError::Protocol(
+                    "peer closed during handshake".into(),
+                ));
+            }
+            Err(e) => return Err(SessionError::Io(e)),
+        };
+
+        Ok(self.make_root_handle(settings, peer_settings))
     }
 
+    // r[impl session.handshake]
     async fn establish_as_acceptor(
         &mut self,
-        _settings: ConnectionSettings,
-        _metadata: Metadata<'_>,
-    ) -> Result<mpsc::Receiver<SelfRef<RequestMessage<'static>>>, SessionError> {
-        todo!()
+        settings: ConnectionSettings,
+        metadata: Metadata<'_>,
+    ) -> Result<ConnectionHandle, SessionError> {
+        use roam_types::{HelloYourself, MessagePayload};
+
+        self.role = SessionRole::Acceptor;
+
+        // Receive Hello
+        let peer_settings = match self.rx.recv().await {
+            Ok(Some(msg)) => match msg.into_inner().payload {
+                MessagePayload::Hello(h) => {
+                    if h.version != PROTOCOL_VERSION {
+                        return Err(SessionError::Protocol(format!(
+                            "version mismatch: got {}, expected {PROTOCOL_VERSION}",
+                            h.version
+                        )));
+                    }
+                    h.connection_settings
+                }
+                MessagePayload::ProtocolError(e) => {
+                    return Err(SessionError::Protocol(e.description.to_owned()));
+                }
+                _ => {
+                    return Err(SessionError::Protocol("expected Hello".into()));
+                }
+            },
+            Ok(None) => {
+                return Err(SessionError::Protocol(
+                    "peer closed during handshake".into(),
+                ));
+            }
+            Err(e) => return Err(SessionError::Io(e)),
+        };
+
+        // Acceptor parity is opposite of initiator
+        let our_settings = ConnectionSettings {
+            parity: peer_settings.parity.opposite(),
+            ..settings
+        };
+        self.parity = our_settings.parity;
+
+        // Send HelloYourself
+        self.sess_core
+            .send(Message {
+                connection_id: ConnectionId::ROOT,
+                payload: MessagePayload::HelloYourself(HelloYourself {
+                    connection_settings: our_settings,
+                    metadata,
+                }),
+            })
+            .await
+            .map_err(|_| SessionError::Protocol("failed to send HelloYourself".into()))?;
+
+        Ok(self.make_root_handle(our_settings, peer_settings))
+    }
+
+    fn make_root_handle(
+        &mut self,
+        local_settings: ConnectionSettings,
+        peer_settings: ConnectionSettings,
+    ) -> ConnectionHandle {
+        let (conn_tx, conn_rx) =
+            mpsc::channel::<SelfRef<ConnectionMessage<'static>>>("session.conn0", 64);
+        let (failures_tx, failures_rx) = mpsc::unbounded_channel("session.conn0.failures");
+
+        let sender = ConnectionSender {
+            connection_id: ConnectionId::ROOT,
+            sess_core: Arc::clone(&self.sess_core),
+            failures: Arc::new(failures_tx),
+        };
+
+        self.conns.insert(
+            ConnectionId::ROOT,
+            ConnectionSlot::Active(ConnectionState {
+                id: ConnectionId::ROOT,
+                local_settings,
+                peer_settings,
+                conn_tx,
+            }),
+        );
+
+        ConnectionHandle {
+            sender,
+            rx: conn_rx,
+            failures_rx,
+        }
+    }
+
+    /// Run the session recv loop: read from the conduit, demux by connection
+    /// ID, route to the appropriate connection's mpsc sender.
+    pub async fn run(&mut self) {
+        loop {
+            let msg = match self.rx.recv().await {
+                Ok(Some(msg)) => msg,
+                Ok(None) => break,
+                Err(_) => break,
+            };
+
+            let conn_id = msg.connection_id;
+
+            let conn_tx = match self.conns.get(&conn_id) {
+                Some(ConnectionSlot::Active(state)) => state.conn_tx.clone(),
+                _ => {
+                    // [TODO] handle ConnectionOpen and other control messages
+                    continue;
+                }
+            };
+
+            let conn_msg = msg.map(|m| match m.payload {
+                MessagePayload::RequestMessage(r) => ConnectionMessage::Request(r),
+                MessagePayload::ChannelMessage(c) => ConnectionMessage::Channel(c),
+                _ => {
+                    // [TODO] handle control messages
+                    panic!("unexpected control message on active connection");
+                }
+            });
+
+            if conn_tx.send(conn_msg).await.is_err() {
+                // Driver dropped — connection is done
+                self.conns.remove(&conn_id);
+            }
+        }
     }
 }
 
@@ -173,87 +354,7 @@ impl SessionCore {
     }
 }
 
-/// Create a session that skips the handshake entirely, assuming a single
-/// root connection (connection 0). Returns a ConnectionHandle for the
-/// root connection and a future that runs the session recv loop.
-///
-/// Both sides of a MemoryLink (or any conduit) can call this independently.
-pub(crate) fn session_no_handshake<C>(
-    conduit: C,
-    local_settings: ConnectionSettings,
-    peer_settings: ConnectionSettings,
-) -> (ConnectionHandle, impl Future<Output = ()>)
-where
-    C: Conduit<Msg = MessageFamily>,
-    C::Tx: Send + Sync,
-    for<'p> <C::Tx as ConduitTx>::Permit<'p>: Send,
-    C::Tx: 'static,
-    C::Rx: Send,
-{
-    let (conduit_tx, mut conduit_rx) = conduit.split();
-
-    // Create the mpsc channel for routing incoming messages to the driver.
-    let (conn_tx, conn_rx) =
-        mpsc::channel::<SelfRef<ConnectionMessage<'static>>>("session.conn0", 64);
-
-    // Build the session core (shared, for sending).
-    let sess_core = Arc::new(SessionCore {
-        tx: Box::new(conduit_tx),
-    });
-
-    // Build the connection handle for the root connection.
-    let handle = ConnectionHandle {
-        sender: ConnectionSender {
-            connection_id: ConnectionId::ROOT,
-            sess_core,
-        },
-        rx: conn_rx,
-    };
-
-    // The recv loop: read from the conduit, demux by connection ID, route
-    // to the appropriate connection's mpsc sender.
-    let recv_loop = async move {
-        // For now we only have connection 0. Store its sender.
-        let root_tx = conn_tx;
-
-        loop {
-            let msg = match conduit_rx.recv().await {
-                Ok(Some(msg)) => msg,
-                Ok(None) => break, // peer closed
-                Err(_) => break,   // conduit error
-            };
-
-            // Demux: peek at connection_id, then route.
-            let conn_id = msg.connection_id;
-
-            // For now, only connection 0 is supported.
-            if !conn_id.is_root() {
-                // [TODO] look up connection by ID, handle ConnectionOpen, etc.
-                todo!("Only root conn is supported right now")
-            }
-
-            // Map the SelfRef<Message> into a SelfRef<ConnectionMessage>.
-            let conn_msg = msg.map(|m| match m.payload {
-                MessagePayload::RequestMessage(r) => ConnectionMessage::Request(r),
-                MessagePayload::ChannelMessage(c) => ConnectionMessage::Channel(c),
-                _ => {
-                    // [TODO] handle control messages (Hello, ProtocolError, etc.)
-                    // For now, skip them.
-                    panic!("unexpected control message on connection 0");
-                }
-            });
-
-            if root_tx.send(conn_msg).await.is_err() {
-                // Driver dropped its receiver — connection is done.
-                break;
-            }
-        }
-    };
-
-    (handle, recv_loop)
-}
-
-type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
+type BoxFuture<'a, T> = Pin<Box<dyn std::future::Future<Output = T> + Send + 'a>>;
 
 pub trait DynConduitTx: Send + Sync {
     fn send_msg<'a>(&'a self, msg: Message<'a>) -> BoxFuture<'a, std::io::Result<()>>;

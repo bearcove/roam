@@ -1,9 +1,6 @@
-use moire::sync::mpsc;
-use roam_types::{
-    Conduit, ConnectionSettings, MessageFamily, Metadata, Parity, RequestMessage, SelfRef,
-};
+use roam_types::{Conduit, ConduitTx, ConnectionSettings, MessageFamily, Metadata, Parity};
 
-use super::{Session, SessionError};
+use super::{ConnectionHandle, Session, SessionError};
 
 // r[impl session.role]
 pub fn initiator<C>(conduit: C) -> SessionInitiatorBuilder<'static, C> {
@@ -53,18 +50,19 @@ impl<'a, C> SessionInitiatorBuilder<'a, C> {
         self
     }
 
-    pub async fn establish(
-        self,
-    ) -> Result<(Session<C>, mpsc::Receiver<SelfRef<RequestMessage<'static>>>), SessionError>
+    pub async fn establish(self) -> Result<(Session<C>, ConnectionHandle), SessionError>
     where
         C: Conduit<Msg = MessageFamily>,
+        C::Tx: Send + Sync + 'static,
+        for<'p> <C::Tx as ConduitTx>::Permit<'p>: Send,
+        C::Rx: Send,
     {
         let (tx, rx) = self.conduit.split();
         let mut session = Session::pre_handshake(tx, rx);
-        let req_rx = session
+        let handle = session
             .establish_as_initiator(self.root_settings, self.metadata)
             .await?;
-        Ok((session, req_rx))
+        Ok((session, handle))
     }
 }
 
@@ -79,7 +77,6 @@ impl<'a, C> SessionAcceptorBuilder<'a, C> {
         Self {
             conduit,
             root_settings: ConnectionSettings {
-                // will be overwritten to be the opposite of Hello
                 parity: Parity::Even,
                 max_concurrent_requests: 64,
             },
@@ -102,17 +99,18 @@ impl<'a, C> SessionAcceptorBuilder<'a, C> {
         self
     }
 
-    pub async fn establish(
-        self,
-    ) -> Result<(Session<C>, mpsc::Receiver<SelfRef<RequestMessage<'static>>>), SessionError>
+    pub async fn establish(self) -> Result<(Session<C>, ConnectionHandle), SessionError>
     where
         C: Conduit<Msg = MessageFamily>,
+        C::Tx: Send + Sync + 'static,
+        for<'p> <C::Tx as ConduitTx>::Permit<'p>: Send,
+        C::Rx: Send,
     {
         let (tx, rx) = self.conduit.split();
         let mut session = Session::pre_handshake(tx, rx);
-        let req_rx = session
+        let handle = session
             .establish_as_acceptor(self.root_settings, self.metadata)
             .await?;
-        Ok((session, req_rx))
+        Ok((session, handle))
     }
 }

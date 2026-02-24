@@ -36,13 +36,16 @@ pub struct DriverReplySink {
 }
 
 impl ReplySink for DriverReplySink {
-    async fn send_reply(mut self, response: RequestResponse<'_>) -> Result<(), TxError> {
-        self.sender
+    async fn send_reply(mut self, response: RequestResponse<'_>) {
+        if let Err(e) = self
+            .sender
             .take()
             .expect("unreachable: send_reply takes self by value")
             .send_response(self.request_id, response)
             .await
-            .map_err(|_| TxError::Transport("session closed".into()))
+        {
+            sender.mark_failure(self.request_id, "send_response failed")
+        }
     }
 }
 
@@ -50,24 +53,7 @@ impl ReplySink for DriverReplySink {
 impl Drop for DriverReplySink {
     fn drop(&mut self) {
         if let Some(sender) = self.sender.take() {
-            let request_id = self.request_id;
-            moire::task::spawn(
-                async move {
-                    let wire: Result<(), RoamError> = Err(RoamError::Cancelled);
-                    let ret = roam_types::Payload::outgoing(&wire);
-                    let _ = sender
-                        .send_response(
-                            request_id,
-                            RequestResponse {
-                                ret,
-                                channels: &[],
-                                metadata: Default::default(),
-                            },
-                        )
-                        .await;
-                }
-                .named("DriverReplySink::drop(cancelled)"),
-            );
+            sender.mark_failure(self.request_id, "no reply sent")
         }
     }
 }
@@ -191,6 +177,9 @@ impl<H: Handler<DriverReplySink>> Driver<H> {
                     }
                 }
                 Some(()) = in_flight.next() => {}
+                Some((req_id, _reason)) = self.handle.failures_rx.recv() => {
+                    self.shared.pending_responses.lock().remove(&req_id);
+                }
             }
         }
     }
