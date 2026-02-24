@@ -58,4 +58,5 @@ impl std::ops::BitAndAssign for MetadataFlags {
 }
 
 /// Metadata entry: (key, value, flags).
+/// [FIXME] make those all borrowed because we can now!
 pub type Metadata = Vec<(String, MetadataValue, MetadataFlags)>;

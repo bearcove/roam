@@ -232,48 +232,51 @@ structstruck::strike! {
         // RPC
         // ========================================================================
 
-        /// Perform a request (or a "call")
-        Request(pub struct Request<'payload> {
-            /// Unique (connection-wide) request identifier, caller-allocated (as per parity)
-            pub request_id: RequestId,
+        RequestMessage(
+            pub struct RequestMessage<'payload> {
+                /// Unique (connection-wide) request identifier, caller-allocated (as per parity)
+                pub id: RequestId,
 
-            /// Unique method identifier, hash of fully qualified name + args etc.
-            pub method_id: MethodId,
+                /// Request paylaod
+                pub body:
+                    #[repr(u8)]
+                    pub enum Request<'payload> {
+                        /// Perform a request (or a "call")
+                        RequestCall(pub struct RequestCall<'payload> {
+                            /// Unique method identifier, hash of fully qualified name + args etc.
+                            pub method_id: MethodId,
 
-            /// Argument tuple
-            pub args: Payload<'payload>,
+                            /// Argument tuple
+                            pub args: Payload<'payload>,
 
-            /// Channel identifiers, allocated by the caller, that are passed as part
-            /// of the arguments.
-            pub channels: Vec<ChannelId>,
+                            /// Channel identifiers, allocated by the caller, that are passed as part
+                            /// of the arguments.
+                            pub channels: &'payload [ChannelId],
 
-            /// Metadata associated with this call
-            pub metadata: Metadata,
-        }),
+                            /// Metadata associated with this call
+                            pub metadata: Metadata,
+                        }),
 
-        /// Respond to a request
-        Response(struct Response<'payload> {
-            /// Request ID of the request being responded to.
-            pub request_id: RequestId,
+                        /// Respond to a request
+                        RequestResponse(struct RequestResponse<'payload> {
+                            /// Return value (Result<T, RoamError<E>>, where E could be Infallible depending on signature)
+                            pub ret: Payload<'payload>,
 
-            /// Channel IDs for streams in the response, in return type declaration order.
-            pub channels: Vec<ChannelId>,
+                            /// Channel IDs for streams in the response, in return type declaration order.
+                            pub channels: &'payload [ChannelId],
 
-            /// Return value
-            pub payload: Payload<'payload>,
+                            /// Arbitrary response metadata
+                            pub metadata: Metadata,
+                        }),
 
-            /// Arbitrary response metadata
-            pub metadata: Metadata,
-        }),
-
-        /// Cancel processing of a request.
-        CancelRequest(struct CancelRequest {
-            /// Request ID of the request being canceled.
-            pub request_id: RequestId,
-
-            /// Arbitrary cancel metadata
-            pub metadata: Metadata,
-        }),
+                        /// Cancel processing of a request.
+                        RequestCancel(struct RequestCancel {
+                            /// Arbitrary cancel metadata
+                            pub metadata: Metadata,
+                        }),
+                    },
+            }
+        ),
 
         // ========================================================================
         // Channels
@@ -285,8 +288,8 @@ structstruck::strike! {
             /// Channel ID (unique per-connection) for the channel to send data on.
             pub channel_id: ChannelId,
 
-            /// Payload to send on the channel.
-            pub payload: Payload<'payload>,
+            /// The item itself
+            pub item: Payload<'payload>,
         }),
 
         /// Close a channel — sent by the sender of the channel when they're gracefully done
