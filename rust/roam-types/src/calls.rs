@@ -106,19 +106,23 @@ pub trait Call<T, E> {
 /// If the `ReplySink` is dropped without `send_reply` being called, the caller
 /// will automatically receive a [`crate::RoamError::Cancelled`] error.
 pub trait ReplySink: Send + Sync + 'static {
-    /// Send the response, awaiting until the transport is ready.
+    /// Send the response, consuming the sink.
     ///
-    /// Successful return means the response has been serialized and committed
-    /// to the link's write buffer.
+    /// Takes `self` by value: the compiler enforces exactly-once semantics.
+    /// If the sink is dropped without calling this, the `Drop` impl sends
+    /// `RoamError::Cancelled` to the caller.
     #[allow(async_fn_in_trait)]
-    async fn send_reply<'a>(&self, response: RequestResponse<'a>) -> Result<(), TxError>;
+    async fn send_reply(self, response: RequestResponse<'_>) -> Result<(), TxError>;
 
-    /// Send a protocol-level error back to the caller.
+    /// Send a protocol-level error back to the caller, consuming the sink.
     ///
     /// Uses `Result::<(), RoamError>::Err(err)` — valid for any `Result<T, RoamError<E>>`
     /// on the caller side since postcard's `Err` encoding is independent of `T`.
     #[allow(async_fn_in_trait)]
-    async fn send_error(&self, err: RoamError) {
+    async fn send_error(self, err: RoamError)
+    where
+        Self: Sized,
+    {
         use crate::{Payload, RequestResponse};
         let wire: Result<(), RoamError> = Err(err);
         let ret = Payload::outgoing(&wire);

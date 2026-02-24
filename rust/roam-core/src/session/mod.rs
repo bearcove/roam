@@ -229,7 +229,7 @@ where
             // For now, only connection 0 is supported.
             if !conn_id.is_root() {
                 // [TODO] look up connection by ID, handle ConnectionOpen, etc.
-                continue;
+                todo!("Only root conn is supported right now")
             }
 
             // Map the SelfRef<Message> into a SelfRef<ConnectionMessage>.

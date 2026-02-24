@@ -1,3 +1,4 @@
+use moire::task::FutureExt;
 use roam_types::{
     Caller, ConnectionSettings, Handler, MessageFamily, MethodId, Parity, Payload, ReplySink,
     RequestCall, RequestResponse, SelfRef,
@@ -74,8 +75,8 @@ async fn echo_call_across_memory_link() {
         default_settings(Parity::Odd),
     );
     let mut server_driver = Driver::new(server_handle, EchoHandler, Parity::Even);
-    moire::task::spawn(server_recv_loop).named("server_recv_loop");
-    moire::task::spawn(async move { server_driver.run().await }).named("server_driver");
+    moire::task::spawn(server_recv_loop.named("server_recv_loop"));
+    moire::task::spawn(async move { server_driver.run().await }.named("server_driver"));
 
     // Set up client side.
     let (client_handle, client_recv_loop) = session_no_handshake(
@@ -85,8 +86,8 @@ async fn echo_call_across_memory_link() {
     );
     let mut client_driver = Driver::new(client_handle, NoopHandler, Parity::Odd);
     let caller = client_driver.caller();
-    moire::task::spawn(client_recv_loop).named("client_recv_loop");
-    moire::task::spawn(async move { client_driver.run().await }).named("client_driver");
+    moire::task::spawn(client_recv_loop.named("client_recv_loop"));
+    moire::task::spawn(async move { client_driver.run().await }.named("client_driver"));
 
     // Make a call: serialize a u32 as the args payload.
     let args_value: u32 = 42;

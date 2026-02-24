@@ -25,19 +25,50 @@ struct DriverShared {
 }
 
 /// Concrete `ReplySink` implementation for the driver.
-/// Sends a response back through the connection's sender.
-// [TODO] Drop impl: if send_reply was never called, send RoamError::Cancelled
+///
+/// If dropped without `send_reply` being called, automatically sends
+/// `RoamError::Cancelled` to the caller. This guarantees that every
+/// request receives exactly one response (`rpc.response.one-per-request`),
+/// even if the handler panics or forgets to reply.
 pub struct DriverReplySink {
-    sender: ConnectionSender,
+    sender: Option<ConnectionSender>,
     request_id: RequestId,
 }
 
 impl ReplySink for DriverReplySink {
-    async fn send_reply<'a>(&self, response: RequestResponse<'a>) -> Result<(), TxError> {
+    async fn send_reply(mut self, response: RequestResponse<'_>) -> Result<(), TxError> {
         self.sender
+            .take()
+            .expect("unreachable: send_reply takes self by value")
             .send_response(self.request_id, response)
             .await
             .map_err(|_| TxError::Transport("session closed".into()))
+    }
+}
+
+// r[impl rpc.response.one-per-request]
+impl Drop for DriverReplySink {
+    fn drop(&mut self) {
+        if let Some(sender) = self.sender.take() {
+            let request_id = self.request_id;
+            moire::task::spawn(
+                async move {
+                    let wire: Result<(), RoamError> = Err(RoamError::Cancelled);
+                    let ret = roam_types::Payload::outgoing(&wire);
+                    let _ = sender
+                        .send_response(
+                            request_id,
+                            RequestResponse {
+                                ret,
+                                channels: &[],
+                                metadata: Default::default(),
+                            },
+                        )
+                        .await;
+                }
+                .named("DriverReplySink::drop(cancelled)"),
+            );
+        }
     }
 }
 
@@ -190,7 +221,7 @@ impl<H: Handler<DriverReplySink>> Driver<H> {
         if is_call {
             // r[impl rpc.request]
             let reply = DriverReplySink {
-                sender: self.handle.sender().clone(),
+                sender: Some(self.handle.sender().clone()),
                 request_id: req_id,
             };
             let call = msg.map(|m| match m.body {
