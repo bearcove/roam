@@ -159,47 +159,10 @@ where
         };
 
         let shape = self.recv_shape;
-        SelfRef::try_new(backing, |bytes| {
-            deserialize_with_shape::<F::Msg<'static>>(shape, bytes)
-        })
-        .map(Some)
+        crate::deserialize_postcard::<F::Msg<'static>>(backing, shape)
+            .map_err(BareConduitError::Decode)
+            .map(Some)
     }
-}
-
-/// Deserialize bytes into T using a shape (plan is cached transparently).
-///
-/// Uses `Partial::from_raw_with_shape` + `FormatDeserializer::deserialize_into`
-/// for stack-allocated, plan-cached deserialization.
-fn deserialize_with_shape<T: 'static>(
-    shape: &'static Shape,
-    bytes: &[u8],
-) -> Result<T, BareConduitError> {
-    use facet_format::{FormatDeserializer, MetaSource};
-    use facet_postcard::PostcardParser;
-    use facet_reflect::Partial;
-
-    let mut value = std::mem::MaybeUninit::<T>::uninit();
-    let ptr = facet_core::PtrUninit::new(value.as_mut_ptr().cast::<u8>());
-
-    // SAFETY: ptr points to valid, aligned, properly-sized memory for T.
-    // shape comes from F::shape(), set at BareConduit construction time.
-    #[allow(unsafe_code)]
-    let partial: Partial<'_, false> = unsafe { Partial::from_raw_with_shape(ptr, shape) }
-        .map_err(|e| BareConduitError::Decode(e.into()))?;
-
-    let mut parser = PostcardParser::new(bytes);
-    let mut deserializer = FormatDeserializer::new_owned(&mut parser);
-    let partial = deserializer
-        .deserialize_into(partial, MetaSource::FromEvents)
-        .map_err(BareConduitError::Decode)?;
-
-    partial
-        .finish_in_place()
-        .map_err(|e| BareConduitError::Decode(e.into()))?;
-
-    // SAFETY: finish_in_place succeeded, so value is fully initialized.
-    #[allow(unsafe_code)]
-    Ok(unsafe { value.assume_init() })
 }
 
 // ---------------------------------------------------------------------------

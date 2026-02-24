@@ -557,7 +557,8 @@ where
             // Phase 2: deserialize the frame.
             let frame_shape = self.frame_shape;
             let frame: SelfRef<Frame<F::Msg<'static>>> =
-                SelfRef::try_new(backing, |bytes| deserialize_frame(frame_shape, bytes))?;
+                crate::deserialize_postcard(backing, frame_shape)
+                    .map_err(StableConduitError::Decode)?;
 
             // Phase 3: update shared state; skip duplicates.
             // r[impl stable.seq.monotonic]
@@ -583,37 +584,6 @@ where
             return Ok(Some(frame.map(|f| f.item)));
         }
     }
-}
-
-fn deserialize_frame<T: 'static>(
-    shape: &'static Shape,
-    bytes: &[u8],
-) -> Result<Frame<T>, StableConduitError> {
-    use facet_format::{FormatDeserializer, MetaSource};
-    use facet_postcard::PostcardParser;
-    use facet_reflect::Partial;
-
-    let mut value = std::mem::MaybeUninit::<Frame<T>>::uninit();
-    let ptr = facet_core::PtrUninit::new(value.as_mut_ptr().cast::<u8>());
-
-    // SAFETY: ptr points to valid, aligned, properly-sized memory for Frame<T>.
-    // shape is Frame<T>::SHAPE, set at StableConduit construction time.
-    #[allow(unsafe_code)]
-    let partial: Partial<'_, false> = unsafe { Partial::from_raw_with_shape(ptr, shape) }
-        .map_err(|e| StableConduitError::Decode(e.into()))?;
-
-    let mut parser = PostcardParser::new(bytes);
-    let mut deserializer = FormatDeserializer::new_owned(&mut parser);
-    let partial = deserializer
-        .deserialize_into(partial, MetaSource::FromEvents)
-        .map_err(StableConduitError::Decode)?;
-
-    partial
-        .finish_in_place()
-        .map_err(|e| StableConduitError::Decode(e.into()))?;
-
-    #[allow(unsafe_code)]
-    Ok(unsafe { value.assume_init() })
 }
 
 // ---------------------------------------------------------------------------
@@ -706,7 +676,7 @@ mod tests {
 
     // Decode a raw frame payload into (seq, ack_max, item).
     fn decode_frame(bytes: &[u8]) -> (u32, Option<u32>, String) {
-        let frame: Frame<String> = super::deserialize_frame(Frame::<String>::SHAPE, bytes).unwrap();
+        let frame: Frame<String> = facet_postcard::from_slice(bytes).unwrap();
         (
             frame.seq.0,
             frame.ack.map(|a| a.max_delivered.0),
