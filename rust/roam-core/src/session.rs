@@ -190,7 +190,10 @@ where
         }
         if hello.version != PROTOCOL_VERSION {
             return Err(self
-                .protocol_violation(&format!("unsupported Hello version {}", hello.version))
+                .protocol_violation(&format!(
+                    "unsupported Hello version {} (expected {})",
+                    hello.version, PROTOCOL_VERSION
+                ))
                 .await);
         }
 
@@ -303,13 +306,13 @@ where
         if !id_matches_parity(conn_id.0, &self.local_session_parity) {
             return Err(SessionError::InvalidState(format!(
                 "connection id {} does not match local session parity {:?}",
-                conn_id.0, self.local_session_parity
+                conn_id, self.local_session_parity
             )));
         }
         if self.slots.contains_key(&conn_id) {
             return Err(SessionError::InvalidState(format!(
                 "connection id {} already in use",
-                conn_id.0
+                conn_id
             )));
         }
 

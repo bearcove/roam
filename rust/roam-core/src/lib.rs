@@ -21,6 +21,9 @@ pub use memory_link::*;
 mod session;
 pub use session::*;
 
+mod driver;
+pub use driver::*;
+
 use facet_format::{FormatDeserializer, MetaSource};
 use facet_postcard::PostcardParser;
 use facet_reflect::Partial;
