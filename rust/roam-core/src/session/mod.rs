@@ -14,7 +14,7 @@ pub use builders::*;
 /// Current roam session protocol version.
 pub const PROTOCOL_VERSION: u32 = 7;
 
-/// Session state machine,
+/// Session state machine.
 // r[impl session]
 pub struct Session<C: Conduit> {
     /// Conduit sender, torn down on protocol error
@@ -47,8 +47,8 @@ pub struct ConnectionState {
     /// The peer's settings
     pub peer_settings: ConnectionSettings,
 
-    /// Sender for routing incoming request messages to the per-connection task.
-    pub req_tx: mpsc::Sender<SelfRef<RequestMessage<'static>>>,
+    /// Sender for routing incoming messages to the per-connection driver task.
+    conn_tx: mpsc::Sender<SelfRef<ConnectionMessage<'static>>>,
 }
 
 #[derive(Debug, Clone)]
@@ -165,13 +165,91 @@ where
 
 pub(crate) struct SessionCore {
     tx: Box<dyn DynConduitTx>,
-    conns: BTreeMap<ConnectionId, ConnectionSlot>,
 }
 
 impl SessionCore {
     pub(crate) async fn send<'a>(&self, msg: Message<'a>) -> Result<(), ()> {
         self.tx.send_msg(msg).await.map_err(|_| ())
     }
+}
+
+/// Create a session that skips the handshake entirely, assuming a single
+/// root connection (connection 0). Returns a ConnectionHandle for the
+/// root connection and a future that runs the session recv loop.
+///
+/// Both sides of a MemoryLink (or any conduit) can call this independently.
+pub(crate) fn session_no_handshake<C>(
+    conduit: C,
+    local_settings: ConnectionSettings,
+    peer_settings: ConnectionSettings,
+) -> (ConnectionHandle, impl Future<Output = ()>)
+where
+    C: Conduit<Msg = MessageFamily>,
+    C::Tx: Send + Sync,
+    for<'p> <C::Tx as ConduitTx>::Permit<'p>: Send,
+    C::Tx: 'static,
+    C::Rx: Send,
+{
+    let (conduit_tx, mut conduit_rx) = conduit.split();
+
+    // Create the mpsc channel for routing incoming messages to the driver.
+    let (conn_tx, conn_rx) = mpsc::channel::<SelfRef<ConnectionMessage<'static>>>(64);
+
+    // Build the session core (shared, for sending).
+    let sess_core = Arc::new(SessionCore {
+        tx: Box::new(conduit_tx),
+    });
+
+    // Build the connection handle for the root connection.
+    let handle = ConnectionHandle {
+        sender: ConnectionSender {
+            connection_id: ConnectionId::ROOT,
+            sess_core,
+        },
+        rx: conn_rx,
+    };
+
+    // The recv loop: read from the conduit, demux by connection ID, route
+    // to the appropriate connection's mpsc sender.
+    let recv_loop = async move {
+        // For now we only have connection 0. Store its sender.
+        let root_tx = conn_tx;
+
+        loop {
+            let msg = match conduit_rx.recv().await {
+                Ok(Some(msg)) => msg,
+                Ok(None) => break, // peer closed
+                Err(_) => break,   // conduit error
+            };
+
+            // Demux: peek at connection_id, then route.
+            let conn_id = msg.connection_id;
+
+            // For now, only connection 0 is supported.
+            if !conn_id.is_root() {
+                // [TODO] look up connection by ID, handle ConnectionOpen, etc.
+                continue;
+            }
+
+            // Map the SelfRef<Message> into a SelfRef<ConnectionMessage>.
+            let conn_msg = msg.map(|m| match m.payload {
+                MessagePayload::RequestMessage(r) => ConnectionMessage::Request(r),
+                MessagePayload::ChannelMessage(c) => ConnectionMessage::Channel(c),
+                _ => {
+                    // [TODO] handle control messages (Hello, ProtocolError, etc.)
+                    // For now, skip them.
+                    panic!("unexpected control message on connection 0");
+                }
+            });
+
+            if root_tx.send(conn_msg).await.is_err() {
+                // Driver dropped its receiver — connection is done.
+                break;
+            }
+        }
+    };
+
+    (handle, recv_loop)
 }
 
 type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
