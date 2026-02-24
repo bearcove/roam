@@ -12,10 +12,5 @@ impl<C> Driver<C>
 where
     C: Conduit<Msg = MessageFamily>,
 {
-    async fn work(self) {
-        loop {
-            let ev = self.session.recv_event().await;
-            match ev {}
-        }
-    }
+    async fn work(self) {}
 }
