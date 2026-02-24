@@ -289,6 +289,10 @@ impl<'payload> Payload<'payload> {
     // ps: as_incoming_bytes was a bad idea. it's not here anymore.
 }
 
+// SAFETY: The pointer in `Outgoing` is valid for `'payload` and the caller
+// guarantees the pointee outlives any use across threads.
+unsafe impl<'payload> Send for Payload<'payload> {}
+
 /// Adapter that bridges [`Payload`] through the opaque field contract.
 pub struct PayloadAdapter;
 

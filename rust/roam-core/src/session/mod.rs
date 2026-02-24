@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, sync::Arc};
+use std::{collections::BTreeMap, future::Future, pin::Pin, sync::Arc};
 
 use facet::Facet;
 use roam_types::{
@@ -103,16 +103,38 @@ impl<C> Session<C>
 where
     C: Conduit<Msg = MessageFamily>,
 {
-    async fn establish(conduit: C) -> () {}
+    async fn establish(conduit: C) -> () {
+        todo!("should establish a connection")
+    }
 }
 
 struct SessionCore {
+    tx: Box<dyn DynConduitTx>,
     conns: BTreeMap<ConnectionId, ConnectionSlot>,
 }
 
 impl SessionCore {
-    async fn send<'a>(&self, msg: Message<'a>) -> Result<(), ProtocolError> {
-        todo!()
+    async fn send<'a>(&self, msg: Message<'a>) -> Result<(), ()> {
+        self.tx.send_msg(msg).await.map_err(|_| ())
+    }
+}
+
+type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
+
+pub trait DynConduitTx: Send + Sync {
+    fn send_msg<'a>(&'a self, msg: Message<'a>) -> BoxFuture<'a, std::io::Result<()>>;
+}
+
+impl<T> DynConduitTx for T
+where
+    T: ConduitTx<Msg = MessageFamily> + Send + Sync,
+    for<'p> <T as ConduitTx>::Permit<'p>: Send,
+{
+    fn send_msg<'a>(&'a self, msg: Message<'a>) -> BoxFuture<'a, std::io::Result<()>> {
+        Box::pin(async move {
+            let permit = self.reserve().await?;
+            permit.send(msg).map_err(|e| std::io::Error::other(e))
+        })
     }
 }
 

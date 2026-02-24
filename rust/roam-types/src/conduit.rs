@@ -1,5 +1,7 @@
 #![allow(async_fn_in_trait)]
 
+use std::future::Future;
+
 use facet::Facet;
 use facet_core::Shape;
 
@@ -51,7 +53,7 @@ pub trait Conduit {
 // r[impl conduit.permit]
 pub trait ConduitTx {
     type Msg: MsgFamily;
-    type Permit<'a>: for<'m> ConduitTxPermit<Msg = Self::Msg>
+    type Permit<'a>: for<'m> ConduitTxPermit<Msg = Self::Msg> + Send
     where
         Self: 'a;
 
@@ -62,7 +64,7 @@ pub trait ConduitTx {
     /// - Flow control from the peer
     ///
     /// Dropping the permit without sending releases the reservation.
-    async fn reserve(&self) -> std::io::Result<Self::Permit<'_>>;
+    fn reserve(&self) -> impl Future<Output = std::io::Result<Self::Permit<'_>>> + Send + '_;
 
     /// Graceful close of the outbound direction.
     async fn close(self) -> std::io::Result<()>
