@@ -1,7 +1,5 @@
 use facet::{Facet, Shape};
 
-use crate::RpcPlan;
-
 /// Static descriptor for a roam RPC service.
 ///
 /// Contains the service name and all method descriptors. Built once per service
@@ -26,8 +24,7 @@ impl ServiceDescriptor {
 
 /// Static descriptor for a single RPC method.
 ///
-/// Contains all metadata and precomputed plans needed for dispatching
-/// and calling this method, eliminating the need for per-method OnceLock statics.
+/// Contains static metadata needed for dispatching and calling this method.
 pub struct MethodDescriptor {
     /// Method ID (hash of service name, method name, arg shapes, return shape).
     pub id: MethodId,
@@ -43,13 +40,6 @@ pub struct MethodDescriptor {
 
     /// Return type shape.
     pub return_shape: &'static Shape,
-
-    /// Precomputed plan for the args tuple type.
-    pub args_plan: &'static RpcPlan,
-
-    /// Precomputed plan for the full return type: `Result<T, RoamError<E>>`.
-    /// For infallible methods, `E` is `Infallible` so this is `Result<T, RoamError>`.
-    pub ret_plan: &'static RpcPlan,
 
     /// Documentation string, if any.
     pub doc: Option<&'static str>,

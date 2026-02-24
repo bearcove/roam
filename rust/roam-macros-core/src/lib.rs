@@ -153,31 +153,9 @@ fn generate_service_descriptor_fn(parsed: &ServiceTrait, roam: &TokenStream2) ->
                 quote! { &[#(#arg_shapes_for_id),*] }
             };
 
-            // Build arg types tuple for args_plan
-            let arg_types: Vec<TokenStream2> =
-                m.args().map(|arg| arg.ty.to_token_stream()).collect();
-            let tuple_type = if arg_types.is_empty() {
-                quote! { () }
-            } else if arg_types.len() == 1 {
-                let t = &arg_types[0];
-                quote! { (#t,) }
-            } else {
-                quote! { (#(#arg_types),*) }
-            };
-
             // Return type
             let return_type = m.return_type();
             let return_ty_tokens = return_type.to_token_stream();
-
-            // ret_plan type: Result<T, RoamError<E>> or Result<T, RoamError> for infallible
-            let ret_plan_ty = if let Some((ok_ty, err_ty)) = return_type.as_result() {
-                let ok = ok_ty.to_token_stream();
-                let err = err_ty.to_token_stream();
-                quote! { Result<#ok, #roam::RoamError<#err>> }
-            } else {
-                let ty = return_type.to_token_stream();
-                quote! { Result<#ty, #roam::RoamError> }
-            };
 
             let method_doc_expr = match m.doc() {
                 Some(d) => quote! { Some(#d) },
@@ -196,8 +174,6 @@ fn generate_service_descriptor_fn(parsed: &ServiceTrait, roam: &TokenStream2) ->
                     method_name: #method_name_str,
                     args: #args_expr,
                     return_shape: <#return_ty_tokens as #roam::facet::Facet>::SHAPE,
-                    args_plan: #roam::rpc_plan::<#tuple_type>(),
-                    ret_plan: #roam::rpc_plan::<#ret_plan_ty>(),
                     doc: #method_doc_expr,
                 }))
             }

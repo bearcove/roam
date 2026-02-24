@@ -1,5 +1,7 @@
 use facet::{DeclId, Facet, Shape};
 use facet_path::{Path, walk_shape};
+use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock};
 
 /// Precomputed plan for an RPC type (args, response, or error).
 ///
@@ -65,6 +67,50 @@ impl RpcPlan {
     {
         // SAFETY: T::SHAPE comes from a Facet implementation
         unsafe { Self::from_shape::<Tx, Rx>(T::SHAPE) }
+    }
+
+    /// Return a process-global cached plan for a shape + channel marker pair.
+    ///
+    /// This is transparent caching: callers ask for a plan when needed and
+    /// receive a stable shared reference.
+    #[allow(unsafe_code)]
+    pub fn for_shape_cached<Tx, Rx>(shape: &'static Shape) -> &'static Self
+    where
+        Tx: Facet<'static>,
+        Rx: Facet<'static>,
+    {
+        type CacheKey = (usize, usize, usize);
+
+        static CACHE: OnceLock<Mutex<HashMap<CacheKey, &'static RpcPlan>>> = OnceLock::new();
+        let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+
+        let key = (
+            shape as *const Shape as usize,
+            Tx::SHAPE as *const Shape as usize,
+            Rx::SHAPE as *const Shape as usize,
+        );
+
+        let mut guard = cache
+            .lock()
+            .expect("rpc plan cache mutex should not be poisoned");
+        if let Some(plan) = guard.get(&key) {
+            return plan;
+        }
+
+        // SAFETY: `shape` and marker shapes come from `Facet` impls.
+        let plan = Box::leak(Box::new(unsafe { Self::from_shape::<Tx, Rx>(shape) }));
+        guard.insert(key, plan);
+        plan
+    }
+
+    /// Return a process-global cached plan for a concrete type.
+    pub fn for_type_cached<T, Tx, Rx>() -> &'static Self
+    where
+        T: Facet<'static>,
+        Tx: Facet<'static>,
+        Rx: Facet<'static>,
+    {
+        Self::for_shape_cached::<Tx, Rx>(T::SHAPE)
     }
 }
 
