@@ -2,7 +2,7 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 
 use facet::Facet;
-use facet_reflect::TypePlanCore;
+use facet_core::Shape;
 use roam_types::{
     Backing, Conduit, ConduitRx, ConduitTx, ConduitTxPermit, Link, LinkRx, LinkTx, LinkTxPermit,
     RpcPlan, SelfRef, WriteSlot,
@@ -73,7 +73,7 @@ pub trait LinkSource: Send + 'static {
 // r[impl stable]
 pub struct StableConduit<T: 'static, LS: LinkSource> {
     inner: Arc<tokio::sync::Mutex<Inner<LS>>>,
-    frame_plan: Arc<TypePlanCore>,
+    frame_shape: &'static Shape,
     _phantom: PhantomData<fn(T) -> T>,
 }
 
@@ -102,10 +102,6 @@ impl<T: Facet<'static> + 'static, LS: LinkSource> StableConduit<T, LS> {
             T::SHAPE,
         );
 
-        let frame_plan = facet_reflect::TypePlan::<Frame<T>>::build()
-            .map_err(|e| StableConduitError::Setup(e.to_string()))?
-            .core();
-
         let attachment = source.next_link().await.map_err(StableConduitError::Io)?;
         let (link_tx, mut link_rx) = attachment.link.split();
 
@@ -126,7 +122,7 @@ impl<T: Facet<'static> + 'static, LS: LinkSource> StableConduit<T, LS> {
 
         Ok(Self {
             inner: Arc::new(tokio::sync::Mutex::new(inner)),
-            frame_plan,
+            frame_shape: Frame::<T>::SHAPE,
             _phantom: PhantomData,
         })
     }
@@ -286,7 +282,7 @@ where
             },
             StableConduitRx {
                 inner: Arc::clone(&self.inner),
-                frame_plan: self.frame_plan,
+                frame_shape: self.frame_shape,
                 _phantom: PhantomData,
             },
         )
@@ -414,7 +410,7 @@ impl<T: Facet<'static> + 'static, LS: LinkSource> ConduitTxPermit
 
 pub struct StableConduitRx<T: 'static, LS: LinkSource> {
     inner: Arc<tokio::sync::Mutex<Inner<LS>>>,
-    frame_plan: Arc<TypePlanCore>,
+    frame_shape: &'static Shape,
     _phantom: PhantomData<fn() -> T>,
 }
 
@@ -446,9 +442,9 @@ where
             };
 
             // Phase 2: deserialize the frame.
-            let frame_plan = Arc::clone(&self.frame_plan);
+            let frame_shape = self.frame_shape;
             let frame: SelfRef<Frame<T>> =
-                SelfRef::try_new(backing, |bytes| deserialize_frame(&frame_plan, bytes))?;
+                SelfRef::try_new(backing, |bytes| deserialize_frame(frame_shape, bytes))?;
 
             // Phase 3: update shared state; skip duplicates.
             // r[impl stable.seq.monotonic]
@@ -477,7 +473,7 @@ where
 }
 
 fn deserialize_frame<T: 'static>(
-    plan: &Arc<TypePlanCore>,
+    shape: &'static Shape,
     bytes: &[u8],
 ) -> Result<Frame<T>, StableConduitError> {
     use facet_format::{FormatDeserializer, MetaSource};
@@ -486,10 +482,11 @@ fn deserialize_frame<T: 'static>(
 
     let mut value = std::mem::MaybeUninit::<Frame<T>>::uninit();
     let ptr = facet_core::PtrUninit::new(value.as_mut_ptr().cast::<u8>());
-    let root_id = plan.root_id();
 
+    // SAFETY: ptr points to valid, aligned, properly-sized memory for Frame<T>.
+    // shape is Frame<T>::SHAPE, set at StableConduit construction time.
     #[allow(unsafe_code)]
-    let partial: Partial<'_, false> = unsafe { Partial::from_raw(ptr, Arc::clone(plan), root_id) }
+    let partial: Partial<'_, false> = unsafe { Partial::from_raw_with_shape(ptr, shape) }
         .map_err(|e| StableConduitError::Decode(e.into()))?;
 
     let mut parser = PostcardParser::new(bytes);
@@ -592,12 +589,7 @@ mod tests {
 
     // Decode a raw frame payload into (seq, ack_max, item).
     fn decode_frame(bytes: &[u8]) -> (u32, Option<u32>, String) {
-        let plan = std::sync::Arc::new(
-            facet_reflect::TypePlan::<Frame<String>>::build()
-                .unwrap()
-                .core(),
-        );
-        let frame: Frame<String> = super::deserialize_frame(&plan, bytes).unwrap();
+        let frame: Frame<String> = super::deserialize_frame(Frame::<String>::SHAPE, bytes).unwrap();
         (
             frame.seq.0,
             frame.ack.map(|a| a.max_delivered.0),

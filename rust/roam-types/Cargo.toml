@@ -17,6 +17,5 @@ bitflags.workspace = true
 facet.workspace = true
 facet-core.workspace = true
 facet-path.workspace = true
-facet-reflect.workspace = true
 smallvec.workspace = true
 structstruck.workspace = true

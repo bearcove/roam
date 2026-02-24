@@ -1,9 +1,8 @@
 use std::marker::PhantomData;
-use std::sync::Arc;
 
 use facet::Facet;
 use facet_core::{PtrConst, Shape};
-use facet_reflect::{Peek, TypePlanCore};
+use facet_reflect::Peek;
 
 use roam_types::{
     Conduit, ConduitRx, ConduitTx, ConduitTxPermit, Link, LinkTx, LinkTxPermit, RpcPlan, SelfRef,
@@ -22,8 +21,7 @@ use roam_types::{
 // r[impl conduit.typeplan]
 pub struct BareConduit<T: 'static, L: Link> {
     link: L,
-    recv_plan: Arc<TypePlanCore>,
-    send_shape: &'static Shape,
+    shape: &'static Shape,
     _phantom: PhantomData<fn(T) -> T>,
 }
 
@@ -40,8 +38,7 @@ impl<T: Facet<'static> + 'static, L: Link> BareConduit<T, L> {
         );
         Self {
             link,
-            recv_plan: Arc::clone(&plan.type_plan),
-            send_shape: T::SHAPE,
+            shape: T::SHAPE,
             _phantom: PhantomData,
         }
     }
@@ -61,12 +58,12 @@ where
         (
             BareConduitTx {
                 link_tx: tx,
-                send_shape: self.send_shape,
+                shape: self.shape,
                 _phantom: PhantomData,
             },
             BareConduitRx {
                 link_rx: rx,
-                plan: self.recv_plan,
+                recv_shape: self.shape,
                 _phantom: PhantomData,
             },
         )
@@ -79,7 +76,7 @@ where
 
 pub struct BareConduitTx<T, LTx: LinkTx> {
     link_tx: LTx,
-    send_shape: &'static Shape,
+    shape: &'static Shape,
     _phantom: PhantomData<fn(T)>,
 }
 
@@ -94,7 +91,7 @@ impl<T, LTx: LinkTx + Send + 'static> ConduitTx for BareConduitTx<T, LTx> {
         let permit = self.link_tx.reserve().await?;
         Ok(BareConduitPermit {
             permit,
-            send_shape: self.send_shape,
+            shape: self.shape,
             _phantom: PhantomData,
         })
     }
@@ -110,7 +107,7 @@ impl<T, LTx: LinkTx + Send + 'static> ConduitTx for BareConduitTx<T, LTx> {
 
 pub struct BareConduitPermit<'a, T, LTx: LinkTx> {
     permit: LTx::Permit,
-    send_shape: &'static Shape,
+    shape: &'static Shape,
     _phantom: PhantomData<fn(T, &'a ())>,
 }
 
@@ -123,10 +120,7 @@ impl<T, LTx: LinkTx> ConduitTxPermit for BareConduitPermit<'_, T, LTx> {
         // The item is a valid instance of T, so (ptr, shape) is consistent.
         #[allow(unsafe_code)]
         let peek = unsafe {
-            Peek::unchecked_new(
-                PtrConst::new((&raw const item).cast::<u8>()),
-                self.send_shape,
-            )
+            Peek::unchecked_new(PtrConst::new((&raw const item).cast::<u8>()), self.shape)
         };
         let encoded = facet_postcard::peek_to_vec(peek).map_err(BareConduitError::Encode)?;
 
@@ -147,7 +141,7 @@ impl<T, LTx: LinkTx> ConduitTxPermit for BareConduitPermit<'_, T, LTx> {
 
 pub struct BareConduitRx<T: 'static, LRx> {
     link_rx: LRx,
-    plan: Arc<TypePlanCore>,
+    recv_shape: &'static Shape,
     _phantom: PhantomData<fn() -> T>,
 }
 
@@ -169,17 +163,17 @@ where
             None => return Ok(None),
         };
 
-        let plan = Arc::clone(&self.plan);
-        SelfRef::try_new(backing, |bytes| deserialize_with_plan::<T>(&plan, bytes)).map(Some)
+        let shape = self.recv_shape;
+        SelfRef::try_new(backing, |bytes| deserialize_with_shape::<T>(shape, bytes)).map(Some)
     }
 }
 
-/// Deserialize bytes into T using a precomputed TypePlanCore.
+/// Deserialize bytes into T using a shape (plan is cached transparently).
 ///
-/// Uses `Partial::from_raw` + `FormatDeserializer::deserialize_into` for
-/// fast plan-driven deserialization (no plan rebuild per call).
-fn deserialize_with_plan<T: 'static>(
-    plan: &Arc<TypePlanCore>,
+/// Uses `Partial::from_raw_with_shape` + `FormatDeserializer::deserialize_into`
+/// for stack-allocated, plan-cached deserialization.
+fn deserialize_with_shape<T: 'static>(
+    shape: &'static Shape,
     bytes: &[u8],
 ) -> Result<T, BareConduitError> {
     use facet_format::{FormatDeserializer, MetaSource};
@@ -189,12 +183,10 @@ fn deserialize_with_plan<T: 'static>(
     let mut value = std::mem::MaybeUninit::<T>::uninit();
     let ptr = facet_core::PtrUninit::new(value.as_mut_ptr().cast::<u8>());
 
-    let root_id = plan.root_id();
-
     // SAFETY: ptr points to valid, aligned, properly-sized memory for T.
-    // The plan was built from RpcPlan::for_type::<T, _, _>() so root_id matches T's shape.
+    // shape comes from T::SHAPE, set at BareConduit construction time.
     #[allow(unsafe_code)]
-    let partial: Partial<'_, false> = unsafe { Partial::from_raw(ptr, Arc::clone(plan), root_id) }
+    let partial: Partial<'_, false> = unsafe { Partial::from_raw_with_shape(ptr, shape) }
         .map_err(|e| BareConduitError::Decode(e.into()))?;
 
     let mut parser = PostcardParser::new(bytes);

@@ -1,19 +1,13 @@
-use std::sync::Arc;
-
 use facet::{DeclId, Facet, Shape};
 use facet_path::{Path, walk_shape};
-use facet_reflect::TypePlanCore;
 
 /// Precomputed plan for an RPC type (args, response, or error).
 ///
-/// Contains both the deserialization plan and the locations of all channels
-/// within the type structure. Computed once per monomorphized type via `OnceLock`.
+/// Contains the shape and locations of all channels within the type structure.
+/// Deserialization plans are cached transparently by facet via `TypePlanCore::from_shape`.
 pub struct RpcPlan {
     /// The shape this plan was built for. Used for type-safe construction.
     pub shape: &'static Shape,
-
-    /// Deserialization plan for this type.
-    pub type_plan: Arc<TypePlanCore>,
 
     /// Locations of all Rx/Tx channels in this type, in declaration order.
     pub channel_locations: &'static [ChannelLocation],
@@ -47,11 +41,6 @@ impl RpcPlan {
         Tx: Facet<'static>,
         Rx: Facet<'static>,
     {
-        // Build deserialization plan
-        // SAFETY: caller guarantees shape comes from a Facet implementation
-        let type_plan =
-            unsafe { TypePlanCore::from_shape(shape) }.expect("TypePlanCore::from_shape failed");
-
         // Walk the type structure to discover channel locations
         let mut visitor = ChannelDiscovery {
             tx_decl_id: Tx::SHAPE.decl_id,
@@ -62,7 +51,6 @@ impl RpcPlan {
 
         RpcPlan {
             shape,
-            type_plan,
             channel_locations: visitor.locations.leak(),
         }
     }
