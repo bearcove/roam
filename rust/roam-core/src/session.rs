@@ -1,9 +1,9 @@
 use std::collections::BTreeMap;
 
 use roam_types::{
-    AcceptConnection, CloseConnection, Conduit, ConduitRx, ConduitTx, ConduitTxPermit,
-    ConnectionId, ConnectionSettings, Hello, HelloYourself, Message, MessageFamily, MessagePayload,
-    Metadata, OpenConnection, Parity, ProtocolError, RejectConnection, SelfRef, SessionRole,
+    Conduit, ConduitRx, ConduitTx, ConduitTxPermit, ConnectionAccept, ConnectionClose,
+    ConnectionId, ConnectionOpen, ConnectionReject, ConnectionSettings, Hello, HelloYourself,
+    Message, MessageFamily, MessagePayload, Metadata, Parity, ProtocolError, SelfRef, SessionRole,
 };
 
 // r[impl session.handshake]
@@ -316,7 +316,7 @@ where
             )));
         }
 
-        let payload = MessagePayload::OpenConnection(OpenConnection {
+        let payload = MessagePayload::ConnectionOpen(ConnectionOpen {
             parity: local_parity,
             connection_settings: local_settings.clone(),
             metadata,
@@ -351,7 +351,7 @@ where
         let peer_parity = pending.peer_parity;
         let peer_settings = pending.peer_settings.clone();
 
-        let payload = MessagePayload::AcceptConnection(AcceptConnection {
+        let payload = MessagePayload::ConnectionAccept(ConnectionAccept {
             connection_settings: local_settings.clone(),
             metadata,
         });
@@ -386,7 +386,7 @@ where
             )));
         }
 
-        let payload = MessagePayload::RejectConnection(RejectConnection { metadata });
+        let payload = MessagePayload::ConnectionReject(ConnectionReject { metadata });
         self.send(Message::new(conn_id, payload)).await?;
 
         self.slots.remove(&conn_id);
@@ -412,7 +412,7 @@ where
             )));
         }
 
-        let payload = MessagePayload::CloseConnection(CloseConnection { metadata });
+        let payload = MessagePayload::ConnectionClose(ConnectionClose { metadata });
         self.send(Message::new(conn_id, payload)).await?;
 
         self.slots.remove(&conn_id);
@@ -470,7 +470,7 @@ where
                 Err(self.handle_incoming_protocol_error(&msg).await)
             }
             // r[impl connection.open]
-            MessagePayload::OpenConnection(open) => {
+            MessagePayload::ConnectionOpen(open) => {
                 if conn_id.is_root() {
                     return Err(self
                         .protocol_violation("OpenConnection cannot use connection 0")
@@ -503,7 +503,7 @@ where
                 })
             }
             // r[impl connection.open]
-            MessagePayload::AcceptConnection(accept) => {
+            MessagePayload::ConnectionAccept(accept) => {
                 if conn_id.is_root() {
                     return Err(self
                         .protocol_violation("AcceptConnection cannot use connection 0")
@@ -537,7 +537,7 @@ where
                 Ok(SessionEvent::OutgoingConnectionAccepted { conn_id })
             }
             // r[impl connection.open.rejection]
-            MessagePayload::RejectConnection(reject) => {
+            MessagePayload::ConnectionReject(reject) => {
                 if conn_id.is_root() {
                     return Err(self
                         .protocol_violation("RejectConnection cannot use connection 0")
@@ -559,7 +559,7 @@ where
             }
             // r[impl connection.close]
             // r[impl connection.close.semantics]
-            MessagePayload::CloseConnection(close) => {
+            MessagePayload::ConnectionClose(close) => {
                 if conn_id.is_root() {
                     return Err(self
                         .protocol_violation("CloseConnection cannot use connection 0")

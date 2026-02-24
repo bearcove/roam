@@ -15,21 +15,6 @@ pub struct ConnectionSettings {
     pub max_concurrent_requests: u32,
 }
 
-/// Protocol message.
-// r[impl session]
-// r[impl session.message]
-// r[impl session.message.connection-id]
-// r[impl session.peer]
-// r[impl session.symmetry]
-#[derive(Debug, Facet)]
-pub struct Message<'payload> {
-    /// Connection ID: 0 for control messages (Hello, HelloYourself)
-    pub connection_id: ConnectionId,
-
-    /// Message payload
-    pub payload: MessagePayload<'payload>,
-}
-
 impl<'payload> Message<'payload> {
     // Message has no methods on purpose. it's all just plain data.
     // Adding constructors or getters is forbidden.
@@ -58,188 +43,202 @@ impl Parity {
 }
 
 structstruck::strike! {
-    #[repr(u8)]
-    // r[impl session.message.payloads]
+    /// Protocol message.
+    // r[impl session]
+    // r[impl session.message]
+    // r[impl session.message.connection-id]
+    // r[impl session.peer]
+    // r[impl session.symmetry]
     #[structstruck::each[derive(Debug, Facet)]]
-    pub enum MessagePayload<'payload> {
-        // ========================================================================
-        // Control (conn 0 only)
-        // ========================================================================
+    pub struct Message<'payload> {
+        /// Connection ID: 0 for control messages (Hello, HelloYourself)
+        pub connection_id: ConnectionId,
 
-        /// Sent by initiator to acceptor as the first message
-        // r[impl session.handshake]
-        // r[impl session.connection-settings.hello]
-        Hello(pub struct Hello<'payload> {
-            /// Must be equal to 7
-            pub version: u32,
+        /// Message payload
+        pub payload:
+            #[repr(u8)]
+            // r[impl session.message.payloads]
+            pub enum MessagePayload<'payload> {
+                // ========================================================================
+                // Control (conn 0 only)
+                // ========================================================================
 
-            /// Parity claimed by the initiator — acceptor will take the other
-            pub parity: Parity,
+                /// Sent by initiator to acceptor as the first message
+                // r[impl session.handshake]
+                // r[impl session.connection-settings.hello]
+                Hello(pub struct Hello<'payload> {
+                    /// Must be equal to 7
+                    pub version: u32,
 
-            /// Connection limits advertised by the initiator for the root connection.
-            pub connection_settings: ConnectionSettings,
+                    /// Parity claimed by the initiator — acceptor will take the other
+                    pub parity: Parity,
 
-            /// Metadata associated with the connection.
-            pub metadata: Metadata<'payload>,
-        }),
+                    /// Connection limits advertised by the initiator for the root connection.
+                    pub connection_settings: ConnectionSettings,
 
-        /// Sent by acceptor back to initiator. Poetic on purpose, I'm not changing the name.
-        // r[impl session.connection-settings.hello]
-        HelloYourself(pub struct HelloYourself<'payload> {
-            /// Connection limits advertised by the acceptor for the root connection.
-            pub connection_settings: ConnectionSettings,
+                    /// Metadata associated with the connection.
+                    pub metadata: Metadata<'payload>,
+                }),
 
-            /// You can _also_ have metadata if you want.
-            pub metadata: Metadata<'payload>,
-        }),
+                /// Sent by acceptor back to initiator. Poetic on purpose, I'm not changing the name.
+                // r[impl session.connection-settings.hello]
+                HelloYourself(pub struct HelloYourself<'payload> {
+                    /// Connection limits advertised by the acceptor for the root connection.
+                    pub connection_settings: ConnectionSettings,
 
-        /// Sent by either peer when the counterpart has violated the protocol.
-        /// The sender closes the transport immediately after sending this message.
-        /// No reply is expected or valid.
-        // r[impl session.protocol-error]
-        ProtocolError(pub struct ProtocolError<'payload> {
-            /// Human-readable description of the protocol violation.
-            pub description: &'payload str,
-        }),
+                    /// You can _also_ have metadata if you want.
+                    pub metadata: Metadata<'payload>,
+                }),
 
-        // ========================================================================
-        // Connection control
-        // ========================================================================
+                /// Sent by either peer when the counterpart has violated the protocol.
+                /// The sender closes the transport immediately after sending this message.
+                /// No reply is expected or valid.
+                // r[impl session.protocol-error]
+                ProtocolError(pub struct ProtocolError<'payload> {
+                    /// Human-readable description of the protocol violation.
+                    pub description: &'payload str,
+                }),
 
-        /// Request a new virtual connection. This is sent on the desired connection
-        /// ID, even though it doesn't exist yet.
-        // r[impl connection.open]
-        // r[impl connection.virtual]
-        // r[impl session.connection-settings.open]
-        OpenConnection(pub struct OpenConnection<'payload> {
-            /// Parity requested by the opener for this virtual connection.
-            pub parity: Parity,
+                // ========================================================================
+                // Connection control
+                // ========================================================================
 
-            /// Connection limits advertised by the opener.
-            pub connection_settings: ConnectionSettings,
+                /// Request a new virtual connection. This is sent on the desired connection
+                /// ID, even though it doesn't exist yet.
+                // r[impl connection.open]
+                // r[impl connection.virtual]
+                // r[impl session.connection-settings.open]
+                ConnectionOpen(pub struct ConnectionOpen<'payload> {
+                    /// Parity requested by the opener for this virtual connection.
+                    pub parity: Parity,
 
-            /// Metadata associated with the connection.
-            pub metadata: Metadata<'payload>,
-        }),
+                    /// Connection limits advertised by the opener.
+                    pub connection_settings: ConnectionSettings,
 
-        /// Accept a virtual connection request — sent on the connection ID requested.
-        // r[impl session.connection-settings.open]
-        AcceptConnection(pub struct AcceptConnection<'payload> {
-            /// Connection limits advertised by the accepter.
-            pub connection_settings: ConnectionSettings,
+                    /// Metadata associated with the connection.
+                    pub metadata: Metadata<'payload>,
+                }),
 
-            /// Metadata associated with the connection.
-            pub metadata: Metadata<'payload>,
-        }),
+                /// Accept a virtual connection request — sent on the connection ID requested.
+                // r[impl session.connection-settings.open]
+                ConnectionAccept(pub struct ConnectionAccept<'payload> {
+                    /// Connection limits advertised by the accepter.
+                    pub connection_settings: ConnectionSettings,
 
-        /// Reject a virtual connection request — sent on the connection ID requested.
-        RejectConnection(pub struct RejectConnection<'payload> {
-            /// Metadata associated with the rejection.
-            pub metadata: Metadata<'payload>,
-        }),
+                    /// Metadata associated with the connection.
+                    pub metadata: Metadata<'payload>,
+                }),
 
-        /// Close a virtual connection. Trying to close conn 0 is a protocol error.
-        CloseConnection(pub struct CloseConnection<'payload> {
-            /// Metadata associated with the close.
-            pub metadata: Metadata<'payload>,
-        }),
+                /// Reject a virtual connection request — sent on the connection ID requested.
+                ConnectionReject(pub struct ConnectionReject<'payload> {
+                    /// Metadata associated with the rejection.
+                    pub metadata: Metadata<'payload>,
+                }),
+
+                /// Close a virtual connection. Trying to close conn 0 is a protocol error.
+                ConnectionClose(pub struct ConnectionClose<'payload> {
+                    /// Metadata associated with the close.
+                    pub metadata: Metadata<'payload>,
+                }),
 
 
-        // ========================================================================
-        // RPC
-        // ========================================================================
+                // ========================================================================
+                // RPC
+                // ========================================================================
 
-        RequestMessage(
-            pub struct RequestMessage<'payload> {
-                /// Unique (connection-wide) request identifier, caller-allocated (as per parity)
-                pub id: RequestId,
+                RequestMessage(
+                    pub struct RequestMessage<'payload> {
+                        /// Unique (connection-wide) request identifier, caller-allocated (as per parity)
+                        pub id: RequestId,
 
-                /// Request paylaod
-                pub body:
-                    #[repr(u8)]
-                    pub enum Request<'payload> {
-                        /// Perform a request (or a "call")
-                        RequestCall(pub struct RequestCall<'payload> {
-                            /// Unique method identifier, hash of fully qualified name + args etc.
-                            pub method_id: MethodId,
+                        /// Request paylaod
+                        pub body:
+                            #[repr(u8)]
+                            pub enum RequestBody<'payload> {
+                                /// Perform a request (or a "call")
+                                Call(pub struct RequestCall<'payload> {
+                                    /// Unique method identifier, hash of fully qualified name + args etc.
+                                    pub method_id: MethodId,
 
-                            /// Argument tuple
-                            pub args: Payload<'payload>,
+                                    /// Argument tuple
+                                    pub args: Payload<'payload>,
 
-                            /// Channel identifiers, allocated by the caller, that are passed as part
-                            /// of the arguments.
-                            pub channels: &'payload [ChannelId],
+                                    /// Channel identifiers, allocated by the caller, that are passed as part
+                                    /// of the arguments.
+                                    pub channels: &'payload [ChannelId],
 
-                            /// Metadata associated with this call
-                            pub metadata: Metadata<'payload>,
-                        }),
+                                    /// Metadata associated with this call
+                                    pub metadata: Metadata<'payload>,
+                                }),
 
-                        /// Respond to a request
-                        RequestResponse(struct RequestResponse<'payload> {
-                            /// Return value (Result<T, RoamError<E>>, where E could be Infallible depending on signature)
-                            pub ret: Payload<'payload>,
+                                /// Respond to a request
+                                Response(struct RequestResponse<'payload> {
+                                    /// Return value (Result<T, RoamError<E>>, where E could be Infallible depending on signature)
+                                    pub ret: Payload<'payload>,
 
-                            /// Channel IDs for streams in the response, in return type declaration order.
-                            pub channels: &'payload [ChannelId],
+                                    /// Channel IDs for streams in the response, in return type declaration order.
+                                    pub channels: &'payload [ChannelId],
 
-                            /// Arbitrary response metadata
-                            pub metadata: Metadata<'payload>,
-                        }),
+                                    /// Arbitrary response metadata
+                                    pub metadata: Metadata<'payload>,
+                                }),
 
-                        /// Cancel processing of a request.
-                        RequestCancel(struct RequestCancel<'payload> {
-                            /// Arbitrary cancel metadata
-                            pub metadata: Metadata<'payload>,
-                        }),
-                    },
-            }
-        ),
+                                /// Cancel processing of a request.
+                                Cancel(struct RequestCancel<'payload> {
+                                    /// Arbitrary cancel metadata
+                                    pub metadata: Metadata<'payload>,
+                                }),
+                            },
+                    }
+                ),
 
-        // ========================================================================
-        // Channels
-        // ========================================================================
+                // ========================================================================
+                // Channels
+                // ========================================================================
 
-        ChannelMessage(
-            pub struct ChannelMessage<'payload> {
-                /// Channel ID (unique per-connection)
-                pub id: ChannelId,
+                ChannelMessage(
+                    pub struct ChannelMessage<'payload> {
+                        /// Channel ID (unique per-connection)
+                        pub id: ChannelId,
 
-                /// Channel message body
-                pub body:
-                    #[repr(u8)]
-                    pub enum Channel<'payload> {
-                        /// Send an item on a channel. Channels are not "opened", they are created
-                        /// implicitly by calls.
-                        ChannelItem(pub struct ChannelItem<'payload> {
-                            /// The item itself
-                            pub item: Payload<'payload>,
-                        }),
+                        /// Channel message body
+                        pub body:
+                            #[repr(u8)]
+                            pub enum ChannelBody<'payload> {
+                                /// Send an item on a channel. Channels are not "opened", they are created
+                                /// implicitly by calls.
+                                Item(pub struct ChannelItem<'payload> {
+                                    /// The item itself
+                                    pub item: Payload<'payload>,
+                                }),
 
-                        /// Close a channel — sent by the sender of the channel when they're gracefully done
-                        /// with a channel.
-                        CloseChannel(pub struct CloseChannel<'payload> {
-                            /// Metadata associated with closing the channel.
-                            pub metadata: Metadata<'payload>,
-                        }),
+                                /// Close a channel — sent by the sender of the channel when they're gracefully done
+                                /// with a channel.
+                                Close(pub struct ChannelClose<'payload> {
+                                    /// Metadata associated with closing the channel.
+                                    pub metadata: Metadata<'payload>,
+                                }),
 
-                        /// Reset a channel — sent by the receiver of a channel when they would like the sender
-                        /// to please, stop sending items through.
-                        ResetChannel(pub struct ResetChannel<'payload> {
-                            /// Metadata associated with resetting the channel.
-                            pub metadata: Metadata<'payload>,
-                        }),
+                                /// Reset a channel — sent by the receiver of a channel when they would like the sender
+                                /// to please, stop sending items through.
+                                Reset(pub struct ChannelReset<'payload> {
+                                    /// Metadata associated with resetting the channel.
+                                    pub metadata: Metadata<'payload>,
+                                }),
 
-                        /// Grant additional send credit to a channel sender.
-                        // r[impl rpc.flow-control.credit.grant]
-                        GrantCredit(pub struct GrantCredit {
-                            /// Number of additional items the sender may send.
-                            pub additional: u32,
-                        }),
-                    },
-            }
-        ),
+                                /// Grant additional send credit to a channel sender.
+                                // r[impl rpc.flow-control.credit.grant]
+                                GrantCredit(pub struct ChannelGrantCredit {
+                                    /// Number of additional items the sender may send.
+                                    pub additional: u32,
+                                }),
+                            },
+                    }
+                ),
 
+            },
     }
+
 }
 
 /// A payload — arguments for a request, or return type for a response.

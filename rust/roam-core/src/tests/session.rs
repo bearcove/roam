@@ -4,9 +4,9 @@ use crate::{
 };
 use facet::Facet;
 use roam_types::{
-    CancelRequest, ChannelId, CloseChannel, Conduit, ConduitRx, ConduitTx, ConduitTxPermit,
+    CancelRequest, ChannelClose, ChannelId, Conduit, ConduitRx, ConduitTx, ConduitTxPermit,
     ConnectionId, ConnectionSettings, Hello, Message, MessageFamily, MessagePayload, MethodId,
-    Parity, Payload, Request, RequestId,
+    Parity, Payload, RequestBody, RequestId,
 };
 
 type MessageConduit = BareConduit<MessageFamily, MemoryLink>;
@@ -223,7 +223,7 @@ async fn recv_event_surfaces_incoming_rpc_and_channel_messages() {
     initiator
         .send_rpc_message(Message::new(
             ConnectionId::ROOT,
-            MessagePayload::CloseChannel(CloseChannel {
+            MessagePayload::CloseChannel(ChannelClose {
                 channel_id: ChannelId(9),
                 metadata: vec![],
             }),
@@ -257,7 +257,7 @@ async fn send_rpc_message_rejects_non_rpc_payloads_and_unknown_connections() {
     let err = initiator
         .send_rpc_message(Message::new(
             ConnectionId::ROOT,
-            MessagePayload::OpenConnection(roam_types::OpenConnection {
+            MessagePayload::ConnectionOpen(roam_types::ConnectionOpen {
                 parity: Parity::Even,
                 connection_settings: default_settings(1),
                 metadata: vec![],
@@ -319,7 +319,7 @@ async fn send_rpc_message_supports_borrowed_payload_lifetimes() {
     initiator
         .send_rpc_message(Message::new(
             ConnectionId::ROOT,
-            MessagePayload::Request(Request {
+            MessagePayload::Request(RequestBody {
                 request_id: RequestId(5),
                 method_id: MethodId(99),
                 args: Payload::borrowed(&args),
