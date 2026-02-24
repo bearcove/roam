@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use facet::Facet;
-use facet_core::{PtrConst, Shape};
+use facet_core::PtrConst;
 use facet_reflect::Peek;
 use roam_types::{
     Conduit, ConduitRx, ConduitTx, ConduitTxPermit, Link, LinkRx, LinkTx, LinkTxPermit, MsgFamily,
@@ -76,7 +76,6 @@ pub trait LinkSource: Send + 'static {
 // r[impl stable]
 pub struct StableConduit<F: MsgFamily, LS: LinkSource> {
     shared: Arc<Shared<LS>>,
-    frame_shape: &'static Shape,
     _phantom: PhantomData<fn(F) -> F>,
 }
 
@@ -128,7 +127,6 @@ impl<F: MsgFamily, LS: LinkSource> StableConduit<F, LS> {
                 reconnecting: AtomicBool::new(false),
                 reconnected: tokio::sync::Notify::new(),
             }),
-            frame_shape: Frame::<F::Msg<'static>>::SHAPE,
             _phantom: PhantomData,
         })
     }
@@ -344,7 +342,6 @@ where
             },
             StableConduitRx {
                 shared: Arc::clone(&self.shared),
-                frame_shape: self.frame_shape,
                 _phantom: PhantomData,
             },
         )
@@ -502,7 +499,6 @@ impl<F: MsgFamily, LS: LinkSource> ConduitTxPermit for StableConduitPermit<F, LS
 
 pub struct StableConduitRx<F: MsgFamily, LS: LinkSource> {
     shared: Arc<Shared<LS>>,
-    frame_shape: &'static Shape,
     _phantom: PhantomData<fn() -> F>,
 }
 
@@ -556,10 +552,8 @@ where
             };
 
             // Phase 2: deserialize the frame.
-            let frame_shape = self.frame_shape;
             let frame: SelfRef<Frame<F::Msg<'static>>> =
-                crate::deserialize_postcard(backing, frame_shape)
-                    .map_err(StableConduitError::Decode)?;
+                crate::deserialize_postcard(backing).map_err(StableConduitError::Decode)?;
 
             // Phase 3: update shared state; skip duplicates.
             // r[impl stable.seq.monotonic]

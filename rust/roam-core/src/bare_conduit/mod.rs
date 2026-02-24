@@ -54,7 +54,6 @@ where
             },
             BareConduitRx {
                 link_rx: rx,
-                recv_shape: self.shape,
                 _phantom: PhantomData,
             },
         )
@@ -136,7 +135,6 @@ impl<F: MsgFamily, LTx: LinkTx> ConduitTxPermit for BareConduitPermit<'_, F, LTx
 
 pub struct BareConduitRx<F: MsgFamily, LRx> {
     link_rx: LRx,
-    recv_shape: &'static Shape,
     _phantom: PhantomData<fn() -> F>,
 }
 
@@ -158,8 +156,7 @@ where
             None => return Ok(None),
         };
 
-        let shape = self.recv_shape;
-        crate::deserialize_postcard::<F::Msg<'static>>(backing, shape)
+        crate::deserialize_postcard::<F::Msg<'static>>(backing)
             .map_err(BareConduitError::Decode)
             .map(Some)
     }
