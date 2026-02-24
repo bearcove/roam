@@ -1,8 +1,14 @@
 use facet::Facet;
 use facet_core::ConstParamKind;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
-use crate::{Rx, Tx};
-use roam_types::{Conduit, ConduitRx, ConduitTx, ConduitTxPermit, MsgFamily};
+use crate::{ChannelSink, IncomingChannelMessage, Rx, Tx};
+use roam_types::{
+    Backing, ChannelId, Conduit, ConduitRx, ConduitTx, ConduitTxPermit, ConnectionId, Message,
+    Metadata, MsgFamily, Payload, SelfRef,
+};
+use tokio::sync::{Notify, mpsc};
 
 use crate::{BareConduit, MemoryLink, memory_link_pair};
 
@@ -128,4 +134,130 @@ fn tx_rx_const_param_n() {
     assert_eq!(cp[0].name, "N");
     assert_eq!(cp[0].kind, ConstParamKind::Usize);
     assert_eq!(cp[0].value, 8);
+}
+
+struct TestSink {
+    gate: Arc<Notify>,
+    send_count: Arc<AtomicUsize>,
+    close_count: Arc<AtomicUsize>,
+}
+
+impl TestSink {
+    fn new() -> Self {
+        Self {
+            gate: Arc::new(Notify::new()),
+            send_count: Arc::new(AtomicUsize::new(0)),
+            close_count: Arc::new(AtomicUsize::new(0)),
+        }
+    }
+
+    fn open_gate(&self) {
+        self.gate.notify_waiters();
+    }
+}
+
+impl ChannelSink for TestSink {
+    fn send_payload<'a>(
+        &self,
+        conn_id: ConnectionId,
+        channel_id: ChannelId,
+        payload: Payload<'a>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), crate::TxError>> + 'a>> {
+        let gate = self.gate.clone();
+        let send_count = self.send_count.clone();
+        Box::pin(async move {
+            gate.notified().await;
+            let _ = Message::channel_item(conn_id, channel_id, payload);
+            send_count.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        })
+    }
+
+    fn close_channel(
+        &self,
+        conn_id: ConnectionId,
+        channel_id: ChannelId,
+        metadata: Metadata,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), crate::TxError>> + 'static>>
+    {
+        let gate = self.gate.clone();
+        let close_count = self.close_count.clone();
+        Box::pin(async move {
+            gate.notified().await;
+            let _ = Message::close_channel(conn_id, channel_id, metadata);
+            close_count.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        })
+    }
+}
+
+#[tokio::test]
+async fn tx_send_waits_for_sink_completion() {
+    let mut tx = Tx::<String>::unbound();
+    let sink = Arc::new(TestSink::new());
+    tx.bind(ConnectionId(1), ChannelId(9), sink.clone());
+
+    let payload = "hello".to_string();
+    let fut = tx.send(&payload);
+    tokio::pin!(fut);
+    tokio::select! {
+        res = &mut fut => panic!("send completed too early: {res:?}"),
+        _ = tokio::time::sleep(std::time::Duration::from_millis(20)) => {}
+    }
+
+    sink.open_gate();
+    fut.await.expect("send should complete once sink opens");
+    assert_eq!(sink.send_count.load(Ordering::SeqCst), 1);
+}
+
+#[derive(Facet)]
+struct BorrowedMsg<'a> {
+    text: &'a str,
+}
+
+#[tokio::test]
+async fn tx_send_accepts_borrowed_payloads() {
+    type Schema = BorrowedMsg<'static>;
+
+    let mut tx = Tx::<Schema>::unbound();
+    let sink = Arc::new(TestSink::new());
+    tx.bind(ConnectionId(3), ChannelId(5), sink.clone());
+
+    let backing = String::from("borrowed");
+    let msg = BorrowedMsg { text: &backing };
+    let fut = tx.send(&msg);
+    tokio::pin!(fut);
+    tokio::select! {
+        res = &mut fut => panic!("send completed too early: {res:?}"),
+        _ = tokio::time::sleep(std::time::Duration::from_millis(20)) => {}
+    }
+    sink.open_gate();
+    fut.await.expect("borrowed send should succeed");
+}
+
+#[tokio::test]
+async fn rx_recv_decodes_channel_items() {
+    let mut rx = Rx::<u32>::unbound();
+    let (tx_items, rx_items) = mpsc::channel(4);
+    rx.bind(ConnectionId(11), ChannelId(15), rx_items);
+
+    let payload_bytes = facet_postcard::to_vec(&42_u32).expect("serialize channel item");
+    let item_msg = Message::channel_item(
+        ConnectionId(11),
+        ChannelId(15),
+        Payload::RawOwned(payload_bytes),
+    );
+    let item_ref = SelfRef::owning(Backing::Boxed(Box::<[u8]>::default()), item_msg);
+    tx_items
+        .send(IncomingChannelMessage::Data(item_ref))
+        .await
+        .expect("send data to rx");
+
+    assert_eq!(rx.recv().await.expect("recv data"), Some(42));
+
+    tx_items
+        .send(IncomingChannelMessage::Close)
+        .await
+        .expect("send close to rx");
+    assert_eq!(rx.recv().await.expect("recv close"), None);
 }

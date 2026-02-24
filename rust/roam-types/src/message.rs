@@ -66,6 +66,56 @@ impl<'payload> Message<'payload> {
     pub fn into_parts(self) -> (ConnectionId, MessagePayload<'payload>) {
         (self.connection_id, self.payload)
     }
+
+    /// Build a `ChannelItem` message.
+    pub fn channel_item(
+        connection_id: ConnectionId,
+        channel_id: ChannelId,
+        payload: Payload<'payload>,
+    ) -> Self {
+        Self::new(
+            connection_id,
+            MessagePayload::ChannelItem(ChannelItem {
+                channel_id,
+                payload,
+            }),
+        )
+    }
+
+    /// Build a `CloseChannel` message.
+    pub fn close_channel(
+        connection_id: ConnectionId,
+        channel_id: ChannelId,
+        metadata: Metadata,
+    ) -> Self {
+        Self::new(
+            connection_id,
+            MessagePayload::CloseChannel(CloseChannel {
+                channel_id,
+                metadata,
+            }),
+        )
+    }
+
+    /// If this message is a `ChannelItem`, return `(conn_id, channel_id, payload)`.
+    pub fn as_channel_item(&self) -> Option<(ConnectionId, ChannelId, &Payload<'payload>)> {
+        match &self.payload {
+            MessagePayload::ChannelItem(item) => {
+                Some((self.connection_id, item.channel_id, &item.payload))
+            }
+            _ => None,
+        }
+    }
+
+    /// If this message is a `CloseChannel`, return `(conn_id, channel_id, metadata)`.
+    pub fn as_close_channel(&self) -> Option<(ConnectionId, ChannelId, &Metadata)> {
+        match &self.payload {
+            MessagePayload::CloseChannel(close) => {
+                Some((self.connection_id, close.channel_id, &close.metadata))
+            }
+            _ => None,
+        }
+    }
 }
 
 /// Whether a peer will use odd or even IDs for requests and channels
@@ -297,6 +347,26 @@ pub enum Payload<'payload> {
 
     /// Incoming: owned bytes (when borrowing is unavailable).
     RawOwned(Vec<u8>),
+}
+
+impl<'payload> Payload<'payload> {
+    /// Construct an outgoing borrowed payload from a concrete value.
+    pub fn borrowed<T: Facet<'payload>>(value: &'payload T) -> Self {
+        Self::Borrowed {
+            ptr: PtrConst::new((value as *const T).cast::<u8>()),
+            shape: T::SHAPE,
+            _lt: PhantomData,
+        }
+    }
+
+    /// Access incoming bytes when this payload is decoded (`RawBorrowed` / `RawOwned`).
+    pub fn as_incoming_bytes(&self) -> Option<&[u8]> {
+        match self {
+            Self::RawBorrowed(bytes) => Some(bytes),
+            Self::RawOwned(bytes) => Some(bytes.as_slice()),
+            Self::Borrowed { .. } => None,
+        }
+    }
 }
 
 /// Adapter that bridges [`Payload`] through the opaque field contract.
