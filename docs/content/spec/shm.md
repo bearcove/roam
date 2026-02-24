@@ -702,3 +702,14 @@ Each guest has two BipBuffers (bipartite circular buffers):
 >
 > The host SHOULD delete the segment file on graceful shutdown. Stale
 > files from crashes SHOULD be detected and recreated on startup.
+
+> r[shm.file.permissions]
+>
+> The segment file SHOULD have permissions that allow all intended
+> guests to read and write. On POSIX systems, mode 0666 is typical,
+> with the host and guests running as the same user.
+
+> r[shm.file.mmap-windows]
+>
+> On Windows, use `CreateFileMapping()` to create a file mapping object
+> and `MapViewOfFile()` to map it into the process address space.

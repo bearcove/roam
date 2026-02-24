@@ -8,7 +8,10 @@ use facet::Facet;
 use facet_core::PtrConst;
 use tokio::sync::mpsc;
 
-use crate::{Message, Metadata, Payload, SelfRef};
+use crate::{
+    ChannelClose, ChannelGrantCredit, ChannelItem, ChannelReset, Message, Metadata, Payload,
+    SelfRef,
+};
 
 /// Create an unbound channel pair.
 ///
@@ -36,9 +39,10 @@ pub trait ChannelSink: Send + Sync + 'static {
 
 /// Message delivered to an `Rx` by the driver.
 pub enum IncomingChannelMessage {
-    Data(SelfRef<Message<'static>>),
-    Close,
-    Reset,
+    Item(SelfRef<ChannelItem<'static>>),
+    Close(SelfRef<ChannelClose<'static>>),
+    Reset(SelfRef<ChannelReset<'static>>),
+    GrantCredit(SelfRef<ChannelGrantCredit>),
 }
 
 /// Sender-side runtime slot.
@@ -105,7 +109,7 @@ impl<T, const N: usize> Tx<T, N> {
         result
     }
 
-    pub async fn close(&self, metadata: Metadata) -> Result<(), TxError> {
+    pub async fn close<'value>(&self, metadata: Metadata<'value>) -> Result<(), TxError> {
         let sink = self.sink.inner.as_ref().ok_or(TxError::Unbound)?;
         sink.close_channel(metadata).await
     }
