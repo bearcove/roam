@@ -5,7 +5,7 @@
 use std::marker::PhantomData;
 
 use crate::{ChannelId, ConnectionId, Metadata, MethodId, RequestId};
-use facet::{Facet, PtrConst, Shape};
+use facet::{Facet, FacetOpaqueAdapter, OpaqueDeserialize, OpaqueSerialize, PtrConst, Shape};
 
 /// Per-connection limits advertised by a peer.
 // r[impl session.connection-settings]
@@ -29,7 +29,7 @@ impl Default for ConnectionSettings {
 // r[impl session.message.connection-id]
 // r[impl session.peer]
 // r[impl session.symmetry]
-#[derive(Debug, Clone, PartialEq, Eq, Facet)]
+#[derive(Debug, Facet)]
 pub struct Message<'payload> {
     /// Connection ID: 0 for control messages (Hello, HelloYourself)
     connection_id: ConnectionId,
@@ -63,7 +63,7 @@ impl Parity {
 structstruck::strike! {
     #[repr(u8)]
     // r[impl session.message.payloads]
-    #[structstruck::each[derive(Debug, Clone, PartialEq, Eq, Facet)]]
+    #[structstruck::each[derive(Debug, Facet)]]
     pub enum MessagePayload<'payload> {
         // ========================================================================
         // Control (conn 0 only)
@@ -242,15 +242,176 @@ structstruck::strike! {
     }
 }
 
-/// A payload — arguments for a request, or return type for a response
-#[derive(Debug, PartialEq, Eq, Facet, Clone)]
+/// A payload — arguments for a request, or return type for a response.
+///
+/// Uses `#[facet(opaque = PayloadAdapter)]` so that format crates handle
+/// serialization/deserialization through the adapter contract:
+/// - **Send path:** `serialize_map` extracts `(ptr, shape)` from `Borrowed`.
+/// - **Recv path:** `deserialize_build` produces `RawBorrowed` or `RawOwned`.
+// r[impl zerocopy.payload]
+#[derive(Debug, Facet)]
 #[repr(u8)]
-#[facet(opaque)]
+#[facet(opaque = PayloadAdapter, traits(Debug))]
 pub enum Payload<'payload> {
-    // Borrowed from somewhere, type-erased, still enough to serialize
+    // r[impl zerocopy.payload.borrowed]
+    /// Outgoing: type-erased pointer to caller-owned memory + its Shape.
     Borrowed {
         ptr: PtrConst,
         shape: &'static Shape,
-        _phantom2: PhantomData<&'payload ()>,
+        _lt: PhantomData<&'payload ()>,
     },
+
+    // r[impl zerocopy.payload.bytes]
+    /// Incoming: raw bytes borrowed from the backing (zero-copy).
+    RawBorrowed(&'payload [u8]),
+
+    /// Incoming: owned bytes (when borrowing is unavailable).
+    RawOwned(Vec<u8>),
+}
+
+/// Adapter that bridges [`Payload`] through the opaque field contract.
+pub struct PayloadAdapter;
+
+impl FacetOpaqueAdapter for PayloadAdapter {
+    type Error = String;
+    type SendValue<'a> = Payload<'a>;
+    type RecvValue<'de> = Payload<'de>;
+
+    fn serialize_map(value: &Self::SendValue<'_>) -> OpaqueSerialize {
+        match value {
+            Payload::Borrowed { ptr, shape, .. } => OpaqueSerialize { ptr: *ptr, shape },
+            _ => unreachable!("serialize_map is only called on outgoing Payload::Borrowed"),
+        }
+    }
+
+    fn deserialize_build<'de>(
+        input: OpaqueDeserialize<'de>,
+    ) -> Result<Self::RecvValue<'de>, Self::Error> {
+        Ok(match input {
+            OpaqueDeserialize::Borrowed(bytes) => Payload::RawBorrowed(bytes),
+            OpaqueDeserialize::Owned(bytes) => Payload::RawOwned(bytes),
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use facet::Facet;
+    use facet_reflect::Peek;
+
+    /// A wrapper struct that contains a Payload, mimicking how Request/Response use it.
+    #[derive(Debug, Facet)]
+    struct Envelope<'a> {
+        method_id: u32,
+        payload: Payload<'a>,
+    }
+
+    /// Construct a Payload::Borrowed from a concrete value.
+    fn borrowed_payload<'a, T: Facet<'a>>(value: &'a T) -> Payload<'a> {
+        Payload::Borrowed {
+            ptr: PtrConst::new((value as *const T).cast::<u8>()),
+            shape: T::SHAPE,
+            _lt: PhantomData,
+        }
+    }
+
+    /// Serialize a non-'static value via Peek.
+    fn serialize_envelope(envelope: &Envelope<'_>) -> Vec<u8> {
+        let peek = Peek::new(envelope);
+        facet_postcard::peek_to_vec(peek).expect("serialize")
+    }
+
+    #[test]
+    fn payload_roundtrip_owned() {
+        let data: Vec<u8> = vec![0xDE, 0xAD, 0xBE, 0xEF];
+        let envelope = Envelope {
+            method_id: 42,
+            payload: borrowed_payload(&data),
+        };
+
+        let bytes = serialize_envelope(&envelope);
+        let decoded: Envelope<'static> =
+            facet_postcard::from_slice(&bytes).expect("deserialize owned");
+
+        assert_eq!(decoded.method_id, 42);
+        match &decoded.payload {
+            Payload::RawOwned(buf) => {
+                let inner: Vec<u8> = facet_postcard::from_slice(buf).expect("decode inner payload");
+                assert_eq!(inner, vec![0xDE, 0xAD, 0xBE, 0xEF]);
+            }
+            other => panic!("expected RawOwned, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn payload_roundtrip_borrowed() {
+        let data: Vec<u8> = vec![0xCA, 0xFE];
+        let envelope = Envelope {
+            method_id: 7,
+            payload: borrowed_payload(&data),
+        };
+
+        let bytes = serialize_envelope(&envelope);
+        let decoded: Envelope<'_> =
+            facet_postcard::from_slice_borrowed(&bytes).expect("deserialize borrowed");
+
+        assert_eq!(decoded.method_id, 7);
+        match &decoded.payload {
+            Payload::RawBorrowed(slice) => {
+                let inner: Vec<u8> =
+                    facet_postcard::from_slice(slice).expect("decode inner payload");
+                assert_eq!(inner, vec![0xCA, 0xFE]);
+            }
+            other => panic!("expected RawBorrowed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn payload_borrowed_slice_points_into_input() {
+        let data: &[u8] = &[0x01, 0x02, 0x03];
+        let envelope = Envelope {
+            method_id: 1,
+            payload: borrowed_payload(&data),
+        };
+
+        let bytes = serialize_envelope(&envelope);
+        let decoded: Envelope<'_> =
+            facet_postcard::from_slice_borrowed(&bytes).expect("deserialize borrowed");
+
+        match &decoded.payload {
+            Payload::RawBorrowed(slice) => {
+                // The borrowed slice should point into `bytes` (zero-copy)
+                let bytes_range = bytes.as_ptr_range();
+                let slice_start = slice.as_ptr();
+                assert!(
+                    bytes_range.contains(&slice_start),
+                    "borrowed slice should point into the input buffer"
+                );
+            }
+            other => panic!("expected RawBorrowed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn payload_with_string_value() {
+        let value = String::from("hello roam");
+        let envelope = Envelope {
+            method_id: 99,
+            payload: borrowed_payload(&value),
+        };
+
+        let bytes = serialize_envelope(&envelope);
+        let decoded: Envelope<'static> =
+            facet_postcard::from_slice(&bytes).expect("deserialize owned");
+
+        assert_eq!(decoded.method_id, 99);
+        match &decoded.payload {
+            Payload::RawOwned(buf) => {
+                let inner: String = facet_postcard::from_slice(buf).expect("decode inner payload");
+                assert_eq!(inner, "hello roam");
+            }
+            other => panic!("expected RawOwned, got {other:?}"),
+        }
+    }
 }
