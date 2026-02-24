@@ -9,8 +9,12 @@ use facet::{Facet, FacetOpaqueAdapter, OpaqueDeserialize, OpaqueSerialize, PtrCo
 
 /// Per-connection limits advertised by a peer.
 // r[impl session.connection-settings]
+// r[impl session.parity]
+// r[impl connection.parity]
 #[derive(Debug, Clone, PartialEq, Eq, Facet)]
 pub struct ConnectionSettings {
+    /// Whether this peer will use odd or even IDs for requests and channels on this connection.
+    pub parity: Parity,
     /// Maximum number of in-flight requests this peer is willing to accept on this connection.
     pub max_concurrent_requests: u32,
 }
@@ -70,10 +74,8 @@ structstruck::strike! {
                     /// Must be equal to 7
                     pub version: u32,
 
-                    /// Parity claimed by the initiator — acceptor will take the other
-                    pub parity: Parity,
-
                     /// Connection limits advertised by the initiator for the root connection.
+                    /// Parity is included in ConnectionSettings.
                     pub connection_settings: ConnectionSettings,
 
                     /// Metadata associated with the connection.
@@ -109,10 +111,8 @@ structstruck::strike! {
                 // r[impl connection.virtual]
                 // r[impl session.connection-settings.open]
                 ConnectionOpen(pub struct ConnectionOpen<'payload> {
-                    /// Parity requested by the opener for this virtual connection.
-                    pub parity: Parity,
-
                     /// Connection limits advertised by the opener.
+                    /// Parity is included in ConnectionSettings.
                     pub connection_settings: ConnectionSettings,
 
                     /// Metadata associated with the connection.
