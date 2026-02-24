@@ -196,8 +196,8 @@ impl<R: ReplySink> SinkCall<R> {
 
 impl<T, E, R> Call<T, E> for SinkCall<R>
 where
-    T: facet::Facet<'static>,
-    E: facet::Facet<'static>,
+    T: for<'a> facet::Facet<'a>,
+    E: for<'a> facet::Facet<'a>,
     R: ReplySink,
 {
     async fn reply(self, result: Result<T, E>) {

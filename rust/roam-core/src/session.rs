@@ -255,7 +255,7 @@ where
             unreachable!("called handle_incoming_protocol_error on non-ProtocolError");
         };
         self.teardown_local().await;
-        SessionError::RemoteProtocolError(err.description.clone())
+        SessionError::RemoteProtocolError(err.description.to_string())
     }
 
     pub(crate) fn role(&self) -> SessionRole {
