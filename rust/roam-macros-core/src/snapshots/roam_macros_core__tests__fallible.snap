@@ -54,11 +54,11 @@ where
 {
     async fn handle(&self, call: ::roam::SelfRef<::roam::RequestCall<'static>>, reply: R) {
         let method_id = call.method_id;
+        let args_bytes = match &call.args {
+            ::roam::Payload::Incoming(bytes) => bytes,
+            _ => return,
+        };
         if method_id == calc_service_descriptor().methods[0usize].id {
-            let args_bytes = match &call.args {
-                ::roam::Payload::Incoming(bytes) => bytes,
-                _ => return,
-            };
             let args: (f64, f64) = match ::roam::facet_postcard::from_slice_borrowed(args_bytes) {
                 Ok(v) => v,
                 Err(_) => return,

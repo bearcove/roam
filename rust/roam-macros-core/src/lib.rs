@@ -238,6 +238,10 @@ fn generate_dispatcher(parsed: &ServiceTrait, roam: &TokenStream2) -> TokenStrea
     } else {
         quote! {
             let method_id = call.method_id;
+            let args_bytes = match &call.args {
+                #roam::Payload::Incoming(bytes) => bytes,
+                _ => return,
+            };
             #(#dispatch_arms)*
         }
     };
@@ -312,10 +316,6 @@ fn generate_dispatch_arm(
 
     quote! {
         if method_id == #descriptor_fn_name().methods[#idx].id {
-            let args_bytes = match &call.args {
-                #roam::Payload::Incoming(bytes) => bytes,
-                _ => return,
-            };
             let args: #args_tuple_type = match #roam::facet_postcard::from_slice_borrowed(args_bytes) {
                 Ok(v) => v,
                 Err(_) => return,
