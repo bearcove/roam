@@ -404,6 +404,7 @@ where
             .link_permit
             .alloc(frame_bytes.len())
             .map_err(StableConduitError::Io)?;
+        // [FIXME] THIS IS WHAT SCATTER-GATHER IS FOR GOD DAMN IT
         slot.as_mut_slice().copy_from_slice(&frame_bytes);
         slot.commit();
 
