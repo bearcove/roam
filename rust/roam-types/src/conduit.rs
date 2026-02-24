@@ -40,9 +40,9 @@ pub trait MsgFamily: 'static {
 ///   transparently. Replay buffer stores encoded bytes (no clone needed).
 // r[impl conduit]
 pub trait Conduit {
-    type Msg<'a>;
-    type Tx: for<'a> ConduitTx<Msg<'a> = Self::Msg<'a>>;
-    type Rx: for<'a> ConduitRx<Msg<'a> = Self::Msg<'a>>;
+    type Msg: MsgFamily;
+    type Tx: ConduitTx<Msg = Self::Msg>;
+    type Rx: ConduitRx<Msg = Self::Msg>;
 
     // r[impl conduit.split]
     fn split(self) -> (Self::Tx, Self::Rx);
@@ -54,8 +54,8 @@ pub trait Conduit {
 /// serializes and writes.
 // r[impl conduit.permit]
 pub trait ConduitTx {
-    type Msg<'a>;
-    type Permit<'a>: for<'m> ConduitTxPermit<Msg<'m> = Self::Msg<'m>>
+    type Msg: MsgFamily;
+    type Permit<'a>: for<'m> ConduitTxPermit<Msg = Self::Msg>
     where
         Self: 'a;
 
@@ -77,10 +77,10 @@ pub trait ConduitTx {
 /// Permit for sending exactly one message through a [`ConduitTx`].
 // r[impl conduit.permit.send]
 pub trait ConduitTxPermit {
-    type Msg<'a>;
+    type Msg: MsgFamily;
     type Error: std::error::Error + Send + Sync + 'static;
 
-    fn send(self, item: Self::Msg<'_>) -> Result<(), Self::Error>;
+    fn send(self, item: <Self::Msg as MsgFamily>::Msg<'_>) -> Result<(), Self::Error>;
 }
 
 /// Receiving half of a [`Conduit`].
@@ -88,13 +88,15 @@ pub trait ConduitTxPermit {
 /// Yields decoded values as [`SelfRef<Msg<'static>>`](SelfRef) (value + backing storage).
 /// Uses a precomputed `TypePlanCore` for fast plan-driven deserialization.
 pub trait ConduitRx {
-    type Msg<'a>: 'a;
+    type Msg: MsgFamily;
     type Error: std::error::Error + Send + Sync + 'static;
 
     /// Receive and decode the next message.
     ///
     /// Returns `Ok(None)` when the peer has closed.
-    async fn recv(&mut self) -> Result<Option<SelfRef<Self::Msg<'static>>>, Self::Error>;
+    async fn recv(
+        &mut self,
+    ) -> Result<Option<SelfRef<<Self::Msg as MsgFamily>::Msg<'static>>>, Self::Error>;
 }
 
 /// Yields new conduits from inbound connections.
