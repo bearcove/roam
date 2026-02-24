@@ -6,9 +6,11 @@ use roam_types::{
     Metadata, OpenConnection, Parity, ProtocolError, RejectConnection, SelfRef, SessionRole,
 };
 
+// r[impl session.handshake]
 /// Current roam session protocol version.
 pub const PROTOCOL_VERSION: u32 = 7;
 
+// r[impl connection]
 /// Static data for one active connection.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConnectionState {
@@ -82,10 +84,13 @@ enum ConnectionSlot {
     PendingOutbound(PendingOutboundOpen),
 }
 
+// r[impl session]
 pub struct Session<C: Conduit> {
     tx: Option<C::Tx>,
     rx: C::Rx,
+    // r[impl session.role]
     role: SessionRole,
+    // r[impl session.parity]
     local_session_parity: Parity,
     slots: BTreeMap<ConnectionId, ConnectionSlot>,
 }
@@ -94,16 +99,133 @@ impl<C> Session<C>
 where
     C: Conduit<Msg = MessageFamily>,
 {
-    fn new(
-        tx: C::Tx,
-        rx: C::Rx,
+    /// Create a pre-handshake session from a split conduit.
+    /// Role and parity are placeholders until handshake completes.
+    fn pre_handshake(tx: C::Tx, rx: C::Rx) -> Self {
+        Self {
+            tx: Some(tx),
+            rx,
+            role: SessionRole::Initiator,
+            local_session_parity: Parity::Odd,
+            slots: BTreeMap::new(),
+        }
+    }
+
+    // r[impl session.handshake]
+    // r[impl session.connection-settings.hello]
+    // r[impl rpc.session-setup]
+    async fn establish_as_initiator(
+        &mut self,
+        parity: Parity,
+        root_settings: ConnectionSettings,
+        metadata: Metadata,
+    ) -> Result<(), SessionError> {
+        let hello = Message::new(
+            ConnectionId::ROOT,
+            MessagePayload::Hello(Hello {
+                version: PROTOCOL_VERSION,
+                parity,
+                connection_settings: root_settings.clone(),
+                metadata,
+            }),
+        );
+        self.send(hello).await?;
+
+        let first = self
+            .recv()
+            .await?
+            .ok_or(SessionError::UnexpectedEof("waiting for HelloYourself"))?;
+
+        match first.payload() {
+            MessagePayload::HelloYourself(reply) => {
+                if !first.connection_id().is_root() {
+                    return Err(self
+                        .protocol_violation("HelloYourself must use connection ID 0")
+                        .await);
+                }
+                self.finish_handshake(
+                    SessionRole::Initiator,
+                    parity,
+                    root_settings,
+                    reply.connection_settings.clone(),
+                );
+                Ok(())
+            }
+            MessagePayload::ProtocolError(_) => {
+                Err(self.handle_incoming_protocol_error(&first).await)
+            }
+            _ => Err(self
+                .protocol_violation("expected HelloYourself during handshake")
+                .await),
+        }
+    }
+
+    // r[impl session.handshake]
+    // r[impl session.parity]
+    // r[impl session.connection-settings.hello]
+    // r[impl rpc.session-setup]
+    async fn establish_as_acceptor(
+        &mut self,
+        root_settings: ConnectionSettings,
+        metadata: Metadata,
+    ) -> Result<(), SessionError> {
+        let first = self
+            .recv()
+            .await?
+            .ok_or(SessionError::UnexpectedEof("waiting for Hello"))?;
+
+        let MessagePayload::Hello(hello) = first.payload() else {
+            if matches!(first.payload(), MessagePayload::ProtocolError(_)) {
+                return Err(self.handle_incoming_protocol_error(&first).await);
+            }
+            return Err(self
+                .protocol_violation("expected Hello during handshake")
+                .await);
+        };
+
+        if !first.connection_id().is_root() {
+            return Err(self
+                .protocol_violation("Hello must use connection ID 0")
+                .await);
+        }
+        if hello.version != PROTOCOL_VERSION {
+            return Err(self
+                .protocol_violation(&format!("unsupported Hello version {}", hello.version))
+                .await);
+        }
+
+        let local_parity = hello.parity.other();
+        let peer_root_settings = hello.connection_settings.clone();
+
+        let reply = Message::new(
+            ConnectionId::ROOT,
+            MessagePayload::HelloYourself(HelloYourself {
+                connection_settings: root_settings.clone(),
+                metadata,
+            }),
+        );
+        self.send(reply).await?;
+
+        self.finish_handshake(
+            SessionRole::Acceptor,
+            local_parity,
+            root_settings,
+            peer_root_settings,
+        );
+        Ok(())
+    }
+
+    // r[impl connection.root]
+    fn finish_handshake(
+        &mut self,
         role: SessionRole,
         local_session_parity: Parity,
         local_root_settings: ConnectionSettings,
         peer_root_settings: ConnectionSettings,
-    ) -> Self {
-        let mut slots = BTreeMap::new();
-        slots.insert(
+    ) {
+        self.role = role;
+        self.local_session_parity = local_session_parity;
+        self.slots.insert(
             ConnectionId::ROOT,
             ConnectionSlot::Active(ConnectionState {
                 id: ConnectionId::ROOT,
@@ -113,35 +235,43 @@ where
                 peer_settings: peer_root_settings,
             }),
         );
-
-        Self {
-            tx: Some(tx),
-            rx,
-            role,
-            local_session_parity,
-            slots,
-        }
     }
 
-    pub fn role(&self) -> SessionRole {
+    /// Handle an incoming ProtocolError message, validating connection ID.
+    // r[impl session.protocol-error]
+    // r[impl session.message.connection-id]
+    async fn handle_incoming_protocol_error(
+        &mut self,
+        msg: &SelfRef<Message<'static>>,
+    ) -> SessionError {
+        if !msg.connection_id().is_root() {
+            return self
+                .protocol_violation("ProtocolError must use connection ID 0")
+                .await;
+        }
+        let MessagePayload::ProtocolError(err) = msg.payload() else {
+            unreachable!("called handle_incoming_protocol_error on non-ProtocolError");
+        };
+        self.teardown_local().await;
+        SessionError::RemoteProtocolError(err.description.clone())
+    }
+
+    pub(crate) fn role(&self) -> SessionRole {
         self.role
     }
 
-    pub fn local_session_parity(&self) -> Parity {
+    pub(crate) fn local_session_parity(&self) -> Parity {
         self.local_session_parity
     }
 
-    pub fn peer_session_parity(&self) -> Parity {
+    pub(crate) fn peer_session_parity(&self) -> Parity {
         self.local_session_parity.other()
     }
 
-    pub fn connection(&self, conn_id: ConnectionId) -> Option<&ConnectionState> {
+    pub(crate) fn connection(&self, conn_id: ConnectionId) -> Option<&ConnectionState> {
         match self.slots.get(&conn_id) {
             Some(ConnectionSlot::Active(state)) => Some(state),
-            Some(ConnectionSlot::PendingInbound(_)) | Some(ConnectionSlot::PendingOutbound(_)) => {
-                None
-            }
-            None => None,
+            _ => None,
         }
     }
 
@@ -154,7 +284,11 @@ where
         Ok(())
     }
 
-    pub async fn open_connection(
+    // r[impl connection.open]
+    // r[impl connection.virtual]
+    // r[impl connection.parity]
+    // r[impl rpc.virtual-connection.open]
+    pub(crate) async fn open_connection(
         &mut self,
         conn_id: ConnectionId,
         local_parity: Parity,
@@ -196,66 +330,69 @@ where
         Ok(())
     }
 
-    pub async fn accept_connection(
+    // r[impl rpc.virtual-connection.accept]
+    // r[impl session.connection-settings.open]
+    pub(crate) async fn accept_connection(
         &mut self,
         conn_id: ConnectionId,
         local_settings: ConnectionSettings,
         metadata: Metadata,
     ) -> Result<(), SessionError> {
-        let slot = self.slots.remove(&conn_id).ok_or_else(|| {
-            SessionError::InvalidState(format!("no pending inbound open for {}", conn_id.0))
-        })?;
-        let pending = match slot {
-            ConnectionSlot::PendingInbound(pending) => pending,
-            ConnectionSlot::Active(_) | ConnectionSlot::PendingOutbound(_) => {
-                self.slots.insert(conn_id, slot);
-                return Err(SessionError::InvalidState(format!(
-                    "no pending inbound open for {}",
-                    conn_id.0
-                )));
-            }
-        };
-
-        let local_parity = pending.peer_parity.other();
-        self.slots.insert(
-            conn_id,
-            ConnectionSlot::Active(ConnectionState {
-                id: conn_id,
-                local_parity,
-                peer_parity: pending.peer_parity,
-                local_settings: local_settings.clone(),
-                peer_settings: pending.peer_settings,
-            }),
-        );
-
-        let payload = MessagePayload::AcceptConnection(AcceptConnection {
-            connection_settings: local_settings,
-            metadata,
-        });
-        self.send(Message::new(conn_id, payload)).await
-    }
-
-    pub async fn reject_connection(
-        &mut self,
-        conn_id: ConnectionId,
-        metadata: Metadata,
-    ) -> Result<(), SessionError> {
-        let slot = self.slots.remove(&conn_id);
-        let Some(ConnectionSlot::PendingInbound(_)) = slot else {
-            if let Some(slot) = slot {
-                self.slots.insert(conn_id, slot);
-            }
+        let Some(ConnectionSlot::PendingInbound(pending)) = self.slots.get(&conn_id) else {
             return Err(SessionError::InvalidState(format!(
                 "no pending inbound open for {}",
                 conn_id.0
             )));
         };
+        let local_parity = pending.peer_parity.other();
+        let peer_parity = pending.peer_parity;
+        let peer_settings = pending.peer_settings.clone();
 
-        let payload = MessagePayload::RejectConnection(RejectConnection { metadata });
-        self.send(Message::new(conn_id, payload)).await
+        let payload = MessagePayload::AcceptConnection(AcceptConnection {
+            connection_settings: local_settings.clone(),
+            metadata,
+        });
+        self.send(Message::new(conn_id, payload)).await?;
+
+        self.slots.insert(
+            conn_id,
+            ConnectionSlot::Active(ConnectionState {
+                id: conn_id,
+                local_parity,
+                peer_parity,
+                local_settings,
+                peer_settings,
+            }),
+        );
+        Ok(())
     }
 
-    pub async fn close_connection(
+    // r[impl connection.open.rejection]
+    pub(crate) async fn reject_connection(
+        &mut self,
+        conn_id: ConnectionId,
+        metadata: Metadata,
+    ) -> Result<(), SessionError> {
+        if !matches!(
+            self.slots.get(&conn_id),
+            Some(ConnectionSlot::PendingInbound(_))
+        ) {
+            return Err(SessionError::InvalidState(format!(
+                "no pending inbound open for {}",
+                conn_id.0
+            )));
+        }
+
+        let payload = MessagePayload::RejectConnection(RejectConnection { metadata });
+        self.send(Message::new(conn_id, payload)).await?;
+
+        self.slots.remove(&conn_id);
+        Ok(())
+    }
+
+    // r[impl connection.close]
+    // r[impl connection.root]
+    pub(crate) async fn close_connection(
         &mut self,
         conn_id: ConnectionId,
         metadata: Metadata,
@@ -265,22 +402,25 @@ where
                 "cannot close root connection".into(),
             ));
         }
-        let slot = self.slots.remove(&conn_id);
-        let Some(ConnectionSlot::Active(_)) = slot else {
-            if let Some(slot) = slot {
-                self.slots.insert(conn_id, slot);
-            }
+        if !matches!(self.slots.get(&conn_id), Some(ConnectionSlot::Active(_))) {
             return Err(SessionError::InvalidState(format!(
                 "connection {} is not active",
                 conn_id.0
             )));
-        };
+        }
 
         let payload = MessagePayload::CloseConnection(CloseConnection { metadata });
-        self.send(Message::new(conn_id, payload)).await
+        self.send(Message::new(conn_id, payload)).await?;
+
+        self.slots.remove(&conn_id);
+        Ok(())
     }
 
-    pub async fn send_rpc_message<'msg>(&self, msg: Message<'msg>) -> Result<(), SessionError> {
+    // r[impl session.message]
+    pub(crate) async fn send_rpc_message<'msg>(
+        &self,
+        msg: Message<'msg>,
+    ) -> Result<(), SessionError> {
         let conn_id = msg.connection_id();
         if !matches!(self.slots.get(&conn_id), Some(ConnectionSlot::Active(_))) {
             return Err(SessionError::InvalidState(format!(
@@ -298,13 +438,16 @@ where
         self.send(msg).await
     }
 
-    pub async fn recv_event(&mut self) -> Result<SessionEvent, SessionError> {
-        let msg = recv_message(&mut self.rx)
+    pub(crate) async fn recv_event(&mut self) -> Result<SessionEvent, SessionError> {
+        let msg = self
+            .recv()
             .await?
             .ok_or(SessionError::UnexpectedEof("receiving session message"))?;
         self.handle_incoming(msg).await
     }
 
+    // r[impl session.message.payloads]
+    // r[impl session.message.connection-id]
     async fn handle_incoming(
         &mut self,
         msg: SelfRef<Message<'static>>,
@@ -312,18 +455,18 @@ where
         let conn_id = msg.connection_id();
 
         match msg.payload() {
-            MessagePayload::Hello(_) => {
-                let description = "unexpected Hello after handshake";
-                Err(self.protocol_violation(description).await)
+            // r[impl session.handshake]
+            MessagePayload::Hello(_) => Err(self
+                .protocol_violation("unexpected Hello after handshake")
+                .await),
+            MessagePayload::HelloYourself(_) => Err(self
+                .protocol_violation("unexpected HelloYourself after handshake")
+                .await),
+            // r[impl session.protocol-error]
+            MessagePayload::ProtocolError(_) => {
+                Err(self.handle_incoming_protocol_error(&msg).await)
             }
-            MessagePayload::HelloYourself(_) => {
-                let description = "unexpected HelloYourself after handshake";
-                Err(self.protocol_violation(description).await)
-            }
-            MessagePayload::ProtocolError(err) => {
-                self.teardown_local().await;
-                Err(SessionError::RemoteProtocolError(err.description.clone()))
-            }
+            // r[impl connection.open]
             MessagePayload::OpenConnection(open) => {
                 if conn_id.is_root() {
                     return Err(self
@@ -356,17 +499,18 @@ where
                     metadata: open.metadata.clone(),
                 })
             }
+            // r[impl connection.open]
             MessagePayload::AcceptConnection(accept) => {
                 if conn_id.is_root() {
                     return Err(self
                         .protocol_violation("AcceptConnection cannot use connection 0")
                         .await);
                 }
-                let slot = self.slots.remove(&conn_id).ok_or_else(|| {
-                    SessionError::ProtocolViolation(
-                        "AcceptConnection without matching outbound open".into(),
-                    )
-                })?;
+                let Some(slot) = self.slots.remove(&conn_id) else {
+                    return Err(self
+                        .protocol_violation("AcceptConnection without matching outbound open")
+                        .await);
+                };
                 let pending = match slot {
                     ConnectionSlot::PendingOutbound(pending) => pending,
                     ConnectionSlot::Active(_) | ConnectionSlot::PendingInbound(_) => {
@@ -389,6 +533,7 @@ where
                 );
                 Ok(SessionEvent::OutgoingConnectionAccepted { conn_id })
             }
+            // r[impl connection.open.rejection]
             MessagePayload::RejectConnection(reject) => {
                 if conn_id.is_root() {
                     return Err(self
@@ -409,6 +554,8 @@ where
                     metadata: reject.metadata.clone(),
                 })
             }
+            // r[impl connection.close]
+            // r[impl connection.close.semantics]
             MessagePayload::CloseConnection(close) => {
                 if conn_id.is_root() {
                     return Err(self
@@ -452,9 +599,24 @@ where
             .tx
             .as_ref()
             .ok_or_else(|| SessionError::InvalidState("session transport already closed".into()))?;
-        send_message(tx, msg).await
+        let permit = tx
+            .reserve()
+            .await
+            .map_err(|e| SessionError::Transport(format!("reserve failed: {e}")))?;
+        permit
+            .send(msg)
+            .map_err(|e| SessionError::Transport(format!("send failed: {e}")))?;
+        Ok(())
     }
 
+    async fn recv(&mut self) -> Result<Option<SelfRef<Message<'static>>>, SessionError> {
+        self.rx
+            .recv()
+            .await
+            .map_err(|e| SessionError::Transport(format!("recv failed: {e}")))
+    }
+
+    // r[impl session.protocol-error]
     async fn protocol_violation(&mut self, description: &str) -> SessionError {
         let error = SessionError::ProtocolViolation(description.to_string());
         if let Some(tx) = self.tx.take() {
@@ -464,7 +626,10 @@ where
                     description: description.to_string(),
                 }),
             );
-            let _ = send_message(&tx, protocol_error).await;
+            // Best-effort: ignore send/close failures during violation teardown
+            if let Ok(permit) = tx.reserve().await {
+                let _ = permit.send(protocol_error);
+            }
             let _ = tx.close().await;
         }
         self.slots.clear();
@@ -479,10 +644,12 @@ where
     }
 }
 
+// r[impl session.role]
 pub fn initiator<C>(conduit: C) -> SessionInitiatorBuilder<C> {
     SessionInitiatorBuilder::new(conduit)
 }
 
+// r[impl session.role]
 pub fn acceptor<C>(conduit: C) -> SessionAcceptorBuilder<C> {
     SessionAcceptorBuilder::new(conduit)
 }
@@ -528,54 +695,12 @@ impl<C> SessionInitiatorBuilder<C> {
     where
         C: Conduit<Msg = MessageFamily>,
     {
-        let (tx, mut rx) = self.conduit.split();
-
-        let hello = Message::new(
-            ConnectionId::ROOT,
-            MessagePayload::Hello(Hello {
-                version: PROTOCOL_VERSION,
-                parity: self.parity,
-                connection_settings: self.root_settings.clone(),
-                metadata: self.metadata,
-            }),
-        );
-        send_message(&tx, hello).await?;
-
-        let first = recv_message(&mut rx)
-            .await?
-            .ok_or(SessionError::UnexpectedEof("waiting for HelloYourself"))?;
-
-        match first.payload() {
-            MessagePayload::HelloYourself(reply) => {
-                if !first.connection_id().is_root() {
-                    let _ =
-                        send_protocol_error_and_close(tx, "HelloYourself must use connection ID 0")
-                            .await;
-                    return Err(SessionError::ProtocolViolation(
-                        "HelloYourself used non-root connection ID".into(),
-                    ));
-                }
-
-                Ok(Session::new(
-                    tx,
-                    rx,
-                    SessionRole::Initiator,
-                    self.parity,
-                    self.root_settings,
-                    reply.connection_settings.clone(),
-                ))
-            }
-            MessagePayload::ProtocolError(err) => {
-                let _ = tx.close().await;
-                Err(SessionError::RemoteProtocolError(err.description.clone()))
-            }
-            _ => {
-                let _ = send_protocol_error_and_close(tx, "expected HelloYourself").await;
-                Err(SessionError::ProtocolViolation(
-                    "expected HelloYourself during handshake".into(),
-                ))
-            }
-        }
+        let (tx, rx) = self.conduit.split();
+        let mut session = Session::pre_handshake(tx, rx);
+        session
+            .establish_as_initiator(self.parity, self.root_settings, self.metadata)
+            .await?;
+        Ok(session)
     }
 }
 
@@ -613,99 +738,16 @@ impl<C> SessionAcceptorBuilder<C> {
     where
         C: Conduit<Msg = MessageFamily>,
     {
-        let (tx, mut rx) = self.conduit.split();
-        let first = recv_message(&mut rx)
-            .await?
-            .ok_or(SessionError::UnexpectedEof("waiting for Hello"))?;
-
-        let MessagePayload::Hello(hello) = first.payload() else {
-            if let MessagePayload::ProtocolError(err) = first.payload() {
-                let _ = tx.close().await;
-                return Err(SessionError::RemoteProtocolError(err.description.clone()));
-            }
-            let _ = send_protocol_error_and_close(tx, "expected Hello").await;
-            return Err(SessionError::ProtocolViolation(
-                "expected Hello during handshake".into(),
-            ));
-        };
-
-        if !first.connection_id().is_root() {
-            let _ = send_protocol_error_and_close(tx, "Hello must use connection ID 0").await;
-            return Err(SessionError::ProtocolViolation(
-                "Hello used non-root connection ID".into(),
-            ));
-        }
-        if hello.version != PROTOCOL_VERSION {
-            let _ = send_protocol_error_and_close(tx, "unsupported Hello version").await;
-            return Err(SessionError::ProtocolViolation(format!(
-                "unsupported Hello version {}",
-                hello.version
-            )));
-        }
-
-        let local_parity = hello.parity.other();
-        let peer_root_settings = hello.connection_settings.clone();
-
-        let reply = Message::new(
-            ConnectionId::ROOT,
-            MessagePayload::HelloYourself(HelloYourself {
-                connection_settings: self.root_settings.clone(),
-                metadata: self.metadata,
-            }),
-        );
-        send_message(&tx, reply).await?;
-
-        Ok(Session::new(
-            tx,
-            rx,
-            SessionRole::Acceptor,
-            local_parity,
-            self.root_settings,
-            peer_root_settings,
-        ))
+        let (tx, rx) = self.conduit.split();
+        let mut session = Session::pre_handshake(tx, rx);
+        session
+            .establish_as_acceptor(self.root_settings, self.metadata)
+            .await?;
+        Ok(session)
     }
 }
 
-async fn send_message<'msg, Tx>(tx: &Tx, msg: Message<'msg>) -> Result<(), SessionError>
-where
-    Tx: ConduitTx<Msg = MessageFamily>,
-{
-    let permit = tx
-        .reserve()
-        .await
-        .map_err(|e| SessionError::Transport(format!("reserve failed: {e}")))?;
-    permit
-        .send(msg)
-        .map_err(|e| SessionError::Transport(format!("send failed: {e}")))?;
-    Ok(())
-}
-
-async fn recv_message<Rx>(rx: &mut Rx) -> Result<Option<SelfRef<Message<'static>>>, SessionError>
-where
-    Rx: ConduitRx<Msg = MessageFamily>,
-{
-    rx.recv()
-        .await
-        .map_err(|e| SessionError::Transport(format!("recv failed: {e}")))
-}
-
-async fn send_protocol_error_and_close<Tx>(tx: Tx, description: &str) -> Result<(), SessionError>
-where
-    Tx: ConduitTx<Msg = MessageFamily>,
-{
-    let protocol_error = Message::new(
-        ConnectionId::ROOT,
-        MessagePayload::ProtocolError(ProtocolError {
-            description: description.to_string(),
-        }),
-    );
-    let _ = send_message(&tx, protocol_error).await;
-    tx.close()
-        .await
-        .map_err(|e| SessionError::Transport(format!("close failed: {e}")))?;
-    Ok(())
-}
-
+// r[impl session.parity]
 fn id_matches_parity(id: u64, parity: &Parity) -> bool {
     match parity {
         Parity::Odd => !id.is_multiple_of(2),
