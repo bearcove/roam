@@ -75,14 +75,19 @@ struct PendingOutboundOpen {
     local_settings: ConnectionSettings,
 }
 
+#[derive(Debug, Clone)]
+enum ConnectionSlot {
+    Active(ConnectionState),
+    PendingInbound(PendingInboundOpen),
+    PendingOutbound(PendingOutboundOpen),
+}
+
 pub struct Session<C: Conduit> {
     tx: Option<C::Tx>,
     rx: C::Rx,
     role: SessionRole,
     local_session_parity: Parity,
-    connections: BTreeMap<ConnectionId, ConnectionState>,
-    pending_inbound: BTreeMap<ConnectionId, PendingInboundOpen>,
-    pending_outbound: BTreeMap<ConnectionId, PendingOutboundOpen>,
+    slots: BTreeMap<ConnectionId, ConnectionSlot>,
 }
 
 impl<C> Session<C>
@@ -97,16 +102,16 @@ where
         local_root_settings: ConnectionSettings,
         peer_root_settings: ConnectionSettings,
     ) -> Self {
-        let mut connections = BTreeMap::new();
-        connections.insert(
+        let mut slots = BTreeMap::new();
+        slots.insert(
             ConnectionId::ROOT,
-            ConnectionState {
+            ConnectionSlot::Active(ConnectionState {
                 id: ConnectionId::ROOT,
                 local_parity: local_session_parity,
                 peer_parity: local_session_parity.other(),
                 local_settings: local_root_settings,
                 peer_settings: peer_root_settings,
-            },
+            }),
         );
 
         Self {
@@ -114,9 +119,7 @@ where
             rx,
             role,
             local_session_parity,
-            connections,
-            pending_inbound: BTreeMap::new(),
-            pending_outbound: BTreeMap::new(),
+            slots,
         }
     }
 
@@ -133,7 +136,13 @@ where
     }
 
     pub fn connection(&self, conn_id: ConnectionId) -> Option<&ConnectionState> {
-        self.connections.get(&conn_id)
+        match self.slots.get(&conn_id) {
+            Some(ConnectionSlot::Active(state)) => Some(state),
+            Some(ConnectionSlot::PendingInbound(_)) | Some(ConnectionSlot::PendingOutbound(_)) => {
+                None
+            }
+            None => None,
+        }
     }
 
     pub async fn close(mut self) -> Result<(), SessionError> {
@@ -163,10 +172,7 @@ where
                 conn_id.0, self.local_session_parity
             )));
         }
-        if self.connections.contains_key(&conn_id)
-            || self.pending_inbound.contains_key(&conn_id)
-            || self.pending_outbound.contains_key(&conn_id)
-        {
+        if self.slots.contains_key(&conn_id) {
             return Err(SessionError::InvalidState(format!(
                 "connection id {} already in use",
                 conn_id.0
@@ -180,12 +186,12 @@ where
         });
         self.send(Message::new(conn_id, payload)).await?;
 
-        self.pending_outbound.insert(
+        self.slots.insert(
             conn_id,
-            PendingOutboundOpen {
+            ConnectionSlot::PendingOutbound(PendingOutboundOpen {
                 local_parity,
                 local_settings,
-            },
+            }),
         );
         Ok(())
     }
@@ -196,20 +202,30 @@ where
         local_settings: ConnectionSettings,
         metadata: Metadata,
     ) -> Result<(), SessionError> {
-        let pending = self.pending_inbound.remove(&conn_id).ok_or_else(|| {
+        let slot = self.slots.remove(&conn_id).ok_or_else(|| {
             SessionError::InvalidState(format!("no pending inbound open for {}", conn_id.0))
         })?;
+        let pending = match slot {
+            ConnectionSlot::PendingInbound(pending) => pending,
+            ConnectionSlot::Active(_) | ConnectionSlot::PendingOutbound(_) => {
+                self.slots.insert(conn_id, slot);
+                return Err(SessionError::InvalidState(format!(
+                    "no pending inbound open for {}",
+                    conn_id.0
+                )));
+            }
+        };
 
         let local_parity = pending.peer_parity.other();
-        self.connections.insert(
+        self.slots.insert(
             conn_id,
-            ConnectionState {
+            ConnectionSlot::Active(ConnectionState {
                 id: conn_id,
                 local_parity,
                 peer_parity: pending.peer_parity,
                 local_settings: local_settings.clone(),
                 peer_settings: pending.peer_settings,
-            },
+            }),
         );
 
         let payload = MessagePayload::AcceptConnection(AcceptConnection {
@@ -224,12 +240,16 @@ where
         conn_id: ConnectionId,
         metadata: Metadata,
     ) -> Result<(), SessionError> {
-        if self.pending_inbound.remove(&conn_id).is_none() {
+        let slot = self.slots.remove(&conn_id);
+        let Some(ConnectionSlot::PendingInbound(_)) = slot else {
+            if let Some(slot) = slot {
+                self.slots.insert(conn_id, slot);
+            }
             return Err(SessionError::InvalidState(format!(
                 "no pending inbound open for {}",
                 conn_id.0
             )));
-        }
+        };
 
         let payload = MessagePayload::RejectConnection(RejectConnection { metadata });
         self.send(Message::new(conn_id, payload)).await
@@ -245,12 +265,16 @@ where
                 "cannot close root connection".into(),
             ));
         }
-        if self.connections.remove(&conn_id).is_none() {
+        let slot = self.slots.remove(&conn_id);
+        let Some(ConnectionSlot::Active(_)) = slot else {
+            if let Some(slot) = slot {
+                self.slots.insert(conn_id, slot);
+            }
             return Err(SessionError::InvalidState(format!(
                 "connection {} is not active",
                 conn_id.0
             )));
-        }
+        };
 
         let payload = MessagePayload::CloseConnection(CloseConnection { metadata });
         self.send(Message::new(conn_id, payload)).await
@@ -258,7 +282,7 @@ where
 
     pub async fn send_rpc_message<'msg>(&self, msg: Message<'msg>) -> Result<(), SessionError> {
         let conn_id = msg.connection_id();
-        if !self.connections.contains_key(&conn_id) {
+        if !matches!(self.slots.get(&conn_id), Some(ConnectionSlot::Active(_))) {
             return Err(SessionError::InvalidState(format!(
                 "connection {} is not active",
                 conn_id.0
@@ -311,21 +335,18 @@ where
                         .protocol_violation("OpenConnection ID parity mismatch")
                         .await);
                 }
-                if self.connections.contains_key(&conn_id)
-                    || self.pending_inbound.contains_key(&conn_id)
-                    || self.pending_outbound.contains_key(&conn_id)
-                {
+                if self.slots.contains_key(&conn_id) {
                     return Err(self
                         .protocol_violation("OpenConnection for already-used ID")
                         .await);
                 }
 
-                self.pending_inbound.insert(
+                self.slots.insert(
                     conn_id,
-                    PendingInboundOpen {
+                    ConnectionSlot::PendingInbound(PendingInboundOpen {
                         peer_parity: open.parity,
                         peer_settings: open.connection_settings.clone(),
-                    },
+                    }),
                 );
 
                 Ok(SessionEvent::IncomingConnectionOpen {
@@ -341,21 +362,30 @@ where
                         .protocol_violation("AcceptConnection cannot use connection 0")
                         .await);
                 }
-                let pending = self.pending_outbound.remove(&conn_id).ok_or_else(|| {
+                let slot = self.slots.remove(&conn_id).ok_or_else(|| {
                     SessionError::ProtocolViolation(
                         "AcceptConnection without matching outbound open".into(),
                     )
                 })?;
+                let pending = match slot {
+                    ConnectionSlot::PendingOutbound(pending) => pending,
+                    ConnectionSlot::Active(_) | ConnectionSlot::PendingInbound(_) => {
+                        self.slots.insert(conn_id, slot);
+                        return Err(self
+                            .protocol_violation("AcceptConnection without matching outbound open")
+                            .await);
+                    }
+                };
 
-                self.connections.insert(
+                self.slots.insert(
                     conn_id,
-                    ConnectionState {
+                    ConnectionSlot::Active(ConnectionState {
                         id: conn_id,
                         local_parity: pending.local_parity,
                         peer_parity: pending.local_parity.other(),
                         local_settings: pending.local_settings,
                         peer_settings: accept.connection_settings.clone(),
-                    },
+                    }),
                 );
                 Ok(SessionEvent::OutgoingConnectionAccepted { conn_id })
             }
@@ -365,11 +395,15 @@ where
                         .protocol_violation("RejectConnection cannot use connection 0")
                         .await);
                 }
-                if self.pending_outbound.remove(&conn_id).is_none() {
+                let slot = self.slots.remove(&conn_id);
+                let Some(ConnectionSlot::PendingOutbound(_)) = slot else {
+                    if let Some(slot) = slot {
+                        self.slots.insert(conn_id, slot);
+                    }
                     return Err(self
                         .protocol_violation("RejectConnection without matching outbound open")
                         .await);
-                }
+                };
                 Ok(SessionEvent::OutgoingConnectionRejected {
                     conn_id,
                     metadata: reject.metadata.clone(),
@@ -381,13 +415,15 @@ where
                         .protocol_violation("CloseConnection cannot use connection 0")
                         .await);
                 }
-                if self.connections.remove(&conn_id).is_none() {
+                let slot = self.slots.remove(&conn_id);
+                let Some(ConnectionSlot::Active(_)) = slot else {
+                    if let Some(slot) = slot {
+                        self.slots.insert(conn_id, slot);
+                    }
                     return Err(self
                         .protocol_violation("CloseConnection for unknown ID")
                         .await);
-                }
-                self.pending_inbound.remove(&conn_id);
-                self.pending_outbound.remove(&conn_id);
+                };
 
                 Ok(SessionEvent::ConnectionClosed {
                     conn_id,
@@ -401,7 +437,7 @@ where
             | MessagePayload::CloseChannel(_)
             | MessagePayload::ResetChannel(_)
             | MessagePayload::GrantCredit(_) => {
-                if !self.connections.contains_key(&conn_id) {
+                if !matches!(self.slots.get(&conn_id), Some(ConnectionSlot::Active(_))) {
                     return Err(self
                         .protocol_violation("rpc/channel message for unknown connection")
                         .await);
@@ -431,9 +467,7 @@ where
             let _ = send_message(&tx, protocol_error).await;
             let _ = tx.close().await;
         }
-        self.connections.clear();
-        self.pending_inbound.clear();
-        self.pending_outbound.clear();
+        self.slots.clear();
         error
     }
 
@@ -441,9 +475,7 @@ where
         if let Some(tx) = self.tx.take() {
             let _ = tx.close().await;
         }
-        self.connections.clear();
-        self.pending_inbound.clear();
-        self.pending_outbound.clear();
+        self.slots.clear();
     }
 }
 
