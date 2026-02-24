@@ -90,16 +90,6 @@ impl<C: ::roam::Caller> PingClient<C> {
     pub async fn ping(
         &self,
     ) -> Result<::roam::SelfRef<::roam::ResponseParts<'static, u64>>, ::roam::RoamError> {
-        static ARGS_PLAN_0: ::std::sync::OnceLock<&'static ::roam::RpcPlan> =
-            ::std::sync::OnceLock::new();
-        static OK_PLAN_0: ::std::sync::OnceLock<&'static ::roam::RpcPlan> =
-            ::std::sync::OnceLock::new();
-        static ERR_PLAN_0: ::std::sync::OnceLock<&'static ::roam::RpcPlan> =
-            ::std::sync::OnceLock::new();
-        let _args_plan = ARGS_PLAN_0.get_or_init(|| ::roam::RpcPlan::for_type::<()>());
-        let _ok_plan = OK_PLAN_0.get_or_init(|| ::roam::RpcPlan::for_type::<u64>());
-        let _err_plan =
-            ERR_PLAN_0.get_or_init(|| ::roam::RpcPlan::for_type::<::core::convert::Infallible>());
         let args_tuple = ();
         let method_id = ping_service_descriptor().methods[0usize].id;
         let args = ::roam::Payload::outgoing(&args_tuple);

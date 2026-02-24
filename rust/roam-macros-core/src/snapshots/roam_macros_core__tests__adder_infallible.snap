@@ -106,16 +106,6 @@ impl<C: ::roam::Caller> AdderClient<C> {
         a: i32,
         b: i32,
     ) -> Result<::roam::SelfRef<::roam::ResponseParts<'static, i32>>, ::roam::RoamError> {
-        static ARGS_PLAN_0: ::std::sync::OnceLock<&'static ::roam::RpcPlan> =
-            ::std::sync::OnceLock::new();
-        static OK_PLAN_0: ::std::sync::OnceLock<&'static ::roam::RpcPlan> =
-            ::std::sync::OnceLock::new();
-        static ERR_PLAN_0: ::std::sync::OnceLock<&'static ::roam::RpcPlan> =
-            ::std::sync::OnceLock::new();
-        let _args_plan = ARGS_PLAN_0.get_or_init(|| ::roam::RpcPlan::for_type::<(i32, i32)>());
-        let _ok_plan = OK_PLAN_0.get_or_init(|| ::roam::RpcPlan::for_type::<i32>());
-        let _err_plan =
-            ERR_PLAN_0.get_or_init(|| ::roam::RpcPlan::for_type::<::core::convert::Infallible>());
         let args_tuple = (a, b);
         let method_id = adder_service_descriptor().methods[0usize].id;
         let args = ::roam::Payload::outgoing(&args_tuple);

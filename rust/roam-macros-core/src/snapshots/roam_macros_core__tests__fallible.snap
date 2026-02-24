@@ -107,15 +107,6 @@ impl<C: ::roam::Caller> CalcClient<C> {
         b: f64,
     ) -> Result<::roam::SelfRef<::roam::ResponseParts<'static, f64>>, ::roam::RoamError<DivError>>
     {
-        static ARGS_PLAN_0: ::std::sync::OnceLock<&'static ::roam::RpcPlan> =
-            ::std::sync::OnceLock::new();
-        static OK_PLAN_0: ::std::sync::OnceLock<&'static ::roam::RpcPlan> =
-            ::std::sync::OnceLock::new();
-        static ERR_PLAN_0: ::std::sync::OnceLock<&'static ::roam::RpcPlan> =
-            ::std::sync::OnceLock::new();
-        let _args_plan = ARGS_PLAN_0.get_or_init(|| ::roam::RpcPlan::for_type::<(f64, f64)>());
-        let _ok_plan = OK_PLAN_0.get_or_init(|| ::roam::RpcPlan::for_type::<f64>());
-        let _err_plan = ERR_PLAN_0.get_or_init(|| ::roam::RpcPlan::for_type::<DivError>());
         let args_tuple = (a, b);
         let method_id = calc_service_descriptor().methods[0usize].id;
         let args = ::roam::Payload::outgoing(&args_tuple);

@@ -427,7 +427,7 @@ fn generate_client_method(
         .map(|arg| format_ident!("{}", arg.name().to_snake_case()))
         .collect();
 
-    // Args tuple value and type (for serialization)
+    // Args tuple value (for serialization)
     let args_tuple = match arg_names.len() {
         0 => quote! { () },
         1 => {
@@ -435,17 +435,6 @@ fn generate_client_method(
             quote! { (#n,) }
         }
         _ => quote! { (#(#arg_names),*) },
-    };
-    let args_tuple_type = {
-        let tys: Vec<TokenStream2> = method.args().map(|a| a.ty.to_token_stream()).collect();
-        match tys.len() {
-            0 => quote! { () },
-            1 => {
-                let t = &tys[0];
-                quote! { (#t,) }
-            }
-            _ => quote! { (#(#tys),*) },
-        }
     };
 
     // Return type
@@ -467,22 +456,9 @@ fn generate_client_method(
         )
     };
 
-    // OnceLock statics for plans (concrete types per method — safe from monomorphization merging)
-    let args_plan_static = format_ident!("ARGS_PLAN_{}", method_index);
-    let ok_plan_static = format_ident!("OK_PLAN_{}", method_index);
-    let err_plan_static = format_ident!("ERR_PLAN_{}", method_index);
-
     quote! {
         #method_doc
         pub async fn #method_name(&self, #(#params),*) -> #client_return {
-            static #args_plan_static: ::std::sync::OnceLock<&'static #roam::RpcPlan> = ::std::sync::OnceLock::new();
-            static #ok_plan_static: ::std::sync::OnceLock<&'static #roam::RpcPlan> = ::std::sync::OnceLock::new();
-            static #err_plan_static: ::std::sync::OnceLock<&'static #roam::RpcPlan> = ::std::sync::OnceLock::new();
-
-            let _args_plan = #args_plan_static.get_or_init(|| #roam::RpcPlan::for_type::<#args_tuple_type>());
-            let _ok_plan = #ok_plan_static.get_or_init(|| #roam::RpcPlan::for_type::<#ok_ty>());
-            let _err_plan = #err_plan_static.get_or_init(|| #roam::RpcPlan::for_type::<#err_ty>());
-
             let args_tuple = #args_tuple;
             let method_id = #descriptor_fn_name().methods[#idx].id;
             let args = #roam::Payload::outgoing(&args_tuple);
