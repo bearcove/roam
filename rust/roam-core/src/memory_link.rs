@@ -1,5 +1,5 @@
+use moire::sync::mpsc;
 use roam_types::{Backing, Link, LinkRx, LinkTx, LinkTxPermit, WriteSlot};
-use tokio::sync::mpsc;
 
 /// In-process [`Link`] backed by tokio mpsc channels.
 ///

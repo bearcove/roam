@@ -1,9 +1,10 @@
 use std::{collections::BTreeMap, pin::Pin, sync::Arc};
 
-use moire::sync::Mutex;
+use moire::sync::SyncMutex;
 
 use futures_util::StreamExt as _;
 use futures_util::stream::FuturesUnordered;
+use moire::task::FutureExt as _;
 use roam_types::{
     Caller, ChannelBody, ChannelId, ChannelMessage, Handler, IdAllocator, Parity, ReplySink,
     RequestBody, RequestCall, RequestId, RequestMessage, RequestResponse, RoamError, SelfRef,
@@ -19,8 +20,8 @@ type HandlerFuture = Pin<Box<dyn std::future::Future<Output = ()> + Send>>;
 
 /// State shared between the driver loop and any DriverCaller handles.
 struct DriverShared {
-    pending_responses: Mutex<BTreeMap<RequestId, ResponseSlot>>,
-    request_ids: Mutex<IdAllocator<RequestId>>,
+    pending_responses: SyncMutex<BTreeMap<RequestId, ResponseSlot>>,
+    request_ids: SyncMutex<IdAllocator<RequestId>>,
 }
 
 /// Concrete `ReplySink` implementation for the driver.
@@ -55,48 +56,47 @@ impl Caller for DriverCaller {
         &self,
         call: RequestCall<'a>,
     ) -> Result<SelfRef<RequestResponse<'static>>, RoamError> {
-        // Allocate a request ID.
-        let req_id = self.shared.request_ids.lock().unwrap().next();
+        async {
+            // Allocate a request ID.
+            let req_id = self.shared.request_ids.lock().next();
 
-        // Register the response slot before sending, so the driver can
-        // route the response even if it arrives before we start awaiting.
-        let (tx, rx) = moire::sync::oneshot::channel("driver.response");
-        self.shared
-            .pending_responses
-            .lock()
-            .unwrap()
-            .insert(req_id, tx);
+            // Register the response slot before sending, so the driver can
+            // route the response even if it arrives before we start awaiting.
+            let (tx, rx) = moire::sync::oneshot::channel("driver.response");
+            self.shared.pending_responses.lock().insert(req_id, tx);
 
-        // Send the call. This awaits the conduit permit and serializes
-        // the borrowed payload all the way to the link's write buffer.
-        let send_result = self
-            .sender
-            .send(ConnectionMessage::Request(RequestMessage {
-                id: req_id,
-                body: RequestBody::Call(call),
-            }))
-            .await;
+            // Send the call. This awaits the conduit permit and serializes
+            // the borrowed payload all the way to the link's write buffer.
+            let send_result = self
+                .sender
+                .send(ConnectionMessage::Request(RequestMessage {
+                    id: req_id,
+                    body: RequestBody::Call(call),
+                }))
+                .await;
 
-        if send_result.is_err() {
-            // Clean up the pending slot.
-            self.shared
-                .pending_responses
-                .lock()
-                .unwrap()
-                .remove(&req_id);
-            return Err(RoamError::Cancelled);
+            if send_result.is_err() {
+                // Clean up the pending slot.
+                self.shared.pending_responses.lock().remove(&req_id);
+                return Err(RoamError::Cancelled);
+            }
+
+            // Await the response from the driver loop.
+            let response_msg: SelfRef<RequestMessage<'static>> = rx
+                .named("awaiting_response")
+                .await
+                .map_err(|_| RoamError::Cancelled)?;
+
+            // Extract the Response variant from the RequestMessage.
+            let response = response_msg.map(|m| match m.body {
+                RequestBody::Response(r) => r,
+                _ => unreachable!("pending_responses only gets Response variants"),
+            });
+
+            Ok(response)
         }
-
-        // Await the response from the driver loop.
-        let response_msg = rx.await.map_err(|_| RoamError::Cancelled)?;
-
-        // Extract the Response variant from the RequestMessage.
-        let response = response_msg.map(|m| match m.body {
-            RequestBody::Response(r) => r,
-            _ => unreachable!("pending_responses only gets Response variants"),
-        });
-
-        Ok(response)
+        .named("Caller::call")
+        .await
     }
 }
 
@@ -125,8 +125,8 @@ impl<H: Handler<DriverReplySink>> Driver<H> {
             handle,
             handler: Arc::new(handler),
             shared: Arc::new(DriverShared {
-                pending_responses: Mutex::new("driver.pending_responses", BTreeMap::new()),
-                request_ids: Mutex::new("driver.request_ids", IdAllocator::new(parity)),
+                pending_responses: SyncMutex::new("driver.pending_responses", BTreeMap::new()),
+                request_ids: SyncMutex::new("driver.request_ids", IdAllocator::new(parity)),
             }),
             channels: BTreeMap::new(),
         }
@@ -198,19 +198,16 @@ impl<H: Handler<DriverReplySink>> Driver<H> {
                 _ => unreachable!(),
             });
             let handler = Arc::clone(&self.handler);
-            Some(Box::pin(async move {
-                handler.handle(call, reply).await;
-            }))
+            Some(Box::pin(
+                async move {
+                    handler.handle(call, reply).await;
+                }
+                .named("handler"),
+            ))
         } else if is_response {
             // r[impl rpc.response.one-per-request]
-            if let Some(tx) = self
-                .shared
-                .pending_responses
-                .lock()
-                .unwrap()
-                .remove(&req_id)
-            {
-                let _ = tx.send(msg);
+            if let Some(tx) = self.shared.pending_responses.lock().remove(&req_id) {
+                let _: Result<(), _> = tx.send(msg);
             }
             None
         } else {

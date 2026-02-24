@@ -1,7 +1,7 @@
+use moire::sync::mpsc;
 use roam_types::{
     Conduit, ConnectionSettings, MessageFamily, Metadata, Parity, RequestMessage, SelfRef,
 };
-use tokio::sync::mpsc;
 
 use super::{Session, SessionError};
 

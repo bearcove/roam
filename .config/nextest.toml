@@ -1,11 +1,21 @@
 # Enable experimental features
 experimental = ["setup-scripts"]
 
+[scripts.setup.moire-env]
+command = ['sh', '-c', 'echo "MOIRE_DASHBOARD=127.0.0.1:9119" >> "$NEXTEST_ENV"']
+
 [profile.loom]
 slow-timeout = { period = "10s", terminate-after = 3 }
 
 [profile.patient]
 slow-timeout = { period = "30s", terminate-after = 4 }
+
+[profile.moire]
+slow-timeout = { period = "1h", terminate-after = 24 }
+
+[[profile.moire.scripts]]
+filter = 'all()'
+setup = 'moire-env'
 
 [profile.default]
 # Fail fast - stop on first failure
