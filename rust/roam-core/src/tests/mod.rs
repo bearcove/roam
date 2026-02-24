@@ -12,8 +12,6 @@ use tokio::sync::{Notify, mpsc};
 
 use crate::{BareConduit, MemoryLink, memory_link_pair};
 
-mod session;
-
 struct StringFamily;
 
 impl MsgFamily for StringFamily {

@@ -9,6 +9,9 @@ use roam_types::{
 };
 use tokio::sync::mpsc;
 
+mod builders;
+pub use builders::*;
+
 // r[impl session.handshake]
 /// Current roam session protocol version.
 pub const PROTOCOL_VERSION: u32 = 7;
@@ -17,9 +20,15 @@ pub const PROTOCOL_VERSION: u32 = 7;
 /// Static data for one active connection.
 #[derive(Debug)]
 pub struct ConnectionState {
+    /// Unique connection identifier
     pub id: ConnectionId,
+
+    /// Our settings
     pub local_settings: ConnectionSettings,
+
+    /// The peer's settings
     pub peer_settings: ConnectionSettings,
+
     /// Sender for routing incoming request messages to the per-connection task.
     pub req_tx: mpsc::Sender<SelfRef<RequestMessage<'static>>>,
 }
@@ -61,12 +70,22 @@ pub struct Session<C: Conduit> {
     conns: BTreeMap<ConnectionId, ConnectionSlot>,
 }
 
-/// Just add more as error conditions add up
+// [TODO] Less stringly typed stuff
 #[derive(Facet, Debug)]
 #[facet(derive(Error))]
 #[repr(u8)]
 pub enum SessionError {
     ExpectedHelloYourselfGotEof,
+    /// The session or connection is in an invalid state for the requested operation.
+    InvalidState(String),
+    /// A protocol violation was detected locally.
+    ProtocolViolation(String),
+    /// The remote peer sent a ProtocolError message.
+    RemoteProtocolError(String),
+    /// An underlying transport error occurred.
+    Transport(String),
+    /// The connection was closed unexpectedly (EOF) while waiting for a message.
+    UnexpectedEof(&'static str),
 }
 
 impl<C> Session<C>
@@ -108,9 +127,9 @@ where
             .await?
             .ok_or(SessionError::UnexpectedEof("waiting for HelloYourself"))?;
 
-        match first.payload() {
+        match &first.payload {
             MessagePayload::HelloYourself(reply) => {
-                if !first.connection_id().is_root() {
+                if !first.connection_id.is_root() {
                     return Err(self
                         .protocol_violation("HelloYourself must use connection ID 0")
                         .await);
@@ -135,18 +154,18 @@ where
     // r[impl session.parity]
     // r[impl session.connection-settings.hello]
     // r[impl rpc.session-setup]
-    async fn establish_as_acceptor(
+    async fn establish_as_acceptor<'a>(
         &mut self,
         root_settings: ConnectionSettings,
-        metadata: Metadata,
+        metadata: Metadata<'a>,
     ) -> Result<mpsc::Receiver<SelfRef<RequestMessage<'static>>>, SessionError> {
         let first = self
             .recv()
             .await?
             .ok_or(SessionError::UnexpectedEof("waiting for Hello"))?;
 
-        let MessagePayload::Hello(hello) = first.payload() else {
-            if matches!(first.payload(), MessagePayload::ProtocolError(_)) {
+        let MessagePayload::Hello(hello) = &first.payload else {
+            if matches!(&first.payload, MessagePayload::ProtocolError(_)) {
                 return Err(self.handle_incoming_protocol_error(&first).await);
             }
             return Err(self
@@ -154,7 +173,7 @@ where
                 .await);
         };
 
-        if !first.connection_id().is_root() {
+        if !first.connection_id.is_root() {
             return Err(self
                 .protocol_violation("Hello must use connection ID 0")
                 .await);
@@ -220,12 +239,12 @@ where
         &mut self,
         msg: &SelfRef<Message<'static>>,
     ) -> SessionError {
-        if !msg.connection_id().is_root() {
+        if !msg.connection_id.is_root() {
             return self
                 .protocol_violation("ProtocolError must use connection ID 0")
                 .await;
         }
-        let MessagePayload::ProtocolError(err) = msg.payload() else {
+        let MessagePayload::ProtocolError(err) = &msg.payload else {
             unreachable!("called handle_incoming_protocol_error on non-ProtocolError");
         };
         self.teardown_local().await;
@@ -236,19 +255,12 @@ where
         self.role
     }
 
-    pub(crate) fn local_session_parity(&self) -> Parity {
+    pub(crate) fn parity(&self) -> Parity {
         self.parity
     }
 
-    pub(crate) fn peer_session_parity(&self) -> Parity {
+    pub(crate) fn peer_parity(&self) -> Parity {
         self.parity.other()
-    }
-
-    pub(crate) fn connection(&self, conn_id: ConnectionId) -> Option<&ConnectionState> {
-        match self.conns.get(&conn_id) {
-            Some(ConnectionSlot::Active(state)) => Some(state),
-            _ => None,
-        }
     }
 
     pub async fn close(mut self) -> Result<(), SessionError> {
@@ -268,7 +280,7 @@ where
         &mut self,
         conn_id: ConnectionId,
         local_settings: ConnectionSettings,
-        metadata: Metadata,
+        metadata: Metadata<'a>,
     ) -> Result<(), SessionError> {
         if conn_id.is_root() {
             return Err(SessionError::InvalidState(
@@ -404,28 +416,6 @@ where
         Ok(())
     }
 
-    // r[impl session.message]
-    pub(crate) async fn send_rpc_message<'msg>(
-        &self,
-        msg: Message<'msg>,
-    ) -> Result<(), SessionError> {
-        let conn_id = msg.connection_id();
-        if !matches!(self.conns.get(&conn_id), Some(ConnectionSlot::Active(_))) {
-            return Err(SessionError::InvalidState(format!(
-                "connection {} is not active",
-                conn_id.0
-            )));
-        }
-
-        if !is_rpc_or_channel_payload(msg.payload()) {
-            return Err(SessionError::InvalidState(
-                "send_rpc_message only accepts rpc/channel payloads".into(),
-            ));
-        }
-
-        self.send(msg).await
-    }
-
     // r[impl session.message.payloads]
     // r[impl session.message.connection-id]
     pub(crate) async fn recv_event(&mut self) -> Result<ConnEvent, SessionError> {
@@ -434,9 +424,9 @@ where
                 .recv()
                 .await?
                 .ok_or(SessionError::UnexpectedEof("receiving session message"))?;
-            let conn_id = msg.connection_id();
+            let conn_id = msg.connection_id;
 
-            match msg.payload() {
+            match &msg.payload {
                 // r[impl session.handshake]
                 MessagePayload::Hello(_) => {
                     return Err(self
@@ -459,7 +449,7 @@ where
                             .protocol_violation("OpenConnection cannot use connection 0")
                             .await);
                     }
-                    if !id_matches_parity(conn_id.0, &self.peer_session_parity()) {
+                    if !id_matches_parity(conn_id.0, &self.peer_parity()) {
                         return Err(self
                             .protocol_violation("OpenConnection ID parity mismatch")
                             .await);
@@ -644,110 +634,5 @@ where
     }
 }
 
-// r[impl session.role]
-pub fn initiator<C>(conduit: C) -> SessionInitiatorBuilder<C> {
-    SessionInitiatorBuilder::new(conduit)
-}
-
-// r[impl session.role]
-pub fn acceptor<C>(conduit: C) -> SessionAcceptorBuilder<C> {
-    SessionAcceptorBuilder::new(conduit)
-}
-
-pub struct SessionInitiatorBuilder<C> {
-    conduit: C,
-    root_settings: ConnectionSettings,
-    metadata: Metadata,
-}
-
-impl<C> SessionInitiatorBuilder<C> {
-    fn new(conduit: C) -> Self {
-        Self {
-            conduit,
-            root_settings: ConnectionSettings {
-                parity: Parity::Odd,
-                max_concurrent_requests: 0,
-            },
-            metadata: vec![],
-        }
-    }
-
-    pub fn parity(mut self, parity: Parity) -> Self {
-        self.root_settings.parity = parity;
-        self
-    }
-
-    pub fn root_settings(mut self, settings: ConnectionSettings) -> Self {
-        self.root_settings = settings;
-        self
-    }
-
-    pub fn max_concurrent_requests(mut self, max_concurrent_requests: u32) -> Self {
-        self.root_settings.max_concurrent_requests = max_concurrent_requests;
-        self
-    }
-
-    pub fn metadata(mut self, metadata: Metadata) -> Self {
-        self.metadata = metadata;
-        self
-    }
-
-    pub async fn establish(
-        self,
-    ) -> Result<(Session<C>, mpsc::Receiver<SelfRef<RequestMessage<'static>>>), SessionError>
-    where
-        C: Conduit<Msg = MessageFamily>,
-    {
-        let (tx, rx) = self.conduit.split();
-        let mut session = Session::pre_handshake(tx, rx);
-        let req_rx = session
-            .establish_as_initiator(self.root_settings, self.metadata)
-            .await?;
-        Ok((session, req_rx))
-    }
-}
-
-pub struct SessionAcceptorBuilder<C> {
-    conduit: C,
-    root_settings: ConnectionSettings,
-    metadata: Metadata,
-}
-
-impl<C> SessionAcceptorBuilder<C> {
-    fn new(conduit: C) -> Self {
-        Self {
-            conduit,
-            root_settings: ConnectionSettings::default(),
-            metadata: vec![],
-        }
-    }
-
-    pub fn root_settings(mut self, settings: ConnectionSettings) -> Self {
-        self.root_settings = settings;
-        self
-    }
-
-    pub fn max_concurrent_requests(mut self, max_concurrent_requests: u32) -> Self {
-        self.root_settings.max_concurrent_requests = max_concurrent_requests;
-        self
-    }
-
-    pub fn metadata(mut self, metadata: Metadata) -> Self {
-        self.metadata = metadata;
-        self
-    }
-
-    pub async fn establish(
-        self,
-    ) -> Result<(Session<C>, mpsc::Receiver<SelfRef<RequestMessage<'static>>>), SessionError>
-    where
-        C: Conduit<Msg = MessageFamily>,
-    {
-        let (tx, rx) = self.conduit.split();
-        let mut session = Session::pre_handshake(tx, rx);
-        let req_rx = session
-            .establish_as_acceptor(self.root_settings, self.metadata)
-            .await?;
-        Ok((session, req_rx))
-    }
-}
+#[cfg(test)]
+mod tests;

@@ -57,5 +57,13 @@ impl std::ops::BitAndAssign for MetadataFlags {
     }
 }
 
-/// Metadata entry: (key, value, flags).
-pub type Metadata<'a> = Vec<(&'a str, MetadataValue<'a>, MetadataFlags)>;
+/// A single metadata entry with a key, value, and flags.
+#[derive(Debug, Clone, PartialEq, Eq, Facet)]
+pub struct MetadataEntry<'a> {
+    pub key: &'a str,
+    pub value: MetadataValue<'a>,
+    pub flags: MetadataFlags,
+}
+
+/// A slice of metadata entries.
+pub type Metadata<'a> = &'a [MetadataEntry<'a>];
