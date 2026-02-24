@@ -7,7 +7,7 @@ use facet_core::{PtrConst, Shape};
 use facet_reflect::Peek;
 use roam_types::{
     Backing, Conduit, ConduitRx, ConduitTx, ConduitTxPermit, Link, LinkRx, LinkTx, LinkTxPermit,
-    MsgFamily, RpcPlan, SelfRef, WriteSlot,
+    MsgFamily, SelfRef, WriteSlot,
 };
 
 use crate::replay_buffer::{PacketAck, PacketSeq, ReplayBuffer};
@@ -102,15 +102,7 @@ struct Inner<LS: LinkSource> {
 }
 
 impl<F: MsgFamily, LS: LinkSource> StableConduit<F, LS> {
-    pub async fn new(mut source: LS, plan: &'static RpcPlan) -> Result<Self, StableConduitError> {
-        let shape = F::shape();
-        assert!(
-            plan.shape == shape,
-            "RpcPlan shape mismatch: plan is for {}, expected {}",
-            plan.shape,
-            shape,
-        );
-
+    pub async fn new(mut source: LS) -> Result<Self, StableConduitError> {
         let attachment = source.next_link().await.map_err(StableConduitError::Io)?;
         let (link_tx, mut link_rx) = attachment.link.split();
 
@@ -667,11 +659,8 @@ impl std::error::Error for StableConduitError {}
 #[cfg(test)]
 mod tests {
     use std::collections::VecDeque;
-    use std::sync::OnceLock;
 
-    use roam_types::{
-        Conduit, ConduitRx, ConduitTx, ConduitTxPermit, LinkRx, LinkTx, MsgFamily, RpcPlan,
-    };
+    use roam_types::{Conduit, ConduitRx, ConduitTx, ConduitTxPermit, LinkRx, LinkTx, MsgFamily};
 
     use crate::{MemoryLink, memory_link_pair};
 
@@ -685,11 +674,6 @@ mod tests {
         fn shape() -> &'static facet_core::Shape {
             String::SHAPE
         }
-    }
-
-    fn string_plan() -> &'static RpcPlan {
-        static PLAN: OnceLock<RpcPlan> = OnceLock::new();
-        PLAN.get_or_init(|| RpcPlan::for_type::<String, (), ()>())
     }
 
     // A LinkSource backed by a queue of pre-created MemoryLinks.
@@ -776,9 +760,7 @@ mod tests {
             (seq, item)
         });
 
-        let client = StableConduit::<StringFamily, _>::new(source, string_plan())
-            .await
-            .unwrap();
+        let client = StableConduit::<StringFamily, _>::new(source).await.unwrap();
         let (client_tx, _client_rx) = client.split();
 
         let permit = client_tx.reserve().await.unwrap();
@@ -875,9 +857,7 @@ mod tests {
         let source = QueuedLinkSource {
             links: VecDeque::from([(c1, None), (c2, None)]),
         };
-        let client = StableConduit::<StringFamily, _>::new(source, string_plan())
-            .await
-            .unwrap();
+        let client = StableConduit::<StringFamily, _>::new(source).await.unwrap();
         let (client_tx, mut client_rx) = client.split();
 
         // Send A and B.
@@ -968,9 +948,7 @@ mod tests {
         let source = QueuedLinkSource {
             links: VecDeque::from([(c1, None), (c2, None)]),
         };
-        let client = StableConduit::<StringFamily, _>::new(source, string_plan())
-            .await
-            .unwrap();
+        let client = StableConduit::<StringFamily, _>::new(source).await.unwrap();
         let (client_tx, mut client_rx) = client.split();
 
         client_tx
@@ -1030,9 +1008,7 @@ mod tests {
             send_frame(&s_tx, 1, None, "second").await;
         });
 
-        let client = StableConduit::<StringFamily, _>::new(source, string_plan())
-            .await
-            .unwrap();
+        let client = StableConduit::<StringFamily, _>::new(source).await.unwrap();
         let (_client_tx, mut client_rx) = client.split();
 
         let a = client_rx.recv().await.unwrap().unwrap();
@@ -1091,9 +1067,7 @@ mod tests {
         let source = QueuedLinkSource {
             links: VecDeque::from([(c1, None), (c2, None)]),
         };
-        let client = StableConduit::<StringFamily, _>::new(source, string_plan())
-            .await
-            .unwrap();
+        let client = StableConduit::<StringFamily, _>::new(source).await.unwrap();
         let (client_tx, mut client_rx) = client.split();
 
         client_tx

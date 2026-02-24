@@ -4,8 +4,8 @@ use facet_core::{PtrConst, Shape};
 use facet_reflect::Peek;
 
 use roam_types::{
-    Conduit, ConduitRx, ConduitTx, ConduitTxPermit, Link, LinkTx, LinkTxPermit, MsgFamily, RpcPlan,
-    SelfRef, WriteSlot,
+    Conduit, ConduitRx, ConduitTx, ConduitTxPermit, Link, LinkTx, LinkTxPermit, MsgFamily, SelfRef,
+    WriteSlot,
 };
 
 /// Wraps a [`Link`] with postcard serialization. No reconnect, no reliability.
@@ -26,19 +26,10 @@ pub struct BareConduit<F: MsgFamily, L: Link> {
 
 impl<F: MsgFamily, L: Link> BareConduit<F, L> {
     /// Create a new BareConduit.
-    ///
-    /// Panics if the plan's shape doesn't match `F::shape()`.
-    pub fn new(link: L, plan: &'static RpcPlan) -> Self {
-        let shape = F::shape();
-        assert!(
-            plan.shape == shape,
-            "RpcPlan shape mismatch: plan is for {}, expected {}",
-            plan.shape,
-            shape,
-        );
+    pub fn new(link: L) -> Self {
         Self {
             link,
-            shape,
+            shape: F::shape(),
             _phantom: PhantomData,
         }
     }

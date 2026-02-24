@@ -1,6 +1,6 @@
 use crate::{
     BareConduit, ConnectionState, MemoryLink, PROTOCOL_VERSION, SessionError, SessionEvent,
-    establish_acceptor, establish_initiator, memory_link_pair, rpc_plan,
+    establish_acceptor, establish_initiator, memory_link_pair,
 };
 use roam_types::{
     Conduit, ConduitRx, ConduitTx, ConduitTxPermit, ConnectionId, ConnectionSettings, Hello,
@@ -11,8 +11,7 @@ type MessageConduit = BareConduit<MessageFamily, MemoryLink>;
 
 fn conduit_pair() -> (MessageConduit, MessageConduit) {
     let (a, b) = memory_link_pair(16);
-    let plan = rpc_plan::<Message<'static>>();
-    (BareConduit::new(a, plan), BareConduit::new(b, plan))
+    (BareConduit::new(a), BareConduit::new(b))
 }
 
 fn default_settings(max_concurrent_requests: u32) -> ConnectionSettings {

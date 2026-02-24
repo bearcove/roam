@@ -3,7 +3,7 @@
 use facet::Facet;
 use facet_core::Shape;
 
-use crate::SelfRef;
+use crate::{RpcPlan, SelfRef};
 
 /// Maps a lifetime to a concrete message type.
 ///
@@ -17,6 +17,14 @@ pub trait MsgFamily: 'static {
 
     fn shape() -> &'static Shape {
         <Self::Msg<'static> as Facet<'static>>::SHAPE
+    }
+
+    fn rpc_plan<Tx, Rx>() -> &'static RpcPlan
+    where
+        Tx: Facet<'static>,
+        Rx: Facet<'static>,
+    {
+        RpcPlan::for_shape_cached::<Tx, Rx>(Self::shape())
     }
 }
 

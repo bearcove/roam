@@ -1,10 +1,8 @@
 use facet::Facet;
 use facet_core::ConstParamKind;
 
-use std::sync::OnceLock;
-
 use crate::{Rx, Tx};
-use roam_types::{Conduit, ConduitRx, ConduitTx, ConduitTxPermit, MsgFamily, RpcPlan};
+use roam_types::{Conduit, ConduitRx, ConduitTx, ConduitTxPermit, MsgFamily};
 
 use crate::{BareConduit, MemoryLink, memory_link_pair};
 
@@ -22,16 +20,10 @@ impl MsgFamily for StringFamily {
 
 type StringConduit = BareConduit<StringFamily, MemoryLink>;
 
-fn string_plan() -> &'static RpcPlan {
-    static PLAN: OnceLock<RpcPlan> = OnceLock::new();
-    PLAN.get_or_init(|| RpcPlan::for_type::<String, (), ()>())
-}
-
 /// Create a connected pair of BareConduits over MemoryLink for String messages.
 fn conduit_pair() -> (StringConduit, StringConduit) {
     let (a, b) = memory_link_pair(16);
-    let plan = string_plan();
-    (BareConduit::new(a, plan), BareConduit::new(b, plan))
+    (BareConduit::new(a), BareConduit::new(b))
 }
 
 #[tokio::test]
