@@ -15,7 +15,7 @@ use crate::SelfRef;
 pub trait MsgFamily: 'static {
     type Msg<'a>: Facet<'a> + 'a;
 
-    fn shape() -> &'static facet_core::Shape {
+    fn shape() -> &'static Shape {
         <Self::Msg<'static> as Facet<'static>>::SHAPE
     }
 }

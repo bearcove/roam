@@ -49,14 +49,6 @@ impl ReplayBuffer {
     pub(crate) fn iter(&self) -> impl Iterator<Item = &(PacketSeq, Vec<u8>)> {
         self.entries.iter()
     }
-
-    pub(crate) fn len(&self) -> usize {
-        self.entries.len()
-    }
-
-    pub(crate) fn is_empty(&self) -> bool {
-        self.entries.is_empty()
-    }
 }
 
 #[cfg(test)]
@@ -96,7 +88,7 @@ mod tests {
 
         buf.trim(ack(2));
 
-        assert_eq!(buf.len(), 2);
+        assert_eq!(buf.iter().count(), 2);
         let seqs: Vec<_> = buf.iter().map(|(s, _)| s.0).collect();
         assert_eq!(seqs, vec![3, 4]);
     }
@@ -110,7 +102,7 @@ mod tests {
         // Ack exactly seq 10 — only seq 10 goes
         buf.trim(ack(10));
 
-        assert_eq!(buf.len(), 1);
+        assert_eq!(buf.iter().count(), 1);
         assert_eq!(buf.iter().next().unwrap().0, seq(11));
     }
 
@@ -123,7 +115,7 @@ mod tests {
         // Ack is below all buffered seqs
         buf.trim(ack(4));
 
-        assert_eq!(buf.len(), 2);
+        assert_eq!(buf.iter().count(), 2);
     }
 
     #[test]
@@ -135,14 +127,14 @@ mod tests {
 
         buf.trim(ack(3));
 
-        assert!(buf.is_empty());
+        assert_eq!(buf.iter().count(), 0);
     }
 
     #[test]
     fn trim_empty_buffer_is_noop() {
         let mut buf = ReplayBuffer::new();
         buf.trim(ack(99)); // should not panic
-        assert!(buf.is_empty());
+        assert_eq!(buf.iter().count(), 0);
     }
 
     #[test]
@@ -151,10 +143,10 @@ mod tests {
         buf.push(seq(0), b"first".to_vec());
         buf.push(seq(1), b"second".to_vec());
         buf.trim(ack(1));
-        assert!(buf.is_empty());
+        assert_eq!(buf.iter().count(), 0);
 
         buf.push(seq(2), b"third".to_vec());
-        assert_eq!(buf.len(), 1);
+        assert_eq!(buf.iter().count(), 1);
         assert_eq!(buf.iter().next().unwrap().1, b"third");
     }
 }

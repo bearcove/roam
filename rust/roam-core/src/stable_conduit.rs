@@ -1,5 +1,6 @@
 use std::marker::PhantomData;
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use facet::Facet;
 use facet_core::{PtrConst, Shape};
@@ -73,18 +74,24 @@ pub trait LinkSource: Send + 'static {
 
 // r[impl stable]
 pub struct StableConduit<F: MsgFamily, LS: LinkSource> {
-    inner: Arc<tokio::sync::Mutex<Inner<LS>>>,
+    shared: Arc<Shared<LS>>,
     frame_shape: &'static Shape,
     _phantom: PhantomData<fn(F) -> F>,
 }
 
+struct Shared<LS: LinkSource> {
+    inner: Mutex<Inner<LS>>,
+    reconnecting: AtomicBool,
+    reconnected: tokio::sync::Notify,
+}
+
 struct Inner<LS: LinkSource> {
-    source: LS,
+    source: Option<LS>,
     /// Incremented every time the link is replaced. Used to detect whether
     /// another task has already reconnected while we were waiting.
     link_generation: u64,
     tx: Option<<LS::Link as Link>::Tx>,
-    rx: <LS::Link as Link>::Rx,
+    rx: Option<<LS::Link as Link>::Rx>,
     resume_key: Option<ResumeKey>,
     // r[impl stable.seq]
     next_send_seq: PacketSeq,
@@ -112,10 +119,10 @@ impl<F: MsgFamily, LS: LinkSource> StableConduit<F, LS> {
                 .await?;
 
         let inner = Inner {
-            source,
+            source: Some(source),
             link_generation: 0,
             tx: Some(link_tx),
-            rx: link_rx,
+            rx: Some(link_rx),
             resume_key: Some(resume_key),
             next_send_seq: PacketSeq(0),
             last_received: None,
@@ -123,7 +130,11 @@ impl<F: MsgFamily, LS: LinkSource> StableConduit<F, LS> {
         };
 
         Ok(Self {
-            inner: Arc::new(tokio::sync::Mutex::new(inner)),
+            shared: Arc::new(Shared {
+                inner: Mutex::new(inner),
+                reconnecting: AtomicBool::new(false),
+                reconnected: tokio::sync::Notify::new(),
+            }),
             frame_shape: Frame::<F::Msg<'static>>::SHAPE,
             _phantom: PhantomData,
         })
@@ -134,50 +145,111 @@ impl<F: MsgFamily, LS: LinkSource> StableConduit<F, LS> {
 // Reconnect
 // ---------------------------------------------------------------------------
 
-impl<LS: LinkSource> Inner<LS> {
+impl<LS: LinkSource> Shared<LS> {
+    fn lock_inner(&self) -> Result<MutexGuard<'_, Inner<LS>>, StableConduitError> {
+        self.inner
+            .lock()
+            .map_err(|_| StableConduitError::Setup("stable conduit mutex poisoned".into()))
+    }
+
+    async fn ensure_reconnected(&self, generation: u64) -> Result<(), StableConduitError> {
+        loop {
+            {
+                let inner = self.lock_inner()?;
+                if inner.link_generation != generation {
+                    return Ok(());
+                }
+            }
+
+            if self
+                .reconnecting
+                .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+            {
+                let result = self.reconnect_once(generation).await;
+                self.reconnecting.store(false, Ordering::Release);
+                self.reconnected.notify_waiters();
+                return result;
+            }
+
+            self.reconnected.notified().await;
+        }
+    }
+
     /// Obtain a new link from the source, re-handshake, and replay any
     /// buffered items the peer missed.
     // r[impl stable.reconnect]
     // r[impl stable.reconnect.client-replay]
     // r[impl stable.reconnect.server-replay]
     // r[impl stable.replay-buffer.order]
-    async fn reconnect(&mut self) -> Result<(), StableConduitError> {
-        let attachment = self
-            .source
-            .next_link()
-            .await
-            .map_err(StableConduitError::Io)?;
-
-        let (new_tx, mut new_rx) = attachment.link.split();
-
-        let (resume_key, peer_last_received) = handshake::<LS::Link>(
-            &new_tx,
-            &mut new_rx,
-            attachment.client_hello,
-            self.resume_key.clone(),
-            self.last_received,
-        )
-        .await?;
-
-        // Replay frames the peer hasn't received yet, in original order.
-        // Frame bytes include the original seq/ack — stale acks are
-        // harmless since the peer ignores acks older than what it has seen.
-        for (seq, frame_bytes) in self.replay.iter() {
-            if peer_last_received.is_some_and(|last| *seq <= last) {
-                continue;
+    async fn reconnect_once(&self, generation: u64) -> Result<(), StableConduitError> {
+        let (mut source, resume_key, last_received, replay_frames) = {
+            let mut inner = self.lock_inner()?;
+            if inner.link_generation != generation {
+                return Ok(());
             }
-            let permit = new_tx.reserve().await.map_err(StableConduitError::Io)?;
-            let mut slot = permit
-                .alloc(frame_bytes.len())
-                .map_err(StableConduitError::Io)?;
-            slot.as_mut_slice().copy_from_slice(frame_bytes);
-            slot.commit();
+            let source = inner
+                .source
+                .take()
+                .ok_or_else(|| StableConduitError::Setup("link source unavailable".into()))?;
+            let replay_frames = inner
+                .replay
+                .iter()
+                .map(|(seq, bytes)| (*seq, bytes.clone()))
+                .collect::<Vec<_>>();
+            (
+                source,
+                inner.resume_key.clone(),
+                inner.last_received,
+                replay_frames,
+            )
+        };
+
+        let reconnect_result = async {
+            let attachment = source.next_link().await.map_err(StableConduitError::Io)?;
+            let (new_tx, mut new_rx) = attachment.link.split();
+
+            let (new_resume_key, peer_last_received) = handshake::<LS::Link>(
+                &new_tx,
+                &mut new_rx,
+                attachment.client_hello,
+                resume_key,
+                last_received,
+            )
+            .await?;
+
+            // Replay frames the peer hasn't received yet, in original order.
+            // Frame bytes include the original seq/ack — stale acks are
+            // harmless since the peer ignores acks older than what it has seen.
+            for (seq, frame_bytes) in replay_frames {
+                if peer_last_received.is_some_and(|last| seq <= last) {
+                    continue;
+                }
+                let permit = new_tx.reserve().await.map_err(StableConduitError::Io)?;
+                let mut slot = permit
+                    .alloc(frame_bytes.len())
+                    .map_err(StableConduitError::Io)?;
+                slot.as_mut_slice().copy_from_slice(&frame_bytes);
+                slot.commit();
+            }
+
+            Ok::<_, StableConduitError>((new_tx, new_rx, new_resume_key))
+        }
+        .await;
+
+        let mut inner = self.lock_inner()?;
+        inner.source = Some(source);
+
+        if inner.link_generation != generation {
+            return Ok(());
         }
 
-        self.link_generation += 1;
-        self.tx = Some(new_tx);
-        self.rx = new_rx;
-        self.resume_key = Some(resume_key);
+        let (new_tx, new_rx, new_resume_key) = reconnect_result?;
+
+        inner.link_generation = inner.link_generation.wrapping_add(1);
+        inner.tx = Some(new_tx);
+        inner.rx = Some(new_rx);
+        inner.resume_key = Some(new_resume_key);
 
         Ok(())
     }
@@ -279,11 +351,11 @@ where
     fn split(self) -> (Self::Tx, Self::Rx) {
         (
             StableConduitTx {
-                inner: Arc::clone(&self.inner),
+                shared: Arc::clone(&self.shared),
                 _phantom: PhantomData,
             },
             StableConduitRx {
-                inner: Arc::clone(&self.inner),
+                shared: Arc::clone(&self.shared),
                 frame_shape: self.frame_shape,
                 _phantom: PhantomData,
             },
@@ -296,7 +368,7 @@ where
 // ---------------------------------------------------------------------------
 
 pub struct StableConduitTx<F: MsgFamily, LS: LinkSource> {
-    inner: Arc<tokio::sync::Mutex<Inner<LS>>>,
+    shared: Arc<Shared<LS>>,
     _phantom: PhantomData<fn(F)>,
 }
 
@@ -308,50 +380,63 @@ where
 {
     type Msg<'a> = F::Msg<'a>;
     type Permit<'a>
-        = StableConduitPermit<'a, F, LS>
+        = StableConduitPermit<F, LS>
     where
         Self: 'a;
 
     async fn reserve(&self) -> std::io::Result<Self::Permit<'_>> {
         loop {
             let (tx, generation) = {
-                let inner = self.inner.lock().await;
-                let tx = inner
-                    .tx
-                    .as_ref()
-                    .ok_or_else(|| {
-                        std::io::Error::new(std::io::ErrorKind::BrokenPipe, "stable conduit closed")
-                    })?
-                    .clone();
-                (tx, inner.link_generation)
+                let inner = self
+                    .shared
+                    .lock_inner()
+                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+                (inner.tx.clone(), inner.link_generation)
+            };
+
+            let tx = match tx {
+                Some(tx) => tx,
+                None => {
+                    self.shared
+                        .ensure_reconnected(generation)
+                        .await
+                        .map_err(|e| {
+                            std::io::Error::new(std::io::ErrorKind::Other, e.to_string())
+                        })?;
+                    continue;
+                }
             };
 
             match tx.reserve().await {
                 Ok(link_permit) => {
-                    let guard = self.inner.lock().await;
                     return Ok(StableConduitPermit {
-                        guard,
+                        shared: Arc::clone(&self.shared),
                         link_permit,
+                        generation,
                         _phantom: PhantomData,
                     });
                 }
                 Err(_) => {
-                    let mut inner = self.inner.lock().await;
-                    if inner.link_generation != generation {
-                        // Another task already reconnected. Retry.
-                        continue;
-                    }
-                    inner.reconnect().await.map_err(|e| {
-                        std::io::Error::new(std::io::ErrorKind::Other, e.to_string())
-                    })?;
+                    self.shared
+                        .ensure_reconnected(generation)
+                        .await
+                        .map_err(|e| {
+                            std::io::Error::new(std::io::ErrorKind::Other, e.to_string())
+                        })?;
                 }
             }
         }
     }
 
     async fn close(self) -> std::io::Result<()> {
-        let mut inner = self.inner.lock().await;
-        if let Some(tx) = inner.tx.take() {
+        let tx = {
+            let mut inner = self
+                .shared
+                .lock_inner()
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+            inner.tx.take()
+        };
+        if let Some(tx) = tx {
             tx.close().await?;
         }
         Ok(())
@@ -362,13 +447,14 @@ where
 // Permit
 // ---------------------------------------------------------------------------
 
-pub struct StableConduitPermit<'a, F: MsgFamily, LS: LinkSource> {
-    guard: tokio::sync::MutexGuard<'a, Inner<LS>>,
+pub struct StableConduitPermit<F: MsgFamily, LS: LinkSource> {
+    shared: Arc<Shared<LS>>,
     link_permit: <<LS::Link as Link>::Tx as LinkTx>::Permit,
+    generation: u64,
     _phantom: PhantomData<fn(F)>,
 }
 
-impl<F: MsgFamily, LS: LinkSource> ConduitTxPermit for StableConduitPermit<'_, F, LS> {
+impl<F: MsgFamily, LS: LinkSource> ConduitTxPermit for StableConduitPermit<F, LS> {
     type Msg<'a> = F::Msg<'a>;
     type Error = StableConduitError;
 
@@ -376,15 +462,26 @@ impl<F: MsgFamily, LS: LinkSource> ConduitTxPermit for StableConduitPermit<'_, F
     // r[impl zerocopy.framing.no-double-serialize]
     // r[impl zerocopy.scatter.write]
     // r[impl zerocopy.scatter.replay]
-    fn send(mut self, item: F::Msg<'_>) -> Result<(), StableConduitError> {
-        let inner = &mut *self.guard;
+    fn send(self, item: F::Msg<'_>) -> Result<(), StableConduitError> {
+        let StableConduitPermit {
+            shared,
+            link_permit,
+            generation,
+            _phantom: _,
+        } = self;
 
-        let seq = inner.next_send_seq;
-        inner.next_send_seq = PacketSeq(seq.0.wrapping_add(1));
-
-        let ack = inner
-            .last_received
-            .map(|max_delivered| PacketAck { max_delivered });
+        let (seq, ack) = {
+            let mut inner = shared.lock_inner()?;
+            if inner.link_generation != generation {
+                return Err(StableConduitError::LinkDead);
+            }
+            let seq = inner.next_send_seq;
+            inner.next_send_seq = PacketSeq(seq.0.wrapping_add(1));
+            let ack = inner
+                .last_received
+                .map(|max_delivered| PacketAck { max_delivered });
+            (seq, ack)
+        };
 
         let frame = Frame { seq, ack, item };
 
@@ -400,8 +497,7 @@ impl<F: MsgFamily, LS: LinkSource> ConduitTxPermit for StableConduitPermit<'_, F
         let plan =
             facet_postcard::peek_to_scatter_plan(peek).map_err(StableConduitError::Encode)?;
 
-        let mut slot = self
-            .link_permit
+        let mut slot = link_permit
             .alloc(plan.total_size())
             .map_err(StableConduitError::Io)?;
         let slot_bytes = slot.as_mut_slice();
@@ -409,7 +505,7 @@ impl<F: MsgFamily, LS: LinkSource> ConduitTxPermit for StableConduitPermit<'_, F
             .map_err(StableConduitError::Encode)?;
 
         // Keep an owned copy for replay after reconnect.
-        inner.replay.push(seq, slot_bytes.to_vec());
+        shared.lock_inner()?.replay.push(seq, slot_bytes.to_vec());
         slot.commit();
 
         Ok(())
@@ -421,7 +517,7 @@ impl<F: MsgFamily, LS: LinkSource> ConduitTxPermit for StableConduitPermit<'_, F
 // ---------------------------------------------------------------------------
 
 pub struct StableConduitRx<F: MsgFamily, LS: LinkSource> {
-    inner: Arc<tokio::sync::Mutex<Inner<LS>>>,
+    shared: Arc<Shared<LS>>,
     frame_shape: &'static Shape,
     _phantom: PhantomData<fn() -> F>,
 }
@@ -437,19 +533,41 @@ where
 
     async fn recv(&mut self) -> Result<Option<SelfRef<F::Msg<'static>>>, Self::Error> {
         loop {
-            // Phase 1: read raw bytes, reconnecting on link failure.
-            let backing = {
-                let mut inner = self.inner.lock().await;
-                // Any link termination — graceful EOF or error — triggers
-                // reconnect. The session ends only when the LinkSource itself
-                // fails (no more links available), which surfaces as Err.
-                match inner.rx.recv().await {
-                    Ok(Some(b)) => b,
-                    Ok(None) | Err(_) => {
-                        // r[impl stable.reconnect]
-                        inner.reconnect().await?;
+            // Phase 1: take current Rx out of shared state, then await without locks held.
+            let (mut rx, generation) = {
+                let mut inner = self.shared.lock_inner()?;
+                let generation = inner.link_generation;
+                let rx = match inner.rx.take() {
+                    Some(rx) => rx,
+                    None => {
+                        drop(inner);
+                        self.shared.ensure_reconnected(generation).await?;
                         continue;
                     }
+                };
+                (rx, generation)
+            };
+
+            // Any link termination — graceful EOF or error — triggers reconnect.
+            // The session ends only when the LinkSource itself fails (no more
+            // links available), which surfaces as Err.
+            let recv_result = rx.recv().await;
+
+            // Put Rx back only if we're still on the same generation and no newer
+            // Rx has been installed by reconnect.
+            {
+                let mut inner = self.shared.lock_inner()?;
+                if inner.link_generation == generation && inner.rx.is_none() {
+                    inner.rx = Some(rx);
+                }
+            }
+
+            let backing = match recv_result {
+                Ok(Some(b)) => b,
+                Ok(None) | Err(_) => {
+                    // r[impl stable.reconnect]
+                    self.shared.ensure_reconnected(generation).await?;
+                    continue;
                 }
             };
 
@@ -462,7 +580,7 @@ where
             // r[impl stable.seq.monotonic]
             // r[impl stable.ack.trim]
             let is_dup = {
-                let mut inner = self.inner.lock().await;
+                let mut inner = self.shared.lock_inner()?;
 
                 if let Some(ack) = frame.ack {
                     inner.replay.trim(ack);
