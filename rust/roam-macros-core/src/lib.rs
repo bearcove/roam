@@ -83,19 +83,13 @@ pub fn generate_service(parsed: &ServiceTrait, roam: &TokenStream2) -> Result<To
     }
 
     let service_descriptor_fn = generate_service_descriptor_fn(parsed, roam);
-    let method_id_mod = generate_method_id_module(parsed, roam);
     let service_trait = generate_service_trait(parsed, roam);
     let dispatcher = generate_dispatcher(parsed, roam);
     let client = generate_client(parsed, roam);
     let service_detail_fn = generate_service_detail_fn(parsed, roam);
 
-    // Generate items directly in the current module scope - no wrapper module.
-    // This avoids type resolution issues since all types are already in scope.
-    // Note: We use fully qualified paths for RoamError and Never instead of
-    // importing them, to allow multiple services in the same module.
     Ok(quote! {
         #service_descriptor_fn
-        #method_id_mod
         #service_trait
         #dispatcher
         #client
@@ -204,40 +198,6 @@ fn generate_service_descriptor_fn(parsed: &ServiceTrait, roam: &TokenStream2) ->
 }
 
 // ============================================================================
-// Method ID Generation
-// ============================================================================
-
-fn generate_method_id_module(parsed: &ServiceTrait, roam: &TokenStream2) -> TokenStream2 {
-    let service_name = parsed.name();
-    let mod_name = format_ident!("{}_method_id", service_name.to_snake_case());
-    let descriptor_fn_name = format_ident!("{}_service_descriptor", service_name.to_snake_case());
-
-    let method_fns: Vec<TokenStream2> = parsed
-        .methods()
-        .enumerate()
-        .map(|(i, m)| {
-            let fn_name = format_ident!("{}", m.name().to_snake_case());
-            let idx = i;
-            quote! {
-                pub fn #fn_name() -> #roam::session::MethodId {
-                    super::#descriptor_fn_name().methods[#idx].id
-                }
-            }
-        })
-        .collect();
-
-    quote! {
-        /// Method IDs for the service (indexes into the service descriptor).
-        #[allow(non_snake_case, clippy::all, unused)]
-        pub mod #mod_name {
-            use super::*;
-
-            #(#method_fns)*
-        }
-    }
-}
-
-// ============================================================================
 // Service Trait Generation
 // ============================================================================
 
@@ -281,7 +241,7 @@ fn generate_trait_method(method: &ServiceMethod, roam: &TokenStream2) -> TokenSt
 
     quote! {
         #method_doc
-        fn #method_name(&self, cx: &#roam::Context, #(#params),*) -> impl std::future::Future<Output = #full_return> + Send;
+        fn #method_name(&self, #(#params),*) -> impl std::future::Future<Output = #full_return> + Send;
     }
 }
 
@@ -297,120 +257,147 @@ fn format_handler_return_type(return_type: &Type, _roam: &TokenStream2) -> Token
 fn generate_dispatcher(parsed: &ServiceTrait, roam: &TokenStream2) -> TokenStream2 {
     let trait_name = format_ident!("{}", parsed.name());
     let dispatcher_name = format_ident!("{}Dispatcher", parsed.name());
-    let method_id_mod = format_ident!("{}_method_id", parsed.name().to_snake_case());
     let descriptor_fn_name = format_ident!("{}_service_descriptor", parsed.name().to_snake_case());
 
-    // Generate dispatch methods
-    let dispatch_methods: Vec<TokenStream2> = parsed
-        .methods()
-        .enumerate()
-        .map(|(i, m)| generate_dispatch_method(m, i, roam, &descriptor_fn_name))
-        .collect();
-
-    // Generate the if-else chain for ServiceDispatcher impl
+    // Generate the if-else dispatch arms inside handle()
     let dispatch_arms: Vec<TokenStream2> = parsed
         .methods()
         .enumerate()
-        .map(|(i, m)| {
-            let method_name = format_ident!("{}", m.name().to_snake_case());
-            let dispatch_name = format_ident!("dispatch_{}", m.name().to_snake_case());
-            let keyword = if i == 0 {
-                quote! { if }
-            } else {
-                quote! { else if }
-            };
-            quote! {
-                #keyword method_id == #method_id_mod::#method_name() {
-                    self.#dispatch_name(cx, payload, registry)
-                }
-            }
-        })
+        .map(|(i, m)| generate_dispatch_arm(m, i, roam, &descriptor_fn_name))
         .collect();
+
+    let no_methods = dispatch_arms.is_empty();
+
+    let dispatch_body = if no_methods {
+        quote! {
+            let _ = (call, reply);
+        }
+    } else {
+        quote! {
+            let method_id = call.method_id;
+            #(#dispatch_arms)*
+        }
+    };
 
     quote! {
         /// Dispatcher for this service.
         ///
-        /// Supports middleware that can inspect deserialized args before the handler runs.
-        /// Middleware is configured via [`with_middleware`](Self::with_middleware).
+        /// Wraps a handler and implements [`#roam::Handler`] by routing incoming
+        /// calls to the appropriate trait method by method ID.
         #[derive(Clone)]
         pub struct #dispatcher_name<H> {
             handler: H,
-            middleware: Vec<::std::sync::Arc<dyn #roam::session::Middleware>>,
         }
 
         impl<H> #dispatcher_name<H>
         where
-            H: #trait_name + Clone + 'static,
+            H: #trait_name + Clone + Send + Sync + 'static,
         {
-            /// Create a new dispatcher with no middleware.
+            /// Create a new dispatcher wrapping the given handler.
             pub fn new(handler: H) -> Self {
-                Self {
-                    handler,
-                    middleware: Vec::new(),
-                }
+                Self { handler }
             }
-
-            /// Add middleware to this dispatcher.
-            ///
-            /// Middleware runs after deserialization but before the handler.
-            /// It can inspect args via reflection and reject requests.
-            /// Middleware runs in the order it was added.
-            pub fn with_middleware<M: #roam::session::Middleware + 'static>(mut self, mw: M) -> Self {
-                self.middleware.push(std::sync::Arc::new(mw));
-                self
-            }
-
-            /// Add already-Arc'd middleware to this dispatcher.
-            pub fn with_middleware_arc(mut self, mw: std::sync::Arc<dyn #roam::session::Middleware>) -> Self {
-                self.middleware.push(mw);
-                self
-            }
-
-            #(#dispatch_methods)*
         }
 
-        impl<H> #roam::session::ServiceDispatcher for #dispatcher_name<H>
+        impl<H, R> #roam::Handler<R> for #dispatcher_name<H>
         where
-            H: #trait_name + Clone + 'static,
+            H: #trait_name + Clone + Send + Sync + 'static,
+            R: #roam::ReplySink,
         {
-            fn service_descriptor(&self) -> &'static #roam::session::ServiceDescriptor {
-                #descriptor_fn_name()
-            }
-
-            fn dispatch(
-                &self,
-                cx: #roam::Context,
-                payload: Vec<u8>,
-                registry: &mut #roam::session::ChannelRegistry,
-            ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'static>> {
-                let method_id = cx.method_id();
-                #(#dispatch_arms)*
-                else {
-                    #roam::session::dispatch_unknown_method(&cx, registry)
-                }
+            async fn handle(&self, call: #roam::SelfRef<#roam::RequestCall<'static>>, reply: R) {
+                #dispatch_body
             }
         }
     }
 }
 
-fn generate_dispatch_method(
+fn generate_dispatch_arm(
     method: &ServiceMethod,
     method_index: usize,
     roam: &TokenStream2,
     descriptor_fn_name: &proc_macro2::Ident,
 ) -> TokenStream2 {
-    let dispatch_name = format_ident!("dispatch_{}", method.name().to_snake_case());
+    let method_fn = format_ident!("{}", method.name().to_snake_case());
     let idx = method_index;
-    let _ = (roam, descriptor_fn_name, idx);
+
+    // Build args tuple type for deserialization
+    let arg_types: Vec<TokenStream2> = method.args().map(|a| a.ty.to_token_stream()).collect();
+    let args_tuple_type = match arg_types.len() {
+        0 => quote! { () },
+        1 => {
+            let t = &arg_types[0];
+            quote! { (#t,) }
+        }
+        _ => quote! { (#(#arg_types),*) },
+    };
+
+    // Destructure args tuple into named bindings
+    let arg_names: Vec<proc_macro2::Ident> = method
+        .args()
+        .map(|a| format_ident!("{}", a.name().to_snake_case()))
+        .collect();
+    let destructure = match arg_names.len() {
+        0 => quote! { let () = args; },
+        1 => {
+            let n = &arg_names[0];
+            quote! { let (#n,) = args; }
+        }
+        _ => quote! { let (#(#arg_names),*) = args; },
+    };
+
+    // Build the reply payload — for fallible methods wrap in RoamError
+    let return_type = method.return_type();
+    let (send_reply, ok_plan, err_plan) = if let Some((ok_ty, err_ty)) = return_type.as_result() {
+        let ok_tokens = ok_ty.to_token_stream();
+        let err_tokens = err_ty.to_token_stream();
+        (
+            quote! {
+                let wire_result: Result<#ok_tokens, #roam::RoamError<#err_tokens>> =
+                    result.map_err(#roam::RoamError::User);
+                let ret = #roam::Payload::outgoing(&wire_result);
+                reply.send_reply(#roam::RequestResponse {
+                    ret,
+                    channels: &[],
+                    metadata: Default::default(),
+                }).await.ok();
+            },
+            quote! { #roam::RpcPlan::for_type::<#ok_tokens>() },
+            quote! { #roam::RpcPlan::for_type::<#err_tokens>() },
+        )
+    } else {
+        let ty_tokens = return_type.to_token_stream();
+        (
+            quote! {
+                let wire_result: Result<#ty_tokens, #roam::RoamError> =
+                    Ok(result);
+                let ret = #roam::Payload::outgoing(&wire_result);
+                reply.send_reply(#roam::RequestResponse {
+                    ret,
+                    channels: &[],
+                    metadata: Default::default(),
+                }).await.ok();
+            },
+            quote! { #roam::RpcPlan::for_type::<#ty_tokens>() },
+            quote! { #roam::RpcPlan::for_type::<::core::convert::Infallible>() },
+        )
+    };
+
+    let _ = (ok_plan, err_plan, idx);
 
     quote! {
-        fn #dispatch_name(
-            &self,
-            cx: #roam::Context,
-            payload: Vec<u8>,
-            registry: &mut #roam::session::ChannelRegistry,
-        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'static>> {
-            todo!()
+        if method_id == #descriptor_fn_name().methods[#idx].id {
+            let args_bytes = match &call.args {
+                #roam::Payload::Incoming(bytes) => bytes,
+                _ => return,
+            };
+            let args: #args_tuple_type = match #roam::facet_postcard::from_slice_borrowed(args_bytes) {
+                Ok(v) => v,
+                Err(_) => return,
+            };
+            #destructure
+            let result = self.handler.#method_fn(#(#arg_names),*).await;
+            #send_reply
+            return;
         }
     }
 }
@@ -422,13 +409,11 @@ fn generate_dispatch_method(
 fn generate_client(parsed: &ServiceTrait, roam: &TokenStream2) -> TokenStream2 {
     let client_name = format_ident!("{}Client", parsed.name());
     let descriptor_fn_name = format_ident!("{}_service_descriptor", parsed.name().to_snake_case());
+    let service_name = parsed.name();
 
     let client_doc = format!(
-        "Client for {} service.\n\n\
-        Generic over any [`Caller`]({roam}::session::Caller) implementation, \
-        allowing use with both [`ConnectionHandle`]({roam}::session::ConnectionHandle) \
-        and reconnecting clients.",
-        parsed.name()
+        "Client for the `{service_name}` service.\n\n\
+        Generic over any [`Caller`]({roam}::Caller) implementation.",
     );
 
     let client_methods: Vec<TokenStream2> = parsed
@@ -440,11 +425,11 @@ fn generate_client(parsed: &ServiceTrait, roam: &TokenStream2) -> TokenStream2 {
     quote! {
         #[doc = #client_doc]
         #[derive(Clone)]
-        pub struct #client_name<C: #roam::session::Caller = #roam::session::ConnectionHandle> {
+        pub struct #client_name<C: #roam::Caller> {
             caller: C,
         }
 
-        impl<C: #roam::session::Caller> #client_name<C> {
+        impl<C: #roam::Caller> #client_name<C> {
             /// Create a new client wrapping the given caller.
             pub fn new(caller: C) -> Self {
                 Self { caller }
@@ -465,7 +450,6 @@ fn generate_client_method(
     let method_doc = method.doc().map(|d| quote! { #[doc = #d] });
     let idx = method_index;
 
-    // Parameters
     let params: Vec<TokenStream2> = method
         .args()
         .map(|arg| {
@@ -479,78 +463,81 @@ fn generate_client_method(
         .map(|arg| format_ident!("{}", arg.name().to_snake_case()))
         .collect();
 
-    // Build args tuple type for CallFuture
-    let args_tuple_type = if arg_names.is_empty() {
-        quote! { () }
-    } else {
-        let arg_types: Vec<TokenStream2> =
-            method.args().map(|arg| arg.ty.to_token_stream()).collect();
-        if arg_types.len() == 1 {
-            let ty = &arg_types[0];
-            quote! { (#ty,) }
-        } else {
-            quote! { (#(#arg_types),*) }
+    // Args tuple value and type (for serialization)
+    let args_tuple = match arg_names.len() {
+        0 => quote! { () },
+        1 => {
+            let n = &arg_names[0];
+            quote! { (#n,) }
+        }
+        _ => quote! { (#(#arg_names),*) },
+    };
+    let args_tuple_type = {
+        let tys: Vec<TokenStream2> = method.args().map(|a| a.ty.to_token_stream()).collect();
+        match tys.len() {
+            0 => quote! { () },
+            1 => {
+                let t = &tys[0];
+                quote! { (#t,) }
+            }
+            _ => quote! { (#(#tys),*) },
         }
     };
 
-    // Build args tuple value
-    let args_tuple = if arg_names.is_empty() {
-        quote! { () }
-    } else if arg_names.len() == 1 {
-        let n = &arg_names[0];
-        quote! { (#n,) }
-    } else {
-        quote! { (#(#arg_names),*) }
-    };
-
-    // Return type and error type depend on whether method is fallible
+    // Return type
     let return_type = method.return_type();
-    let (ok_ty, err_ty, _client_return) = format_client_return_type(&return_type, roam);
-
-    // The CallFuture type
-    let call_future_return = quote! {
-        #roam::session::CallFuture<C, #args_tuple_type, #ok_ty, #err_ty>
+    let (ok_ty, err_ty, client_return) = if let Some((ok, err)) = return_type.as_result() {
+        let ok_t = ok.to_token_stream();
+        let err_t = err.to_token_stream();
+        (
+            ok_t.clone(),
+            err_t.clone(),
+            quote! { Result<#ok_t, #roam::RoamError<#err_t>> },
+        )
+    } else {
+        let t = return_type.to_token_stream();
+        (
+            t.clone(),
+            quote! { ::core::convert::Infallible },
+            quote! { Result<#t, #roam::RoamError> },
+        )
     };
+
+    // OnceLock statics for plans (concrete types per method — safe from monomorphization merging)
+    let args_plan_static = format_ident!("ARGS_PLAN_{}", method_index);
+    let ok_plan_static = format_ident!("OK_PLAN_{}", method_index);
+    let err_plan_static = format_ident!("ERR_PLAN_{}", method_index);
 
     quote! {
         #method_doc
-        pub fn #method_name(
-            &self,
-            #(#params),*
-        ) -> #call_future_return {
-            let desc = #descriptor_fn_name().methods[#idx];
+        pub async fn #method_name(&self, #(#params),*) -> #client_return {
+            static #args_plan_static: ::std::sync::OnceLock<&'static #roam::RpcPlan> = ::std::sync::OnceLock::new();
+            static #ok_plan_static: ::std::sync::OnceLock<&'static #roam::RpcPlan> = ::std::sync::OnceLock::new();
+            static #err_plan_static: ::std::sync::OnceLock<&'static #roam::RpcPlan> = ::std::sync::OnceLock::new();
 
-            #roam::session::CallFuture::new(
-                self.caller.clone(),
-                desc,
-                #args_tuple,
-            )
+            let _args_plan = #args_plan_static.get_or_init(|| #roam::RpcPlan::for_type::<#args_tuple_type>());
+            let _ok_plan = #ok_plan_static.get_or_init(|| #roam::RpcPlan::for_type::<#ok_ty>());
+            let _err_plan = #err_plan_static.get_or_init(|| #roam::RpcPlan::for_type::<#err_ty>());
+
+            let args_tuple = #args_tuple;
+            let method_id = #descriptor_fn_name().methods[#idx].id;
+            let args = #roam::Payload::outgoing(&args_tuple);
+            let req = #roam::RequestCall {
+                method_id,
+                args,
+                channels: &[],
+                metadata: Default::default(),
+            };
+            let response = self.caller.call(req).await?;
+            let ret_bytes = match &response.ret {
+                #roam::Payload::Incoming(bytes) => bytes,
+                _ => return Err(#roam::RoamError::InvalidPayload),
+            };
+            let result: Result<#ok_ty, #roam::RoamError<#err_ty>> =
+                #roam::facet_postcard::from_slice_borrowed(ret_bytes)
+                    .map_err(|_| #roam::RoamError::InvalidPayload)?;
+            result
         }
-    }
-}
-
-/// Format the return type as Result<T, CallError<E>> for client.
-///
-/// Returns (ok_type, err_type, full_return_type) for use in codegen.
-fn format_client_return_type(
-    return_type: &Type,
-    roam: &TokenStream2,
-) -> (TokenStream2, TokenStream2, TokenStream2) {
-    if let Some((ok_ty, err_ty)) = return_type.as_result() {
-        let ok_tokens = ok_ty.to_token_stream();
-        let err_tokens = err_ty.to_token_stream();
-        (
-            ok_tokens.clone(),
-            err_tokens.clone(),
-            quote! { Result<#ok_tokens, #roam::session::CallError<#err_tokens>> },
-        )
-    } else {
-        let ty_tokens = return_type.to_token_stream();
-        (
-            ty_tokens.clone(),
-            quote! { ::core::convert::Infallible },
-            quote! { Result<#ty_tokens, #roam::session::CallError<::core::convert::Infallible>> },
-        )
     }
 }
 
