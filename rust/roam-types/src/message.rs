@@ -15,14 +15,6 @@ pub struct ConnectionSettings {
     pub max_concurrent_requests: u32,
 }
 
-impl Default for ConnectionSettings {
-    fn default() -> Self {
-        Self {
-            max_concurrent_requests: 1024,
-        }
-    }
-}
-
 /// Protocol message.
 // r[impl session]
 // r[impl session.message]
@@ -32,90 +24,15 @@ impl Default for ConnectionSettings {
 #[derive(Debug, Facet)]
 pub struct Message<'payload> {
     /// Connection ID: 0 for control messages (Hello, HelloYourself)
-    connection_id: ConnectionId,
+    pub connection_id: ConnectionId,
 
     /// Message payload
-    payload: MessagePayload<'payload>,
+    pub payload: MessagePayload<'payload>,
 }
 
 impl<'payload> Message<'payload> {
-    /// Create a message from connection ID + payload.
-    pub fn new(connection_id: ConnectionId, payload: MessagePayload<'payload>) -> Self {
-        Self {
-            connection_id,
-            payload,
-        }
-    }
-
-    /// Message connection ID.
-    pub fn connection_id(&self) -> ConnectionId {
-        self.connection_id
-    }
-
-    /// Borrow the message payload.
-    pub fn payload(&self) -> &MessagePayload<'payload> {
-        &self.payload
-    }
-
-    /// Mutably borrow the message payload.
-    pub fn payload_mut(&mut self) -> &mut MessagePayload<'payload> {
-        &mut self.payload
-    }
-
-    /// Split a message into `(connection_id, payload)`.
-    pub fn into_parts(self) -> (ConnectionId, MessagePayload<'payload>) {
-        (self.connection_id, self.payload)
-    }
-
-    /// Build a `ChannelItem` message.
-    pub fn channel_item(
-        connection_id: ConnectionId,
-        channel_id: ChannelId,
-        payload: Payload<'payload>,
-    ) -> Self {
-        Self::new(
-            connection_id,
-            MessagePayload::ChannelItem(ChannelItem {
-                channel_id,
-                payload,
-            }),
-        )
-    }
-
-    /// Build a `CloseChannel` message.
-    pub fn close_channel(
-        connection_id: ConnectionId,
-        channel_id: ChannelId,
-        metadata: Metadata,
-    ) -> Self {
-        Self::new(
-            connection_id,
-            MessagePayload::CloseChannel(CloseChannel {
-                channel_id,
-                metadata,
-            }),
-        )
-    }
-
-    /// If this message is a `ChannelItem`, return `(conn_id, channel_id, payload)`.
-    pub fn as_channel_item(&self) -> Option<(ConnectionId, ChannelId, &Payload<'payload>)> {
-        match &self.payload {
-            MessagePayload::ChannelItem(item) => {
-                Some((self.connection_id, item.channel_id, &item.payload))
-            }
-            _ => None,
-        }
-    }
-
-    /// If this message is a `CloseChannel`, return `(conn_id, channel_id, metadata)`.
-    pub fn as_close_channel(&self) -> Option<(ConnectionId, ChannelId, &Metadata)> {
-        match &self.payload {
-            MessagePayload::CloseChannel(close) => {
-                Some((self.connection_id, close.channel_id, &close.metadata))
-            }
-            _ => None,
-        }
-    }
+    // Message has no methods on purpose. it's all just plain data.
+    // Adding constructors or getters is forbidden.
 }
 
 /// Whether a peer will use odd or even IDs for requests and channels
