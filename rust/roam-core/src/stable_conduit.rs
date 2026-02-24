@@ -390,7 +390,7 @@ where
                 let inner = self
                     .shared
                     .lock_inner()
-                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+                    .map_err(|e| std::io::Error::other(e.to_string()))?;
                 (inner.tx.clone(), inner.link_generation)
             };
 
@@ -400,9 +400,7 @@ where
                     self.shared
                         .ensure_reconnected(generation)
                         .await
-                        .map_err(|e| {
-                            std::io::Error::new(std::io::ErrorKind::Other, e.to_string())
-                        })?;
+                        .map_err(|e| std::io::Error::other(e.to_string()))?;
                     continue;
                 }
             };
@@ -420,9 +418,7 @@ where
                     self.shared
                         .ensure_reconnected(generation)
                         .await
-                        .map_err(|e| {
-                            std::io::Error::new(std::io::ErrorKind::Other, e.to_string())
-                        })?;
+                        .map_err(|e| std::io::Error::other(e.to_string()))?;
                 }
             }
         }
@@ -433,7 +429,7 @@ where
             let mut inner = self
                 .shared
                 .lock_inner()
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+                .map_err(|e| std::io::Error::other(e.to_string()))?;
             inner.tx.take()
         };
         if let Some(tx) = tx {

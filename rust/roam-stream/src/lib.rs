@@ -141,9 +141,7 @@ impl LinkTx for StreamLinkTx {
 
     async fn close(self) -> io::Result<()> {
         drop(self.tx);
-        self.writer_task
-            .await
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?
+        self.writer_task.await.map_err(io::Error::other)?
     }
 }
 
