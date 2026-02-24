@@ -1,36 +1,27 @@
 use std::collections::BTreeMap;
-use std::sync::Arc;
 
 use roam_types::{
-    ChannelBody, ChannelId, ChannelMessage, ConnectionId, Handler, Message, MessagePayload,
-    ReplySink, RequestBody, RequestId, RequestMessage, RequestResponse, SelfRef, TxError,
+    ChannelBody, ChannelId, ChannelMessage, Handler, ReplySink, RequestBody, RequestId,
+    RequestMessage, RequestResponse, SelfRef, TxError,
 };
 
-use crate::session::{ConnectionHandle, ConnectionMessage, SessionCore};
+use crate::session::{ConnectionHandle, ConnectionMessage, ConnectionSender};
 
 /// Owned response message, sent through a oneshot when a response arrives
 /// for an outgoing call. The caller unpacks the `SelfRef` on the other side.
 type ResponseSlot = tokio::sync::oneshot::Sender<SelfRef<RequestMessage<'static>>>;
 
 /// Concrete `ReplySink` implementation for the driver.
-/// Sends a response back through the session's conduit.
+/// Sends a response back through the connection's sender.
 pub struct DriverReplySink {
-    sess_core: Arc<SessionCore>,
-    connection_id: ConnectionId,
+    sender: ConnectionSender,
     request_id: RequestId,
 }
 
 impl ReplySink for DriverReplySink {
     async fn send_reply<'a>(&self, response: RequestResponse<'a>) -> Result<(), TxError> {
-        let message = Message {
-            connection_id: self.connection_id,
-            payload: MessagePayload::RequestMessage(RequestMessage {
-                id: self.request_id,
-                body: RequestBody::Response(response),
-            }),
-        };
-        self.sess_core
-            .send(message)
+        self.sender
+            .send_response(self.request_id, response)
             .await
             .map_err(|_| TxError::Transport("session closed".into()))
     }
@@ -42,9 +33,9 @@ impl ReplySink for DriverReplySink {
 // r[impl rpc.pipelining]
 /// Per-connection driver. Handles in-flight request tracking, dispatches
 /// incoming calls to a Handler, and manages channel state/flow control.
-pub struct Driver {
+pub struct Driver<H: Handler<DriverReplySink>> {
     handle: ConnectionHandle,
-    handler: Box<dyn Handler<DriverReplySink>>,
+    handler: H,
     /// In-flight outgoing requests (we sent a Call, waiting for Response).
     pending_responses: BTreeMap<RequestId, ResponseSlot>,
     /// Channels we know about on this connection.
@@ -56,8 +47,8 @@ struct ChannelState {
     credit: u32,
 }
 
-impl Driver {
-    pub fn new(handle: ConnectionHandle, handler: Box<dyn Handler<DriverReplySink>>) -> Self {
+impl<H: Handler<DriverReplySink>> Driver<H> {
+    pub fn new(handle: ConnectionHandle, handler: H) -> Self {
         Self {
             handle,
             handler,
@@ -72,7 +63,7 @@ impl Driver {
         // [TODO] SelfRef should have a more ergonomic way to match-and-move
         // through enum variants without the peek-then-map dance.
         while let Some(msg) = self.handle.recv().await {
-            let is_request = matches!(msg.as_ref(), ConnectionMessage::Request(_));
+            let is_request = matches!(&*msg, ConnectionMessage::Request(_));
             if is_request {
                 let msg = msg.map(|m| match m {
                     ConnectionMessage::Request(r) => r,
@@ -98,8 +89,7 @@ impl Driver {
         if is_call {
             // r[impl rpc.request]
             let reply = DriverReplySink {
-                sess_core: Arc::clone(&self.handle.sess_core),
-                connection_id: self.handle.connection_id,
+                sender: self.handle.sender().clone(),
                 request_id: req_id,
             };
             let call = msg.map(|m| match m.body {

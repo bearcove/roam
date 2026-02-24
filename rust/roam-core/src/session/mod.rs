@@ -5,7 +5,7 @@ use roam_types::{
     ChannelMessage, Conduit, ConduitRx, ConduitTx, ConduitTxPermit, ConnectionAccept,
     ConnectionClose, ConnectionId, ConnectionOpen, ConnectionReject, ConnectionSettings, Hello,
     HelloYourself, Message, MessageFamily, MessagePayload, Metadata, Parity, ProtocolError,
-    RequestMessage, SelfRef, SessionRole,
+    RequestBody, RequestId, RequestMessage, RequestResponse, SelfRef, SessionRole,
 };
 use tokio::sync::mpsc;
 
@@ -70,19 +70,14 @@ enum ConnectionSlot {
     PendingOutbound(PendingOutboundOpen),
 }
 
-struct ConnectionHandle {
+#[derive(Clone)]
+pub(crate) struct ConnectionSender {
     connection_id: ConnectionId,
     sess_core: Arc<SessionCore>,
-    rx: mpsc::Receiver<SelfRef<ConnectionMessage<'static>>>,
 }
 
-enum ConnectionMessage<'payload> {
-    Request(RequestMessage<'payload>),
-    Channel(ChannelMessage<'payload>),
-}
-
-impl ConnectionHandle {
-    async fn send<'a>(&self, msg: ConnectionMessage<'a>) -> Result<(), ()> {
+impl ConnectionSender {
+    pub async fn send<'a>(&self, msg: ConnectionMessage<'a>) -> Result<(), ()> {
         let payload = match msg {
             ConnectionMessage::Request(r) => MessagePayload::RequestMessage(r),
             ConnectionMessage::Channel(c) => MessagePayload::ChannelMessage(c),
@@ -94,7 +89,35 @@ impl ConnectionHandle {
         self.sess_core.send(message).await.map_err(|_| ())
     }
 
-    async fn recv(&mut self) -> Option<SelfRef<ConnectionMessage<'static>>> {
+    pub async fn send_response<'a>(
+        &self,
+        request_id: RequestId,
+        response: RequestResponse<'a>,
+    ) -> Result<(), ()> {
+        self.send(ConnectionMessage::Request(RequestMessage {
+            id: request_id,
+            body: RequestBody::Response(response),
+        }))
+        .await
+    }
+}
+
+pub(crate) struct ConnectionHandle {
+    sender: ConnectionSender,
+    rx: mpsc::Receiver<SelfRef<ConnectionMessage<'static>>>,
+}
+
+pub(crate) enum ConnectionMessage<'payload> {
+    Request(RequestMessage<'payload>),
+    Channel(ChannelMessage<'payload>),
+}
+
+impl ConnectionHandle {
+    pub fn sender(&self) -> &ConnectionSender {
+        &self.sender
+    }
+
+    pub async fn recv(&mut self) -> Option<SelfRef<ConnectionMessage<'static>>> {
         self.rx.recv().await
     }
 }
@@ -108,13 +131,13 @@ where
     }
 }
 
-struct SessionCore {
+pub(crate) struct SessionCore {
     tx: Box<dyn DynConduitTx>,
     conns: BTreeMap<ConnectionId, ConnectionSlot>,
 }
 
 impl SessionCore {
-    async fn send<'a>(&self, msg: Message<'a>) -> Result<(), ()> {
+    pub(crate) async fn send<'a>(&self, msg: Message<'a>) -> Result<(), ()> {
         self.tx.send_msg(msg).await.map_err(|_| ())
     }
 }

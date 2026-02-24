@@ -1,5 +1,7 @@
 #![allow(async_fn_in_trait)]
 
+use std::future::Future;
+
 use crate::Backing;
 
 /// Bidirectional raw-bytes transport.
@@ -46,8 +48,8 @@ pub trait LinkTxPermit {
 ///    then the caller fills it and calls [`WriteSlot::commit`].
 ///
 /// `reserve` is the backpressure point.
-pub trait LinkTx: Send + 'static {
-    type Permit: LinkTxPermit;
+pub trait LinkTx: Send + Sync + 'static {
+    type Permit: LinkTxPermit + Send;
 
     /// Reserve capacity to send exactly one payload.
     ///
@@ -58,11 +60,11 @@ pub trait LinkTx: Send + 'static {
     /// release the reservation.
     // r[impl link.tx.reserve]
     // r[impl link.tx.cancel-safe]
-    async fn reserve(&self) -> std::io::Result<Self::Permit>;
+    fn reserve(&self) -> impl Future<Output = std::io::Result<Self::Permit>> + Send + '_;
 
     /// Graceful close of the outbound direction.
     // r[impl link.tx.close]
-    async fn close(self) -> std::io::Result<()>
+    fn close(self) -> impl Future<Output = std::io::Result<()>> + Send
     where
         Self: Sized;
 }
@@ -103,7 +105,7 @@ pub trait LinkRx: Send + 'static {
     // r[impl link.rx.recv]
     // r[impl link.rx.error]
     // r[impl link.rx.eof]
-    async fn recv(&mut self) -> Result<Option<Backing>, Self::Error>;
+    fn recv(&mut self) -> impl Future<Output = Result<Option<Backing>, Self::Error>> + Send + '_;
 }
 
 /// A [`Link`] assembled from pre-split Tx and Rx halves.

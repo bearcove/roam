@@ -102,10 +102,11 @@ struct Attachment<L> {
 
 // r[impl stable.link-source]
 pub trait LinkSource: Send + 'static {
-    type Link: Link;
+    type Link: Link + Send;
 
-    #[allow(async_fn_in_trait)]
-    async fn next_link(&mut self) -> std::io::Result<Attachment<Self::Link>>;
+    fn next_link(
+        &mut self,
+    ) -> impl Future<Output = std::io::Result<Attachment<Self::Link>>> + Send + '_;
 }
 
 // ---------------------------------------------------------------------------
