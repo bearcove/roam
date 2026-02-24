@@ -19,6 +19,7 @@ facet-core.workspace = true
 facet-reflect.workspace = true
 facet-format.workspace = true
 facet-postcard.workspace = true
+futures-util.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 smallvec.workspace = true

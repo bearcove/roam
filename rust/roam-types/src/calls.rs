@@ -156,8 +156,11 @@ pub trait Caller: Clone + Send + Sync + 'static {
 
 pub trait Handler<R: ReplySink>: Send + Sync + 'static {
     /// Dispatch an incoming call to the appropriate method implementation.
-    #[allow(async_fn_in_trait)]
-    async fn handle(&self, call: SelfRef<crate::RequestCall<'static>>, reply: R);
+    fn handle(
+        &self,
+        call: SelfRef<crate::RequestCall<'static>>,
+        reply: R,
+    ) -> impl std::future::Future<Output = ()> + Send + '_;
 }
 
 /// A decoded response value paired with its response metadata.
