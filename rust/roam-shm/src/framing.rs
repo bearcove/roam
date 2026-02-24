@@ -16,6 +16,7 @@
 
 use shm_primitives::BipBufFull;
 use shm_primitives::bipbuf::{BipBufConsumer, BipBufProducer};
+use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout};
 
 use crate::varslot::SlotRef;
 
@@ -52,6 +53,7 @@ pub const DEFAULT_INLINE_THRESHOLD: u32 = 256;
 /// r[impl shm.framing]
 /// r[impl shm.framing.header]
 /// r[impl shm.framing.alignment]
+#[derive(FromBytes, IntoBytes, KnownLayout, Immutable)]
 #[repr(C)]
 pub struct FrameHeader {
     /// Total entry size in bytes, padded to a 4-byte boundary.
@@ -67,6 +69,7 @@ pub struct FrameHeader {
 /// `FLAG_SLOT_REF` is set.
 ///
 /// r[impl shm.framing.slot-ref]
+#[derive(FromBytes, IntoBytes, KnownLayout, Immutable)]
 #[repr(C)]
 pub struct SlotRefBody {
     pub class_idx: u8,
@@ -80,6 +83,7 @@ pub struct SlotRefBody {
 /// `FLAG_MMAP_REF` is set.
 ///
 /// r[impl shm.framing.mmap-ref]
+#[derive(FromBytes, IntoBytes, KnownLayout, Immutable)]
 #[repr(C)]
 pub struct MmapRefBody {
     pub map_id: u32,
@@ -125,16 +129,13 @@ pub fn write_inline(producer: &mut BipBufProducer<'_>, payload: &[u8]) -> Result
     let entry_len = align4(8 + payload.len() as u32);
     let buf = producer.try_grant(entry_len).ok_or(BipBufFull)?;
 
-    // Safety: buf is at least 4-byte aligned and large enough for FrameHeader.
-    let hdr = unsafe { &mut *(buf.as_mut_ptr() as *mut FrameHeader) };
+    let (hdr, rest) = FrameHeader::mut_from_prefix(buf).expect("buf alignment/size");
     hdr.total_len = entry_len;
     hdr.flags = 0;
     hdr._reserved = [0; 3];
 
-    let payload_start = FRAME_HEADER_SIZE;
-    let payload_end = payload_start + payload.len();
-    buf[payload_start..payload_end].copy_from_slice(payload);
-    buf[payload_end..entry_len as usize].fill(0);
+    rest[..payload.len()].copy_from_slice(payload);
+    rest[payload.len()..].fill(0);
 
     producer.commit(entry_len);
     Ok(())
@@ -148,12 +149,12 @@ pub fn write_inline(producer: &mut BipBufProducer<'_>, payload: &[u8]) -> Result
 pub fn write_mmap_ref(producer: &mut BipBufProducer<'_>, mmap: &MmapRef) -> Result<(), BipBufFull> {
     let buf = producer.try_grant(MMAP_REF_ENTRY_SIZE).ok_or(BipBufFull)?;
 
-    let hdr = unsafe { &mut *(buf.as_mut_ptr() as *mut FrameHeader) };
+    let (hdr, rest) = FrameHeader::mut_from_prefix(buf).expect("buf alignment/size");
     hdr.total_len = MMAP_REF_ENTRY_SIZE;
     hdr.flags = FLAG_MMAP_REF;
     hdr._reserved = [0; 3];
 
-    let body = unsafe { &mut *(buf[FRAME_HEADER_SIZE..].as_mut_ptr() as *mut MmapRefBody) };
+    let body = MmapRefBody::mut_from_bytes(rest).expect("rest alignment/size");
     body.map_id = mmap.map_id;
     body.map_generation = mmap.map_generation;
     body.map_offset = mmap.map_offset;
@@ -172,13 +173,12 @@ pub fn write_mmap_ref(producer: &mut BipBufProducer<'_>, mmap: &MmapRef) -> Resu
 pub fn write_slot_ref(producer: &mut BipBufProducer<'_>, slot: &SlotRef) -> Result<(), BipBufFull> {
     let buf = producer.try_grant(SLOT_REF_ENTRY_SIZE).ok_or(BipBufFull)?;
 
-    let hdr = unsafe { &mut *(buf.as_mut_ptr() as *mut FrameHeader) };
+    let (hdr, rest) = FrameHeader::mut_from_prefix(buf).expect("buf alignment/size");
     hdr.total_len = SLOT_REF_ENTRY_SIZE;
     hdr.flags = FLAG_SLOT_REF;
     hdr._reserved = [0; 3];
 
-    // Safety: buf[8..] is 4-byte aligned (8 % 4 == 0) and large enough.
-    let body = unsafe { &mut *(buf[FRAME_HEADER_SIZE..].as_mut_ptr() as *mut SlotRefBody) };
+    let body = SlotRefBody::mut_from_bytes(rest).expect("rest alignment/size");
     body.class_idx = slot.class_idx;
     body.extent_idx = slot.extent_idx;
     body._reserved = [0; 2];
@@ -211,12 +211,7 @@ pub enum Frame<'a> {
 ///
 /// r[impl shm.framing.header]
 pub fn peek_frame(data: &[u8]) -> Option<(Frame<'_>, u32)> {
-    if data.len() < FRAME_HEADER_SIZE {
-        return None;
-    }
-
-    // Safety: data is valid memory; FrameHeader is repr(C) with no padding.
-    let hdr = unsafe { &*(data.as_ptr() as *const FrameHeader) };
+    let (hdr, rest) = FrameHeader::ref_from_prefix(data).ok()?;
     let total_len = hdr.total_len as usize;
 
     if data.len() < total_len {
@@ -233,7 +228,7 @@ pub fn peek_frame(data: &[u8]) -> Option<(Frame<'_>, u32)> {
         if total_len < FRAME_HEADER_SIZE + SLOT_REF_BODY_SIZE {
             return None;
         }
-        let body = unsafe { &*(data[FRAME_HEADER_SIZE..].as_ptr() as *const SlotRefBody) };
+        let (body, _) = SlotRefBody::ref_from_prefix(rest).ok()?;
         Frame::SlotRef(SlotRef {
             class_idx: body.class_idx,
             extent_idx: body.extent_idx,
@@ -244,7 +239,7 @@ pub fn peek_frame(data: &[u8]) -> Option<(Frame<'_>, u32)> {
         if total_len < FRAME_HEADER_SIZE + MMAP_REF_BODY_SIZE {
             return None;
         }
-        let body = unsafe { &*(data[FRAME_HEADER_SIZE..].as_ptr() as *const MmapRefBody) };
+        let (body, _) = MmapRefBody::ref_from_prefix(rest).ok()?;
         Frame::MmapRef(MmapRef {
             map_id: body.map_id,
             map_generation: body.map_generation,
@@ -443,11 +438,11 @@ mod tests {
         // Manually write a frame with both flag bits set (invalid).
         let entry_len: u32 = 32;
         let buf = tx.try_grant(entry_len).unwrap();
-        let hdr = unsafe { &mut *(buf.as_mut_ptr() as *mut FrameHeader) };
+        let (hdr, rest) = FrameHeader::mut_from_prefix(buf).unwrap();
         hdr.total_len = entry_len;
         hdr.flags = FLAG_SLOT_REF | FLAG_MMAP_REF;
         hdr._reserved = [0; 3];
-        buf[FRAME_HEADER_SIZE..].fill(0);
+        rest.fill(0);
         tx.commit(entry_len);
 
         // peek_frame must reject it

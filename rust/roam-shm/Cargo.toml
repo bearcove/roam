@@ -18,6 +18,7 @@ unexpected_cfgs = { level = "warn", check-cfg = ['cfg(loom)'] }
 roam-types.workspace = true
 shm-primitives.workspace = true
 tokio = { workspace = true, features = ["sync"] }
+zerocopy = { workspace = true }
 
 [target.'cfg(loom)'.dependencies]
 loom = { version = "0.7" }

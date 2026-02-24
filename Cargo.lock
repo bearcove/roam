@@ -837,6 +837,7 @@ dependencies = [
  "roam-types",
  "shm-primitives",
  "tokio",
+ "zerocopy",
 ]
 
 [[package]]
