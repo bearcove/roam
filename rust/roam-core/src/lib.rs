@@ -22,12 +22,9 @@ pub use memory_link::*;
 mod session;
 pub use session::*;
 
-/// Build a `&'static RpcPlan` for type `T`, using `Tx<()>` / `Rx<()>` as the
-/// channel sentinels, via the process-global RpcPlan cache.
-///
-/// Kept as a convenience helper for call sites that need a plan on demand.
+/// Return a process-global cached `&'static RpcPlan` for type `T`.
 pub fn rpc_plan<T: facet::Facet<'static>>() -> &'static roam_types::RpcPlan {
-    roam_types::RpcPlan::for_type_cached::<T, roam_types::Tx<()>, roam_types::Rx<()>>()
+    roam_types::RpcPlan::for_type::<T>()
 }
 
 #[cfg(test)]

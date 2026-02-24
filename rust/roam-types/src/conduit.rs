@@ -19,12 +19,8 @@ pub trait MsgFamily: 'static {
         <Self::Msg<'static> as Facet<'static>>::SHAPE
     }
 
-    fn rpc_plan<Tx, Rx>() -> &'static RpcPlan
-    where
-        Tx: Facet<'static>,
-        Rx: Facet<'static>,
-    {
-        RpcPlan::for_shape_cached::<Tx, Rx>(Self::shape())
+    fn rpc_plan() -> &'static RpcPlan {
+        RpcPlan::for_shape(Self::shape())
     }
 }
 
