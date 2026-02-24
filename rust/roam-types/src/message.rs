@@ -254,17 +254,7 @@ structstruck::strike! {
 pub enum Payload<'payload> {
     // r[impl zerocopy.payload.borrowed]
     /// Outgoing: type-erased pointer to caller-owned memory + its Shape.
-    Borrowed {
-        ptr: PtrConst,
-        shape: &'static Shape,
-        _lt: PhantomData<&'payload ()>,
-    },
-
-    /// Outgoing: type-erased pointer + shape where liveness is guaranteed by caller.
-    ///
-    /// This is an explicit footgun. It is valid only if the pointed value remains alive
-    /// until serialization is complete.
-    Owned {
+    Outgoing {
         ptr: PtrConst,
         shape: &'static Shape,
         _lt: PhantomData<&'payload ()>,
@@ -272,19 +262,14 @@ pub enum Payload<'payload> {
 
     // r[impl zerocopy.payload.bytes]
     /// Incoming: raw bytes borrowed from the backing (zero-copy).
-    RawBorrowed(&'payload [u8]),
-
-    /// Incoming: owned bytes (when borrowing is unavailable).
-    RawOwned(Vec<u8>),
+    Incoming(&'payload [u8]),
 }
 
 impl<'payload> Payload<'payload> {
     /// Construct an outgoing borrowed payload from a concrete value.
-    pub fn borrowed<T: Facet<'payload>>(value: &'payload T) -> Self {
-        Self::Borrowed {
-            ptr: PtrConst::new((value as *const T).cast::<u8>()),
-            shape: T::SHAPE,
-            _lt: PhantomData,
+    pub fn outgoing<T: Facet<'payload>>(value: &'payload T) -> Self {
+        unsafe {
+            Self::outgoing_unchecked(PtrConst::new((value as *const T).cast::<u8>()), T::SHAPE)
         }
     }
 
@@ -293,22 +278,15 @@ impl<'payload> Payload<'payload> {
     /// # Safety
     ///
     /// The pointed value must remain alive until serialization has completed.
-    pub unsafe fn owned_unchecked(ptr: PtrConst, shape: &'static Shape) -> Self {
-        Self::Owned {
+    pub unsafe fn outgoing_unchecked(ptr: PtrConst, shape: &'static Shape) -> Self {
+        Self::Outgoing {
             ptr,
             shape,
             _lt: PhantomData,
         }
     }
 
-    /// Access incoming bytes when this payload is decoded (`RawBorrowed` / `RawOwned`).
-    pub fn as_incoming_bytes(&self) -> Option<&[u8]> {
-        match self {
-            Self::RawBorrowed(bytes) => Some(bytes),
-            Self::RawOwned(bytes) => Some(bytes.as_slice()),
-            Self::Borrowed { .. } | Self::Owned { .. } => None,
-        }
-    }
+    // ps: as_incoming_bytes was a bad idea. it's not here anymore.
 }
 
 /// Adapter that bridges [`Payload`] through the opaque field contract.
@@ -320,21 +298,21 @@ impl FacetOpaqueAdapter for PayloadAdapter {
     type RecvValue<'de> = Payload<'de>;
 
     fn serialize_map(value: &Self::SendValue<'_>) -> OpaqueSerialize {
-        match value {
-            Payload::Borrowed { ptr, shape, .. } | Payload::Owned { ptr, shape, .. } => {
-                OpaqueSerialize { ptr: *ptr, shape }
-            }
-            _ => unreachable!("serialize_map is only called on outgoing Payload variants"),
-        }
+        let Payload::Outgoing { ptr, shape, .. } = value else {
+            unreachable!("serialize_map is only called on outgoing Payload variants");
+        };
+        OpaqueSerialize { ptr: *ptr, shape }
     }
 
     fn deserialize_build<'de>(
         input: OpaqueDeserialize<'de>,
     ) -> Result<Self::RecvValue<'de>, Self::Error> {
-        Ok(match input {
-            OpaqueDeserialize::Borrowed(bytes) => Payload::RawBorrowed(bytes),
-            OpaqueDeserialize::Owned(bytes) => Payload::RawOwned(bytes),
-        })
+        match input {
+            OpaqueDeserialize::Borrowed(bytes) => Ok(Payload::Incoming(bytes)),
+            OpaqueDeserialize::Owned(_) => {
+                Err("payload bytes must be borrowed from backing, not owned".into())
+            }
+        }
     }
 }
 
@@ -359,7 +337,7 @@ mod tests {
 
     /// Construct a Payload::Borrowed from a concrete value.
     fn borrowed_payload<'a, T: Facet<'a>>(value: &'a T) -> Payload<'a> {
-        Payload::Borrowed {
+        Payload::Outgoing {
             ptr: PtrConst::new((value as *const T).cast::<u8>()),
             shape: T::SHAPE,
             _lt: PhantomData,
@@ -402,7 +380,7 @@ mod tests {
 
         assert_eq!(decoded.method_id, 7);
         match &decoded.payload {
-            Payload::RawBorrowed(slice) => {
+            Payload::Incoming(slice) => {
                 let inner: Vec<u8> =
                     facet_postcard::from_slice(slice).expect("decode inner payload");
                 assert_eq!(inner, vec![0xCA, 0xFE]);
@@ -424,7 +402,7 @@ mod tests {
             facet_postcard::from_slice_borrowed(&bytes).expect("deserialize borrowed");
 
         match &decoded.payload {
-            Payload::RawBorrowed(slice) => {
+            Payload::Incoming(slice) => {
                 // The borrowed slice should point into `bytes` (zero-copy)
                 let bytes_range = bytes.as_ptr_range();
                 let slice_start = slice.as_ptr();

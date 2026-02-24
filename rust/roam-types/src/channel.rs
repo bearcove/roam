@@ -9,8 +9,7 @@ use facet_core::PtrConst;
 use tokio::sync::mpsc;
 
 use crate::{
-    ChannelClose, ChannelGrantCredit, ChannelItem, ChannelReset, Message, Metadata, Payload,
-    SelfRef,
+    ChannelClose, ChannelGrantCredit, ChannelItem, ChannelReset, Metadata, Payload, SelfRef,
 };
 
 /// Create an unbound channel pair.
@@ -103,7 +102,7 @@ impl<T, const N: usize> Tx<T, N> {
         let ptr = PtrConst::new((&value as *const T).cast::<u8>());
         // SAFETY: `value` is explicitly dropped only after `await`, so the pointer
         // remains valid for the whole send operation.
-        let payload = unsafe { Payload::owned_unchecked(ptr, T::SHAPE) };
+        let payload = unsafe { Payload::outgoing_unchecked(ptr, T::SHAPE) };
         let result = sink.send_payload(payload).await;
         drop(value);
         result
@@ -180,23 +179,50 @@ impl<T, const N: usize> Rx<T, N> {
         self.receiver.inner.is_some()
     }
 
-    pub async fn recv(&mut self) -> Result<Option<T>, RxError>
+    pub async fn recv(&mut self) -> Result<Option<SelfRef<T>>, RxError>
     where
         T: Facet<'static>,
     {
         let receiver = self.receiver.inner.as_mut().ok_or(RxError::Unbound)?;
         match receiver.recv().await {
-            Some(IncomingChannelMessage::Close) | None => Ok(None),
-            Some(IncomingChannelMessage::Reset) => Err(RxError::Reset),
-            Some(IncomingChannelMessage::Data(msg)) => {
-                let Some((_conn_id, _channel_id, payload)) = msg.as_channel_item() else {
-                    return Err(RxError::Protocol("expected ChannelItem message".into()));
-                };
-                let bytes = payload.as_incoming_bytes().ok_or_else(|| {
-                    RxError::Protocol("incoming channel item payload was not decoded bytes".into())
-                })?;
-                let value = facet_postcard::from_slice(bytes).map_err(RxError::Deserialize)?;
-                Ok(Some(value))
+            Some(IncomingChannelMessage::Close(_)) | None => Ok(None),
+            Some(IncomingChannelMessage::Reset(_)) => Err(RxError::Reset),
+            Some(IncomingChannelMessage::GrantCredit(_)) => {
+                // credit grants are flow-control only; skip and wait for the next message
+                // TODO: handle properly
+                Ok(None)
+            }
+            Some(IncomingChannelMessage::Item(msg)) => {
+                // Extract the payload bytes before consuming `msg` so we can choose
+                // the right deserialization path.
+                let use_owned = matches!(msg.item, Payload::RawOwned(_));
+                if use_owned {
+                    // RawOwned: bytes live in a Vec inside the SelfRef, not the backing.
+                    // Deserialize owned (one allocation, unavoidable).
+                    msg.try_map(|item| {
+                        let bytes = item.item.as_incoming_bytes().ok_or_else(|| {
+                            RxError::Protocol(
+                                "incoming channel item payload was not decoded bytes".into(),
+                            )
+                        })?;
+                        facet_postcard::from_slice(bytes).map_err(RxError::Deserialize)
+                    })
+                    .map(Some)
+                } else {
+                    // RawBorrowed: bytes point into the backing — borrow zero-copy.
+                    msg.try_repack(|item, backing_bytes| {
+                        let payload_bytes = item.item.as_incoming_bytes().ok_or_else(|| {
+                            RxError::Protocol(
+                                "incoming channel item payload was not decoded bytes".into(),
+                            )
+                        })?;
+                        let offset =
+                            payload_bytes.as_ptr() as usize - backing_bytes.as_ptr() as usize;
+                        let slice = &backing_bytes[offset..offset + payload_bytes.len()];
+                        facet_postcard::from_slice_borrowed(slice).map_err(RxError::Deserialize)
+                    })
+                    .map(Some)
+                }
             }
         }
     }

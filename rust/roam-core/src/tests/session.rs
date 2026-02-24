@@ -322,7 +322,7 @@ async fn send_rpc_message_supports_borrowed_payload_lifetimes() {
             MessagePayload::Request(RequestBody {
                 request_id: RequestId(5),
                 method_id: MethodId(99),
-                args: Payload::borrowed(&args),
+                args: Payload::outgoing(&args),
                 channels: vec![],
                 metadata: vec![],
             }),

@@ -101,6 +101,47 @@ impl<T: 'static> SelfRef<T> {
     /// The closure receives the old value by move and returns the new value.
     /// Any references the new value holds into the backing storage (inherited
     /// from fields of `T`) remain valid — the backing is preserved.
+    /// Like [`try_map`](Self::try_map), but the closure also receives a `&'static [u8]`
+    /// view of the backing bytes, so the new value `U` can borrow from them.
+    pub fn try_repack<U: 'static, E>(
+        mut self,
+        f: impl FnOnce(T, &'static [u8]) -> Result<U, E>,
+    ) -> Result<SelfRef<U>, E> {
+        let value = unsafe { ManuallyDrop::take(&mut self.value) };
+        let backing = unsafe { ManuallyDrop::take(&mut self.backing) };
+        core::mem::forget(self);
+
+        let bytes: &'static [u8] = unsafe {
+            let b = backing.as_bytes();
+            std::slice::from_raw_parts(b.as_ptr(), b.len())
+        };
+
+        match f(value, bytes) {
+            Ok(u) => Ok(SelfRef {
+                value: ManuallyDrop::new(u),
+                backing: ManuallyDrop::new(backing),
+            }),
+            Err(e) => Err(e),
+        }
+    }
+
+    pub fn try_map<U: 'static, E>(
+        mut self,
+        f: impl FnOnce(T) -> Result<U, E>,
+    ) -> Result<SelfRef<U>, E> {
+        let value = unsafe { ManuallyDrop::take(&mut self.value) };
+        let backing = unsafe { ManuallyDrop::take(&mut self.backing) };
+        core::mem::forget(self);
+
+        match f(value) {
+            Ok(u) => Ok(SelfRef {
+                value: ManuallyDrop::new(u),
+                backing: ManuallyDrop::new(backing),
+            }),
+            Err(e) => Err(e),
+        }
+    }
+
     pub fn map<U: 'static>(mut self, f: impl FnOnce(T) -> U) -> SelfRef<U> {
         // SAFETY: we take both fields via ManuallyDrop::take, then forget
         // self to prevent its Drop impl from double-dropping them.

@@ -4,8 +4,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use roam_types::{
-    Backing, ChannelId, ChannelSink, Conduit, ConduitRx, ConduitTx, ConduitTxPermit, ConnectionId,
-    IncomingChannelMessage, Message, Metadata, MsgFamily, Payload, Rx, SelfRef, Tx, TxError,
+    Backing, ChannelClose, ChannelItem, ChannelSink, Conduit, ConduitRx, ConduitTx,
+    ConduitTxPermit, IncomingChannelMessage, Metadata, MsgFamily, Payload, Rx, SelfRef, Tx,
+    TxError,
 };
 use tokio::sync::{Notify, mpsc};
 
@@ -166,7 +167,7 @@ impl ChannelSink for TestSink {
         let send_count = self.send_count.clone();
         let saw_owned_payload = self.saw_owned_payload.clone();
         Box::pin(async move {
-            if matches!(payload, Payload::Owned { .. }) {
+            if matches!(payload, Payload::Outgoing { .. }) {
                 saw_owned_payload.store(true, Ordering::SeqCst);
             }
             gate.notified().await;
@@ -244,24 +245,27 @@ async fn rx_recv_decodes_channel_items() {
     rx.bind(rx_items);
 
     let payload_bytes = facet_postcard::to_vec(&42_u32).expect("serialize channel item");
-    let item_msg = Message::channel_item(
-        ConnectionId(11),
-        ChannelId(15),
-        Payload::RawOwned(payload_bytes),
-    );
-    let item_ref = SelfRef::owning(Backing::Boxed(Box::<[u8]>::default()), item_msg);
+    let item = ChannelItem {
+        item: Payload::RawOwned(payload_bytes),
+    };
+    let item_ref = SelfRef::owning(Backing::Boxed(Box::<[u8]>::default()), item);
     tx_items
-        .send(IncomingChannelMessage::Data(item_ref))
+        .send(IncomingChannelMessage::Item(item_ref))
         .await
-        .expect("send data to rx");
+        .expect("send item to rx");
 
-    assert_eq!(rx.recv().await.expect("recv data"), Some(42));
+    let received = rx.recv().await.expect("recv data");
+    assert_eq!(*received.unwrap(), 42);
 
+    let close = ChannelClose {
+        metadata: Metadata::default(),
+    };
+    let close_ref = SelfRef::owning(Backing::Boxed(Box::<[u8]>::default()), close);
     tx_items
-        .send(IncomingChannelMessage::Close)
+        .send(IncomingChannelMessage::Close(close_ref))
         .await
         .expect("send close to rx");
-    assert_eq!(rx.recv().await.expect("recv close"), None);
+    assert!(rx.recv().await.expect("recv close").is_none());
 }
 
 #[test]
