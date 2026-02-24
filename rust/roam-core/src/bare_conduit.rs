@@ -115,6 +115,9 @@ impl<F: MsgFamily, LTx: LinkTx> ConduitTxPermit for BareConduitPermit<'_, F, LTx
     type Msg<'a> = F::Msg<'a>;
     type Error = BareConduitError;
 
+    // r[impl zerocopy.framing.single-pass]
+    // r[impl zerocopy.framing.no-double-serialize]
+    // r[impl zerocopy.scatter.write]
     fn send(self, item: F::Msg<'_>) -> Result<(), Self::Error> {
         // SAFETY: shape was set from F::shape() at construction time.
         // The item is a valid instance of F::Msg<'_>, which shares the same
@@ -123,14 +126,14 @@ impl<F: MsgFamily, LTx: LinkTx> ConduitTxPermit for BareConduitPermit<'_, F, LTx
         let peek = unsafe {
             Peek::unchecked_new(PtrConst::new((&raw const item).cast::<u8>()), self.shape)
         };
-        let encoded = facet_postcard::peek_to_vec(peek).map_err(BareConduitError::Encode)?;
+        let plan = facet_postcard::peek_to_scatter_plan(peek).map_err(BareConduitError::Encode)?;
 
         let mut slot = self
             .permit
-            .alloc(encoded.len())
+            .alloc(plan.total_size())
             .map_err(BareConduitError::Io)?;
-
-        slot.as_mut_slice().copy_from_slice(&encoded);
+        plan.write_into(slot.as_mut_slice())
+            .map_err(BareConduitError::Encode)?;
         slot.commit();
         Ok(())
     }

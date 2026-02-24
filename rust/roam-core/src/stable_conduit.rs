@@ -2,7 +2,8 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 
 use facet::Facet;
-use facet_core::Shape;
+use facet_core::{PtrConst, Shape};
+use facet_reflect::Peek;
 use roam_types::{
     Backing, Conduit, ConduitRx, ConduitTx, ConduitTxPermit, Link, LinkRx, LinkTx, LinkTxPermit,
     MsgFamily, RpcPlan, SelfRef, WriteSlot,
@@ -267,7 +268,6 @@ fn fresh_key() -> Vec<u8> {
 
 impl<F: MsgFamily, LS: LinkSource> Conduit for StableConduit<F, LS>
 where
-    F::Msg<'static>: Facet<'static>,
     <LS::Link as Link>::Tx: Clone + Send + 'static,
     <LS::Link as Link>::Rx: Send + 'static,
     LS: Send + 'static,
@@ -374,6 +374,8 @@ impl<F: MsgFamily, LS: LinkSource> ConduitTxPermit for StableConduitPermit<'_, F
 
     // r[impl zerocopy.framing.single-pass]
     // r[impl zerocopy.framing.no-double-serialize]
+    // r[impl zerocopy.scatter.write]
+    // r[impl zerocopy.scatter.replay]
     fn send(mut self, item: F::Msg<'_>) -> Result<(), StableConduitError> {
         let inner = &mut *self.guard;
 
@@ -386,19 +388,28 @@ impl<F: MsgFamily, LS: LinkSource> ConduitTxPermit for StableConduitPermit<'_, F
 
         let frame = Frame { seq, ack, item };
 
-        // Single-pass serialization of the entire Frame<T>.
-        let frame_bytes = facet_postcard::to_vec(&frame).map_err(StableConduitError::Encode)?;
-
-        // Store full frame bytes for replay. Stale acks are harmless —
-        // the peer ignores acks older than what it has already seen.
-        inner.replay.push(seq, frame_bytes.clone());
+        // SAFETY: The shape matches `frame`'s concrete type for all lifetimes.
+        // `Frame<F::Msg<'a>>` has a lifetime-independent shape by `MsgFamily` contract.
+        #[allow(unsafe_code)]
+        let peek = unsafe {
+            Peek::unchecked_new(
+                PtrConst::new((&raw const frame).cast::<u8>()),
+                Frame::<F::Msg<'static>>::SHAPE,
+            )
+        };
+        let plan =
+            facet_postcard::peek_to_scatter_plan(peek).map_err(StableConduitError::Encode)?;
 
         let mut slot = self
             .link_permit
-            .alloc(frame_bytes.len())
+            .alloc(plan.total_size())
             .map_err(StableConduitError::Io)?;
-        // [FIXME] THIS IS WHAT SCATTER-GATHER IS FOR GOD DAMN IT
-        slot.as_mut_slice().copy_from_slice(&frame_bytes);
+        let slot_bytes = slot.as_mut_slice();
+        plan.write_into(slot_bytes)
+            .map_err(StableConduitError::Encode)?;
+
+        // Keep an owned copy for replay after reconnect.
+        inner.replay.push(seq, slot_bytes.to_vec());
         slot.commit();
 
         Ok(())
@@ -417,7 +428,6 @@ pub struct StableConduitRx<F: MsgFamily, LS: LinkSource> {
 
 impl<F: MsgFamily, LS: LinkSource> ConduitRx for StableConduitRx<F, LS>
 where
-    F::Msg<'static>: Facet<'static>,
     <LS::Link as Link>::Tx: Send + 'static,
     <LS::Link as Link>::Rx: Send + 'static,
     LS: Send + 'static,
