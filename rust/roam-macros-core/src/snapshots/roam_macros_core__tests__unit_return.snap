@@ -8,17 +8,12 @@ pub fn notifier_service_descriptor() -> &'static ::roam::session::ServiceDescrip
         std::sync::OnceLock::new();
     DESCRIPTOR.get_or_init(|| {
         let methods: Vec<&'static ::roam::session::MethodDescriptor> =
-            vec![Box::leak(Box::new(::roam::session::MethodDescriptor {
-                id: ::roam::hash::method_id::<(String,), ()>("Notifier", "notify"),
-                service_name: "Notifier",
-                method_name: "notify",
-                args: &[::roam::session::ArgDescriptor {
-                    name: "msg",
-                    shape: <String as ::roam::facet::Facet>::SHAPE,
-                }],
-                return_shape: <() as ::roam::facet::Facet>::SHAPE,
-                doc: None,
-            }))];
+            vec![::roam::hash::method_descriptor::<(String,), ()>(
+                "Notifier",
+                "notify",
+                &["msg"],
+                None,
+            )];
         Box::leak(Box::new(::roam::session::ServiceDescriptor {
             service_name: "Notifier",
             methods: Box::leak(methods.into_boxed_slice()),

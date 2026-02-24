@@ -7,7 +7,7 @@
 
 use facet_core::{Def, Facet, ScalarType, Shape, StructKind, Type, UserType};
 use heck::ToKebabCase;
-use roam_types::MethodId;
+use roam_types::{ArgDescriptor, MethodDescriptor, MethodId};
 use roam_types::{is_rx, is_tx};
 
 /// Signature encoding tags for type serialization.
@@ -291,4 +291,50 @@ pub fn method_id<A: Facet, R: Facet>(service_name: &str, method_name: &str) -> M
     let h = blake3::hash(&input);
     let first8: [u8; 8] = h.as_bytes()[0..8].try_into().expect("slice len");
     MethodId(u64::from_le_bytes(first8))
+}
+
+/// Build and leak a `MethodDescriptor` from type parameters and arg names.
+///
+/// Called once per method inside a `OnceLock::get_or_init` in macro-generated code.
+/// `A` is the args tuple type, `R` is the return type.
+pub fn method_descriptor<A: Facet, R: Facet>(
+    service_name: &'static str,
+    method_name: &'static str,
+    arg_names: &[&'static str],
+    doc: Option<&'static str>,
+) -> &'static MethodDescriptor {
+    let id = method_id::<A, R>(service_name, method_name);
+
+    // Extract per-arg shapes from the tuple fields of A::SHAPE.
+    let arg_shapes: &[&'static Shape] = match A::SHAPE.ty {
+        Type::User(UserType::Struct(s)) => {
+            let fields: Vec<&'static Shape> = s.fields.iter().map(|f| f.shape()).collect();
+            Box::leak(fields.into_boxed_slice())
+        }
+        _ => &[],
+    };
+
+    assert_eq!(
+        arg_names.len(),
+        arg_shapes.len(),
+        "arg_names length mismatch for {service_name}.{method_name}"
+    );
+
+    let args: &'static [ArgDescriptor] = Box::leak(
+        arg_names
+            .iter()
+            .zip(arg_shapes.iter())
+            .map(|(&name, &shape)| ArgDescriptor { name, shape })
+            .collect::<Vec<_>>()
+            .into_boxed_slice(),
+    );
+
+    Box::leak(Box::new(MethodDescriptor {
+        id,
+        service_name,
+        method_name,
+        args,
+        return_shape: R::SHAPE,
+        doc,
+    }))
 }

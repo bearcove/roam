@@ -8,14 +8,12 @@ pub fn ping_service_descriptor() -> &'static ::roam::session::ServiceDescriptor 
         std::sync::OnceLock::new();
     DESCRIPTOR.get_or_init(|| {
         let methods: Vec<&'static ::roam::session::MethodDescriptor> =
-            vec![Box::leak(Box::new(::roam::session::MethodDescriptor {
-                id: ::roam::hash::method_id::<(), u64>("Ping", "ping"),
-                service_name: "Ping",
-                method_name: "ping",
-                args: &[],
-                return_shape: <u64 as ::roam::facet::Facet>::SHAPE,
-                doc: None,
-            }))];
+            vec![::roam::hash::method_descriptor::<(), u64>(
+                "Ping",
+                "ping",
+                &[],
+                None,
+            )];
         Box::leak(Box::new(::roam::session::ServiceDescriptor {
             service_name: "Ping",
             methods: Box::leak(methods.into_boxed_slice()),

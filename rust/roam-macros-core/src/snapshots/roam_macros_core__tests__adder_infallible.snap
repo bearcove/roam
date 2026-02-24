@@ -8,23 +8,12 @@ pub fn adder_service_descriptor() -> &'static ::roam::session::ServiceDescriptor
         std::sync::OnceLock::new();
     DESCRIPTOR.get_or_init(|| {
         let methods: Vec<&'static ::roam::session::MethodDescriptor> =
-            vec![Box::leak(Box::new(::roam::session::MethodDescriptor {
-                id: ::roam::hash::method_id::<(i32, i32), i32>("Adder", "add"),
-                service_name: "Adder",
-                method_name: "add",
-                args: &[
-                    ::roam::session::ArgDescriptor {
-                        name: "a",
-                        shape: <i32 as ::roam::facet::Facet>::SHAPE,
-                    },
-                    ::roam::session::ArgDescriptor {
-                        name: "b",
-                        shape: <i32 as ::roam::facet::Facet>::SHAPE,
-                    },
-                ],
-                return_shape: <i32 as ::roam::facet::Facet>::SHAPE,
-                doc: None,
-            }))];
+            vec![::roam::hash::method_descriptor::<(i32, i32), i32>(
+                "Adder",
+                "add",
+                &["a", "b"],
+                None,
+            )];
         Box::leak(Box::new(::roam::session::ServiceDescriptor {
             service_name: "Adder",
             methods: Box::leak(methods.into_boxed_slice()),

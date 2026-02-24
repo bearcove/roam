@@ -8,23 +8,10 @@ pub fn calc_service_descriptor() -> &'static ::roam::session::ServiceDescriptor 
         std::sync::OnceLock::new();
     DESCRIPTOR.get_or_init(|| {
         let methods: Vec<&'static ::roam::session::MethodDescriptor> =
-            vec![Box::leak(Box::new(::roam::session::MethodDescriptor {
-                id: ::roam::hash::method_id::<(f64, f64), Result<f64, DivError>>("Calc", "div"),
-                service_name: "Calc",
-                method_name: "div",
-                args: &[
-                    ::roam::session::ArgDescriptor {
-                        name: "a",
-                        shape: <f64 as ::roam::facet::Facet>::SHAPE,
-                    },
-                    ::roam::session::ArgDescriptor {
-                        name: "b",
-                        shape: <f64 as ::roam::facet::Facet>::SHAPE,
-                    },
-                ],
-                return_shape: <Result<f64, DivError> as ::roam::facet::Facet>::SHAPE,
-                doc: None,
-            }))];
+            vec![::roam::hash::method_descriptor::<
+                (f64, f64),
+                Result<f64, DivError>,
+            >("Calc", "div", &["a", "b"], None)];
         Box::leak(Box::new(::roam::session::ServiceDescriptor {
             service_name: "Calc",
             methods: Box::leak(methods.into_boxed_slice()),

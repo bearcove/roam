@@ -111,33 +111,12 @@ fn generate_service_descriptor_fn(parsed: &ServiceTrait, roam: &TokenStream2) ->
         .map(|m| {
             let method_name_str = m.name();
 
-            // Build ArgDescriptor array
-            let arg_descriptors: Vec<TokenStream2> = m
-                .args()
-                .map(|arg| {
-                    let name_str = arg.name().to_string();
-                    let ty = arg.ty.to_token_stream();
-                    quote! {
-                        #roam::session::ArgDescriptor {
-                            name: #name_str,
-                            shape: <#ty as #roam::facet::Facet>::SHAPE,
-                        }
-                    }
-                })
-                .collect();
-
-            let args_expr = if arg_descriptors.is_empty() {
-                quote! { &[] }
-            } else {
-                quote! { &[#(#arg_descriptors),*] }
-            };
-
-            // Build args tuple type and return type for method ID
+            // Build args tuple type and return type
             let arg_types: Vec<TokenStream2> =
                 m.args().map(|arg| arg.ty.to_token_stream()).collect();
             let args_tuple_ty = quote! { (#(#arg_types,)*) };
+            let arg_name_strs: Vec<String> = m.args().map(|arg| arg.name().to_string()).collect();
 
-            // Return type
             let return_type = m.return_type();
             let return_ty_tokens = return_type.to_token_stream();
 
@@ -147,17 +126,12 @@ fn generate_service_descriptor_fn(parsed: &ServiceTrait, roam: &TokenStream2) ->
             };
 
             quote! {
-                Box::leak(Box::new(#roam::session::MethodDescriptor {
-                    id: #roam::hash::method_id::<#args_tuple_ty, #return_ty_tokens>(
-                        #service_name,
-                        #method_name_str,
-                    ),
-                    service_name: #service_name,
-                    method_name: #method_name_str,
-                    args: #args_expr,
-                    return_shape: <#return_ty_tokens as #roam::facet::Facet>::SHAPE,
-                    doc: #method_doc_expr,
-                }))
+                #roam::hash::method_descriptor::<#args_tuple_ty, #return_ty_tokens>(
+                    #service_name,
+                    #method_name_str,
+                    &[#(#arg_name_strs),*],
+                    #method_doc_expr,
+                )
             }
         })
         .collect();
