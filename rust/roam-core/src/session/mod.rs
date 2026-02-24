@@ -1,11 +1,9 @@
 use std::{collections::BTreeMap, future::Future, pin::Pin, sync::Arc};
 
-use facet::Facet;
 use roam_types::{
-    ChannelMessage, Conduit, ConduitRx, ConduitTx, ConduitTxPermit, ConnectionAccept,
-    ConnectionClose, ConnectionId, ConnectionOpen, ConnectionReject, ConnectionSettings, Hello,
-    HelloYourself, Message, MessageFamily, MessagePayload, Metadata, Parity, ProtocolError,
-    RequestBody, RequestId, RequestMessage, RequestResponse, SelfRef, SessionRole,
+    ChannelMessage, Conduit, ConduitRx, ConduitTx, ConduitTxPermit, ConnectionId,
+    ConnectionSettings, Message, MessageFamily, MessagePayload, Metadata, Parity, RequestBody,
+    RequestId, RequestMessage, RequestResponse, SelfRef, SessionRole,
 };
 use tokio::sync::mpsc;
 
@@ -190,7 +188,7 @@ where
     fn send_msg<'a>(&'a self, msg: Message<'a>) -> BoxFuture<'a, std::io::Result<()>> {
         Box::pin(async move {
             let permit = self.reserve().await?;
-            permit.send(msg).map_err(|e| std::io::Error::other(e))
+            permit.send(msg).map_err(std::io::Error::other)
         })
     }
 }

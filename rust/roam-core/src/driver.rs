@@ -88,11 +88,11 @@ impl<H: Handler<DriverReplySink>> Driver<H> {
 
         if is_call {
             // r[impl rpc.request]
-            let reply = DriverReplySink {
+            let _reply = DriverReplySink {
                 sender: self.handle.sender().clone(),
                 request_id: req_id,
             };
-            let call = msg.map(|m| match m.body {
+            let _call = msg.map(|m| match m.body {
                 RequestBody::Call(c) => c,
                 _ => unreachable!(),
             });
