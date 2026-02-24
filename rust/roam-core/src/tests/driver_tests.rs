@@ -35,8 +35,7 @@ impl Handler<DriverReplySink> for EchoHandler {
                     channels: &[],
                     metadata: Default::default(),
                 })
-                .await
-                .ok();
+                .await;
         }
     }
 }

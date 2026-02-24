@@ -12,6 +12,7 @@ use roam_types::{
 };
 
 use crate::session::{ConnectionHandle, ConnectionMessage, ConnectionSender};
+use moire::sync::mpsc;
 
 type ResponseSlot = moire::sync::oneshot::Sender<SelfRef<RequestMessage<'static>>>;
 
@@ -37,14 +38,12 @@ pub struct DriverReplySink {
 
 impl ReplySink for DriverReplySink {
     async fn send_reply(mut self, response: RequestResponse<'_>) {
-        if let Err(e) = self
+        let sender = self
             .sender
             .take()
-            .expect("unreachable: send_reply takes self by value")
-            .send_response(self.request_id, response)
-            .await
-        {
-            sender.mark_failure(self.request_id, "send_response failed")
+            .expect("unreachable: send_reply takes self by value");
+        if let Err(_e) = sender.send_response(self.request_id, response).await {
+            sender.mark_failure(self.request_id, "send_response failed");
         }
     }
 }
@@ -124,7 +123,9 @@ impl Caller for DriverCaller {
 /// Per-connection driver. Handles in-flight request tracking, dispatches
 /// incoming calls to a Handler, and manages channel state/flow control.
 pub struct Driver<H: Handler<DriverReplySink>> {
-    handle: ConnectionHandle,
+    sender: ConnectionSender,
+    rx: mpsc::Receiver<SelfRef<ConnectionMessage<'static>>>,
+    failures_rx: mpsc::UnboundedReceiver<(RequestId, &'static str)>,
     handler: Arc<H>,
     shared: Arc<DriverShared>,
     /// Channels we know about on this connection.
@@ -138,8 +139,15 @@ struct ChannelState {
 
 impl<H: Handler<DriverReplySink>> Driver<H> {
     pub fn new(handle: ConnectionHandle, handler: H, parity: Parity) -> Self {
+        let ConnectionHandle {
+            sender,
+            rx,
+            failures_rx,
+        } = handle;
         Self {
-            handle,
+            sender,
+            rx,
+            failures_rx,
             handler: Arc::new(handler),
             shared: Arc::new(DriverShared {
                 pending_responses: SyncMutex::new("driver.pending_responses", BTreeMap::new()),
@@ -152,7 +160,7 @@ impl<H: Handler<DriverReplySink>> Driver<H> {
     /// Get a cloneable caller handle for making outgoing calls.
     pub fn caller(&self) -> DriverCaller {
         DriverCaller {
-            sender: self.handle.sender().clone(),
+            sender: self.sender.clone(),
             shared: Arc::clone(&self.shared),
         }
     }
@@ -166,7 +174,7 @@ impl<H: Handler<DriverReplySink>> Driver<H> {
 
         loop {
             tokio::select! {
-                msg = self.handle.recv() => {
+                msg = self.rx.recv() => {
                     match msg {
                         Some(msg) => {
                             if let Some(fut) = self.handle_msg(msg) {
@@ -177,7 +185,7 @@ impl<H: Handler<DriverReplySink>> Driver<H> {
                     }
                 }
                 Some(()) = in_flight.next() => {}
-                Some((req_id, _reason)) = self.handle.failures_rx.recv() => {
+                Some((req_id, _reason)) = self.failures_rx.recv() => {
                     self.shared.pending_responses.lock().remove(&req_id);
                 }
             }
@@ -210,7 +218,7 @@ impl<H: Handler<DriverReplySink>> Driver<H> {
         if is_call {
             // r[impl rpc.request]
             let reply = DriverReplySink {
-                sender: Some(self.handle.sender().clone()),
+                sender: Some(self.sender.clone()),
                 request_id: req_id,
             };
             let call = msg.map(|m| match m.body {

@@ -17,9 +17,6 @@ pub const PROTOCOL_VERSION: u32 = 7;
 /// Session state machine.
 // r[impl session]
 pub struct Session<C: Conduit> {
-    /// Conduit sender, torn down on protocol error
-    tx: Option<C::Tx>,
-
     /// Conduit receiver
     rx: C::Rx,
 
@@ -114,7 +111,7 @@ impl ConnectionSender {
 
 pub(crate) struct ConnectionHandle {
     pub(crate) sender: ConnectionSender,
-    rx: mpsc::Receiver<SelfRef<ConnectionMessage<'static>>>,
+    pub(crate) rx: mpsc::Receiver<SelfRef<ConnectionMessage<'static>>>,
     pub(crate) failures_rx: mpsc::UnboundedReceiver<(RequestId, &'static str)>,
 }
 
@@ -126,10 +123,6 @@ pub(crate) enum ConnectionMessage<'payload> {
 impl ConnectionHandle {
     pub fn sender(&self) -> &ConnectionSender {
         &self.sender
-    }
-
-    pub async fn recv(&mut self) -> Option<SelfRef<ConnectionMessage<'static>>> {
-        self.rx.recv().await
     }
 }
 
@@ -161,7 +154,6 @@ where
     fn pre_handshake(tx: C::Tx, rx: C::Rx) -> Self {
         let sess_core = Arc::new(SessionCore { tx: Box::new(tx) });
         Session {
-            tx: None, // owned by sess_core now
             rx,
             role: SessionRole::Initiator, // overwritten in establish_as_*
             parity: Parity::Odd,          // overwritten in establish_as_*
@@ -187,7 +179,7 @@ where
                 connection_id: ConnectionId::ROOT,
                 payload: MessagePayload::Hello(Hello {
                     version: PROTOCOL_VERSION,
-                    connection_settings: settings,
+                    connection_settings: settings.clone(),
                     metadata,
                 }),
             })
@@ -196,21 +188,24 @@ where
 
         // Receive HelloYourself
         let peer_settings = match self.rx.recv().await {
-            Ok(Some(msg)) => match msg.into_inner().payload {
-                MessagePayload::HelloYourself(hy) => hy.connection_settings,
-                MessagePayload::ProtocolError(e) => {
-                    return Err(SessionError::Protocol(e.description.to_owned()));
+            Ok(Some(msg)) => {
+                let payload = msg.map(|m| m.payload);
+                match &*payload {
+                    MessagePayload::HelloYourself(hy) => hy.connection_settings.clone(),
+                    MessagePayload::ProtocolError(e) => {
+                        return Err(SessionError::Protocol(e.description.to_owned()));
+                    }
+                    _ => {
+                        return Err(SessionError::Protocol("expected HelloYourself".into()));
+                    }
                 }
-                _ => {
-                    return Err(SessionError::Protocol("expected HelloYourself".into()));
-                }
-            },
+            }
             Ok(None) => {
                 return Err(SessionError::Protocol(
                     "peer closed during handshake".into(),
                 ));
             }
-            Err(e) => return Err(SessionError::Io(e)),
+            Err(e) => return Err(SessionError::Protocol(e.to_string())),
         };
 
         Ok(self.make_root_handle(settings, peer_settings))
@@ -228,34 +223,37 @@ where
 
         // Receive Hello
         let peer_settings = match self.rx.recv().await {
-            Ok(Some(msg)) => match msg.into_inner().payload {
-                MessagePayload::Hello(h) => {
-                    if h.version != PROTOCOL_VERSION {
-                        return Err(SessionError::Protocol(format!(
-                            "version mismatch: got {}, expected {PROTOCOL_VERSION}",
-                            h.version
-                        )));
+            Ok(Some(msg)) => {
+                let payload = msg.map(|m| m.payload);
+                match &*payload {
+                    MessagePayload::Hello(h) => {
+                        if h.version != PROTOCOL_VERSION {
+                            return Err(SessionError::Protocol(format!(
+                                "version mismatch: got {}, expected {PROTOCOL_VERSION}",
+                                h.version
+                            )));
+                        }
+                        h.connection_settings.clone()
                     }
-                    h.connection_settings
+                    MessagePayload::ProtocolError(e) => {
+                        return Err(SessionError::Protocol(e.description.to_owned()));
+                    }
+                    _ => {
+                        return Err(SessionError::Protocol("expected Hello".into()));
+                    }
                 }
-                MessagePayload::ProtocolError(e) => {
-                    return Err(SessionError::Protocol(e.description.to_owned()));
-                }
-                _ => {
-                    return Err(SessionError::Protocol("expected Hello".into()));
-                }
-            },
+            }
             Ok(None) => {
                 return Err(SessionError::Protocol(
                     "peer closed during handshake".into(),
                 ));
             }
-            Err(e) => return Err(SessionError::Io(e)),
+            Err(e) => return Err(SessionError::Protocol(e.to_string())),
         };
 
         // Acceptor parity is opposite of initiator
         let our_settings = ConnectionSettings {
-            parity: peer_settings.parity.opposite(),
+            parity: peer_settings.parity.other(),
             ..settings
         };
         self.parity = our_settings.parity;
@@ -265,7 +263,7 @@ where
             .send(Message {
                 connection_id: ConnectionId::ROOT,
                 payload: MessagePayload::HelloYourself(HelloYourself {
-                    connection_settings: our_settings,
+                    connection_settings: our_settings.clone(),
                     metadata,
                 }),
             })
