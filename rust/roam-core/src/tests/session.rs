@@ -3,8 +3,9 @@ use crate::{
     establish_acceptor, establish_initiator, memory_link_pair,
 };
 use roam_types::{
-    Conduit, ConduitRx, ConduitTx, ConduitTxPermit, ConnectionId, ConnectionSettings, Hello,
-    Message, MessageFamily, MessagePayload, Parity,
+    CancelRequest, ChannelId, CloseChannel, Conduit, ConduitRx, ConduitTx, ConduitTxPermit,
+    ConnectionId, ConnectionSettings, Hello, Message, MessageFamily, MessagePayload, Parity,
+    RequestId,
 };
 
 type MessageConduit = BareConduit<MessageFamily, MemoryLink>;
@@ -86,10 +87,13 @@ async fn open_accept_and_close_virtual_connection() {
         .recv_event()
         .await
         .expect("initiator should receive accept");
-    assert_eq!(
-        accepted,
-        SessionEvent::OutgoingConnectionAccepted { conn_id }
-    );
+    let SessionEvent::OutgoingConnectionAccepted {
+        conn_id: accepted_conn_id,
+    } = accepted
+    else {
+        panic!("expected OutgoingConnectionAccepted");
+    };
+    assert_eq!(accepted_conn_id, conn_id);
 
     let ConnectionState {
         local_parity,
@@ -115,13 +119,15 @@ async fn open_accept_and_close_virtual_connection() {
         .recv_event()
         .await
         .expect("acceptor should see close");
-    assert_eq!(
-        closed,
-        SessionEvent::ConnectionClosed {
-            conn_id,
-            metadata: vec![]
-        }
-    );
+    let SessionEvent::ConnectionClosed {
+        conn_id: closed_conn_id,
+        metadata,
+    } = closed
+    else {
+        panic!("expected ConnectionClosed");
+    };
+    assert_eq!(closed_conn_id, conn_id);
+    assert_eq!(metadata, vec![]);
     assert!(acceptor.connection(conn_id).is_none());
 }
 
@@ -166,5 +172,102 @@ async fn acceptor_rejects_invalid_hello_version_with_protocol_error() {
         }
         Ok(_) => panic!("expected ProtocolViolation error, got success"),
         Err(other) => panic!("expected ProtocolViolation error, got {other}"),
+    }
+}
+
+#[tokio::test]
+async fn recv_event_surfaces_incoming_rpc_and_channel_messages() {
+    let (initiator_conduit, acceptor_conduit) = conduit_pair();
+    let (initiator, acceptor) = tokio::join!(
+        establish_initiator(initiator_conduit, Parity::Odd, default_settings(10), vec![]),
+        establish_acceptor(acceptor_conduit, default_settings(20), vec![])
+    );
+    let initiator = initiator.expect("initiator handshake");
+    let mut acceptor = acceptor.expect("acceptor handshake");
+
+    initiator
+        .send_rpc_message(Message::new(
+            ConnectionId::ROOT,
+            MessagePayload::CancelRequest(CancelRequest {
+                request_id: RequestId(7),
+                metadata: vec![],
+            }),
+        ))
+        .await
+        .expect("send rpc cancel");
+
+    let ev = acceptor.recv_event().await.expect("recv cancel");
+    let SessionEvent::IncomingMessage(msg) = ev else {
+        panic!("expected IncomingMessage event");
+    };
+    assert_eq!(msg.connection_id(), ConnectionId::ROOT);
+    let MessagePayload::CancelRequest(cancel) = msg.payload() else {
+        panic!("expected CancelRequest payload");
+    };
+    assert_eq!(cancel.request_id, RequestId(7));
+
+    initiator
+        .send_rpc_message(Message::new(
+            ConnectionId::ROOT,
+            MessagePayload::CloseChannel(CloseChannel {
+                channel_id: ChannelId(9),
+                metadata: vec![],
+            }),
+        ))
+        .await
+        .expect("send close channel");
+
+    let ev = acceptor.recv_event().await.expect("recv close channel");
+    let SessionEvent::IncomingMessage(msg) = ev else {
+        panic!("expected IncomingMessage event");
+    };
+    let MessagePayload::CloseChannel(close) = msg.payload() else {
+        panic!("expected CloseChannel payload");
+    };
+    assert_eq!(close.channel_id, ChannelId(9));
+}
+
+#[tokio::test]
+async fn send_rpc_message_rejects_non_rpc_payloads_and_unknown_connections() {
+    let (initiator_conduit, acceptor_conduit) = conduit_pair();
+    let (initiator, _acceptor) = tokio::join!(
+        establish_initiator(initiator_conduit, Parity::Odd, default_settings(10), vec![]),
+        establish_acceptor(acceptor_conduit, default_settings(20), vec![])
+    );
+    let initiator = initiator.expect("initiator handshake");
+
+    let err = initiator
+        .send_rpc_message(Message::new(
+            ConnectionId::ROOT,
+            MessagePayload::OpenConnection(roam_types::OpenConnection {
+                parity: Parity::Even,
+                connection_settings: default_settings(1),
+                metadata: vec![],
+            }),
+        ))
+        .await
+        .expect_err("OpenConnection should be rejected by send_rpc_message");
+    match err {
+        SessionError::InvalidState(msg) => {
+            assert!(msg.contains("only accepts rpc/channel"));
+        }
+        other => panic!("expected InvalidState, got {other}"),
+    }
+
+    let err = initiator
+        .send_rpc_message(Message::new(
+            ConnectionId(11),
+            MessagePayload::CancelRequest(CancelRequest {
+                request_id: RequestId(3),
+                metadata: vec![],
+            }),
+        ))
+        .await
+        .expect_err("unknown connection should be rejected");
+    match err {
+        SessionError::InvalidState(msg) => {
+            assert!(msg.contains("is not active"));
+        }
+        other => panic!("expected InvalidState, got {other}"),
     }
 }

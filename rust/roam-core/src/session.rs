@@ -19,7 +19,6 @@ pub struct ConnectionState {
     pub peer_settings: ConnectionSettings,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SessionEvent {
     IncomingConnectionOpen {
         conn_id: ConnectionId,
@@ -38,6 +37,7 @@ pub enum SessionEvent {
         conn_id: ConnectionId,
         metadata: Metadata,
     },
+    IncomingMessage(SelfRef<Message<'static>>),
 }
 
 #[derive(Debug)]
@@ -47,7 +47,6 @@ pub enum SessionError {
     RemoteProtocolError(String),
     UnexpectedEof(&'static str),
     InvalidState(String),
-    UnsupportedMessage(&'static str),
 }
 
 impl std::fmt::Display for SessionError {
@@ -58,7 +57,6 @@ impl std::fmt::Display for SessionError {
             Self::RemoteProtocolError(msg) => write!(f, "remote protocol error: {msg}"),
             Self::UnexpectedEof(ctx) => write!(f, "unexpected eof while {ctx}"),
             Self::InvalidState(msg) => write!(f, "invalid state: {msg}"),
-            Self::UnsupportedMessage(kind) => write!(f, "unsupported message kind: {kind}"),
         }
     }
 }
@@ -264,16 +262,34 @@ where
         self.send(Message::new(conn_id, payload)).await
     }
 
+    pub async fn send_rpc_message(&self, msg: Message<'static>) -> Result<(), SessionError> {
+        let conn_id = msg.connection_id();
+        if !self.connections.contains_key(&conn_id) {
+            return Err(SessionError::InvalidState(format!(
+                "connection {} is not active",
+                conn_id.0
+            )));
+        }
+
+        if !is_rpc_or_channel_payload(msg.payload()) {
+            return Err(SessionError::InvalidState(
+                "send_rpc_message only accepts rpc/channel payloads".into(),
+            ));
+        }
+
+        self.send(msg).await
+    }
+
     pub async fn recv_event(&mut self) -> Result<SessionEvent, SessionError> {
         let msg = recv_message(&mut self.rx)
             .await?
             .ok_or(SessionError::UnexpectedEof("receiving session message"))?;
-        self.handle_incoming(&msg).await
+        self.handle_incoming(msg).await
     }
 
     async fn handle_incoming(
         &mut self,
-        msg: &SelfRef<Message<'static>>,
+        msg: SelfRef<Message<'static>>,
     ) -> Result<SessionEvent, SessionError> {
         let conn_id = msg.connection_id();
 
@@ -390,9 +406,14 @@ where
             | MessagePayload::ChannelItem(_)
             | MessagePayload::CloseChannel(_)
             | MessagePayload::ResetChannel(_)
-            | MessagePayload::GrantCredit(_) => Err(SessionError::UnsupportedMessage(
-                "rpc/channel message handling is not implemented yet",
-            )),
+            | MessagePayload::GrantCredit(_) => {
+                if !self.connections.contains_key(&conn_id) {
+                    return Err(self
+                        .protocol_violation("rpc/channel message for unknown connection")
+                        .await);
+                }
+                Ok(SessionEvent::IncomingMessage(msg))
+            }
         }
     }
 
@@ -609,4 +630,17 @@ fn id_matches_parity(id: u64, parity: &Parity) -> bool {
         Parity::Odd => id % 2 == 1,
         Parity::Even => id % 2 == 0,
     }
+}
+
+fn is_rpc_or_channel_payload(payload: &MessagePayload<'_>) -> bool {
+    matches!(
+        payload,
+        MessagePayload::Request(_)
+            | MessagePayload::Response(_)
+            | MessagePayload::CancelRequest(_)
+            | MessagePayload::ChannelItem(_)
+            | MessagePayload::CloseChannel(_)
+            | MessagePayload::ResetChannel(_)
+            | MessagePayload::GrantCredit(_)
+    )
 }
