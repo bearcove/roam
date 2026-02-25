@@ -145,6 +145,7 @@ where
     type Msg = F;
     type Error = BareConduitError;
 
+    #[moire::instrument]
     async fn recv(&mut self) -> Result<Option<SelfRef<F::Msg<'static>>>, Self::Error> {
         let backing = match self
             .link_rx

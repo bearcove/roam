@@ -574,6 +574,7 @@ where
     type Msg = F;
     type Error = StableConduitError;
 
+    #[moire::instrument]
     async fn recv(&mut self) -> Result<Option<SelfRef<F::Msg<'static>>>, Self::Error> {
         loop {
             // Phase 1: take current Rx out of shared state, then await without locks held.

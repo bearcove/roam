@@ -100,6 +100,7 @@ impl<'a, C> SessionAcceptorBuilder<'a, C> {
         self
     }
 
+    #[moire::instrument]
     pub async fn establish(self) -> Result<(Session<C>, ConnectionHandle), SessionError>
     where
         C: Conduit<Msg = MessageFamily>,

@@ -109,7 +109,7 @@ impl ConnectionSender {
     }
 }
 
-pub(crate) struct ConnectionHandle {
+pub struct ConnectionHandle {
     pub(crate) sender: ConnectionSender,
     pub(crate) rx: mpsc::Receiver<SelfRef<ConnectionMessage<'static>>>,
     pub(crate) failures_rx: mpsc::UnboundedReceiver<(RequestId, &'static str)>,
@@ -121,7 +121,7 @@ pub(crate) enum ConnectionMessage<'payload> {
 }
 
 impl ConnectionHandle {
-    pub fn sender(&self) -> &ConnectionSender {
+    pub(crate) fn sender(&self) -> &ConnectionSender {
         &self.sender
     }
 }
@@ -212,6 +212,7 @@ where
     }
 
     // r[impl session.handshake]
+    #[moire::instrument]
     async fn establish_as_acceptor(
         &mut self,
         settings: ConnectionSettings,
