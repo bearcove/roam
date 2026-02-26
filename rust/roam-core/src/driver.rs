@@ -6,9 +6,9 @@ use futures_util::StreamExt as _;
 use futures_util::stream::FuturesUnordered;
 use moire::task::FutureExt as _;
 use roam_types::{
-    Caller, ChannelBody, ChannelId, ChannelMessage, Handler, IdAllocator, Parity, Payload,
-    ReplySink, RequestBody, RequestCall, RequestId, RequestMessage, RequestResponse, RoamError,
-    SelfRef, TxError,
+    Caller, ChannelBody, ChannelClose, ChannelId, ChannelItem, ChannelMessage, ChannelSink,
+    Handler, IdAllocator, IncomingChannelMessage, Parity, Payload, ReplySink, RequestBody,
+    RequestCall, RequestId, RequestMessage, RequestResponse, RoamError, SelfRef, TxError,
 };
 
 use crate::session::{ConnectionHandle, ConnectionMessage, ConnectionSender};
@@ -19,10 +19,14 @@ type ResponseSlot = moire::sync::oneshot::Sender<SelfRef<RequestMessage<'static>
 /// A boxed, Send future representing an in-flight handler task.
 type HandlerFuture = Pin<Box<dyn std::future::Future<Output = ()> + Send>>;
 
-/// State shared between the driver loop and any DriverCaller handles.
+/// State shared between the driver loop and any DriverCaller/DriverChannelSink handles.
 struct DriverShared {
     pending_responses: SyncMutex<BTreeMap<RequestId, ResponseSlot>>,
     request_ids: SyncMutex<IdAllocator<RequestId>>,
+    channel_ids: SyncMutex<IdAllocator<ChannelId>>,
+    /// Registry mapping inbound channel IDs to the sender that feeds the Rx handle.
+    channel_senders:
+        SyncMutex<BTreeMap<ChannelId, tokio::sync::mpsc::Sender<IncomingChannelMessage>>>,
 }
 
 /// Concrete `ReplySink` implementation for the driver.
@@ -57,6 +61,58 @@ impl Drop for DriverReplySink {
     }
 }
 
+// r[impl rpc.channel.item]
+// r[impl rpc.channel.close]
+/// Concrete [`ChannelSink`] backed by a [`ConnectionSender`].
+///
+/// Created by the driver when setting up outbound channels (Tx handles).
+/// Sends `ChannelItem` and `ChannelClose` messages through the connection.
+pub struct DriverChannelSink {
+    sender: ConnectionSender,
+    channel_id: ChannelId,
+}
+
+impl ChannelSink for DriverChannelSink {
+    fn send_payload<'payload>(
+        &self,
+        payload: Payload<'payload>,
+    ) -> Pin<Box<dyn std::future::Future<Output = Result<(), TxError>> + 'payload>> {
+        let sender = self.sender.clone();
+        let channel_id = self.channel_id;
+        Box::pin(async move {
+            sender
+                .send(ConnectionMessage::Channel(ChannelMessage {
+                    id: channel_id,
+                    body: ChannelBody::Item(ChannelItem { item: payload }),
+                }))
+                .await
+                .map_err(|()| TxError::Transport("connection closed".into()))
+        })
+    }
+
+    fn close_channel(
+        &self,
+        _metadata: roam_types::Metadata,
+    ) -> Pin<Box<dyn std::future::Future<Output = Result<(), TxError>> + 'static>> {
+        // [FIXME] ChannelSink::close_channel takes borrowed Metadata but returns 'static future.
+        // We drop the borrowed metadata and send an empty one. This matches the [FIXME] in the
+        // trait definition — the signature needs to be fixed to take owned metadata.
+        let sender = self.sender.clone();
+        let channel_id = self.channel_id;
+        Box::pin(async move {
+            sender
+                .send(ConnectionMessage::Channel(ChannelMessage {
+                    id: channel_id,
+                    body: ChannelBody::Close(ChannelClose {
+                        metadata: Default::default(),
+                    }),
+                }))
+                .await
+                .map_err(|()| TxError::Transport("connection closed".into()))
+        })
+    }
+}
+
 /// Cloneable handle for making outgoing calls through a connection.
 ///
 /// Implements [`Caller`]: allocates a request ID, registers a response slot,
@@ -65,6 +121,34 @@ impl Drop for DriverReplySink {
 pub struct DriverCaller {
     sender: ConnectionSender,
     shared: Arc<DriverShared>,
+}
+
+impl DriverCaller {
+    /// Allocate a channel ID and create a sink for outbound items (Tx on our side).
+    ///
+    /// The returned sink should be bound to a `Tx` handle via `Tx::bind()`.
+    /// The channel ID must be included in the `RequestCall.channels` list.
+    pub fn create_tx_channel(&self) -> (ChannelId, Arc<DriverChannelSink>) {
+        let channel_id = self.shared.channel_ids.lock().next();
+        let sink = Arc::new(DriverChannelSink {
+            sender: self.sender.clone(),
+            channel_id,
+        });
+        (channel_id, sink)
+    }
+
+    /// Register an inbound channel (Rx on our side) and return the receiver.
+    ///
+    /// The channel ID comes from the peer (e.g. from `RequestCall.channels`).
+    /// The returned receiver should be bound to an `Rx` handle via `Rx::bind()`.
+    pub fn register_rx_channel(
+        &self,
+        channel_id: ChannelId,
+    ) -> tokio::sync::mpsc::Receiver<IncomingChannelMessage> {
+        let (tx, rx) = tokio::sync::mpsc::channel(64);
+        self.shared.channel_senders.lock().insert(channel_id, tx);
+        rx
+    }
 }
 
 impl Caller for DriverCaller {
@@ -135,6 +219,9 @@ pub struct Driver<H: Handler<DriverReplySink>> {
 struct ChannelState {
     /// Credit remaining (for sender side)
     credit: u32,
+    /// For inbound channels: sender that feeds the Rx handle.
+    /// None for outbound-only channels (Tx on this side).
+    rx_sender: Option<tokio::sync::mpsc::Sender<IncomingChannelMessage>>,
 }
 
 impl<H: Handler<DriverReplySink>> Driver<H> {
@@ -152,6 +239,8 @@ impl<H: Handler<DriverReplySink>> Driver<H> {
             shared: Arc::new(DriverShared {
                 pending_responses: SyncMutex::new("driver.pending_responses", BTreeMap::new()),
                 request_ids: SyncMutex::new("driver.request_ids", IdAllocator::new(parity)),
+                channel_ids: SyncMutex::new("driver.channel_ids", IdAllocator::new(parity)),
+                channel_senders: SyncMutex::new("driver.channel_senders", BTreeMap::new()),
             }),
             channels: BTreeMap::new(),
         }
@@ -254,18 +343,47 @@ impl<H: Handler<DriverReplySink>> Driver<H> {
 
     fn handle_channel(&mut self, msg: SelfRef<ChannelMessage<'static>>) {
         let chan_id = msg.id;
+
+        // Look up the channel sender from the shared registry (handles registered
+        // by both the driver and any DriverCaller that set up channels).
+        let sender = self.shared.channel_senders.lock().get(&chan_id).cloned();
+
         match &msg.body {
             // r[impl rpc.channel.item]
             ChannelBody::Item(_item) => {
-                // [TODO] route to the Rx's mpsc sender
+                if let Some(tx) = &sender {
+                    let item = msg.map(|m| match m.body {
+                        ChannelBody::Item(item) => item,
+                        _ => unreachable!(),
+                    });
+                    // try_send: if the Rx has been dropped or the buffer is full, drop the item.
+                    let _ = tx.try_send(IncomingChannelMessage::Item(item));
+                }
             }
             // r[impl rpc.channel.close]
             ChannelBody::Close(_close) => {
-                // [TODO] signal end-of-stream to the Rx
+                if let Some(tx) = &sender {
+                    let close = msg.map(|m| match m.body {
+                        ChannelBody::Close(close) => close,
+                        _ => unreachable!(),
+                    });
+                    let _ = tx.try_send(IncomingChannelMessage::Close(close));
+                }
+                // Remove the channel from both registries
+                self.channels.remove(&chan_id);
+                self.shared.channel_senders.lock().remove(&chan_id);
             }
             // r[impl rpc.channel.reset]
             ChannelBody::Reset(_reset) => {
-                // [TODO] signal the Tx to stop sending
+                if let Some(tx) = &sender {
+                    let reset = msg.map(|m| match m.body {
+                        ChannelBody::Reset(reset) => reset,
+                        _ => unreachable!(),
+                    });
+                    let _ = tx.try_send(IncomingChannelMessage::Reset(reset));
+                }
+                self.channels.remove(&chan_id);
+                self.shared.channel_senders.lock().remove(&chan_id);
             }
             // r[impl rpc.flow-control.credit.grant]
             ChannelBody::GrantCredit(grant) => {

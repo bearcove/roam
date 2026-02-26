@@ -39,3 +39,4 @@ java/**/out/
 .claude/settings.local.json
 .claude/settings.json
 .tracey/
+*.sqlite*
