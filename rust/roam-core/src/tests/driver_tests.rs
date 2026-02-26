@@ -57,16 +57,22 @@ impl Handler<DriverReplySink> for NoopHandler {
 async fn echo_call_across_memory_link() {
     let (client_conduit, server_conduit) = message_conduit_pair();
 
-    // Set up server side.
-    let (mut server_session, server_handle) = acceptor(server_conduit)
-        .establish()
-        .await
-        .expect("server handshake failed");
-    let mut server_driver = Driver::new(server_handle, EchoHandler, Parity::Even);
-    moire::task::spawn(async move { server_session.run().await }.named("server_session"));
-    moire::task::spawn(async move { server_driver.run().await }.named("server_driver"));
+    // Server and client handshakes must run concurrently — both sides exchange
+    // settings before either can proceed.
+    let server_task = moire::task::spawn(
+        async move {
+            let (mut server_session, server_handle) = acceptor(server_conduit)
+                .establish()
+                .await
+                .expect("server handshake failed");
+            let mut server_driver = Driver::new(server_handle, EchoHandler, Parity::Even);
+            moire::task::spawn(async move { server_session.run().await }.named("server_session"));
+            moire::task::spawn(async move { server_driver.run().await }.named("server_driver"));
+        }
+        .named("server_setup"),
+    );
 
-    // Set up client side.
+    // Set up client side (runs concurrently with server_task above).
     let (mut client_session, client_handle) = initiator(client_conduit)
         .establish()
         .await
@@ -75,6 +81,8 @@ async fn echo_call_across_memory_link() {
     let caller = client_driver.caller();
     moire::task::spawn(async move { client_session.run().await }.named("client_session"));
     moire::task::spawn(async move { client_driver.run().await }.named("client_driver"));
+
+    server_task.await.expect("server setup failed");
 
     // Make a call: serialize a u32 as the args payload.
     let args_value: u32 = 42;
