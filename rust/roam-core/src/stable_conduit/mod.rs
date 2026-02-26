@@ -122,7 +122,7 @@ pub struct StableConduit<F: MsgFamily, LS: LinkSource> {
 struct Shared<LS: LinkSource> {
     inner: Mutex<Inner<LS>>,
     reconnecting: AtomicBool,
-    reconnected: tokio::sync::Notify,
+    reconnected: moire::sync::Notify,
 }
 
 struct Inner<LS: LinkSource> {
@@ -165,7 +165,7 @@ impl<F: MsgFamily, LS: LinkSource> StableConduit<F, LS> {
             shared: Arc::new(Shared {
                 inner: Mutex::new(inner),
                 reconnecting: AtomicBool::new(false),
-                reconnected: tokio::sync::Notify::new(),
+                reconnected: moire::sync::Notify::new("stable_conduit.reconnected"),
             }),
             _phantom: PhantomData,
         })
