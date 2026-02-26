@@ -6,9 +6,9 @@ use futures_util::StreamExt as _;
 use futures_util::stream::FuturesUnordered;
 use moire::task::FutureExt as _;
 use roam_types::{
-    Caller, ChannelBody, ChannelId, ChannelMessage, Handler, IdAllocator, Parity, ReplySink,
-    RequestBody, RequestCall, RequestId, RequestMessage, RequestResponse, RoamError, SelfRef,
-    TxError,
+    Caller, ChannelBody, ChannelId, ChannelMessage, Handler, IdAllocator, Parity, Payload,
+    ReplySink, RequestBody, RequestCall, RequestId, RequestMessage, RequestResponse, RoamError,
+    SelfRef, TxError,
 };
 
 use crate::session::{ConnectionHandle, ConnectionMessage, ConnectionSender};
@@ -186,7 +186,15 @@ impl<H: Handler<DriverReplySink>> Driver<H> {
                 }
                 Some(()) = in_flight.next() => {}
                 Some((req_id, _reason)) = self.failures_rx.recv() => {
-                    self.shared.pending_responses.lock().remove(&req_id);
+                    if self.shared.pending_responses.lock().remove(&req_id).is_none() {
+                        // Incoming call — handler failed to reply, send Cancelled back
+                        let error = RoamError::<core::convert::Infallible>::Cancelled;
+                        let _ = self.sender.send_response(req_id, RequestResponse {
+                            ret: Payload::outgoing(&error),
+                            channels: vec![],
+                            metadata: Default::default(),
+                        }).await;
+                    }
                 }
             }
         }

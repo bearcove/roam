@@ -27,7 +27,7 @@ impl<'a, C> SessionInitiatorBuilder<'a, C> {
                 parity: Parity::Odd,
                 max_concurrent_requests: 64,
             },
-            metadata: &[],
+            metadata: vec![],
         }
     }
 
@@ -81,7 +81,7 @@ impl<'a, C> SessionAcceptorBuilder<'a, C> {
                 parity: Parity::Even,
                 max_concurrent_requests: 64,
             },
-            metadata: &[],
+            metadata: vec![],
         }
     }
 

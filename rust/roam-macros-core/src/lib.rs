@@ -431,7 +431,7 @@ fn generate_client_method(
             let req = #roam::RequestCall {
                 method_id,
                 args: #roam::Payload::outgoing(&#args_tuple),
-                channels: &[],
+                channels: vec![],
                 metadata: Default::default(),
             };
             let response = self.caller.call(req).await?;

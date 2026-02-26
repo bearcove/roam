@@ -29,10 +29,11 @@ impl Handler<DriverReplySink> for EchoHandler {
                 _ => panic!("expected incoming payload"),
             };
 
+            let result: u32 = facet_postcard::from_slice(args_bytes).expect("deserialize args");
             reply
                 .send_reply(RequestResponse {
-                    ret: Payload::Incoming(args_bytes),
-                    channels: &[],
+                    ret: Payload::outgoing(&result),
+                    channels: vec![],
                     metadata: Default::default(),
                 })
                 .await;
@@ -90,7 +91,7 @@ async fn echo_call_across_memory_link() {
         .call(RequestCall {
             method_id: MethodId(1),
             args: Payload::outgoing(&args_value),
-            channels: &[],
+            channels: vec![],
             metadata: Default::default(),
         })
         .await

@@ -195,7 +195,7 @@ where
         self.reply
             .send_reply(RequestResponse {
                 ret,
-                channels: &[],
+                channels: vec![],
                 metadata: Default::default(),
             })
             .await;

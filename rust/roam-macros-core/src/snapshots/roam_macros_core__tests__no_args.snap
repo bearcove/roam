@@ -93,7 +93,7 @@ impl<C: ::roam::Caller> PingClient<C> {
         let req = ::roam::RequestCall {
             method_id,
             args: ::roam::Payload::outgoing(&()),
-            channels: &[],
+            channels: vec![],
             metadata: Default::default(),
         };
         let response = self.caller.call(req).await?;

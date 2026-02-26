@@ -65,5 +65,5 @@ pub struct MetadataEntry<'a> {
     pub flags: MetadataFlags,
 }
 
-/// A slice of metadata entries.
-pub type Metadata<'a> = &'a [MetadataEntry<'a>];
+/// A list of metadata entries.
+pub type Metadata<'a> = Vec<MetadataEntry<'a>>;

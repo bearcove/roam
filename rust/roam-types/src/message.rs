@@ -165,7 +165,7 @@ structstruck::strike! {
 
                                     /// Channel identifiers, allocated by the caller, that are passed as part
                                     /// of the arguments.
-                                    pub channels: &'payload [ChannelId],
+                                    pub channels: Vec<ChannelId>,
 
                                     /// Metadata associated with this call
                                     pub metadata: Metadata<'payload>,
@@ -177,7 +177,7 @@ structstruck::strike! {
                                     pub ret: Payload<'payload>,
 
                                     /// Channel IDs for streams in the response, in return type declaration order.
-                                    pub channels: &'payload [ChannelId],
+                                    pub channels: Vec<ChannelId>,
 
                                     /// Arbitrary response metadata
                                     pub metadata: Metadata<'payload>,
