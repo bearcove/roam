@@ -58,7 +58,9 @@ where
         let args_bytes = match &call.args {
             ::roam::Payload::Incoming(bytes) => bytes,
             _ => {
-                reply.send_error(::roam::RoamError::InvalidPayload).await;
+                reply
+                    .send_error(::roam::RoamError::<::core::convert::Infallible>::InvalidPayload)
+                    .await;
                 return;
             }
         };
@@ -66,7 +68,11 @@ where
             let args: (String,) = match ::roam::facet_postcard::from_slice_borrowed(args_bytes) {
                 Ok(v) => v,
                 Err(_) => {
-                    reply.send_error(::roam::RoamError::InvalidPayload).await;
+                    reply
+                        .send_error(
+                            ::roam::RoamError::<::core::convert::Infallible>::InvalidPayload,
+                        )
+                        .await;
                     return;
                 }
             };
@@ -92,9 +98,10 @@ impl<C: ::roam::Caller> NotifierClient<C> {
         msg: String,
     ) -> Result<::roam::SelfRef<::roam::ResponseParts<'static, ()>>, ::roam::RoamError> {
         let method_id = notifier_service_descriptor().methods[0usize].id;
+        let args = (msg,);
         let req = ::roam::RequestCall {
             method_id,
-            args: ::roam::Payload::outgoing(&(msg,)),
+            args: ::roam::Payload::outgoing(&args),
             channels: vec![],
             metadata: Default::default(),
         };

@@ -98,3 +98,5 @@ pub use calls::*;
 
 mod channel;
 pub use channel::*;
+
+pub mod schema;

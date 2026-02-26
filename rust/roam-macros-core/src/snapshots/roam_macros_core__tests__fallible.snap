@@ -57,7 +57,9 @@ where
         let args_bytes = match &call.args {
             ::roam::Payload::Incoming(bytes) => bytes,
             _ => {
-                reply.send_error(::roam::RoamError::InvalidPayload).await;
+                reply
+                    .send_error(::roam::RoamError::<::core::convert::Infallible>::InvalidPayload)
+                    .await;
                 return;
             }
         };
@@ -65,7 +67,11 @@ where
             let args: (f64, f64) = match ::roam::facet_postcard::from_slice_borrowed(args_bytes) {
                 Ok(v) => v,
                 Err(_) => {
-                    reply.send_error(::roam::RoamError::InvalidPayload).await;
+                    reply
+                        .send_error(
+                            ::roam::RoamError::<::core::convert::Infallible>::InvalidPayload,
+                        )
+                        .await;
                     return;
                 }
             };
@@ -93,9 +99,10 @@ impl<C: ::roam::Caller> CalcClient<C> {
     ) -> Result<::roam::SelfRef<::roam::ResponseParts<'static, f64>>, ::roam::RoamError<DivError>>
     {
         let method_id = calc_service_descriptor().methods[0usize].id;
+        let args = (a, b);
         let req = ::roam::RequestCall {
             method_id,
-            args: ::roam::Payload::outgoing(&(a, b)),
+            args: ::roam::Payload::outgoing(&args),
             channels: vec![],
             metadata: Default::default(),
         };

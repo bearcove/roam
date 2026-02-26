@@ -241,7 +241,7 @@ fn generate_dispatcher(parsed: &ServiceTrait, roam: &TokenStream2) -> TokenStrea
             let args_bytes = match &call.args {
                 #roam::Payload::Incoming(bytes) => bytes,
                 _ => {
-                    reply.send_error(#roam::RoamError::InvalidPayload).await;
+                    reply.send_error(#roam::RoamError::<::core::convert::Infallible>::InvalidPayload).await;
                     return;
                 }
             };
@@ -322,7 +322,7 @@ fn generate_dispatch_arm(
             let args: #args_tuple_type = match #roam::facet_postcard::from_slice_borrowed(args_bytes) {
                 Ok(v) => v,
                 Err(_) => {
-                    reply.send_error(#roam::RoamError::InvalidPayload).await;
+                    reply.send_error(#roam::RoamError::<::core::convert::Infallible>::InvalidPayload).await;
                     return;
                 }
             };
@@ -428,9 +428,10 @@ fn generate_client_method(
         #method_doc
         pub async fn #method_name(&self, #(#params),*) -> #client_return {
             let method_id = #descriptor_fn_name().methods[#idx].id;
+            let args = #args_tuple;
             let req = #roam::RequestCall {
                 method_id,
-                args: #roam::Payload::outgoing(&#args_tuple),
+                args: #roam::Payload::outgoing(&args),
                 channels: vec![],
                 metadata: Default::default(),
             };

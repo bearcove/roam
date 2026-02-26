@@ -1114,6 +1114,13 @@ checksum = "dc897dd8d9e8bd1ed8cdad82b5966c3e0ecae09fb1907d58efaa013543185d0a"
 [[package]]
 name = "roam"
 version = "3.0.0"
+dependencies = [
+ "facet 0.43.2 (git+https://github.com/facet-rs/facet?branch=main)",
+ "facet-postcard",
+ "roam-hash",
+ "roam-service-macros",
+ "roam-types",
+]
 
 [[package]]
 name = "roam-core"
@@ -1128,6 +1135,7 @@ dependencies = [
  "futures-util",
  "getrandom 0.2.17",
  "moire",
+ "roam",
  "roam-types",
  "smallvec 1.15.1",
  "tokio",

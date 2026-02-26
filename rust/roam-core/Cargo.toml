@@ -34,3 +34,5 @@ facet-error = "0.43.2"
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+roam.workspace = true
+facet-postcard.workspace = true

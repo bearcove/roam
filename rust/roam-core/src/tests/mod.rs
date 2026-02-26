@@ -270,6 +270,7 @@ async fn rx_recv_decodes_channel_items() {
 }
 
 mod driver_tests;
+mod service_macro_tests;
 
 #[test]
 fn test_deser_postcard_borrowed() {

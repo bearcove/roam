@@ -68,31 +68,30 @@ use crate::{Metadata, RequestCall, RequestResponse, RoamError, SelfRef, TxError}
 ///
 /// - `T`: The success value type of the response.
 /// - `E`: The error value type of the response.
-pub trait Call<T, E> {
+pub trait Call<T, E>: Send {
     /// Send a [`Result`] back to the caller, consuming this `Call`.
-    #[allow(async_fn_in_trait)]
-    async fn reply(self, result: Result<T, E>);
+    fn reply(self, result: Result<T, E>) -> impl std::future::Future<Output = ()> + Send;
 
     /// Send a successful response back to the caller, consuming this `Call`.
     ///
     /// Equivalent to `self.reply(Ok(value)).await`.
-    #[allow(async_fn_in_trait)]
-    async fn ok(self, value: T)
+    fn ok(self, value: T) -> impl std::future::Future<Output = ()> + Send
     where
         Self: Sized,
+        T: Send,
     {
-        self.reply(Ok(value)).await
+        self.reply(Ok(value))
     }
 
     /// Send an error response back to the caller, consuming this `Call`.
     ///
     /// Equivalent to `self.reply(Err(error)).await`.
-    #[allow(async_fn_in_trait)]
-    async fn err(self, error: E)
+    fn err(self, error: E) -> impl std::future::Future<Output = ()> + Send
     where
         Self: Sized,
+        E: Send,
     {
-        self.reply(Err(error)).await
+        self.reply(Err(error))
     }
 }
 
@@ -113,8 +112,36 @@ pub trait ReplySink: Send + Sync + 'static {
     /// it's not like they can try sending a second reply anyway.
     ///
     /// Do not spawn a task to send the error because it too, might fail.
-    #[allow(async_fn_in_trait)]
-    async fn send_reply(self, response: RequestResponse<'_>);
+    fn send_reply(
+        self,
+        response: RequestResponse<'_>,
+    ) -> impl std::future::Future<Output = ()> + Send;
+
+    /// Send an error response back to the caller, consuming the sink.
+    ///
+    /// This is a convenience method used by generated dispatchers when
+    /// deserialization fails or the method ID is unknown.
+    fn send_error<E: for<'a> facet::Facet<'a> + Send>(
+        self,
+        error: RoamError<E>,
+    ) -> impl std::future::Future<Output = ()> + Send
+    where
+        Self: Sized,
+    {
+        use crate::{Payload, RequestResponse};
+        // Wire format is always Result<T, RoamError<E>>. We don't know T here,
+        // but postcard encodes () as zero bytes, so Result<(), RoamError<E>>
+        // produces the same Err variant encoding as any Result<T, RoamError<E>>.
+        async move {
+            let wire: Result<(), RoamError<E>> = Err(error);
+            self.send_reply(RequestResponse {
+                ret: Payload::outgoing(&wire),
+                channels: vec![],
+                metadata: Default::default(),
+            })
+            .await;
+        }
+    }
 }
 
 /// Type-erased handler for incoming service calls.
@@ -184,8 +211,8 @@ impl<R: ReplySink> SinkCall<R> {
 
 impl<T, E, R> Call<T, E> for SinkCall<R>
 where
-    T: for<'a> facet::Facet<'a>,
-    E: for<'a> facet::Facet<'a>,
+    T: for<'a> facet::Facet<'a> + Send,
+    E: for<'a> facet::Facet<'a> + Send,
     R: ReplySink,
 {
     async fn reply(self, result: Result<T, E>) {

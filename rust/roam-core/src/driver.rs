@@ -247,8 +247,7 @@ impl<H: Handler<DriverReplySink>> Driver<H> {
             }
             None
         } else {
-            // r[impl rpc.cancel]
-            // [TODO] signal cancellation to in-flight handler task
+            // [TODO] r[impl rpc.cancel] signal cancellation to in-flight handler task
             None
         }
     }
