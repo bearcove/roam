@@ -509,6 +509,7 @@ struct ShmGuestRemapTests {
     }
 
     @Test func remapOnCurrentSizeGrowth() throws {
+        // r[verify shm.varslot.extents]
         let path = tmpPath("guest-remap.bin")
         defer { try? FileManager.default.removeItem(atPath: path) }
 
@@ -526,6 +527,39 @@ struct ShmGuestRemapTests {
         #expect(try guest.checkRemap())
         #expect(guest.region.length == newSize)
         #expect(!(try guest.checkRemap()))
+    }
+
+    // r[verify shm.varslot.extents.notification]
+    @Test func doorbellWakeTriggersRemapFromCurrentSize() throws {
+        let path = tmpPath("guest-remap-doorbell.bin")
+        let pair = try makeDoorbellPair()
+        defer {
+            close(pair.host)
+            close(pair.guest)
+            try? FileManager.default.removeItem(atPath: path)
+        }
+
+        let fixture = try makeSegmentFixture(
+            path: path,
+            classes: [ShmVarSlotClass(slotSize: 256, count: 2)],
+            reservedPeer: 1
+        )
+        let guest = try ShmGuestRuntime.attach(
+            ticket: ShmBootstrapTicket(peerId: 1, hubPath: path, doorbellFd: pair.guest)
+        )
+
+        let newSize = fixture.region.length + 4096
+        try fixture.region.resize(newSize: newSize)
+        var header = Array(try fixture.region.mutableBytes(at: 0, count: shmSegmentHeaderSize))
+        writeU64LE(UInt64(newSize), to: &header, at: 88)
+        let headerBytes = try fixture.region.mutableBytes(at: 0, count: shmSegmentHeaderSize)
+        headerBytes.copyBytes(from: header)
+
+        let hostDoorbell = ShmDoorbell(fd: pair.host)
+        try hostDoorbell.signal()
+
+        #expect(try guest.waitForDoorbell(timeoutMs: 1000) == .signaled)
+        #expect(guest.region.length == newSize)
     }
 }
 

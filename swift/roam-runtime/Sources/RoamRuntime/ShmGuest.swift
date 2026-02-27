@@ -492,7 +492,10 @@ public final class ShmGuestRuntime: @unchecked Sendable {
     // r[impl shm.framing.inline]
     // r[impl shm.framing.slot-ref]
     // r[impl shm.framing.threshold]
+    // r[impl shm.varslot.extents.notification]
     public func send(frame: ShmGuestFrame) throws {
+        _ = try checkRemap()
+
         if fatalError || hostGoodbyeFlag() {
             throw ShmGuestSendError.hostGoodbye
         }
@@ -570,7 +573,11 @@ public final class ShmGuestRuntime: @unchecked Sendable {
     // r[impl shm.signal.doorbell.optional]
     // r[impl shm.framing.inline]
     // r[impl shm.framing.slot-ref]
+    // r[impl shm.varslot.extents]
+    // r[impl shm.varslot.extents.notification]
     public func receive() throws -> ShmGuestFrame? {
+        _ = try checkRemap()
+
         if fatalError || hostGoodbyeFlag() {
             return nil
         }
@@ -686,7 +693,11 @@ public final class ShmGuestRuntime: @unchecked Sendable {
         guard let doorbell else {
             return nil
         }
-        return try doorbell.wait(timeoutMs: timeoutMs)
+        let result = try doorbell.wait(timeoutMs: timeoutMs)
+        if result == .signaled {
+            _ = try checkRemap()
+        }
+        return result
     }
 
     public func peerState() throws -> ShmPeerState {
