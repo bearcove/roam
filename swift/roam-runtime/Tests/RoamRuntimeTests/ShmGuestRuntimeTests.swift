@@ -329,7 +329,7 @@ struct ShmDoorbellAndPayloadTests {
         let g2h = try ShmBipBuffer.attach(region: fixture.region, headerOffset: ringOffset)
 
         let inlinePayload = Array("small".utf8)
-        try guest.send(frame: ShmGuestFrame(msgType: 1, id: 10, methodId: 99, payload: inlinePayload))
+        try guest.send(frame: ShmGuestFrame(payload: inlinePayload))
 
         let firstReadable = try #require(g2h.tryRead())
         let firstDecoded = try decodeShmFrame(Array(firstReadable))
@@ -337,12 +337,11 @@ struct ShmDoorbellAndPayloadTests {
             Issue.record("expected inline frame")
             return
         }
-        #expect(header.id == 10)
-        #expect(payload == inlinePayload)
+        #expect(payload.starts(with: inlinePayload))
         try g2h.release(header.totalLen)
 
         let largePayload = [UInt8](repeating: 0xAB, count: 120)
-        try guest.send(frame: ShmGuestFrame(msgType: 2, id: 11, methodId: 100, payload: largePayload))
+        try guest.send(frame: ShmGuestFrame(payload: largePayload))
 
         let secondReadable = try #require(g2h.tryRead())
         let secondDecoded = try decodeShmFrame(Array(secondReadable))
@@ -350,7 +349,6 @@ struct ShmDoorbellAndPayloadTests {
             Issue.record("expected slot-ref frame")
             return
         }
-        #expect(slotHeader.id == 11)
 
         let segmentHeader = try ShmSegmentView(region: fixture.region).header
         let pool = ShmVarSlotPool(
@@ -365,7 +363,13 @@ struct ShmDoorbellAndPayloadTests {
             generation: slotRef.slotGeneration
         )
         let payloadPtr = try #require(pool.payloadPointer(handle))
-        let copied = Array(UnsafeRawBufferPointer(start: UnsafeRawPointer(payloadPtr), count: largePayload.count))
+        let storedLen = payloadPtr.load(as: UInt32.self).littleEndian
+        #expect(storedLen == UInt32(largePayload.count))
+        let copied = Array(
+            UnsafeRawBufferPointer(
+                start: UnsafeRawPointer(payloadPtr.advanced(by: 4)),
+                count: largePayload.count
+            ))
         #expect(copied == largePayload)
 
         try g2h.release(slotHeader.totalLen)

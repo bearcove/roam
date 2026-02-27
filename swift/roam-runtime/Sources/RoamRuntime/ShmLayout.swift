@@ -138,7 +138,7 @@ public struct ShmSegmentHeader: Sendable, Equatable {
                 regionSize: regionLimit
             )
         case 2:
-            if magic != shmSegmentMagicLegacy {
+            if magic != shmSegmentMagicLegacy && magic != shmSegmentMagicV7 {
                 throw ShmLayoutError.invalidMagic(magic)
             }
             if slotSize != 0 {

@@ -130,8 +130,8 @@ struct ShmGuestClientMain {
     let inlinePayload = Array("swift-inline".utf8)
     let slotPayload = (0..<2048).map { UInt8(truncatingIfNeeded: $0) }
 
-    let inlineFrame = ShmGuestFrame(msgType: 4, id: 1, methodId: 0, payload: inlinePayload)
-    let slotFrame = ShmGuestFrame(msgType: 4, id: 2, methodId: 0, payload: slotPayload)
+    let inlineFrame = ShmGuestFrame(payload: inlinePayload)
+    let slotFrame = ShmGuestFrame(payload: slotPayload)
 
     do {
         try guest.send(frame: inlineFrame)
@@ -147,9 +147,9 @@ struct ShmGuestClientMain {
     while Date() < deadline {
         do {
             if let frame = try guest.receive() {
-                if frame.id == 101, frame.payload == Array("ack-inline".utf8) {
+                if frame.payload == Array("ack-inline".utf8) {
                     gotInlineAck = true
-                } else if frame.id == 102, frame.payload == Array("ack-slot".utf8) {
+                } else if frame.payload == Array("ack-slot".utf8) {
                     gotSlotAck = true
                 }
 
@@ -169,27 +169,19 @@ struct ShmGuestClientMain {
             fail("timed out waiting for host responses")
 
         case "remap-recv":
-    var got201 = false
-    var got202 = false
+    var largePayloadsSeen = 0
     let deadline = Date().addingTimeInterval(2.5)
 
     while Date() < deadline {
         do {
             _ = try? guest.checkRemap()
             if let frame = try guest.receive() {
-                if frame.id == 201, frame.payload.count == 3000 {
-                    got201 = true
-                } else if frame.id == 202, frame.payload.count == 3000 {
-                    got202 = true
+                if frame.payload.count == 3000 {
+                    largePayloadsSeen += 1
                 }
 
-                if got201 && got202 {
-                    let ack = ShmGuestFrame(
-                        msgType: 4,
-                        id: 777,
-                        methodId: 0,
-                        payload: Array("remap-recv-ok".utf8)
-                    )
+                if largePayloadsSeen >= 2 {
+                    let ack = ShmGuestFrame(payload: Array("remap-recv-ok".utf8))
                     try guest.send(frame: ack)
                     guest.detach()
                     print("ok")
@@ -207,7 +199,7 @@ struct ShmGuestClientMain {
 
         case "remap-send":
     let firstPayload = [UInt8](repeating: 0xCD, count: 3000)
-    let first = ShmGuestFrame(msgType: 4, id: 301, methodId: 0, payload: firstPayload)
+    let first = ShmGuestFrame(payload: firstPayload)
     do {
         try guest.send(frame: first)
     } catch {
@@ -220,7 +212,6 @@ struct ShmGuestClientMain {
         do {
             _ = try? guest.checkRemap()
             if let frame = try guest.receive(),
-                frame.id == 401,
                 frame.payload == Array("start-second-send".utf8)
             {
                 gotStart = true
@@ -237,7 +228,7 @@ struct ShmGuestClientMain {
     }
 
     let secondPayload = [UInt8](repeating: 0xEF, count: 3000)
-    let second = ShmGuestFrame(msgType: 4, id: 302, methodId: 0, payload: secondPayload)
+    let second = ShmGuestFrame(payload: secondPayload)
     do {
         try guest.send(frame: second)
     } catch {
@@ -249,7 +240,6 @@ struct ShmGuestClientMain {
     while Date() < ackDeadline {
         do {
             if let frame = try guest.receive(),
-                frame.id == 402,
                 frame.payload == Array("send-remap-ack".utf8)
             {
                 gotAck = true

@@ -56,13 +56,9 @@ struct ShmTransportMappingTests {
             ))
     }
 
-    @Test func helloAndCreditAreRejected() throws {
-        #expect(throws: ShmTransportConvertError.helloNotSupported) {
-            _ = try messageToShmFrame(.hello(defaultHello()))
-        }
-        #expect(throws: ShmTransportConvertError.creditNotSupported) {
-            _ = try messageToShmFrame(.credit(connId: 0, channelId: 1, bytes: 64))
-        }
+    @Test func helloAndCreditRoundtrip() throws {
+        try assertShmRoundtrip(.hello(defaultHello()))
+        try assertShmRoundtrip(.credit(connId: 0, channelId: 1, bytes: 64))
     }
 }
 #endif

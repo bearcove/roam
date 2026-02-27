@@ -317,15 +317,9 @@ public final class ShmDoorbell: @unchecked Sendable {
 #endif
 
 public struct ShmGuestFrame: Sendable, Equatable {
-    public let msgType: UInt8
-    public let id: UInt32
-    public let methodId: UInt64
     public let payload: [UInt8]
 
-    public init(msgType: UInt8, id: UInt32, methodId: UInt64, payload: [UInt8]) {
-        self.msgType = msgType
-        self.id = id
-        self.methodId = methodId
+    public init(payload: [UInt8]) {
         self.payload = payload
     }
 }
@@ -470,12 +464,7 @@ public final class ShmGuestRuntime: @unchecked Sendable {
         let threshold = header.inlineThreshold == 0 ? shmDefaultInlineThreshold : header.inlineThreshold
 
         if shmShouldInline(payloadLen: payloadLen, threshold: threshold) {
-            let bytes = encodeShmInlineFrame(
-                msgType: frame.msgType,
-                id: frame.id,
-                methodId: frame.methodId,
-                payload: frame.payload
-            )
+            let bytes = encodeShmInlineFrame(payload: frame.payload)
 
             if let grant = try guestToHost.tryGrant(UInt32(bytes.count)) {
                 grant.copyBytes(from: bytes)
@@ -487,7 +476,11 @@ public final class ShmGuestRuntime: @unchecked Sendable {
             throw ShmGuestSendError.ringFull
         }
 
-        guard let handle = slotPool.alloc(size: payloadLen, owner: peerId) else {
+        let slotPayloadLen = payloadLen &+ 4
+        guard slotPayloadLen >= payloadLen else {
+            throw ShmGuestSendError.payloadTooLarge
+        }
+        guard let handle = slotPool.alloc(size: slotPayloadLen, owner: peerId) else {
             throw ShmGuestSendError.slotExhausted
         }
 
@@ -498,7 +491,8 @@ public final class ShmGuestRuntime: @unchecked Sendable {
 
         frame.payload.withUnsafeBytes { raw in
             if let base = raw.baseAddress {
-                memcpy(payloadPtr, base, raw.count)
+                payloadPtr.storeBytes(of: payloadLen.littleEndian, as: UInt32.self)
+                memcpy(payloadPtr.advanced(by: 4), base, raw.count)
             }
         }
 
@@ -510,10 +504,6 @@ public final class ShmGuestRuntime: @unchecked Sendable {
         }
 
         let slotFrame = encodeShmSlotRefFrame(
-            msgType: frame.msgType,
-            id: frame.id,
-            methodId: frame.methodId,
-            payloadLen: payloadLen,
             slotRef: ShmSlotRef(
                 classIdx: handle.classIdx,
                 extentIdx: handle.extentIdx,
@@ -554,7 +544,7 @@ public final class ShmGuestRuntime: @unchecked Sendable {
         switch decoded {
         case .inline(let header, let payload):
             try hostToGuest.release(header.totalLen)
-            return ShmGuestFrame(msgType: header.msgType, id: header.id, methodId: header.methodId, payload: payload)
+            return ShmGuestFrame(payload: payload)
 
         case .slotRef(let header, let slotRef):
             let handle = ShmVarSlotHandle(
@@ -568,7 +558,7 @@ public final class ShmGuestRuntime: @unchecked Sendable {
                 fatalError = true
                 throw ShmGuestReceiveError.slotError
             }
-            if header.payloadLen > clsSize {
+            if clsSize < 4 {
                 fatalError = true
                 throw ShmGuestReceiveError.payloadTooLarge
             }
@@ -578,9 +568,17 @@ public final class ShmGuestRuntime: @unchecked Sendable {
                 throw ShmGuestReceiveError.slotError
             }
 
+            let slotBytes = UnsafeRawBufferPointer(start: UnsafeRawPointer(payloadPtr), count: Int(clsSize))
+            let payloadLen = readU32LE(Array(slotBytes.prefix(4)), 0)
+            if payloadLen > clsSize - 4 {
+                fatalError = true
+                throw ShmGuestReceiveError.payloadTooLarge
+            }
             let payload = Array(
-                UnsafeRawBufferPointer(start: UnsafeRawPointer(payloadPtr), count: Int(header.payloadLen))
-            )
+                UnsafeRawBufferPointer(
+                    start: UnsafeRawPointer(payloadPtr.advanced(by: 4)),
+                    count: Int(payloadLen)
+                ))
 
             do {
                 try slotPool.free(handle)
@@ -592,12 +590,16 @@ public final class ShmGuestRuntime: @unchecked Sendable {
             try hostToGuest.release(header.totalLen)
             try doorbell?.signal()
 
-            return ShmGuestFrame(msgType: header.msgType, id: header.id, methodId: header.methodId, payload: payload)
+            return ShmGuestFrame(payload: payload)
+        case .mmapRef:
+            fatalError = true
+            throw ShmGuestReceiveError.malformedFrame
         }
     }
 
     public func checkRemap() throws -> Bool {
-        let currentSizePtr = try region.pointer(at: 88)
+        let currentSizeOffset = header.version == 7 ? 72 : 88
+        let currentSizePtr = try region.pointer(at: currentSizeOffset)
         let currentSize = Int(atomicLoadU64Acquire(UnsafeRawPointer(currentSizePtr)))
         if currentSize <= region.length {
             return false
@@ -646,7 +648,8 @@ public final class ShmGuestRuntime: @unchecked Sendable {
     }
 
     private func hostGoodbyeFlag() -> Bool {
-        guard let ptr = try? region.pointer(at: 68) else {
+        let hostGoodbyeOffset = header.version == 7 ? 64 : 68
+        guard let ptr = try? region.pointer(at: hostGoodbyeOffset) else {
             return true
         }
         return atomicLoadU32Acquire(UnsafeRawPointer(ptr)) != 0
