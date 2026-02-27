@@ -77,6 +77,7 @@ pub trait LinkTx: Send + Sync + 'static {
 ///
 /// Dropping without commit = discard (no bytes sent, space reclaimed).
 // r[impl link.tx.discard]
+// r[impl zerocopy.framing.link]
 pub trait WriteSlot {
     /// The writable buffer, exactly the size requested in `alloc`.
     // r[impl link.tx.slot.len]

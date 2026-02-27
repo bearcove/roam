@@ -18,6 +18,7 @@ use roam_types::{Backing, Link, LinkRx, LinkTx, LinkTxPermit, WriteSlot};
 /// `[len: u32 LE][payload bytes]`.
 // r[impl transport.stream]
 // r[impl transport.stream.kinds]
+// r[impl zerocopy.framing.link.stream]
 pub struct StreamLink<R, W> {
     reader: R,
     writer: W,
@@ -153,6 +154,7 @@ impl LinkTx for StreamLinkTx {
     }
 }
 
+// r[impl zerocopy.send.stream]
 impl LinkTxPermit for StreamLinkTxPermit {
     type Slot = StreamWriteSlot;
 
@@ -183,6 +185,7 @@ pub struct StreamLinkRx<R> {
     reader: R,
 }
 
+// r[impl zerocopy.recv.stream]
 impl<R: AsyncRead + Send + Unpin + 'static> LinkRx for StreamLinkRx<R> {
     type Error = io::Error;
 

@@ -11,6 +11,7 @@ use std::sync::Arc;
 /// Uses `ManuallyDrop` + custom `Drop` to guarantee drop order: value is
 /// dropped before backing, so borrowed references in `T` remain valid
 /// through `T`'s drop.
+// r[impl zerocopy.recv.selfref]
 pub struct SelfRef<T: 'static> {
     /// The decoded value, potentially borrowing from `backing`.
     value: ManuallyDrop<T>,
@@ -25,7 +26,9 @@ pub trait SharedBacking: Send + Sync + 'static {
     fn as_bytes(&self) -> &[u8];
 }
 
+// r[impl zerocopy.backing]
 pub enum Backing {
+    // r[impl zerocopy.backing.boxed]
     /// Heap-allocated buffer (TCP read, BipBuffer copy-out for small messages).
     Boxed(Box<[u8]>),
     /// Shared backing that can be provided by transports (for example SHM slots).

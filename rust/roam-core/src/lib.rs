@@ -37,6 +37,7 @@ pub fn rpc_plan<T: facet::Facet<'static>>() -> &'static roam_types::RpcPlan {
 
 /// Deserialize postcard-encoded `backing` bytes into `T` in place, returning a
 /// [`roam_types::SelfRef`] that keeps the backing storage alive for the value.
+// r[impl zerocopy.framing.value]
 pub(crate) fn deserialize_postcard<T: facet::Facet<'static>>(
     backing: Backing,
 ) -> Result<SelfRef<T>, facet_format::DeserializeError> {

@@ -309,6 +309,7 @@ where
 
     /// Run the session recv loop: read from the conduit, demux by connection
     /// ID, route to the appropriate connection's mpsc sender.
+    // r[impl zerocopy.framing.pipeline.incoming]
     pub async fn run(&mut self) {
         loop {
             let msg = match self.rx.recv().await {
@@ -360,6 +361,8 @@ pub trait DynConduitTx: Send + Sync {
     fn send_msg<'a>(&'a self, msg: Message<'a>) -> BoxFuture<'a, std::io::Result<()>>;
 }
 
+// r[impl zerocopy.send]
+// r[impl zerocopy.framing.pipeline.outgoing]
 impl<T> DynConduitTx for T
 where
     T: ConduitTx<Msg = MessageFamily> + Send + Sync,

@@ -100,6 +100,7 @@ struct TxShared {
 
 /// A [`Link`] over shared memory ring buffers.
 // r[impl transport.shm]
+// r[impl zerocopy.framing.link.shm]
 pub struct ShmLink {
     tx_shared: Arc<TxShared>,
     rx_bipbuf: Arc<BipBuf>,
@@ -458,6 +459,7 @@ impl LinkTx for ShmLinkTx {
     }
 }
 
+// r[impl zerocopy.send.shm]
 impl LinkTxPermit for ShmTxPermit {
     type Slot = ShmWriteSlot;
 
@@ -677,6 +679,8 @@ impl LinkRx for ShmLinkRx {
             let (_, mut consumer) = self.rx_bipbuf.split();
             if let Some(frame) = framing::read_frame(&mut consumer) {
                 return match frame {
+                    // r[impl zerocopy.recv.shm.inline]
+                    // r[impl zerocopy.backing.bipbuf]
                     OwnedFrame::Inline(bytes) => {
                         self.stats
                             .inline_recvs
@@ -692,6 +696,7 @@ impl LinkRx for ShmLinkRx {
                         }
                         Ok(Some(Backing::Boxed(bytes.into_boxed_slice())))
                     }
+                    // r[impl zerocopy.recv.shm.slotref]
                     OwnedFrame::SlotRef(slot_ref) => {
                         self.stats
                             .slot_ref_recvs
@@ -763,6 +768,7 @@ impl ShmLinkRx {
     }
 }
 
+// r[impl zerocopy.backing.varslot]
 struct ShmVarSlotBacking {
     backend: Backend,
     slot_ref: SlotRef,

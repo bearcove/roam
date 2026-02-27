@@ -114,6 +114,7 @@ pub trait LinkSource: Send + 'static {
 // ---------------------------------------------------------------------------
 
 // r[impl stable]
+// r[impl zerocopy.framing.conduit.stable]
 pub struct StableConduit<F: MsgFamily, LS: LinkSource> {
     shared: Arc<Shared<LS>>,
     _phantom: PhantomData<fn(F) -> F>,
@@ -504,7 +505,11 @@ impl<F: MsgFamily, LS: LinkSource> ConduitTxPermit for StableConduitPermit<F, LS
 
     // r[impl zerocopy.framing.single-pass]
     // r[impl zerocopy.framing.no-double-serialize]
+    // r[impl zerocopy.scatter]
+    // r[impl zerocopy.scatter.plan]
+    // r[impl zerocopy.scatter.plan.size]
     // r[impl zerocopy.scatter.write]
+    // r[impl zerocopy.scatter.lifetime]
     // r[impl zerocopy.scatter.replay]
     fn send(self, item: F::Msg<'_>) -> Result<(), StableConduitError> {
         let StableConduitPermit {

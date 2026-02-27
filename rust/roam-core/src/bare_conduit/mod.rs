@@ -18,6 +18,7 @@ use roam_types::{
 /// via `Peek`). The recv path yields `SelfRef<F::Msg<'static>>` (owned).
 // r[impl conduit.bare]
 // r[impl conduit.typeplan]
+// r[impl zerocopy.framing.conduit.bare]
 pub struct BareConduit<F: MsgFamily, L: Link> {
     link: L,
     shape: &'static Shape,
@@ -107,7 +108,11 @@ impl<F: MsgFamily, LTx: LinkTx> ConduitTxPermit for BareConduitPermit<'_, F, LTx
 
     // r[impl zerocopy.framing.single-pass]
     // r[impl zerocopy.framing.no-double-serialize]
+    // r[impl zerocopy.scatter]
+    // r[impl zerocopy.scatter.plan]
+    // r[impl zerocopy.scatter.plan.size]
     // r[impl zerocopy.scatter.write]
+    // r[impl zerocopy.scatter.lifetime]
     fn send(self, item: F::Msg<'_>) -> Result<(), Self::Error> {
         // SAFETY: shape was set from F::shape() at construction time.
         // The item is a valid instance of F::Msg<'_>, which shares the same
@@ -145,6 +150,7 @@ where
     type Msg = F;
     type Error = BareConduitError;
 
+    // r[impl zerocopy.recv]
     #[moire::instrument]
     async fn recv(&mut self) -> Result<Option<SelfRef<F::Msg<'static>>>, Self::Error> {
         let backing = match self

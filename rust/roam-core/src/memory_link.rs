@@ -7,6 +7,7 @@ use roam_types::{Backing, Link, LinkRx, LinkTx, LinkTxPermit, WriteSlot};
 /// no serialization, no IO. Useful for testing Conduits, Session, and
 /// anything above the transport layer without real networking.
 // r[impl transport.memory]
+// r[impl zerocopy.framing.link.memory]
 pub struct MemoryLink {
     tx: mpsc::Sender<Vec<u8>>,
     rx: mpsc::Receiver<Vec<u8>>,

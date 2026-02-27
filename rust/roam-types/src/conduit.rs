@@ -74,6 +74,7 @@ pub trait ConduitTx {
 
 /// Permit for sending exactly one message through a [`ConduitTx`].
 // r[impl conduit.permit.send]
+// r[impl zerocopy.framing.conduit]
 pub trait ConduitTxPermit {
     type Msg: MsgFamily;
     type Error: std::error::Error + Send + Sync + 'static;
