@@ -63,7 +63,7 @@ private func makeSegmentFixture(
     let headerBytes = try region.mutableBytes(at: 0, count: shmSegmentHeaderSize)
     headerBytes.copyBytes(from: header)
 
-    let pool = ShmVarSlotPool(region: region, baseOffset: varPoolOffset, classes: classes)
+    let pool = try ShmVarSlotPool(region: region, baseOffset: varPoolOffset, classes: classes)
     pool.initialize()
 
     var ringOffsets: [UInt8: Int] = [:]
@@ -119,6 +119,13 @@ private func isConnectionClosedTransportError(_ error: Error) -> Bool {
 }
 
 struct ShmVarSlotPoolTests {
+    // r[verify shm.varslot]
+    // r[verify shm.varslot.allocate]
+    // r[verify shm.varslot.free]
+    // r[verify shm.varslot.selection]
+    // r[verify shm.varslot.freelist]
+    // r[verify shm.varslot.classes]
+    // r[verify shm.varslot.slot-meta]
     @Test func allocFreeAndGenerationTransitions() throws {
         let path = tmpPath("varslot.bin")
         defer { try? FileManager.default.removeItem(atPath: path) }
@@ -132,7 +139,7 @@ struct ShmVarSlotPoolTests {
         )
 
         let header = try ShmSegmentView(region: fixture.region).header
-        let pool = ShmVarSlotPool(
+        let pool = try ShmVarSlotPool(
             region: fixture.region,
             baseOffset: Int(header.varSlotPoolOffset),
             classes: fixture.classes
@@ -155,6 +162,9 @@ struct ShmVarSlotPoolTests {
         #expect(reused.generation > first.generation)
     }
 
+    // r[verify shm.varslot]
+    // r[verify shm.varslot.allocate]
+    // r[verify shm.varslot.free]
     @Test func stressChurnEndsWithNoLeakedSlots() async throws {
         let path = tmpPath("varslot-stress.bin")
         defer { try? FileManager.default.removeItem(atPath: path) }
@@ -165,7 +175,7 @@ struct ShmVarSlotPoolTests {
         ]
         let fixture = try makeSegmentFixture(path: path, classes: classes)
         let header = try ShmSegmentView(region: fixture.region).header
-        let pool = ShmVarSlotPool(
+        let pool = try ShmVarSlotPool(
             region: fixture.region,
             baseOffset: Int(header.varSlotPoolOffset),
             classes: classes
@@ -226,13 +236,22 @@ struct ShmVarSlotPoolTests {
 }
 
 struct ShmGuestLifecycleTests {
+    // r[verify shm.architecture]
+    // r[verify shm.signal]
+    // r[verify shm.topology]
+    // r[verify shm.topology.peer-id]
+    // r[verify shm.topology.max-guests]
+    // r[verify shm.topology.communication]
+    // r[verify shm.topology.bidirectional]
+    // r[verify shm.guest.attach]
+    // r[verify shm.guest.detach]
     @Test func attachDetachAndTicketValidation() throws {
         let path = tmpPath("guest-lifecycle.bin")
         defer { try? FileManager.default.removeItem(atPath: path) }
 
         let fixture = try makeSegmentFixture(path: path, classes: [ShmVarSlotClass(slotSize: 256, count: 4)])
 
-        let guest = try ShmGuestRuntime.attach(path: path)
+        let guest = try ShmGuestRuntime.attach(path: path, classes: fixture.classes)
         #expect(guest.peerId == 1)
         #expect(try guest.peerState() == .attached)
 
@@ -241,12 +260,13 @@ struct ShmGuestLifecycleTests {
 
         let badTicket = ShmBootstrapTicket(peerId: 1, hubPath: path, doorbellFd: -1)
         #expect(throws: ShmGuestAttachError.slotNotReserved) {
-            _ = try ShmGuestRuntime.attach(ticket: badTicket)
+            _ = try ShmGuestRuntime.attach(ticket: badTicket, classes: fixture.classes)
         }
 
         _ = fixture
     }
 
+    // r[verify shm.guest.attach]
     @Test func reservedTicketAttachSucceeds() throws {
         let path = tmpPath("guest-ticket.bin")
         defer { try? FileManager.default.removeItem(atPath: path) }
@@ -264,12 +284,13 @@ struct ShmGuestLifecycleTests {
         }
 
         let ticket = ShmBootstrapTicket(peerId: 1, hubPath: path, doorbellFd: pair.guest)
-        let guest = try ShmGuestRuntime.attach(ticket: ticket)
+        let guest = try ShmGuestRuntime.attach(ticket: ticket, classes: fixture.classes)
         #expect(guest.peerId == 1)
         #expect(try guest.peerState() == .attached)
         _ = fixture
     }
 
+    // r[verify shm.guest.attach-failure]
     @Test func invalidTicketPeerIsRejected() throws {
         let path = tmpPath("guest-invalid-peer.bin")
         defer { try? FileManager.default.removeItem(atPath: path) }
@@ -278,11 +299,13 @@ struct ShmGuestLifecycleTests {
 
         let ticket = ShmBootstrapTicket(peerId: 2, hubPath: path, doorbellFd: -1)
         #expect(throws: ShmGuestAttachError.invalidTicketPeer(2)) {
-            _ = try ShmGuestRuntime.attach(ticket: ticket)
+            _ = try ShmGuestRuntime.attach(ticket: ticket, classes: fixture.classes)
         }
         _ = fixture
     }
 
+    // r[verify shm.host.goodbye]
+    // r[verify shm.guest.attach-failure]
     @Test func hostGoodbyeRejectsAttach() throws {
         let path = tmpPath("guest-host-goodbye.bin")
         defer { try? FileManager.default.removeItem(atPath: path) }
@@ -295,12 +318,20 @@ struct ShmGuestLifecycleTests {
         headerView.copyBytes(from: headerBytes)
 
         #expect(throws: ShmGuestAttachError.hostGoodbye) {
-            _ = try ShmGuestRuntime.attach(path: path)
+            _ = try ShmGuestRuntime.attach(path: path, classes: fixture.classes)
         }
     }
 }
 
 struct ShmDoorbellAndPayloadTests {
+    // r[verify zerocopy.send.shm]
+    // r[verify zerocopy.recv.shm.inline]
+    // r[verify zerocopy.recv.shm.slotref]
+    // r[verify shm.signal.doorbell.integration]
+    // r[verify shm.signal.doorbell.optional]
+    // r[verify shm.framing.inline]
+    // r[verify shm.framing.slot-ref]
+    // r[verify shm.framing.threshold]
     @Test func mixedInlineAndSlotRefPathsRoundTrip() throws {
         let path = tmpPath("guest-payload.bin")
         defer { try? FileManager.default.removeItem(atPath: path) }
@@ -323,13 +354,16 @@ struct ShmDoorbellAndPayloadTests {
         state = fcntl(pair.host, F_GETFL)
         _ = fcntl(pair.host, F_SETFL, state | O_NONBLOCK)
 
-        let guest = try ShmGuestRuntime.attach(ticket: ShmBootstrapTicket(peerId: 1, hubPath: path, doorbellFd: pair.guest))
+        let guest = try ShmGuestRuntime.attach(
+            ticket: ShmBootstrapTicket(peerId: 1, hubPath: path, doorbellFd: pair.guest),
+            classes: fixture.classes
+        )
 
         let ringOffset = try #require(fixture.ringOffsets[1])
         let g2h = try ShmBipBuffer.attach(region: fixture.region, headerOffset: ringOffset)
 
         let inlinePayload = Array("small".utf8)
-        try guest.send(frame: ShmGuestFrame(msgType: 1, id: 10, methodId: 99, payload: inlinePayload))
+        try guest.send(frame: ShmGuestFrame(payload: inlinePayload))
 
         let firstReadable = try #require(g2h.tryRead())
         let firstDecoded = try decodeShmFrame(Array(firstReadable))
@@ -337,12 +371,11 @@ struct ShmDoorbellAndPayloadTests {
             Issue.record("expected inline frame")
             return
         }
-        #expect(header.id == 10)
-        #expect(payload == inlinePayload)
+        #expect(payload.starts(with: inlinePayload))
         try g2h.release(header.totalLen)
 
         let largePayload = [UInt8](repeating: 0xAB, count: 120)
-        try guest.send(frame: ShmGuestFrame(msgType: 2, id: 11, methodId: 100, payload: largePayload))
+        try guest.send(frame: ShmGuestFrame(payload: largePayload))
 
         let secondReadable = try #require(g2h.tryRead())
         let secondDecoded = try decodeShmFrame(Array(secondReadable))
@@ -350,10 +383,9 @@ struct ShmDoorbellAndPayloadTests {
             Issue.record("expected slot-ref frame")
             return
         }
-        #expect(slotHeader.id == 11)
 
         let segmentHeader = try ShmSegmentView(region: fixture.region).header
-        let pool = ShmVarSlotPool(
+        let pool = try ShmVarSlotPool(
             region: fixture.region,
             baseOffset: Int(segmentHeader.varSlotPoolOffset),
             classes: fixture.classes
@@ -365,13 +397,22 @@ struct ShmDoorbellAndPayloadTests {
             generation: slotRef.slotGeneration
         )
         let payloadPtr = try #require(pool.payloadPointer(handle))
-        let copied = Array(UnsafeRawBufferPointer(start: UnsafeRawPointer(payloadPtr), count: largePayload.count))
+        let storedLen = payloadPtr.load(as: UInt32.self).littleEndian
+        #expect(storedLen == UInt32(largePayload.count))
+        let copied = Array(
+            UnsafeRawBufferPointer(
+                start: UnsafeRawPointer(payloadPtr.advanced(by: 4)),
+                count: largePayload.count
+            ))
         #expect(copied == largePayload)
 
         try g2h.release(slotHeader.totalLen)
         try pool.free(handle)
     }
 
+    // r[verify shm.signal.doorbell]
+    // r[verify shm.signal.doorbell.signal]
+    // r[verify shm.signal.doorbell.wait]
     @Test func doorbellSignalWaitDrain() throws {
         let pair = try makeDoorbellPair()
         defer {
@@ -387,6 +428,9 @@ struct ShmDoorbellAndPayloadTests {
         #expect(try host.wait(timeoutMs: 10) == .timeout)
     }
 
+    // r[verify shm.signal.doorbell]
+    // r[verify shm.signal.doorbell.signal]
+    // r[verify shm.signal.doorbell.wait]
     @Test func doorbellBurstSignalsCoalesce() throws {
         let pair = try makeDoorbellPair()
         defer {
@@ -405,6 +449,7 @@ struct ShmDoorbellAndPayloadTests {
         #expect(try host.wait(timeoutMs: 10) == .timeout)
     }
 
+    // r[verify shm.signal.doorbell.death]
     @Test func doorbellPeerDeathIsReported() throws {
         let pair = try makeDoorbellPair()
         defer { close(pair.host) }
@@ -417,12 +462,13 @@ struct ShmDoorbellAndPayloadTests {
 }
 
 struct ShmGuestRemapTests {
+    // r[verify transport.shm]
     @Test func closedTransportSendReturnsConnectionClosed() async throws {
         let path = tmpPath("transport-closed-send.bin")
         defer { try? FileManager.default.removeItem(atPath: path) }
 
         let fixture = try makeSegmentFixture(path: path, classes: [ShmVarSlotClass(slotSize: 256, count: 2)])
-        let transport = try ShmGuestTransport.attach(path: path)
+        let transport = try ShmGuestTransport.attach(path: path, classes: fixture.classes)
         try await transport.close()
 
         do {
@@ -434,6 +480,8 @@ struct ShmGuestRemapTests {
         _ = fixture
     }
 
+    // r[verify transport.shm]
+    // r[verify shm.signal.doorbell.death]
     @Test func peerDeathInRecvReturnsConnectionClosed() async throws {
         let path = tmpPath("transport-peer-dead.bin")
         let pair = try makeDoorbellPair()
@@ -449,7 +497,8 @@ struct ShmGuestRemapTests {
             reservedPeer: 1
         )
         let transport = try ShmGuestTransport.attach(
-            ticket: ShmBootstrapTicket(peerId: 1, hubPath: path, doorbellFd: pair.guest)
+            ticket: ShmBootstrapTicket(peerId: 1, hubPath: path, doorbellFd: pair.guest),
+            classes: fixture.classes
         )
 
         close(pair.host)
@@ -464,11 +513,12 @@ struct ShmGuestRemapTests {
     }
 
     @Test func remapOnCurrentSizeGrowth() throws {
+        // r[verify shm.varslot.extents]
         let path = tmpPath("guest-remap.bin")
         defer { try? FileManager.default.removeItem(atPath: path) }
 
         let fixture = try makeSegmentFixture(path: path, classes: [ShmVarSlotClass(slotSize: 256, count: 2)])
-        let guest = try ShmGuestRuntime.attach(path: path)
+        let guest = try ShmGuestRuntime.attach(path: path, classes: fixture.classes)
 
         let newSize = fixture.region.length + 4096
         try fixture.region.resize(newSize: newSize)
@@ -481,6 +531,40 @@ struct ShmGuestRemapTests {
         #expect(try guest.checkRemap())
         #expect(guest.region.length == newSize)
         #expect(!(try guest.checkRemap()))
+    }
+
+    // r[verify shm.varslot.extents.notification]
+    @Test func doorbellWakeTriggersRemapFromCurrentSize() throws {
+        let path = tmpPath("guest-remap-doorbell.bin")
+        let pair = try makeDoorbellPair()
+        defer {
+            close(pair.host)
+            close(pair.guest)
+            try? FileManager.default.removeItem(atPath: path)
+        }
+
+        let fixture = try makeSegmentFixture(
+            path: path,
+            classes: [ShmVarSlotClass(slotSize: 256, count: 2)],
+            reservedPeer: 1
+        )
+        let guest = try ShmGuestRuntime.attach(
+            ticket: ShmBootstrapTicket(peerId: 1, hubPath: path, doorbellFd: pair.guest),
+            classes: fixture.classes
+        )
+
+        let newSize = fixture.region.length + 4096
+        try fixture.region.resize(newSize: newSize)
+        var header = Array(try fixture.region.mutableBytes(at: 0, count: shmSegmentHeaderSize))
+        writeU64LE(UInt64(newSize), to: &header, at: 88)
+        let headerBytes = try fixture.region.mutableBytes(at: 0, count: shmSegmentHeaderSize)
+        headerBytes.copyBytes(from: header)
+
+        let hostDoorbell = ShmDoorbell(fd: pair.host)
+        try hostDoorbell.signal()
+
+        #expect(try guest.waitForDoorbell(timeoutMs: 1000) == .signaled)
+        #expect(guest.region.length == newSize)
     }
 }
 

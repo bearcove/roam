@@ -10,6 +10,10 @@ specs (
                 include (rust/**/*.rs)
                 exclude (rust-legacy/**/*.rs)
             }
+            {
+                name swift
+                include (swift/roam-runtime/**/*.swift)
+            }
         )
     }
 )

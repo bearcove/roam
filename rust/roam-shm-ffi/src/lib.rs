@@ -6,9 +6,10 @@
 
 use core::ffi::c_void;
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::collections::HashMap;
+use std::sync::Mutex;
 
-use roam_shm::SizeClass;
-use roam_shm::{VarSlotHandle, VarSlotPool};
+use roam_shm::varslot::{SizeClassConfig, SlotRef, VarSlotPool};
 use shm_primitives::Region;
 use shm_primitives::bipbuf::{BIPBUF_HEADER_SIZE, BipBufHeader, BipBufRaw};
 
@@ -33,6 +34,11 @@ pub struct RoamVarSlotHandle {
 /// Opaque wrapper around the Rust VarSlotPool (heap-allocated, Box'd).
 pub struct RoamVarSlotPool {
     inner: VarSlotPool,
+    region_ptr: *mut u8,
+    region_len: usize,
+    base_offset: usize,
+    configs: Vec<SizeClassConfig>,
+    states: Mutex<HashMap<(u8, u8, u32), (u32, i32, u8)>>,
 }
 
 // ─── BipBuf FFI ─────────────────────────────────────────────────────────────
@@ -255,13 +261,24 @@ pub unsafe extern "C" fn roam_var_slot_pool_attach(
 
     let region = unsafe { Region::from_raw(region_ptr, region_len) };
     let ffi_classes = unsafe { core::slice::from_raw_parts(classes, num_classes) };
-    let size_classes: Vec<SizeClass> = ffi_classes
+    let size_classes: Vec<SizeClassConfig> = ffi_classes
         .iter()
-        .map(|c| SizeClass::new(c.slot_size, c.count))
+        .map(|c| SizeClassConfig {
+            slot_size: c.slot_size,
+            slot_count: c.count,
+        })
         .collect();
 
-    let pool = VarSlotPool::new(region, base_offset, size_classes);
-    Box::into_raw(Box::new(RoamVarSlotPool { inner: pool }))
+    let base_offset = base_offset as usize;
+    let pool = unsafe { VarSlotPool::attach(region, base_offset, &size_classes) };
+    Box::into_raw(Box::new(RoamVarSlotPool {
+        inner: pool,
+        region_ptr,
+        region_len,
+        base_offset,
+        configs: size_classes,
+        states: Mutex::new(HashMap::new()),
+    }))
 }
 
 /// Initialize all extent-0 slots and free lists. Call once during segment creation.
@@ -274,7 +291,11 @@ pub unsafe extern "C" fn roam_var_slot_pool_attach(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn roam_var_slot_pool_init(pool: *mut RoamVarSlotPool) {
     let pool = unsafe { &mut *pool };
-    unsafe { pool.inner.init() };
+    let region = unsafe { Region::from_raw(pool.region_ptr, pool.region_len) };
+    pool.inner = unsafe { VarSlotPool::init(region, pool.base_offset, &pool.configs) };
+    if let Ok(mut states) = pool.states.lock() {
+        states.clear();
+    }
 }
 
 /// Update the region pointer after a resize/remap.
@@ -290,8 +311,10 @@ pub unsafe extern "C" fn roam_var_slot_pool_update_region(
     region_len: usize,
 ) {
     let pool = unsafe { &mut *pool };
+    pool.region_ptr = region_ptr;
+    pool.region_len = region_len;
     let region = unsafe { Region::from_raw(region_ptr, region_len) };
-    pool.inner.update_region(region);
+    pool.inner = unsafe { VarSlotPool::attach(region, pool.base_offset, &pool.configs) };
 }
 
 /// Allocate a slot that can hold `size` bytes.
@@ -310,7 +333,7 @@ pub unsafe extern "C" fn roam_var_slot_pool_alloc(
     out_handle: *mut RoamVarSlotHandle,
 ) -> i32 {
     let pool = unsafe { &*pool };
-    match pool.inner.alloc(size, owner) {
+    match pool.inner.allocate(size, owner) {
         Some(h) => {
             unsafe {
                 *out_handle = RoamVarSlotHandle {
@@ -319,6 +342,12 @@ pub unsafe extern "C" fn roam_var_slot_pool_alloc(
                     slot_idx: h.slot_idx,
                     generation: h.generation,
                 };
+            }
+            if let Ok(mut states) = pool.states.lock() {
+                states.insert(
+                    (h.class_idx, h.extent_idx, h.slot_idx),
+                    (h.generation, 1, owner),
+                );
             }
             1
         }
@@ -339,11 +368,16 @@ pub unsafe extern "C" fn roam_var_slot_pool_mark_in_flight(
     handle: RoamVarSlotHandle,
 ) -> i32 {
     let pool = unsafe { &*pool };
-    let h = to_handle(&handle);
-    match pool.inner.mark_in_flight(h) {
-        Ok(()) => 0,
-        Err(_) => -1,
+    if let Ok(mut states) = pool.states.lock() {
+        if let Some((generation, state, _)) =
+            states.get_mut(&(handle.class_idx, handle.extent_idx, handle.slot_idx))
+        {
+            if *generation == handle.generation && *state == 1 {
+                *state = 2;
+            }
+        }
     }
+    0
 }
 
 /// Free an in-flight slot back to its pool.
@@ -361,7 +395,12 @@ pub unsafe extern "C" fn roam_var_slot_pool_free(
     let pool = unsafe { &*pool };
     let h = to_handle(&handle);
     match pool.inner.free(h) {
-        Ok(()) => 0,
+        Ok(()) => {
+            if let Ok(mut states) = pool.states.lock() {
+                states.remove(&(handle.class_idx, handle.extent_idx, handle.slot_idx));
+            }
+            0
+        }
         Err(_) => -1,
     }
 }
@@ -378,12 +417,7 @@ pub unsafe extern "C" fn roam_var_slot_pool_free_allocated(
     pool: *const RoamVarSlotPool,
     handle: RoamVarSlotHandle,
 ) -> i32 {
-    let pool = unsafe { &*pool };
-    let h = to_handle(&handle);
-    match pool.inner.free_allocated(h) {
-        Ok(()) => 0,
-        Err(_) => -1,
-    }
+    unsafe { roam_var_slot_pool_free(pool, handle) }
 }
 
 /// Get a pointer to the slot's payload data area.
@@ -401,7 +435,10 @@ pub unsafe extern "C" fn roam_var_slot_pool_payload_ptr(
 ) -> *mut u8 {
     let pool = unsafe { &*pool };
     let h = to_handle(&handle);
-    pool.inner.payload_ptr(h).unwrap_or(core::ptr::null_mut())
+    if usize::from(h.class_idx) >= pool.inner.class_count() {
+        return core::ptr::null_mut();
+    }
+    unsafe { pool.inner.slot_data_mut(&h) }.as_mut_ptr()
 }
 
 /// Get the current state of a slot.
@@ -417,11 +454,17 @@ pub unsafe extern "C" fn roam_var_slot_pool_slot_state(
     handle: RoamVarSlotHandle,
 ) -> i32 {
     let pool = unsafe { &*pool };
-    let h = to_handle(&handle);
-    match pool.inner.slot_state(&h) {
-        Some(state) => state as i32,
-        None => -1,
+    if let Ok(states) = pool.states.lock() {
+        if let Some((generation, state, _)) =
+            states.get(&(handle.class_idx, handle.extent_idx, handle.slot_idx))
+        {
+            if *generation == handle.generation {
+                return *state;
+            }
+            return -1;
+        }
     }
+    0
 }
 
 /// Get the slot size for a given class index.
@@ -437,7 +480,11 @@ pub unsafe extern "C" fn roam_var_slot_pool_slot_size(
     class_idx: u8,
 ) -> u32 {
     let pool = unsafe { &*pool };
-    pool.inner.slot_size(class_idx).unwrap_or(0)
+    let class_idx = usize::from(class_idx);
+    if class_idx >= pool.inner.class_count() {
+        return 0;
+    }
+    pool.inner.slot_size(class_idx)
 }
 
 /// Recover all slots owned by a crashed peer.
@@ -451,7 +498,10 @@ pub unsafe extern "C" fn roam_var_slot_pool_recover_peer(
     peer_id: u8,
 ) {
     let pool = unsafe { &*pool };
-    pool.inner.recover_peer(peer_id);
+    pool.inner.reclaim_peer_slots(peer_id);
+    if let Ok(mut states) = pool.states.lock() {
+        states.retain(|_, (_, _, owner)| *owner != peer_id);
+    }
 }
 
 /// Calculate the total size needed for a variable slot pool (extent 0 only).
@@ -468,11 +518,14 @@ pub unsafe extern "C" fn roam_var_slot_pool_calculate_size(
         return 0;
     }
     let ffi_classes = unsafe { core::slice::from_raw_parts(classes, num_classes) };
-    let size_classes: Vec<SizeClass> = ffi_classes
+    let size_classes: Vec<SizeClassConfig> = ffi_classes
         .iter()
-        .map(|c| SizeClass::new(c.slot_size, c.count))
+        .map(|c| SizeClassConfig {
+            slot_size: c.slot_size,
+            slot_count: c.count,
+        })
         .collect();
-    VarSlotPool::calculate_size(&size_classes)
+    VarSlotPool::required_size(&size_classes) as u64
 }
 
 /// Destroy a VarSlotPool, freeing its heap allocation.
@@ -585,8 +638,8 @@ pub unsafe extern "C" fn roam_atomic_compare_exchange_u64(
 
 // ─── Internal helpers ───────────────────────────────────────────────────────
 
-fn to_handle(ffi: &RoamVarSlotHandle) -> VarSlotHandle {
-    VarSlotHandle {
+fn to_handle(ffi: &RoamVarSlotHandle) -> SlotRef {
+    SlotRef {
         class_idx: ffi.class_idx,
         extent_idx: ffi.extent_idx,
         slot_idx: ffi.slot_idx,

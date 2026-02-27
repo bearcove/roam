@@ -20,9 +20,14 @@ shm-primitives.workspace = true
 tokio = { workspace = true, features = ["sync", "rt"] }
 zerocopy = { workspace = true }
 tempfile = "3"
+facet-postcard.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 libc = { workspace = true }
 
 [target.'cfg(loom)'.dependencies]
 loom = { version = "0.7" }
+
+[dev-dependencies]
+tempfile = "3"
+facet-postcard.workspace = true

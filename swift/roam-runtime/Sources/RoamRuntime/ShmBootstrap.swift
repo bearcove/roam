@@ -18,6 +18,7 @@ public struct ShmBootstrapTicket: Sendable {
     }
 }
 
+// r[impl shm.spawn]
 public enum ShmBootstrapError: Error {
     case invalidSid
     case unsupportedPlatform
@@ -40,6 +41,8 @@ private let shmBootstrapResponseMagic = [UInt8]("RSP0".utf8)
 private let shmBootstrapStatusOK: UInt8 = 0
 private let shmBootstrapStatusError: UInt8 = 1
 
+// r[impl shm.spawn]
+// r[impl shm.spawn.fd-inheritance]
 public func requestShmBootstrapTicket(controlSocketPath: String, sid: String) throws ->
     ShmBootstrapTicket
 {
