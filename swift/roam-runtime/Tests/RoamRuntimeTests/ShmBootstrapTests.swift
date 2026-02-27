@@ -221,6 +221,8 @@ private func XCTUnwrap<T>(_ value: T?) throws -> T {
 }
 
 struct ShmBootstrapTests {
+    // r[verify shm.spawn]
+    // r[verify shm.spawn.fd-inheritance]
     @Test func receivesDoorbellFdViaScmRights() throws {
         for _ in 0..<100 {
             let sid = "123e4567-e89b-12d3-a456-426614174000"
@@ -256,6 +258,7 @@ struct ShmBootstrapTests {
         }
     }
 
+    // r[verify shm.spawn.fd-inheritance]
     @Test func failsWhenNoFdIsPassed() throws {
         let sid = "123e4567-e89b-12d3-a456-426614174000"
 

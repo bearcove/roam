@@ -1,4 +1,5 @@
 #if os(macOS)
+import Darwin
 import Foundation
 import Testing
 
@@ -163,6 +164,8 @@ struct ShmBipBufferCorrectnessTests {
     // r[verify shm.bipbuf.header]
     // r[verify shm.bipbuf.init]
     // r[verify shm.bipbuf.layout]
+    // r[verify shm.file.create]
+    // r[verify shm.file.attach]
     // r[verify shm.bipbuf.read]
     // r[verify shm.bipbuf.release]
     @Test func contiguousReadWrite() throws {
@@ -384,6 +387,37 @@ struct ShmBipBufferCorrectnessTests {
         }
 
         #expect(buf.isEmpty())
+    }
+}
+
+struct ShmFileRegionTests {
+    // r[verify shm.file]
+    // r[verify shm.file.create]
+    // r[verify shm.file.attach]
+    // r[verify shm.file.permissions]
+    @Test func createManualSetsExpectedPermissionsAndAllowsAttach() throws {
+        let path = makeTempPath("region-manual.bin")
+        defer { try? FileManager.default.removeItem(atPath: path) }
+
+        let region = try ShmRegion.create(path: path, size: 4096, cleanup: .manual)
+        #expect(FileManager.default.fileExists(atPath: path))
+        #expect(region.length == 4096)
+
+        var st = stat()
+        #expect(stat(path, &st) == 0)
+        #expect((st.st_mode & S_IRWXU) == (S_IRUSR | S_IWUSR))
+
+        let attached = try ShmRegion.attach(path: path)
+        #expect(attached.length == 4096)
+        _ = attached
+    }
+
+    // r[verify shm.file.cleanup]
+    @Test func createAutoUnlinksBackingFile() throws {
+        let path = makeTempPath("region-auto.bin")
+        let region = try ShmRegion.create(path: path, size: 4096, cleanup: .auto)
+        #expect(region.length == 4096)
+        #expect(!FileManager.default.fileExists(atPath: path))
     }
 }
 #endif

@@ -55,6 +55,8 @@ public enum ShmVarSlotFreeError: Error, Equatable {
 // r[impl shm.varslot]
 // r[impl shm.varslot.allocate]
 // r[impl shm.varslot.free]
+// r[impl shm.varslot.selection]
+// r[impl shm.varslot.freelist]
 public final class ShmVarSlotPool: @unchecked Sendable {
     private static let sizeClassHeaderSize = 64
 
@@ -366,6 +368,11 @@ public enum ShmGuestReceiveError: Error, Equatable {
 // r[impl shm.host.goodbye]
 // r[impl shm.architecture]
 // r[impl shm.signal]
+// r[impl shm.topology]
+// r[impl shm.topology.peer-id]
+// r[impl shm.topology.max-guests]
+// r[impl shm.topology.communication]
+// r[impl shm.topology.bidirectional]
 // r[impl shm.framing.threshold]
 // r[impl zerocopy.send.shm]
 // r[impl zerocopy.recv.shm.inline]
@@ -480,6 +487,8 @@ public final class ShmGuestRuntime: @unchecked Sendable {
     }
 
     // r[impl zerocopy.send.shm]
+    // r[impl shm.signal.doorbell.integration]
+    // r[impl shm.signal.doorbell.optional]
     // r[impl shm.framing.inline]
     // r[impl shm.framing.slot-ref]
     // r[impl shm.framing.threshold]
@@ -557,6 +566,8 @@ public final class ShmGuestRuntime: @unchecked Sendable {
 
     // r[impl zerocopy.recv.shm.inline]
     // r[impl zerocopy.recv.shm.slotref]
+    // r[impl shm.signal.doorbell.integration]
+    // r[impl shm.signal.doorbell.optional]
     // r[impl shm.framing.inline]
     // r[impl shm.framing.slot-ref]
     public func receive() throws -> ShmGuestFrame? {

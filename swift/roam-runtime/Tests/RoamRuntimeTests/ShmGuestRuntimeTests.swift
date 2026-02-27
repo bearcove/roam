@@ -122,6 +122,8 @@ struct ShmVarSlotPoolTests {
     // r[verify shm.varslot]
     // r[verify shm.varslot.allocate]
     // r[verify shm.varslot.free]
+    // r[verify shm.varslot.selection]
+    // r[verify shm.varslot.freelist]
     // r[verify shm.varslot.classes]
     // r[verify shm.varslot.slot-meta]
     @Test func allocFreeAndGenerationTransitions() throws {
@@ -236,6 +238,11 @@ struct ShmVarSlotPoolTests {
 struct ShmGuestLifecycleTests {
     // r[verify shm.architecture]
     // r[verify shm.signal]
+    // r[verify shm.topology]
+    // r[verify shm.topology.peer-id]
+    // r[verify shm.topology.max-guests]
+    // r[verify shm.topology.communication]
+    // r[verify shm.topology.bidirectional]
     // r[verify shm.guest.attach]
     // r[verify shm.guest.detach]
     @Test func attachDetachAndTicketValidation() throws {
@@ -320,6 +327,8 @@ struct ShmDoorbellAndPayloadTests {
     // r[verify zerocopy.send.shm]
     // r[verify zerocopy.recv.shm.inline]
     // r[verify zerocopy.recv.shm.slotref]
+    // r[verify shm.signal.doorbell.integration]
+    // r[verify shm.signal.doorbell.optional]
     // r[verify shm.framing.inline]
     // r[verify shm.framing.slot-ref]
     // r[verify shm.framing.threshold]
