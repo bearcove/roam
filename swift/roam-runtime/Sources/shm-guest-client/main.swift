@@ -70,6 +70,7 @@ struct SpawnArgs {
     let peerId: UInt8
     let doorbellFd: Int32
     let scenario: String
+    let classes: [ShmVarSlotClass]
 }
 
 private func fail(_ message: String) -> Never {
@@ -82,6 +83,7 @@ private func parseArgs(_ args: [String]) -> SpawnArgs {
     var peerId: UInt8?
     var doorbellFd: Int32?
     var scenario = "data-path"
+    var classes: [ShmVarSlotClass] = []
 
     for arg in args {
         if let value = arg.split(separator: "=", maxSplits: 1).last, arg.hasPrefix("--hub-path=") {
@@ -95,6 +97,17 @@ private func parseArgs(_ args: [String]) -> SpawnArgs {
             doorbellFd = fd
         } else if let value = arg.split(separator: "=", maxSplits: 1).last, arg.hasPrefix("--scenario=") {
             scenario = String(value)
+        } else if let value = arg.split(separator: "=", maxSplits: 1).last, arg.hasPrefix("--size-class=") {
+            let fields = value.split(separator: ":", maxSplits: 1)
+            guard fields.count == 2,
+                  let slotSize = UInt32(fields[0]),
+                  let count = UInt32(fields[1]),
+                  slotSize > 0,
+                  count > 0
+            else {
+                fail("invalid --size-class value (expected SLOT_SIZE:COUNT)")
+            }
+            classes.append(ShmVarSlotClass(slotSize: slotSize, count: count))
         }
     }
 
@@ -107,8 +120,11 @@ private func parseArgs(_ args: [String]) -> SpawnArgs {
     guard let doorbellFd else {
         fail("missing --doorbell-fd")
     }
+    guard !classes.isEmpty else {
+        fail("missing --size-class (repeatable, format SLOT_SIZE:COUNT)")
+    }
 
-    return SpawnArgs(hubPath: hubPath, peerId: peerId, doorbellFd: doorbellFd, scenario: scenario)
+    return SpawnArgs(hubPath: hubPath, peerId: peerId, doorbellFd: doorbellFd, scenario: scenario, classes: classes)
 }
 
 @main
@@ -120,7 +136,7 @@ struct ShmGuestClientMain {
         let guest: ShmGuestRuntime
 
         do {
-            guest = try ShmGuestRuntime.attach(ticket: ticket)
+            guest = try ShmGuestRuntime.attach(ticket: ticket, classes: args.classes)
         } catch {
             fail("attach failed: \(error)")
         }
@@ -147,9 +163,9 @@ struct ShmGuestClientMain {
     while Date() < deadline {
         do {
             if let frame = try guest.receive() {
-                if frame.payload == Array("ack-inline".utf8) {
+                if frame.payload.starts(with: Array("ack-inline".utf8)) {
                     gotInlineAck = true
-                } else if frame.payload == Array("ack-slot".utf8) {
+                } else if frame.payload.starts(with: Array("ack-slot".utf8)) {
                     gotSlotAck = true
                 }
 

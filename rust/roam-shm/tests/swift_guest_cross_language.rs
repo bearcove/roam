@@ -81,7 +81,6 @@ fn make_socketpair() -> (i32, i32) {
 }
 
 #[test]
-#[ignore = "blocked: Swift guest varslot FFI attach crashes against current rust/roam-shm segment layout"]
 fn rust_segment_to_swift_guest_data_path() {
     let dir = tempfile::tempdir().unwrap();
     let shm_path = dir.path().join("xlang-shm-data-path.shm");
@@ -107,6 +106,7 @@ fn rust_segment_to_swift_guest_data_path() {
         .arg(format!("--hub-path={}", shm_path.display()))
         .arg(format!("--peer-id={}", peer_id.get()))
         .arg(format!("--doorbell-fd={guest_fd}"))
+        .arg("--size-class=4096:2")
         .arg("--scenario=data-path")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

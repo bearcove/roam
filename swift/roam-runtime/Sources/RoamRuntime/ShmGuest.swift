@@ -52,30 +52,35 @@ public enum ShmVarSlotFreeError: Error, Equatable {
     case ffiError
 }
 
+public enum ShmVarSlotPoolError: Error, Equatable {
+    case attachFailed
+}
+
 // r[impl shm.varslot]
 // r[impl shm.varslot.allocate]
 // r[impl shm.varslot.free]
 // r[impl shm.varslot.selection]
 // r[impl shm.varslot.freelist]
 public final class ShmVarSlotPool: @unchecked Sendable {
-    private static let sizeClassHeaderSize = 64
-
     private let pool: OpaquePointer
     private var region: ShmRegion
 
-    public init(region: ShmRegion, baseOffset: Int, classes: [ShmVarSlotClass]) {
+    public init(region: ShmRegion, baseOffset: Int, classes: [ShmVarSlotClass]) throws {
         self.region = region
 
         let ffiClasses = classes.map { RoamSizeClass(slot_size: $0.slotSize, count: $0.count) }
-        self.pool = ffiClasses.withUnsafeBufferPointer { buf in
+        guard let pool = ffiClasses.withUnsafeBufferPointer({ buf in
             roam_var_slot_pool_attach(
                 region.basePointer().assumingMemoryBound(to: UInt8.self),
                 UInt(region.length),
                 UInt64(baseOffset),
                 buf.baseAddress,
                 UInt(buf.count)
-            )!
+            )
+        }) else {
+            throw ShmVarSlotPoolError.attachFailed
         }
+        self.pool = pool
     }
 
     deinit {
@@ -87,28 +92,6 @@ public final class ShmVarSlotPool: @unchecked Sendable {
         return ffiClasses.withUnsafeBufferPointer { buf in
             Int(roam_var_slot_pool_calculate_size(buf.baseAddress, UInt(buf.count)))
         }
-    }
-
-    // r[impl shm.varslot.classes]
-    public static func loadClasses(region: ShmRegion, header: ShmSegmentHeader) throws -> [ShmVarSlotClass] {
-        let base = Int(header.varSlotPoolOffset)
-        let numClasses = Int(header.numVarSlotClasses)
-        guard numClasses > 0 else {
-            return []
-        }
-
-        var classes: [ShmVarSlotClass] = []
-        classes.reserveCapacity(numClasses)
-
-        for idx in 0..<numClasses {
-            let classOffset = base + idx * sizeClassHeaderSize
-            let bytes = Array(try region.mutableBytes(at: classOffset, count: sizeClassHeaderSize))
-            let slotSize = readU32LE(bytes, 0)
-            let count = readU32LE(bytes, 4)
-            classes.append(ShmVarSlotClass(slotSize: slotSize, count: count))
-        }
-
-        return classes
     }
 
     public func updateRegion(_ region: ShmRegion) {
@@ -345,6 +328,7 @@ public enum ShmGuestAttachError: Error, Equatable {
     case hostGoodbye
     case invalidTicketPeer(UInt8)
     case slotNotReserved
+    case missingVarSlotClasses
     case unsupportedVersion(UInt32)
 }
 
@@ -390,35 +374,41 @@ public final class ShmGuestRuntime: @unchecked Sendable {
 
     // r[impl shm.guest.attach]
     // r[impl shm.guest.attach-failure]
-    public static func attach(path: String) throws -> ShmGuestRuntime {
+    public static func attach(path: String, classes: [ShmVarSlotClass]) throws -> ShmGuestRuntime {
         let region = try ShmRegion.attach(path: path)
-        return try attach(region: region, ticket: nil)
+        return try attach(region: region, ticket: nil, classes: classes)
     }
 
     // r[impl shm.guest.attach]
     // r[impl shm.guest.attach-failure]
-    public static func attach(ticket: ShmBootstrapTicket) throws -> ShmGuestRuntime {
+    public static func attach(ticket: ShmBootstrapTicket, classes: [ShmVarSlotClass]) throws -> ShmGuestRuntime {
         let region: ShmRegion
         if ticket.shmFd >= 0 {
             region = try ShmRegion.attach(fd: ticket.shmFd, pathHint: ticket.hubPath)
         } else {
             region = try ShmRegion.attach(path: ticket.hubPath)
         }
-        return try attach(region: region, ticket: ticket)
+        return try attach(region: region, ticket: ticket, classes: classes)
     }
 
     // r[impl shm.guest.attach]
     // r[impl shm.guest.attach-failure]
-    private static func attach(region: ShmRegion, ticket: ShmBootstrapTicket?) throws -> ShmGuestRuntime {
+    private static func attach(
+        region: ShmRegion,
+        ticket: ShmBootstrapTicket?,
+        classes: [ShmVarSlotClass]
+    ) throws -> ShmGuestRuntime {
         let view = try ShmSegmentView(region: region)
         let header = view.header
 
         if header.hostGoodbye != 0 {
             throw ShmGuestAttachError.hostGoodbye
         }
+        if classes.isEmpty {
+            throw ShmGuestAttachError.missingVarSlotClasses
+        }
 
-        let classes = try ShmVarSlotPool.loadClasses(region: region, header: header)
-        let pool = ShmVarSlotPool(region: region, baseOffset: Int(header.varSlotPoolOffset), classes: classes)
+        let pool = try ShmVarSlotPool(region: region, baseOffset: Int(header.varSlotPoolOffset), classes: classes)
 
         let chosenPeerId: UInt8
         if let ticket {
