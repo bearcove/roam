@@ -82,7 +82,7 @@ impl ChannelSink for DriverChannelSink {
     fn send_payload<'payload>(
         &self,
         payload: Payload<'payload>,
-    ) -> Pin<Box<dyn std::future::Future<Output = Result<(), TxError>> + 'payload>> {
+    ) -> Pin<Box<dyn std::future::Future<Output = Result<(), TxError>> + Send + 'payload>> {
         let sender = self.sender.clone();
         let channel_id = self.channel_id;
         Box::pin(async move {
@@ -99,7 +99,7 @@ impl ChannelSink for DriverChannelSink {
     fn close_channel(
         &self,
         _metadata: roam_types::Metadata,
-    ) -> Pin<Box<dyn std::future::Future<Output = Result<(), TxError>> + 'static>> {
+    ) -> Pin<Box<dyn std::future::Future<Output = Result<(), TxError>> + Send + 'static>> {
         // [FIXME] ChannelSink::close_channel takes borrowed Metadata but returns 'static future.
         // We drop the borrowed metadata and send an empty one. This matches the [FIXME] in the
         // trait definition — the signature needs to be fixed to take owned metadata.

@@ -32,12 +32,16 @@ pub use roam_types::{
     ResponseParts,
     RoamError,
     RpcPlan,
+    Rx,
     SelfRef,
     ServiceDescriptor,
     SinkCall,
+    // Channels
+    Tx,
     // Channel binding (used by generated dispatcher/client code)
     bind_channels_client,
     bind_channels_server,
+    channel,
 };
 
 // Re-export the session module (generated code uses `roam::session::ServiceDescriptor`)

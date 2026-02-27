@@ -28,14 +28,12 @@ pub trait ChannelSink: Send + Sync + 'static {
     fn send_payload<'payload>(
         &self,
         payload: Payload<'payload>,
-    ) -> Pin<Box<dyn Future<Output = Result<(), TxError>> + 'payload>>;
-    // [FIXME] why Pin<Box>???
+    ) -> Pin<Box<dyn Future<Output = Result<(), TxError>> + Send + 'payload>>;
 
     fn close_channel(
         &self,
         metadata: Metadata,
-    ) -> Pin<Box<dyn Future<Output = Result<(), TxError>> + 'static>>;
-    // [FIXME] why Pin<Box>???
+    ) -> Pin<Box<dyn Future<Output = Result<(), TxError>> + Send + 'static>>;
 }
 
 /// Message delivered to an `Rx` by the driver.
