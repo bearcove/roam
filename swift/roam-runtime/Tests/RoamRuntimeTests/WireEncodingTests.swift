@@ -29,120 +29,33 @@ func assertEncoding(_ encoded: [UInt8], _ vectorPath: String) throws {
 // MARK: - Wire Protocol Tests
 
 struct WireEncodingTests {
-
-    // MARK: - Hello Tests
-
-    @Test func testHelloEncodingSmall() throws {
-        let hello = Hello.v5(maxPayloadSize: 1024, initialChannelCredit: 64, maxConcurrentRequests: 64)
-        try assertEncoding(hello.encode(), "wire/hello_v5_small.bin")
-    }
-
-    @Test func testHelloEncodingTypical() throws {
-        let hello = Hello.v5(
-            maxPayloadSize: 1_048_576,
-            initialChannelCredit: 65536,
-            maxConcurrentRequests: 64
-        )
-        try assertEncoding(hello.encode(), "wire/hello_v5_typical.bin")
-    }
-
-    // MARK: - Message Tests
-
-    @Test func testMessageHelloSmall() throws {
-        let hello = Hello.v5(maxPayloadSize: 1024, initialChannelCredit: 64, maxConcurrentRequests: 64)
-        let msg = Message.hello(hello)
-        try assertEncoding(msg.encode(), "wire/message_hello_v5_small.bin")
-    }
-
-    @Test func testMessageHelloTypical() throws {
-        let hello = Hello.v5(
-            maxPayloadSize: 1_048_576,
-            initialChannelCredit: 65536,
-            maxConcurrentRequests: 64
-        )
-        let msg = Message.hello(hello)
-        try assertEncoding(msg.encode(), "wire/message_hello_v5_typical.bin")
-    }
-
-    @Test func testMessageGoodbye() throws {
-        let msg = Message.goodbye(connId: 0, reason: "test")
-        try assertEncoding(msg.encode(), "wire/message_goodbye_conn0.bin")
-    }
-
-    @Test func testMessageRequestEmpty() throws {
-        let msg = Message.request(
-            connId: 0, requestId: 1, methodId: 42, metadata: [], channels: [], payload: [])
-        try assertEncoding(msg.encode(), "wire/message_request_empty.bin")
-    }
-
-    @Test func testMessageRequestWithPayload() throws {
-        let msg = Message.request(
-            connId: 0, requestId: 1, methodId: 42, metadata: [], channels: [], payload: [
-                0xDE, 0xAD, 0xBE, 0xEF,
-            ])
-        try assertEncoding(msg.encode(), "wire/message_request_with_payload.bin")
-    }
-
-    @Test func testMessageResponse() throws {
-        let msg = Message.response(connId: 0, requestId: 1, metadata: [], channels: [], payload: [0x42])
-        try assertEncoding(msg.encode(), "wire/message_response.bin")
-    }
-
-    @Test func testMessageCancel() throws {
-        let msg = Message.cancel(connId: 0, requestId: 99)
-        try assertEncoding(msg.encode(), "wire/message_cancel.bin")
-    }
-
-    @Test func testMessageData() throws {
-        let msg = Message.data(connId: 0, channelId: 1, payload: [1, 2, 3])
-        try assertEncoding(msg.encode(), "wire/message_data.bin")
-    }
-
-    @Test func testMessageClose() throws {
-        let msg = Message.close(connId: 0, channelId: 7)
-        try assertEncoding(msg.encode(), "wire/message_close.bin")
-    }
-
-    @Test func testMessageReset() throws {
-        let msg = Message.reset(connId: 0, channelId: 5)
-        try assertEncoding(msg.encode(), "wire/message_reset.bin")
-    }
-
-    @Test func testMessageCredit() throws {
-        let msg = Message.credit(connId: 0, channelId: 3, bytes: 4096)
-        try assertEncoding(msg.encode(), "wire/message_credit.bin")
-    }
-
-    // MARK: - Decode Tests
-
-    @Test func testMessageHelloDecode() throws {
-        let bytes = try loadGoldenVector("wire/message_hello_v5_small.bin")
-        let msg = try Message.decode(from: Data(bytes))
-        guard case .hello(let hello) = msg,
-            case .v5(let maxPayload, let initialCredit, let maxConcurrentRequests) = hello
-        else {
-            Issue.record("Expected Hello message")
+    @Test func testMessageV7HelloDecodeAndRoundtrip() throws {
+        let bytes = try loadGoldenVector("wire-v7/message_hello.bin")
+        let msg = try MessageV7.decode(from: Data(bytes))
+        guard case .hello(let hello) = msg.payload else {
+            Issue.record("Expected HelloV7 payload")
             return
         }
-        #expect(maxPayload == 1024)
-        #expect(initialCredit == 64)
-        #expect(maxConcurrentRequests == 64)
+        #expect(msg.connectionId == 0)
+        #expect(hello.version == 7)
+        #expect(hello.connectionSettings.maxConcurrentRequests == 64)
+        #expect(msg.encode() == bytes)
     }
 
-    @Test func testMessageRequestDecode() throws {
-        let bytes = try loadGoldenVector("wire/message_request_with_payload.bin")
-        let msg = try Message.decode(from: Data(bytes))
-        guard case .request(let connId, let reqId, let methodId, let meta, let channels, let payload) = msg
+    @Test func testMessageV7RequestCallDecodeAndRoundtrip() throws {
+        let bytes = try loadGoldenVector("wire-v7/message_request_call.bin")
+        let msg = try MessageV7.decode(from: Data(bytes))
+        guard case .requestMessage(let request) = msg.payload,
+            case .call(let call) = request.body
         else {
-            Issue.record("Expected Request message")
+            Issue.record("Expected RequestCall payload")
             return
         }
-        #expect(connId == 0)
-        #expect(reqId == 1)
-        #expect(methodId == 42)
-        #expect(meta.isEmpty)
-        #expect(channels.isEmpty)
-        #expect(payload == [0xDE, 0xAD, 0xBE, 0xEF])
+        #expect(msg.connectionId == 2)
+        #expect(request.id == 11)
+        #expect(call.channels == [3, 5])
+        #expect(!call.args.bytes.isEmpty)
+        #expect(msg.encode() == bytes)
     }
 }
 

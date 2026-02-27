@@ -46,21 +46,6 @@ private func responseMetadataFromRequest(_ requestMetadata: [MetadataEntryV7]) -
     return responseMetadata
 }
 
-private func toV7Metadata(_ metadata: [MetadataEntry]) -> [MetadataEntryV7] {
-    metadata.map { entry in
-        let value: MetadataValueV7
-        switch entry.value {
-        case .string(let v):
-            value = .string(v)
-        case .bytes(let v):
-            value = .bytes(v)
-        case .u64(let v):
-            value = .u64(v)
-        }
-        return MetadataEntryV7(key: entry.key, value: value, flags: entry.flags)
-    }
-}
-
 private func helloCorrelationId(_ hello: HelloV7) -> String? {
     let metadata = hello.metadata
     return metadataString(metadata, key: peepsConnectionCorrelationIdMetadataKey)
@@ -120,7 +105,7 @@ public enum HandleCommand: Sendable {
     case call(
         requestId: UInt64,
         methodId: UInt64,
-        metadata: [MetadataEntry],
+        metadata: [MetadataEntryV7],
         payload: [UInt8],
         channels: [UInt64],
         timeout: TimeInterval?,
@@ -220,7 +205,7 @@ public final class ConnectionHandle: @unchecked Sendable {
     /// r[impl flow.request.concurrent-limit] - Blocks if maxConcurrentRequests are in-flight.
     public func callRaw(
         methodId: UInt64,
-        metadata: [MetadataEntry] = [],
+        metadata: [MetadataEntryV7] = [],
         payload: [UInt8],
         channels: [UInt64] = [],
         timeout: TimeInterval? = nil
@@ -445,7 +430,7 @@ public final class Driver: @unchecked Sendable {
     private struct QueuedCall: Sendable {
         let requestId: UInt64
         let methodId: UInt64
-        let metadata: [MetadataEntry]
+        let metadata: [MetadataEntryV7]
         let payload: [UInt8]
         let channels: [UInt64]
         let timeout: TimeInterval?
@@ -673,7 +658,7 @@ public final class Driver: @unchecked Sendable {
                 connId: 0,
                 requestId: requestId,
                 methodId: methodId,
-                metadata: toV7Metadata(metadata),
+                metadata: metadata,
                 channels: channels,
                 payload: payload
             )
@@ -744,7 +729,7 @@ public final class Driver: @unchecked Sendable {
                 connId: 0,
                 requestId: call.requestId,
                 methodId: call.methodId,
-                metadata: toV7Metadata(call.metadata),
+                metadata: call.metadata,
                 channels: call.channels,
                 payload: call.payload
             )
