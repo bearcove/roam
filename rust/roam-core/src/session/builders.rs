@@ -1,7 +1,10 @@
-use moire::task::FutureExt;
+use moire::sync::mpsc;
 use roam_types::{Conduit, ConduitTx, ConnectionSettings, MessageFamily, Metadata, Parity};
 
-use super::{ConnectionHandle, Session, SessionError};
+use super::{
+    CloseRequest, ConnectionAcceptor, ConnectionHandle, OpenRequest, Session, SessionError,
+    SessionHandle,
+};
 
 // r[impl rpc.session-setup]
 // r[impl session.role]
@@ -18,6 +21,7 @@ pub struct SessionInitiatorBuilder<'a, C> {
     conduit: C,
     root_settings: ConnectionSettings,
     metadata: Metadata<'a>,
+    on_connection: Option<Box<dyn ConnectionAcceptor>>,
 }
 
 impl<'a, C> SessionInitiatorBuilder<'a, C> {
@@ -29,6 +33,7 @@ impl<'a, C> SessionInitiatorBuilder<'a, C> {
                 max_concurrent_requests: 64,
             },
             metadata: vec![],
+            on_connection: None,
         }
     }
 
@@ -52,7 +57,14 @@ impl<'a, C> SessionInitiatorBuilder<'a, C> {
         self
     }
 
-    pub async fn establish(self) -> Result<(Session<C>, ConnectionHandle), SessionError>
+    pub fn on_connection(mut self, acceptor: impl ConnectionAcceptor) -> Self {
+        self.on_connection = Some(Box::new(acceptor));
+        self
+    }
+
+    pub async fn establish(
+        self,
+    ) -> Result<(Session<C>, ConnectionHandle, SessionHandle), SessionError>
     where
         C: Conduit<Msg = MessageFamily>,
         C::Tx: Send + Sync + 'static,
@@ -60,11 +72,14 @@ impl<'a, C> SessionInitiatorBuilder<'a, C> {
         C::Rx: Send,
     {
         let (tx, rx) = self.conduit.split();
-        let mut session = Session::pre_handshake(tx, rx);
+        let (open_tx, open_rx) = mpsc::channel::<OpenRequest>("session.open", 4);
+        let (close_tx, close_rx) = mpsc::channel::<CloseRequest>("session.close", 4);
+        let mut session = Session::pre_handshake(tx, rx, self.on_connection, open_rx, close_rx);
         let handle = session
             .establish_as_initiator(self.root_settings, self.metadata)
             .await?;
-        Ok((session, handle))
+        let session_handle = SessionHandle { open_tx, close_tx };
+        Ok((session, handle, session_handle))
     }
 }
 
@@ -72,6 +87,7 @@ pub struct SessionAcceptorBuilder<'a, C> {
     conduit: C,
     root_settings: ConnectionSettings,
     metadata: Metadata<'a>,
+    on_connection: Option<Box<dyn ConnectionAcceptor>>,
 }
 
 impl<'a, C> SessionAcceptorBuilder<'a, C> {
@@ -83,6 +99,7 @@ impl<'a, C> SessionAcceptorBuilder<'a, C> {
                 max_concurrent_requests: 64,
             },
             metadata: vec![],
+            on_connection: None,
         }
     }
 
@@ -101,8 +118,15 @@ impl<'a, C> SessionAcceptorBuilder<'a, C> {
         self
     }
 
+    pub fn on_connection(mut self, acceptor: impl ConnectionAcceptor) -> Self {
+        self.on_connection = Some(Box::new(acceptor));
+        self
+    }
+
     #[moire::instrument]
-    pub async fn establish(self) -> Result<(Session<C>, ConnectionHandle), SessionError>
+    pub async fn establish(
+        self,
+    ) -> Result<(Session<C>, ConnectionHandle, SessionHandle), SessionError>
     where
         C: Conduit<Msg = MessageFamily>,
         C::Tx: Send + Sync + 'static,
@@ -110,10 +134,13 @@ impl<'a, C> SessionAcceptorBuilder<'a, C> {
         C::Rx: Send,
     {
         let (tx, rx) = self.conduit.split();
-        let mut session = Session::pre_handshake(tx, rx);
+        let (open_tx, open_rx) = mpsc::channel::<OpenRequest>("session.open", 4);
+        let (close_tx, close_rx) = mpsc::channel::<CloseRequest>("session.close", 4);
+        let mut session = Session::pre_handshake(tx, rx, self.on_connection, open_rx, close_rx);
         let handle = session
             .establish_as_acceptor(self.root_settings, self.metadata)
             .await?;
-        Ok((session, handle))
+        let session_handle = SessionHandle { open_tx, close_tx };
+        Ok((session, handle, session_handle))
     }
 }

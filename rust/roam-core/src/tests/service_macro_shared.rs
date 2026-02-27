@@ -43,7 +43,7 @@ pub async fn run_adder_end_to_end<L>(
 
     let server_task = moire::task::spawn(
         async move {
-            let (mut server_session, server_handle) = acceptor(server_conduit)
+            let (mut server_session, server_handle, _sh) = acceptor(server_conduit)
                 .establish()
                 .await
                 .expect("server handshake failed");
@@ -55,7 +55,7 @@ pub async fn run_adder_end_to_end<L>(
         .named("server_setup"),
     );
 
-    let (mut client_session, client_handle) = initiator(client_conduit)
+    let (mut client_session, client_handle, _sh) = initiator(client_conduit)
         .establish()
         .await
         .expect("client handshake failed");

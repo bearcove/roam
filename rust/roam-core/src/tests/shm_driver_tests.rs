@@ -64,7 +64,7 @@ async fn echo_call_across_shm_link() {
 
     let server_task = moire::task::spawn(
         async move {
-            let (mut server_session, server_handle) = acceptor(server_conduit)
+            let (mut server_session, server_handle, _sh) = acceptor(server_conduit)
                 .establish()
                 .await
                 .expect("server handshake failed");
@@ -75,7 +75,7 @@ async fn echo_call_across_shm_link() {
         .named("server_setup"),
     );
 
-    let (mut client_session, client_handle) = initiator(client_conduit)
+    let (mut client_session, client_handle, _sh) = initiator(client_conduit)
         .establish()
         .await
         .expect("client handshake failed");
@@ -137,7 +137,7 @@ async fn echo_blob_stress_over_shm_link() {
 
     let server_task = moire::task::spawn(
         async move {
-            let (mut server_session, server_handle) = acceptor(server_conduit)
+            let (mut server_session, server_handle, _sh) = acceptor(server_conduit)
                 .establish()
                 .await
                 .expect("server handshake failed");
@@ -148,7 +148,7 @@ async fn echo_blob_stress_over_shm_link() {
         .named("server_setup"),
     );
 
-    let (mut client_session, client_handle) = initiator(client_conduit)
+    let (mut client_session, client_handle, _sh) = initiator(client_conduit)
         .establish()
         .await
         .expect("client handshake failed");

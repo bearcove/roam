@@ -83,7 +83,7 @@ mod roam_bench {
 
         let server_task = moire::task::spawn(
             async move {
-                let (mut server_session, server_handle) = acceptor(server_conduit)
+                let (mut server_session, server_handle, _sh) = acceptor(server_conduit)
                     .establish()
                     .await
                     .expect("server handshake failed");
@@ -97,7 +97,7 @@ mod roam_bench {
             .named("server_setup"),
         );
 
-        let (mut client_session, client_handle) = initiator(client_conduit)
+        let (mut client_session, client_handle, _sh) = initiator(client_conduit)
             .establish()
             .await
             .expect("client handshake failed");
@@ -191,7 +191,7 @@ mod roam_shm_bench {
 
         let server_task = moire::task::spawn(
             async move {
-                let (mut server_session, server_handle) = acceptor(server_conduit)
+                let (mut server_session, server_handle, _sh) = acceptor(server_conduit)
                     .establish()
                     .await
                     .expect("server handshake failed");
@@ -205,7 +205,7 @@ mod roam_shm_bench {
             .named("server_setup"),
         );
 
-        let (mut client_session, client_handle) = initiator(client_conduit)
+        let (mut client_session, client_handle, _sh) = initiator(client_conduit)
             .establish()
             .await
             .expect("client handshake failed");
@@ -293,7 +293,7 @@ mod roam_tcp_bench {
                 let (stream, _) = listener.accept().await.unwrap();
                 stream.set_nodelay(true).unwrap();
                 let server_conduit: MessageConduit = BareConduit::new(StreamLink::tcp(stream));
-                let (mut server_session, server_handle) = acceptor(server_conduit)
+                let (mut server_session, server_handle, _sh) = acceptor(server_conduit)
                     .establish()
                     .await
                     .expect("server handshake failed");
@@ -311,7 +311,7 @@ mod roam_tcp_bench {
         stream.set_nodelay(true).unwrap();
         let client_conduit: MessageConduit = BareConduit::new(StreamLink::tcp(stream));
 
-        let (mut client_session, client_handle) = initiator(client_conduit)
+        let (mut client_session, client_handle, _sh) = initiator(client_conduit)
             .establish()
             .await
             .expect("client handshake failed");
