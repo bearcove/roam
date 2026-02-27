@@ -17,7 +17,6 @@ pub mod server;
 pub mod types;
 
 use crate::code_writer::CodeWriter;
-use roam_schema::ServiceDetail;
 use roam_types::{MethodDescriptor, ServiceDescriptor};
 
 pub use client::generate_client;
@@ -51,7 +50,6 @@ pub fn generate_method_ids(methods: &[&MethodDescriptor]) -> String {
 ///
 /// This is the main entry point for TypeScript code generation.
 pub fn generate_service(service: &ServiceDescriptor) -> String {
-    let service = crate::to_service_detail(service);
     use crate::code_writer::CodeWriter;
     use crate::{cw_writeln, render::hex_u64};
     use heck::ToLowerCamelCase;
@@ -76,7 +74,7 @@ pub fn generate_service(service: &ServiceDescriptor) -> String {
     cw_writeln!(w, "export const METHOD_ID = {{").unwrap();
     {
         let _indent = w.indent();
-        for method in &service.methods {
+        for method in service.methods {
             let id = crate::method_id(method);
             let method_name = method.method_name.to_lower_camel_case();
             cw_writeln!(w, "{method_name}: {}n,", hex_u64(id)).unwrap();
@@ -108,22 +106,22 @@ pub fn generate_service(service: &ServiceDescriptor) -> String {
 ///
 /// Uses namespace imports for postcard encoding functions to avoid tracking
 /// which specific functions are used. The bundler will tree-shake unused exports.
-fn generate_imports(service: &ServiceDetail, w: &mut CodeWriter<&mut String>) {
+fn generate_imports(service: &ServiceDescriptor, w: &mut CodeWriter<&mut String>) {
     use crate::cw_writeln;
-    use roam_schema::{classify_shape, is_rx, is_tx, ShapeKind};
+    use roam_types::{ShapeKind, classify_shape, is_rx, is_tx};
 
     // Check if any method uses channels
     let has_streaming = service.methods.iter().any(|m| {
-        m.args.iter().any(|a| is_tx(a.ty) || is_rx(a.ty))
-            || is_tx(m.return_type)
-            || is_rx(m.return_type)
+        m.args.iter().any(|a| is_tx(a.shape) || is_rx(a.shape))
+            || is_tx(m.return_shape)
+            || is_rx(m.return_shape)
     });
 
     // Check if any method returns Result<T, E> (fallible methods)
     let has_fallible = service
         .methods
         .iter()
-        .any(|m| matches!(classify_shape(m.return_type), ShapeKind::Result { .. }));
+        .any(|m| matches!(classify_shape(m.return_shape), ShapeKind::Result { .. }));
 
     // Type imports
     cw_writeln!(
@@ -167,7 +165,7 @@ fn generate_imports(service: &ServiceDetail, w: &mut CodeWriter<&mut String>) {
 
 /// Generate request/response type aliases, skipping any that conflict with named types
 fn generate_request_response_types(
-    service: &ServiceDetail,
+    service: &ServiceDescriptor,
     named_types: &[(String, &'static facet_core::Shape)],
 ) -> String {
     use heck::ToUpperCamelCase;
@@ -180,7 +178,7 @@ fn generate_request_response_types(
     let mut out = String::new();
     out.push_str("// Request/Response type aliases\n");
 
-    for method in &service.methods {
+    for method in service.methods {
         let method_name = method.method_name.to_upper_camel_case();
         let request_name = format!("{method_name}Request");
         let response_name = format!("{method_name}Response");
@@ -190,12 +188,12 @@ fn generate_request_response_types(
             if method.args.is_empty() {
                 out.push_str(&format!("export type {request_name} = [];\n"));
             } else if method.args.len() == 1 {
-                let ty = ts_type(method.args[0].ty);
+                let ty = ts_type(method.args[0].shape);
                 out.push_str(&format!("export type {request_name} = [{ty}];\n"));
             } else {
                 out.push_str(&format!("export type {request_name} = [\n"));
-                for arg in &method.args {
-                    let ty = ts_type(arg.ty);
+                for arg in method.args {
+                    let ty = ts_type(arg.shape);
                     out.push_str(&format!("  {ty}, // {}\n", arg.name));
                 }
                 out.push_str("];\n");
@@ -204,7 +202,7 @@ fn generate_request_response_types(
 
         // Only generate response type alias if it doesn't conflict with a named type
         if !type_names.contains(response_name.as_str()) {
-            let ret_ty = ts_type(method.return_type);
+            let ret_ty = ts_type(method.return_shape);
             out.push_str(&format!("export type {response_name} = {ret_ty};\n"));
         }
 

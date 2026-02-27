@@ -13,9 +13,9 @@
 
 use facet_core::{ScalarType, Shape};
 use heck::ToLowerCamelCase;
-use roam_schema::{
-    EnumInfo, ServiceDetail, ShapeKind, StructInfo, VariantKind, classify_shape, classify_variant,
-    is_bytes, is_rx, is_tx,
+use roam_types::{
+    EnumInfo, ServiceDescriptor, ShapeKind, StructInfo, VariantKind, classify_shape,
+    classify_variant, is_bytes, is_rx, is_tx,
 };
 
 /// Generate a TypeScript Schema object literal for a type.
@@ -171,28 +171,32 @@ fn generate_scalar_schema(scalar: ScalarType) -> String {
 /// For infallible methods returning `T`:
 /// - `returns` is the schema for `T`
 /// - `error` is null
-pub fn generate_method_schemas(service: &ServiceDetail) -> String {
+pub fn generate_method_schemas(service: &ServiceDescriptor) -> String {
     let mut out = String::new();
-    let service_name_lower = service.name.to_lower_camel_case();
+    let service_name_lower = service.service_name.to_lower_camel_case();
 
     out.push_str("// Method schemas for runtime encoding/decoding and channel binding\n");
     out.push_str(&format!(
         "export const {service_name_lower}_schemas: Record<string, MethodSchema> = {{\n"
     ));
 
-    for method in &service.methods {
+    for method in service.methods {
         let method_name = method.method_name.to_lower_camel_case();
-        let arg_schemas: Vec<_> = method.args.iter().map(|a| generate_schema(a.ty)).collect();
+        let arg_schemas: Vec<_> = method
+            .args
+            .iter()
+            .map(|a| generate_schema(a.shape))
+            .collect();
 
         // Check if return type is Result<T, E>
-        let (return_schema, error_schema) = match classify_shape(method.return_type) {
+        let (return_schema, error_schema) = match classify_shape(method.return_shape) {
             ShapeKind::Result { ok, err } => {
                 // For Result<T, E>: returns is T, error is E
                 (generate_schema(ok), generate_schema(err))
             }
             _ => {
                 // Infallible method: returns is the full type, no error schema
-                (generate_schema(method.return_type), "null".to_string())
+                (generate_schema(method.return_shape), "null".to_string())
             }
         };
 
@@ -210,9 +214,9 @@ pub fn generate_method_schemas(service: &ServiceDetail) -> String {
 
 /// Generate BindingSerializers for runtime channel binding.
 /// These provide encode/decode functions based on schema element types.
-pub fn generate_binding_serializers(service: &ServiceDetail) -> String {
+pub fn generate_binding_serializers(service: &ServiceDescriptor) -> String {
     let mut out = String::new();
-    let service_name_lower = service.name.to_lower_camel_case();
+    let service_name_lower = service.service_name.to_lower_camel_case();
 
     out.push_str("// Serializers for runtime channel binding\n");
     out.push_str(&format!(
@@ -268,7 +272,7 @@ pub fn generate_binding_serializers(service: &ServiceDetail) -> String {
 }
 
 /// Generate complete schema exports (method schemas + serializers).
-pub fn generate_schemas(service: &ServiceDetail) -> String {
+pub fn generate_schemas(service: &ServiceDescriptor) -> String {
     let mut out = String::new();
 
     // Generate method schemas
@@ -276,9 +280,9 @@ pub fn generate_schemas(service: &ServiceDetail) -> String {
 
     // Check if any method uses channels
     let has_streaming = service.methods.iter().any(|m| {
-        m.args.iter().any(|a| is_tx(a.ty) || is_rx(a.ty))
-            || is_tx(m.return_type)
-            || is_rx(m.return_type)
+        m.args.iter().any(|a| is_tx(a.shape) || is_rx(a.shape))
+            || is_tx(m.return_shape)
+            || is_rx(m.return_shape)
     });
 
     // Generate serializers only if channels are used

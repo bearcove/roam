@@ -4,16 +4,16 @@
 
 use facet_core::{ScalarType, Shape};
 use heck::{ToLowerCamelCase, ToUpperCamelCase};
-use roam_schema::{
-    EnumInfo, ServiceDetail, ShapeKind, StructInfo, VariantKind, classify_shape, classify_variant,
-    is_bytes,
+use roam_types::{
+    EnumInfo, ServiceDescriptor, ShapeKind, StructInfo, VariantKind, classify_shape,
+    classify_variant, is_bytes,
 };
 
 use crate::code_writer::CodeWriter;
 use crate::cw_writeln;
 
 /// Generate complete schema code (method schemas + serializers).
-pub fn generate_schemas(service: &ServiceDetail) -> String {
+pub fn generate_schemas(service: &ServiceDescriptor) -> String {
     let mut out = String::new();
     out.push_str(&generate_method_schemas(service));
     out.push_str(&generate_serializers(service));
@@ -21,19 +21,23 @@ pub fn generate_schemas(service: &ServiceDetail) -> String {
 }
 
 /// Generate method schemas for runtime channel binding.
-fn generate_method_schemas(service: &ServiceDetail) -> String {
+fn generate_method_schemas(service: &ServiceDescriptor) -> String {
     let mut out = String::new();
-    let service_name = service.name.to_lower_camel_case();
+    let service_name = service.service_name.to_lower_camel_case();
 
     out.push_str(&format!(
         "public let {service_name}_schemas: [String: MethodSchema] = [\n"
     ));
 
-    for method in &service.methods {
+    for method in service.methods {
         let method_name = method.method_name.to_lower_camel_case();
         out.push_str(&format!("    \"{method_name}\": MethodSchema(args: ["));
 
-        let schemas: Vec<String> = method.args.iter().map(|a| shape_to_schema(a.ty)).collect();
+        let schemas: Vec<String> = method
+            .args
+            .iter()
+            .map(|a| shape_to_schema(a.shape))
+            .collect();
         out.push_str(&schemas.join(", "));
 
         out.push_str("]),\n");
@@ -117,10 +121,10 @@ fn shape_to_schema(shape: &'static Shape) -> String {
 }
 
 /// Generate serializers for runtime channel binding.
-fn generate_serializers(service: &ServiceDetail) -> String {
+fn generate_serializers(service: &ServiceDescriptor) -> String {
     let mut out = String::new();
     let mut w = CodeWriter::with_indent_spaces(&mut out, 4);
-    let service_name_upper = service.name.to_upper_camel_case();
+    let service_name_upper = service.service_name.to_upper_camel_case();
 
     cw_writeln!(
         w,

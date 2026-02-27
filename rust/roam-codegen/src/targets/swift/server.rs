@@ -4,7 +4,7 @@
 
 use facet_core::Shape;
 use heck::{ToLowerCamelCase, ToUpperCamelCase};
-use roam_schema::{MethodDetail, ServiceDetail, ShapeKind, classify_shape, is_rx, is_tx};
+use roam_types::{MethodDescriptor, ServiceDescriptor, ShapeKind, classify_shape, is_rx, is_tx};
 
 use super::decode::{generate_decode_stmt_with_cursor, generate_inline_decode};
 use super::encode::generate_encode_closure;
@@ -18,7 +18,7 @@ fn dispatch_helper_name(method_name: &str) -> String {
 }
 
 /// Generate complete server code (handler protocol + dispatchers).
-pub fn generate_server(service: &ServiceDetail) -> String {
+pub fn generate_server(service: &ServiceDescriptor) -> String {
     let mut out = String::new();
     out.push_str(&generate_handler_protocol(service));
     // Emit only the channel-capable dispatcher.
@@ -27,16 +27,16 @@ pub fn generate_server(service: &ServiceDetail) -> String {
 }
 
 /// Generate handler protocol (for handling incoming calls).
-fn generate_handler_protocol(service: &ServiceDetail) -> String {
+fn generate_handler_protocol(service: &ServiceDescriptor) -> String {
     let mut out = String::new();
-    let service_name = service.name.to_upper_camel_case();
+    let service_name = service.service_name.to_upper_camel_case();
 
     if let Some(doc) = &service.doc {
         out.push_str(&format_doc(doc, ""));
     }
     out.push_str(&format!("public protocol {service_name}Handler {{\n"));
 
-    for method in &service.methods {
+    for method in service.methods {
         let method_name = method.method_name.to_lower_camel_case();
 
         if let Some(doc) = &method.doc {
@@ -51,12 +51,12 @@ fn generate_handler_protocol(service: &ServiceDetail) -> String {
                 format!(
                     "{}: {}",
                     a.name.to_lower_camel_case(),
-                    swift_type_server_arg(a.ty)
+                    swift_type_server_arg(a.shape)
                 )
             })
             .collect();
 
-        let ret_type = swift_type_server_return(method.return_type);
+        let ret_type = swift_type_server_return(method.return_shape);
 
         if ret_type == "Void" {
             out.push_str(&format!(
@@ -77,10 +77,10 @@ fn generate_handler_protocol(service: &ServiceDetail) -> String {
 
 #[cfg(test)]
 /// Generate dispatcher for handling incoming calls.
-fn generate_dispatcher(service: &ServiceDetail) -> String {
+fn generate_dispatcher(service: &ServiceDescriptor) -> String {
     let mut out = String::new();
     let mut w = CodeWriter::with_indent_spaces(&mut out, 4);
-    let service_name = service.name.to_upper_camel_case();
+    let service_name = service.service_name.to_upper_camel_case();
 
     cw_writeln!(w, "public final class {service_name}Dispatcher {{").unwrap();
     {
@@ -101,7 +101,7 @@ fn generate_dispatcher(service: &ServiceDetail) -> String {
         {
             let _indent = w.indent();
             w.writeln("switch methodId {").unwrap();
-            for method in &service.methods {
+            for method in service.methods {
                 let method_name = method.method_name.to_lower_camel_case();
                 let method_id = crate::method_id(method);
                 let dispatch_name = dispatch_helper_name(&method_name);
@@ -115,7 +115,7 @@ fn generate_dispatcher(service: &ServiceDetail) -> String {
         w.writeln("}").unwrap();
 
         // Individual dispatch methods
-        for method in &service.methods {
+        for method in service.methods {
             w.blank_line().unwrap();
             generate_dispatch_method(&mut w, method);
         }
@@ -128,11 +128,11 @@ fn generate_dispatcher(service: &ServiceDetail) -> String {
 
 #[cfg(test)]
 /// Generate a single dispatch method for non-channeling dispatcher.
-fn generate_dispatch_method(w: &mut CodeWriter<&mut String>, method: &MethodDetail) {
+fn generate_dispatch_method(w: &mut CodeWriter<&mut String>, method: &MethodDescriptor) {
     let method_name = method.method_name.to_lower_camel_case();
     let dispatch_name = dispatch_helper_name(&method_name);
     let has_channeling =
-        method.args.iter().any(|a| is_channel(a.ty)) || is_channel(method.return_type);
+        method.args.iter().any(|a| is_channel(a.shape)) || is_channel(method.return_shape);
 
     cw_writeln!(
         w,
@@ -159,7 +159,7 @@ fn generate_dispatch_method(w: &mut CodeWriter<&mut String>, method: &MethodDeta
                 })
                 .collect();
 
-            let ret_type = swift_type_server_return(method.return_type);
+            let ret_type = swift_type_server_return(method.return_shape);
 
             if ret_type == "Void" {
                 cw_writeln!(
@@ -176,7 +176,7 @@ fn generate_dispatch_method(w: &mut CodeWriter<&mut String>, method: &MethodDeta
                     arg_names.join(", ")
                 )
                 .unwrap();
-                let encode_closure = generate_encode_closure(method.return_type);
+                let encode_closure = generate_encode_closure(method.return_shape);
                 cw_writeln!(
                     w,
                     "return Data(encodeResultOk(result, encoder: {encode_closure}))"
@@ -190,7 +190,7 @@ fn generate_dispatch_method(w: &mut CodeWriter<&mut String>, method: &MethodDeta
 
 #[cfg(test)]
 /// Generate code to decode method arguments (for dispatcher).
-fn generate_decode_args(w: &mut CodeWriter<&mut String>, args: &[roam_schema::ArgDetail]) {
+fn generate_decode_args(w: &mut CodeWriter<&mut String>, args: &[roam_types::ArgDescriptor]) {
     if args.is_empty() {
         w.writeln("// No arguments to decode").unwrap();
         return;
@@ -200,7 +200,7 @@ fn generate_decode_args(w: &mut CodeWriter<&mut String>, args: &[roam_schema::Ar
     cw_writeln!(w, "var {cursor_var} = 0").unwrap();
     for arg in args {
         let arg_name = arg.name.to_lower_camel_case();
-        let decode_stmt = generate_decode_stmt_with_cursor(arg.ty, &arg_name, "", &cursor_var);
+        let decode_stmt = generate_decode_stmt_with_cursor(arg.shape, &arg_name, "", &cursor_var);
         for line in decode_stmt.lines() {
             w.writeln(line).unwrap();
         }
@@ -208,10 +208,10 @@ fn generate_decode_args(w: &mut CodeWriter<&mut String>, args: &[roam_schema::Ar
 }
 
 /// Generate channeling dispatcher for handling incoming calls with channel support.
-fn generate_channeling_dispatcher(service: &ServiceDetail) -> String {
+fn generate_channeling_dispatcher(service: &ServiceDescriptor) -> String {
     let mut out = String::new();
     let mut w = CodeWriter::with_indent_spaces(&mut out, 4);
-    let service_name = service.name.to_upper_camel_case();
+    let service_name = service.service_name.to_upper_camel_case();
 
     cw_writeln!(
         w,
@@ -248,7 +248,7 @@ fn generate_channeling_dispatcher(service: &ServiceDetail) -> String {
         {
             let _indent = w.indent();
             w.writeln("switch methodId {").unwrap();
-            for method in &service.methods {
+            for method in service.methods {
                 let method_name = method.method_name.to_lower_camel_case();
                 let method_id = crate::method_id(method);
                 let dispatch_name = dispatch_helper_name(&method_name);
@@ -274,7 +274,7 @@ fn generate_channeling_dispatcher(service: &ServiceDetail) -> String {
         w.blank_line().unwrap();
 
         // Individual dispatch methods
-        for method in &service.methods {
+        for method in service.methods {
             generate_channeling_dispatch_method(&mut w, method);
             w.blank_line().unwrap();
         }
@@ -286,7 +286,7 @@ fn generate_channeling_dispatcher(service: &ServiceDetail) -> String {
 }
 
 /// Generate preregisterChannels method.
-fn generate_preregister_channels(w: &mut CodeWriter<&mut String>, service: &ServiceDetail) {
+fn generate_preregister_channels(w: &mut CodeWriter<&mut String>, service: &ServiceDescriptor) {
     w.writeln("/// Pre-register Rx channel IDs from request channels.")
         .unwrap();
     w.writeln("/// Call this synchronously before spawning the dispatch task to avoid")
@@ -299,15 +299,15 @@ fn generate_preregister_channels(w: &mut CodeWriter<&mut String>, service: &Serv
         let _indent = w.indent();
         w.writeln("switch methodId {").unwrap();
 
-        for method in &service.methods {
+        for method in service.methods {
             let method_id = crate::method_id(method);
-            let has_rx_args = method.args.iter().any(|a| is_rx(a.ty));
+            let has_rx_args = method.args.iter().any(|a| is_rx(a.shape));
 
             if has_rx_args {
                 let channel_arg_count = method
                     .args
                     .iter()
-                    .filter(|a| is_rx(a.ty) || is_tx(a.ty))
+                    .filter(|a| is_rx(a.shape) || is_tx(a.shape))
                     .count();
                 cw_writeln!(w, "case {}:", hex_u64(method_id)).unwrap();
                 cw_writeln!(w, "    guard channels.count >= {channel_arg_count} else {{").unwrap();
@@ -316,16 +316,16 @@ fn generate_preregister_channels(w: &mut CodeWriter<&mut String>, service: &Serv
                 w.writeln("    var channelCursor = 0").unwrap();
 
                 // Channel IDs are provided in declaration order.
-                for arg in &method.args {
+                for arg in method.args {
                     let arg_name = arg.name.to_lower_camel_case();
-                    if is_rx(arg.ty) {
+                    if is_rx(arg.shape) {
                         // Schema Rx = client sends, server receives → need to preregister
                         cw_writeln!(w, "    let {arg_name}ChannelId = channels[channelCursor]")
                             .unwrap();
                         w.writeln("    channelCursor += 1").unwrap();
                         cw_writeln!(w, "    await registry.markKnown({arg_name}ChannelId)")
                             .unwrap();
-                    } else if is_tx(arg.ty) {
+                    } else if is_tx(arg.shape) {
                         cw_writeln!(w, "    _ = channels[channelCursor] // {arg_name}").unwrap();
                         w.writeln("    channelCursor += 1").unwrap();
                     }
@@ -341,11 +341,11 @@ fn generate_preregister_channels(w: &mut CodeWriter<&mut String>, service: &Serv
 }
 
 /// Generate a single channeling dispatch method.
-fn generate_channeling_dispatch_method(w: &mut CodeWriter<&mut String>, method: &MethodDetail) {
+fn generate_channeling_dispatch_method(w: &mut CodeWriter<&mut String>, method: &MethodDescriptor) {
     let method_name = method.method_name.to_lower_camel_case();
     let dispatch_name = dispatch_helper_name(&method_name);
     let has_channeling =
-        method.args.iter().any(|a| is_channel(a.ty)) || is_channel(method.return_type);
+        method.args.iter().any(|a| is_channel(a.shape)) || is_channel(method.return_shape);
 
     cw_writeln!(
         w,
@@ -357,8 +357,11 @@ fn generate_channeling_dispatch_method(w: &mut CodeWriter<&mut String>, method: 
         w.writeln("do {").unwrap();
         {
             let _indent = w.indent();
-            let has_payload_args = method.args.iter().any(|a| !is_rx(a.ty) && !is_tx(a.ty));
-            let has_channel_args = method.args.iter().any(|a| is_rx(a.ty) || is_tx(a.ty));
+            let has_payload_args = method
+                .args
+                .iter()
+                .any(|a| !is_rx(a.shape) && !is_tx(a.shape));
+            let has_channel_args = method.args.iter().any(|a| is_rx(a.shape) || is_tx(a.shape));
             let cursor_var = if has_payload_args {
                 let name = unique_decode_cursor_name(&method.args);
                 cw_writeln!(w, "var {name} = 0").unwrap();
@@ -371,12 +374,12 @@ fn generate_channeling_dispatch_method(w: &mut CodeWriter<&mut String>, method: 
             }
 
             // Decode arguments - channel IDs come from Request.channels.
-            for arg in &method.args {
+            for arg in method.args {
                 let arg_name = arg.name.to_lower_camel_case();
                 generate_channeling_decode_arg(
                     w,
                     &arg_name,
-                    arg.ty,
+                    arg.shape,
                     cursor_var.as_deref(),
                     "channels",
                     Some("channelCursor"),
@@ -393,7 +396,7 @@ fn generate_channeling_dispatch_method(w: &mut CodeWriter<&mut String>, method: 
                 })
                 .collect();
 
-            let ret_type = swift_type_server_return(method.return_type);
+            let ret_type = swift_type_server_return(method.return_shape);
 
             if has_channeling {
                 // For channeling methods, close any Tx channels after handler completes
@@ -414,8 +417,8 @@ fn generate_channeling_dispatch_method(w: &mut CodeWriter<&mut String>, method: 
                 }
 
                 // Close any Tx channels
-                for arg in &method.args {
-                    if is_tx(arg.ty) {
+                for arg in method.args {
+                    if is_tx(arg.shape) {
                         let arg_name = arg.name.to_lower_camel_case();
                         cw_writeln!(w, "{arg_name}.close()").unwrap();
                     }
@@ -425,7 +428,7 @@ fn generate_channeling_dispatch_method(w: &mut CodeWriter<&mut String>, method: 
                 if ret_type == "Void" {
                     w.writeln("taskSender(.response(requestId: requestId, payload: encodeResultOk((), encoder: { _ in [] })))").unwrap();
                 } else {
-                    let encode_closure = generate_encode_closure(method.return_type);
+                    let encode_closure = generate_encode_closure(method.return_shape);
                     cw_writeln!(
                         w,
                         "taskSender(.response(requestId: requestId, payload: encodeResultOk(result, encoder: {encode_closure})))"
@@ -450,7 +453,7 @@ fn generate_channeling_dispatch_method(w: &mut CodeWriter<&mut String>, method: 
                     )
                     .unwrap();
                     // Check if return type is Result<T, E> - if so, encode as Result<T, RoamError<User(E)>>
-                    if let ShapeKind::Result { ok, err } = classify_shape(method.return_type) {
+                    if let ShapeKind::Result { ok, err } = classify_shape(method.return_shape) {
                         let ok_encode = generate_encode_closure(ok);
                         let err_encode = generate_encode_closure(err);
                         // Wire format: [0] + T for success, [1, 0] + E for User error
@@ -460,7 +463,7 @@ fn generate_channeling_dispatch_method(w: &mut CodeWriter<&mut String>, method: 
                         )
                         .unwrap();
                     } else {
-                        let encode_closure = generate_encode_closure(method.return_type);
+                        let encode_closure = generate_encode_closure(method.return_shape);
                         cw_writeln!(
                             w,
                             "taskSender(.response(requestId: requestId, payload: encodeResultOk(result, encoder: {encode_closure})))"
@@ -558,7 +561,7 @@ fn generate_channeling_decode_arg(
     }
 }
 
-fn unique_decode_cursor_name(args: &[roam_schema::ArgDetail]) -> String {
+fn unique_decode_cursor_name(args: &[roam_types::ArgDescriptor]) -> String {
     let arg_names: Vec<String> = args.iter().map(|a| a.name.to_lower_camel_case()).collect();
     let mut candidate = String::from("cursor");
     while arg_names.iter().any(|name| name == &candidate) {

@@ -3,7 +3,7 @@
 //! Generates client interface and implementation for making RPC calls.
 
 use heck::{ToLowerCamelCase, ToUpperCamelCase};
-use roam_schema::{ServiceDetail, ShapeKind, classify_shape, is_rx, is_tx};
+use roam_types::{ServiceDescriptor, ShapeKind, classify_shape, is_rx, is_tx};
 
 use super::types::{ts_type_client_arg, ts_type_client_return};
 
@@ -37,14 +37,14 @@ fn format_doc_comment(doc: &str, indent: &str) -> String {
 /// Generate caller interface (for making calls to the service).
 ///
 /// r[impl channeling.caller-pov] - Caller uses Tx for args, Rx for returns.
-pub fn generate_caller_interface(service: &ServiceDetail) -> String {
+pub fn generate_caller_interface(service: &ServiceDescriptor) -> String {
     let mut out = String::new();
-    let service_name = service.name.to_upper_camel_case();
+    let service_name = service.service_name.to_upper_camel_case();
 
     out.push_str(&format!("// Caller interface for {service_name}\n"));
     out.push_str(&format!("export interface {service_name}Caller {{\n"));
 
-    for method in &service.methods {
+    for method in service.methods {
         let method_name = method.method_name.to_lower_camel_case();
         // Caller args: Tx stays Tx, Rx stays Rx
         let args = method
@@ -54,13 +54,13 @@ pub fn generate_caller_interface(service: &ServiceDetail) -> String {
                 format!(
                     "{}: {}",
                     a.name.to_lower_camel_case(),
-                    ts_type_client_arg(a.ty)
+                    ts_type_client_arg(a.shape)
                 )
             })
             .collect::<Vec<_>>()
             .join(", ");
         // Caller returns - CallBuilder for fluent API with metadata support
-        let ret_ty = ts_type_client_return(method.return_type);
+        let ret_ty = ts_type_client_return(method.return_shape);
 
         if let Some(doc) = &method.doc {
             out.push_str(&format_doc_comment(doc, "  "));
@@ -78,12 +78,12 @@ pub fn generate_caller_interface(service: &ServiceDetail) -> String {
 ///
 /// Uses schema-driven encoding/decoding via `encodeWithSchema`/`decodeWithSchema`.
 /// Returns CallBuilder for fluent metadata API.
-pub fn generate_client_impl(service: &ServiceDetail) -> String {
+pub fn generate_client_impl(service: &ServiceDescriptor) -> String {
     use crate::render::hex_u64;
 
     let mut out = String::new();
-    let service_name = service.name.to_upper_camel_case();
-    let service_name_lower = service.name.to_lower_camel_case();
+    let service_name = service.service_name.to_upper_camel_case();
+    let service_name_lower = service.service_name.to_lower_camel_case();
 
     out.push_str(&format!("// Client implementation for {service_name}\n"));
     out.push_str(&format!(
@@ -94,12 +94,12 @@ pub fn generate_client_impl(service: &ServiceDetail) -> String {
     out.push_str("    this.caller = caller;\n");
     out.push_str("  }\n\n");
 
-    for method in &service.methods {
+    for method in service.methods {
         let method_name = method.method_name.to_lower_camel_case();
         let id = crate::method_id(method);
 
         // Check if this method has channel args (Tx or Rx)
-        let has_streaming_args = method.args.iter().any(|a| is_tx(a.ty) || is_rx(a.ty));
+        let has_streaming_args = method.args.iter().any(|a| is_tx(a.shape) || is_rx(a.shape));
 
         // Build args list
         let args = method
@@ -109,14 +109,14 @@ pub fn generate_client_impl(service: &ServiceDetail) -> String {
                 format!(
                     "{}: {}",
                     a.name.to_lower_camel_case(),
-                    ts_type_client_arg(a.ty)
+                    ts_type_client_arg(a.shape)
                 )
             })
             .collect::<Vec<_>>()
             .join(", ");
 
         // Return type
-        let ret_ty = ts_type_client_return(method.return_type);
+        let ret_ty = ts_type_client_return(method.return_shape);
 
         // Build args record for CallRequest
         let args_record = if method.args.is_empty() {
@@ -160,7 +160,10 @@ pub fn generate_client_impl(service: &ServiceDetail) -> String {
         out.push_str("    return new CallBuilder(async (metadata) => {\n");
 
         // Check if this method returns Result<T, E>
-        let is_fallible = matches!(classify_shape(method.return_type), ShapeKind::Result { .. });
+        let is_fallible = matches!(
+            classify_shape(method.return_shape),
+            ShapeKind::Result { .. }
+        );
 
         if is_fallible {
             // Fallible method: caller.call() throws RpcError on user errors
@@ -221,10 +224,10 @@ pub fn generate_client_impl(service: &ServiceDetail) -> String {
 }
 
 /// Generate a connect() helper function for WebSocket connections.
-pub fn generate_connect_function(service: &ServiceDetail) -> String {
+pub fn generate_connect_function(service: &ServiceDescriptor) -> String {
     use heck::ToUpperCamelCase;
 
-    let service_name = service.name.to_upper_camel_case();
+    let service_name = service.service_name.to_upper_camel_case();
 
     let mut out = String::new();
     out.push_str(&format!(
@@ -248,7 +251,7 @@ pub fn generate_connect_function(service: &ServiceDetail) -> String {
 }
 
 /// Generate complete client code (interface + implementation + connect helper).
-pub fn generate_client(service: &ServiceDetail) -> String {
+pub fn generate_client(service: &ServiceDescriptor) -> String {
     let mut out = String::new();
     out.push_str(&generate_caller_interface(service));
     out.push_str(&generate_client_impl(service));

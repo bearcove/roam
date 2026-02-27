@@ -3,7 +3,7 @@
 //! Generates TypeScript code that decodes byte arrays into Rust types.
 
 use facet_core::{ScalarType, Shape, StructKind};
-use roam_schema::{
+use roam_types::{
     EnumInfo, ShapeKind, StructInfo, VariantKind, classify_shape, classify_variant, is_bytes,
 };
 

@@ -71,7 +71,6 @@ pub fn generate_service_with_bindings(
     service: &ServiceDescriptor,
     bindings: SwiftBindings,
 ) -> String {
-    let service = crate::to_service_detail(service);
     use crate::render::hex_u64;
     use heck::{ToLowerCamelCase, ToUpperCamelCase};
 
@@ -81,12 +80,12 @@ pub fn generate_service_with_bindings(
     out.push_str("import Foundation\n");
     out.push_str("import RoamRuntime\n\n");
 
-    let service_name = service.name.to_upper_camel_case();
+    let service_name = service.service_name.to_upper_camel_case();
 
     // Generate method IDs enum
     out.push_str(&format!("// MARK: - {service_name} Method IDs\n\n"));
     out.push_str(&format!("public enum {service_name}MethodId {{\n"));
-    for method in &service.methods {
+    for method in service.methods {
         let method_name = method.method_name.to_lower_camel_case();
         let id = crate::method_id(method);
         out.push_str(&format!(

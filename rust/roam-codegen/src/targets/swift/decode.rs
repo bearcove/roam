@@ -4,7 +4,7 @@
 
 use facet_core::{ScalarType, Shape};
 use heck::ToLowerCamelCase;
-use roam_schema::{
+use roam_types::{
     EnumInfo, ShapeKind, StructInfo, VariantKind, classify_shape, classify_variant, is_bytes,
 };
 

@@ -8,9 +8,9 @@
 use std::collections::HashSet;
 
 use facet_core::{ScalarType, Shape};
-use roam_schema::{
-    EnumInfo, ServiceDetail, ShapeKind, StructInfo, VariantKind, classify_shape, classify_variant,
-    is_bytes,
+use roam_types::{
+    EnumInfo, ServiceDescriptor, ShapeKind, StructInfo, VariantKind, classify_shape,
+    classify_variant, is_bytes,
 };
 
 /// Generate TypeScript field access expression.
@@ -29,7 +29,7 @@ pub fn ts_field_access(expr: &str, field_name: &str) -> String {
 
 /// Collect all named types (structs and enums with a name) from a service.
 /// Returns a vector of (name, Shape) pairs in dependency order.
-pub fn collect_named_types(service: &ServiceDetail) -> Vec<(String, &'static Shape)> {
+pub fn collect_named_types(service: &ServiceDescriptor) -> Vec<(String, &'static Shape)> {
     let mut seen = HashSet::new();
     let mut types = Vec::new();
 
@@ -98,11 +98,11 @@ pub fn collect_named_types(service: &ServiceDetail) -> Vec<(String, &'static Sha
         }
     }
 
-    for method in &service.methods {
-        for arg in &method.args {
-            visit(arg.ty, &mut seen, &mut types);
+    for method in service.methods {
+        for arg in method.args {
+            visit(arg.shape, &mut seen, &mut types);
         }
-        visit(method.return_type, &mut seen, &mut types);
+        visit(method.return_shape, &mut seen, &mut types);
     }
 
     types

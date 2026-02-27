@@ -102,3 +102,6 @@ pub use channel::*;
 
 mod channel_binding;
 pub use channel_binding::*;
+
+mod shape_classify;
+pub use shape_classify::*;

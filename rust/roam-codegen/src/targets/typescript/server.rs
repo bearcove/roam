@@ -3,7 +3,7 @@
 //! Generates server handler interface and method dispatch logic.
 
 use heck::{ToLowerCamelCase, ToUpperCamelCase};
-use roam_schema::{ServiceDetail, ShapeKind, classify_shape};
+use roam_types::{ServiceDescriptor, ShapeKind, classify_shape};
 
 use super::decode::generate_decode_stmt_server_channels;
 use super::encode::generate_encode_expr;
@@ -12,14 +12,14 @@ use super::types::{ts_type_server_arg, ts_type_server_return};
 /// Generate handler interface (for handling incoming calls).
 ///
 /// r[impl channeling.caller-pov] - Handler uses Rx for args, Tx for returns.
-pub fn generate_handler_interface(service: &ServiceDetail) -> String {
+pub fn generate_handler_interface(service: &ServiceDescriptor) -> String {
     let mut out = String::new();
-    let service_name = service.name.to_upper_camel_case();
+    let service_name = service.service_name.to_upper_camel_case();
 
     out.push_str(&format!("// Handler interface for {service_name}\n"));
     out.push_str(&format!("export interface {service_name}Handler {{\n"));
 
-    for method in &service.methods {
+    for method in service.methods {
         let method_name = method.method_name.to_lower_camel_case();
         // Handler args: Tx becomes Rx (receives), Rx becomes Tx (sends)
         let args = method
@@ -29,13 +29,13 @@ pub fn generate_handler_interface(service: &ServiceDetail) -> String {
                 format!(
                     "{}: {}",
                     a.name.to_lower_camel_case(),
-                    ts_type_server_arg(a.ty)
+                    ts_type_server_arg(a.shape)
                 )
             })
             .collect::<Vec<_>>()
             .join(", ");
         // Handler returns
-        let ret_ty = ts_type_server_return(method.return_type);
+        let ret_ty = ts_type_server_return(method.return_shape);
 
         out.push_str(&format!(
             "  {method_name}({args}): Promise<{ret_ty}> | {ret_ty};\n"
@@ -47,12 +47,12 @@ pub fn generate_handler_interface(service: &ServiceDetail) -> String {
 }
 
 /// Generate channel-capable method handlers.
-pub fn generate_channel_handlers(service: &ServiceDetail) -> String {
+pub fn generate_channel_handlers(service: &ServiceDescriptor) -> String {
     use crate::render::hex_u64;
 
     let mut out = String::new();
-    let service_name = service.name.to_upper_camel_case();
-    let service_name_lower = service.name.to_lower_camel_case();
+    let service_name = service.service_name.to_upper_camel_case();
+    let service_name_lower = service.service_name.to_lower_camel_case();
 
     // Type for channel-capable method handlers.
     out.push_str(&format!("// Channel handler type for {service_name}\n"));
@@ -64,7 +64,7 @@ pub fn generate_channel_handlers(service: &ServiceDetail) -> String {
         "export const {service_name_lower}_channelingHandlers = new Map<bigint, ChannelingMethodHandler<{service_name}Handler>>([\n"
     ));
 
-    for method in &service.methods {
+    for method in service.methods {
         let method_name = method.method_name.to_lower_camel_case();
         let id = crate::method_id(method);
 
@@ -77,10 +77,10 @@ pub fn generate_channel_handlers(service: &ServiceDetail) -> String {
         out.push_str("      let offset = 0;\n");
 
         // Decode all arguments with proper channel binding.
-        for arg in &method.args {
+        for arg in method.args {
             let arg_name = arg.name.to_lower_camel_case();
             let decode_stmt = generate_decode_stmt_server_channels(
-                arg.ty,
+                arg.shape,
                 &arg_name,
                 "offset",
                 "registry",
@@ -104,8 +104,8 @@ pub fn generate_channel_handlers(service: &ServiceDetail) -> String {
         ));
 
         // Close any Tx channels that were passed as arguments.
-        for arg in &method.args {
-            if matches!(classify_shape(arg.ty), ShapeKind::Tx { .. }) {
+        for arg in method.args {
+            if matches!(classify_shape(arg.shape), ShapeKind::Tx { .. }) {
                 let arg_name = arg.name.to_lower_camel_case();
                 out.push_str(&format!("      {arg_name}.close();\n"));
             }
@@ -113,7 +113,7 @@ pub fn generate_channel_handlers(service: &ServiceDetail) -> String {
 
         // Encode and send response via taskSender
         // Check if return type is Result<T, E> - if so, encode as Result<T, RoamError<User(E)>>
-        if let ShapeKind::Result { ok, err } = classify_shape(method.return_type) {
+        if let ShapeKind::Result { ok, err } = classify_shape(method.return_shape) {
             // Handler returns { ok: true; value: T } | { ok: false; error: E }
             // Wire format: [0] + T for success, [1, 0] + E for User error
             let ok_encode = generate_encode_expr(ok, "result.value");
@@ -128,7 +128,7 @@ pub fn generate_channel_handlers(service: &ServiceDetail) -> String {
             ));
             out.push_str("      }\n");
         } else {
-            let encode_expr = generate_encode_expr(method.return_type, "result");
+            let encode_expr = generate_encode_expr(method.return_shape, "result");
             out.push_str(&format!(
                 "      taskSender({{ kind: 'response', requestId, payload: encodeResultOk({encode_expr}) }});\n"
             ));
@@ -147,7 +147,7 @@ pub fn generate_channel_handlers(service: &ServiceDetail) -> String {
 }
 
 /// Generate complete server code (interface + channel-capable handlers).
-pub fn generate_server(service: &ServiceDetail) -> String {
+pub fn generate_server(service: &ServiceDescriptor) -> String {
     let mut out = String::new();
 
     // Generate handler interface
