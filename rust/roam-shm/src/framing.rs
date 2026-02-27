@@ -214,6 +214,12 @@ pub fn peek_frame(data: &[u8]) -> Option<(Frame<'_>, u32)> {
     let (hdr, rest) = FrameHeader::ref_from_prefix(data).ok()?;
     let total_len = hdr.total_len as usize;
 
+    if total_len < FRAME_HEADER_SIZE {
+        return None;
+    }
+    if total_len % 4 != 0 {
+        return None;
+    }
     if data.len() < total_len {
         return None;
     }
@@ -448,6 +454,19 @@ mod tests {
         // peek_frame must reject it
         let data = rx.try_read().unwrap();
         assert!(peek_frame(data).is_none());
+    }
+
+    #[test]
+    fn total_len_smaller_than_header_rejected() {
+        let data = [0_u8; 12];
+        assert!(peek_frame(&data).is_none());
+    }
+
+    #[test]
+    fn unaligned_total_len_rejected() {
+        let mut data = [0_u8; 12];
+        data[0] = 9; // total_len = 9 (not 4-byte aligned)
+        assert!(peek_frame(&data).is_none());
     }
 
     #[test]
