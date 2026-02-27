@@ -1,0 +1,36 @@
+[package]
+name = "roam-bench"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[package.metadata]
+
+[package.metadata."docs.rs"]
+rustdoc-args = ["--html-in-header", "arborium-header.html"]
+
+[dependencies]
+roam.workspace = true
+roam-core.workspace = true
+roam-types.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net"] }
+moire.workspace = true
+futures-util.workspace = true
+
+tarpc.workspace = true
+serde.workspace = true
+tonic.workspace = true
+tonic-prost.workspace = true
+prost.workspace = true
+hyper-util.workspace = true
+tower.workspace = true
+tokio-stream.workspace = true
+
+divan.workspace = true
+
+[build-dependencies]
+tonic-prost-build.workspace = true
+
+[[bench]]
+name = "rpc"
+harness = false

@@ -11,6 +11,7 @@ members = [
   "rust/roam-macros-core",
   "rust/roam-macros",
   "rust/roam",
+  "rust/roam-bench",
 ]
 exclude = ["fuzz"]
 
@@ -84,6 +85,18 @@ ulid = "1"
 smallvec = "1.15.1"
 getrandom = "0.2.16"
 zerocopy = { version = "0.8", features = ["derive"] }
+
+# Benchmarking
+divan = "0.1"
+tarpc = { version = "0.37", features = ["tokio1", "serde1"] }
+tonic = "0.14"
+prost = "0.14"
+tonic-prost = "0.14"
+tonic-prost-build = "0.14"
+serde = { version = "1", features = ["derive"] }
+hyper-util = "0.1"
+tower = "0.5"
+tokio-stream = "0.1"
 
 # [patch."https://github.com/facet-rs/facet"]
 # facet = { path = "../facet/facet" }
