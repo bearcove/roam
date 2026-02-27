@@ -12,11 +12,16 @@ use std::sync::{Arc, Mutex};
 use roam_types::{Backing, Link, LinkRx, LinkTx, LinkTxPermit, SharedBacking, WriteSlot};
 use shm_primitives::{BIPBUF_HEADER_SIZE, BipBuf, Doorbell, HeapRegion, PeerId};
 
-use crate::framing::{DEFAULT_INLINE_THRESHOLD, OwnedFrame};
+use crate::framing::{DEFAULT_INLINE_THRESHOLD, MmapRef, OwnedFrame};
+use crate::mmap_registry::{
+    MmapAllocation, MmapAttachments, MmapChannelRx, MmapChannelTx, MmapRegistry,
+    create_in_process_mmap_channel,
+};
 use crate::segment::Segment;
 use crate::varslot::{SizeClassConfig, SlotRef, VarSlotPool};
 
 pub mod framing;
+pub mod mmap_registry;
 pub mod peer_table;
 pub mod segment;
 pub mod varslot;
@@ -96,6 +101,7 @@ struct TxShared {
     doorbell: Arc<Doorbell>,
     doorbell_dead: AtomicBool,
     stats: Arc<ShmTransportStats>,
+    mmap_registry: Mutex<MmapRegistry>,
 }
 
 /// A [`Link`] over shared memory ring buffers.
@@ -107,14 +113,17 @@ pub struct ShmLink {
     rx_backend: Backend,
     tx_closed: Arc<AtomicBool>,
     peer_closed: Arc<AtomicBool>,
+    mmap_attachments: MmapAttachments,
 }
 
 #[derive(Default)]
 struct ShmTransportStats {
     inline_sends: AtomicU64,
     slot_ref_sends: AtomicU64,
+    mmap_ref_sends: AtomicU64,
     inline_recvs: AtomicU64,
     slot_ref_recvs: AtomicU64,
+    mmap_ref_recvs: AtomicU64,
     varslot_exhausted: AtomicU64,
     ring_exhausted: AtomicU64,
     reserve_waits: AtomicU64,
@@ -127,8 +136,10 @@ struct ShmTransportStats {
 pub struct ShmTransportStatsSnapshot {
     pub inline_sends: u64,
     pub slot_ref_sends: u64,
+    pub mmap_ref_sends: u64,
     pub inline_recvs: u64,
     pub slot_ref_recvs: u64,
+    pub mmap_ref_recvs: u64,
     pub varslot_exhausted: u64,
     pub ring_exhausted: u64,
     pub reserve_waits: u64,
@@ -142,8 +153,10 @@ impl ShmTransportStats {
         ShmTransportStatsSnapshot {
             inline_sends: self.inline_sends.load(AtomicOrdering::Relaxed),
             slot_ref_sends: self.slot_ref_sends.load(AtomicOrdering::Relaxed),
+            mmap_ref_sends: self.mmap_ref_sends.load(AtomicOrdering::Relaxed),
             inline_recvs: self.inline_recvs.load(AtomicOrdering::Relaxed),
             slot_ref_recvs: self.slot_ref_recvs.load(AtomicOrdering::Relaxed),
+            mmap_ref_recvs: self.mmap_ref_recvs.load(AtomicOrdering::Relaxed),
             varslot_exhausted: self.varslot_exhausted.load(AtomicOrdering::Relaxed),
             ring_exhausted: self.ring_exhausted.load(AtomicOrdering::Relaxed),
             reserve_waits: self.reserve_waits.load(AtomicOrdering::Relaxed),
@@ -173,6 +186,8 @@ impl ShmLink {
         inline_threshold: u32,
         tx_closed: Arc<AtomicBool>,
         peer_closed: Arc<AtomicBool>,
+        mmap_channel_tx: MmapChannelTx,
+        mmap_channel_rx: MmapChannelRx,
     ) -> Self {
         let ring_capacity = tx_bipbuf.capacity();
         let ring_contiguous_ceiling = ring_capacity.saturating_sub(1);
@@ -188,6 +203,9 @@ impl ShmLink {
             .max_slot_size()
             .and_then(|slot_size| slot_size.checked_sub(SLOT_LEN_PREFIX_SIZE as u32));
 
+        let default_mmap_region_size = 1024 * 1024; // 1 MiB default
+        let mmap_registry = MmapRegistry::new(mmap_channel_tx, default_mmap_region_size);
+
         let stats = Arc::new(ShmTransportStats::default());
         let tx_shared = Arc::new(TxShared {
             tx_bipbuf,
@@ -201,7 +219,10 @@ impl ShmLink {
             doorbell,
             doorbell_dead: AtomicBool::new(false),
             stats: stats.clone(),
+            mmap_registry: Mutex::new(mmap_registry),
         });
+
+        let mmap_attachments = MmapAttachments::new(mmap_channel_rx);
 
         Self {
             tx_shared,
@@ -209,11 +230,18 @@ impl ShmLink {
             rx_backend: backend,
             tx_closed,
             peer_closed,
+            mmap_attachments,
         }
     }
 
     /// Build a guest-side SHM link from a shared segment.
-    pub fn for_guest(segment: Arc<Segment>, peer_id: PeerId, doorbell: Doorbell) -> Self {
+    pub fn for_guest(
+        segment: Arc<Segment>,
+        peer_id: PeerId,
+        doorbell: Doorbell,
+        mmap_channel_tx: MmapChannelTx,
+        mmap_channel_rx: MmapChannelRx,
+    ) -> Self {
         let tx_bipbuf = Arc::new(segment.g2h_bipbuf(peer_id));
         let rx_bipbuf = Arc::new(segment.h2g_bipbuf(peer_id));
         let backend = Backend::Segment(segment.clone());
@@ -228,11 +256,19 @@ impl ShmLink {
             segment.header().inline_threshold,
             Arc::new(AtomicBool::new(false)),
             Arc::new(AtomicBool::new(false)),
+            mmap_channel_tx,
+            mmap_channel_rx,
         )
     }
 
     /// Build a host-side SHM link for one peer from a shared segment.
-    pub fn for_host(segment: Arc<Segment>, peer_id: PeerId, doorbell: Doorbell) -> Self {
+    pub fn for_host(
+        segment: Arc<Segment>,
+        peer_id: PeerId,
+        doorbell: Doorbell,
+        mmap_channel_tx: MmapChannelTx,
+        mmap_channel_rx: MmapChannelRx,
+    ) -> Self {
         let tx_bipbuf = Arc::new(segment.h2g_bipbuf(peer_id));
         let rx_bipbuf = Arc::new(segment.g2h_bipbuf(peer_id));
         let backend = Backend::Segment(segment.clone());
@@ -247,6 +283,8 @@ impl ShmLink {
             segment.header().inline_threshold,
             Arc::new(AtomicBool::new(false)),
             Arc::new(AtomicBool::new(false)),
+            mmap_channel_tx,
+            mmap_channel_rx,
         )
     }
 
@@ -285,6 +323,11 @@ impl ShmLink {
         let a_closed = Arc::new(AtomicBool::new(false));
         let b_closed = Arc::new(AtomicBool::new(false));
 
+        // a sends to b via a_mmap_tx → b_mmap_rx
+        let (a_mmap_tx, b_mmap_rx) = create_in_process_mmap_channel();
+        // b sends to a via b_mmap_tx → a_mmap_rx
+        let (b_mmap_tx, a_mmap_rx) = create_in_process_mmap_channel();
+
         let a = Self::from_parts(
             g2h.clone(),
             h2g.clone(),
@@ -295,6 +338,8 @@ impl ShmLink {
             inline_threshold,
             a_closed.clone(),
             b_closed.clone(),
+            a_mmap_tx,
+            a_mmap_rx,
         );
         let b = Self::from_parts(
             h2g,
@@ -306,6 +351,8 @@ impl ShmLink {
             inline_threshold,
             b_closed,
             a_closed,
+            b_mmap_tx,
+            b_mmap_rx,
         );
         Ok((a, b))
     }
@@ -324,6 +371,7 @@ pub struct ShmLinkRx {
     peer_closed: Arc<AtomicBool>,
     doorbell: Arc<Doorbell>,
     stats: Arc<ShmTransportStats>,
+    mmap_attachments: MmapAttachments,
 }
 
 pub struct ShmTxPermit {
@@ -339,6 +387,10 @@ enum ShmWriteSlotInner {
         slot_ref: Option<SlotRef>,
         payload_len: usize,
     },
+    MmapRef {
+        alloc: Option<MmapAllocation>,
+        payload_len: usize,
+    },
 }
 
 pub struct ShmWriteSlot {
@@ -348,20 +400,29 @@ pub struct ShmWriteSlot {
 
 impl Drop for ShmWriteSlot {
     fn drop(&mut self) {
-        if let ShmWriteSlotInner::VarSlot { slot_ref, .. } = &mut self.inner
-            && let Some(slot_ref) = slot_ref.take()
-        {
-            self.shared.backend.free_slot(slot_ref);
-            if matches!(
-                self.shared.doorbell.signal_now(),
-                shm_primitives::SignalResult::PeerDead
-            ) {
-                self.shared.doorbell_dead.store(true, Ordering::Release);
-                self.shared
-                    .stats
-                    .doorbell_peer_dead
-                    .fetch_add(1, AtomicOrdering::Relaxed);
+        match &mut self.inner {
+            ShmWriteSlotInner::VarSlot { slot_ref, .. } => {
+                if let Some(slot_ref) = slot_ref.take() {
+                    self.shared.backend.free_slot(slot_ref);
+                    if matches!(
+                        self.shared.doorbell.signal_now(),
+                        shm_primitives::SignalResult::PeerDead
+                    ) {
+                        self.shared.doorbell_dead.store(true, Ordering::Release);
+                        self.shared
+                            .stats
+                            .doorbell_peer_dead
+                            .fetch_add(1, AtomicOrdering::Relaxed);
+                    }
+                }
             }
+            ShmWriteSlotInner::MmapRef { alloc, .. } => {
+                // r[impl shm.mmap.release]
+                if let Some(alloc) = alloc.take() {
+                    alloc.lease_counter.fetch_sub(1, Ordering::Release);
+                }
+            }
+            ShmWriteSlotInner::Inline { .. } => {}
         }
     }
 }
@@ -385,6 +446,7 @@ impl Link for ShmLink {
                 peer_closed: self.peer_closed,
                 doorbell,
                 stats,
+                mmap_attachments: self.mmap_attachments,
             },
         )
     }
@@ -504,10 +566,24 @@ impl LinkTxPermit for ShmTxPermit {
             )
         })?;
         if len as u32 > max_varslot_payload {
-            return Err(io::Error::new(
-                io::ErrorKind::Unsupported,
-                "mmap-ref payload path is not implemented yet",
-            ));
+            // r[impl shm.mmap.ordering]
+            // Payload exceeds varslot — use mmap-ref path.
+            // Step 1: alloc delivers fd to peer (ordering: registry visible)
+            let mut registry = self
+                .shared
+                .mmap_registry
+                .lock()
+                .expect("mmap registry poisoned");
+            let alloc = registry.alloc(len).map_err(|e| {
+                io::Error::new(io::ErrorKind::Other, format!("mmap alloc failed: {e}"))
+            })?;
+            return Ok(ShmWriteSlot {
+                shared: self.shared.clone(),
+                inner: ShmWriteSlotInner::MmapRef {
+                    alloc: Some(alloc),
+                    payload_len: len,
+                },
+            });
         }
         let slot_ref = self
             .shared
@@ -558,6 +634,13 @@ impl WriteSlot for ShmWriteSlot {
                 let end = SLOT_LEN_PREFIX_SIZE + *payload_len;
                 let data = unsafe { self.shared.backend.slot_data_mut(slot_ref) };
                 &mut data[SLOT_LEN_PREFIX_SIZE..end]
+            }
+            ShmWriteSlotInner::MmapRef { alloc, payload_len } => {
+                let alloc = alloc
+                    .as_ref()
+                    .expect("mmap alloc must be present while write slot is alive");
+                // SAFETY: We just allocated this range and no one else is reading it.
+                unsafe { alloc.payload_mut(*payload_len) }
             }
         }
     }
@@ -639,13 +722,56 @@ impl WriteSlot for ShmWriteSlot {
                     }
                 }
             }
+            // r[impl shm.mmap.ordering]
+            ShmWriteSlotInner::MmapRef { alloc, payload_len } => {
+                let Some(alloc_value) = alloc.take() else {
+                    return;
+                };
+
+                // Step 2→3: bytes are initialized (caller wrote them), issue release fence
+                std::sync::atomic::fence(Ordering::Release);
+
+                let mmap_ref = MmapRef {
+                    map_id: alloc_value.map_id,
+                    map_generation: alloc_value.map_generation,
+                    map_offset: alloc_value.map_offset,
+                    payload_len: *payload_len as u32,
+                };
+
+                loop {
+                    let lock = self.shared.tx_lock.lock().expect("tx lock poisoned");
+                    let (mut producer, _) = self.shared.tx_bipbuf.split();
+                    let result = framing::write_mmap_ref(&mut producer, &mmap_ref);
+                    drop(lock);
+                    match result {
+                        Ok(()) => {
+                            // The lease counter stays at 1 — the receiver will hold
+                            // it via ShmMmapBacking and decrement on drop.
+                            // alloc_value (no Drop impl) goes out of scope naturally.
+                            self.shared
+                                .stats
+                                .mmap_ref_sends
+                                .fetch_add(1, AtomicOrdering::Relaxed);
+                            ring_doorbell(&self.shared);
+                            return;
+                        }
+                        Err(_) => {
+                            self.shared
+                                .stats
+                                .commit_retries
+                                .fetch_add(1, AtomicOrdering::Relaxed);
+                            std::thread::yield_now();
+                        }
+                    }
+                }
+            }
         }
     }
 }
 
 #[derive(Debug)]
 pub enum ShmLinkRxError {
-    UnsupportedMmapRef,
+    MmapResolve(crate::mmap_registry::MmapResolveError),
     DoorbellWait(io::Error),
     MalformedSlotRefLength {
         slot_bytes: usize,
@@ -656,7 +782,7 @@ pub enum ShmLinkRxError {
 impl std::fmt::Display for ShmLinkRxError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ShmLinkRxError::UnsupportedMmapRef => write!(f, "mmap-ref frames are not implemented"),
+            ShmLinkRxError::MmapResolve(err) => write!(f, "mmap resolve failed: {err}"),
             ShmLinkRxError::DoorbellWait(err) => write!(f, "doorbell wait failed: {err}"),
             ShmLinkRxError::MalformedSlotRefLength {
                 slot_bytes,
@@ -738,7 +864,41 @@ impl LinkRx for ShmLinkRx {
                             stats: self.stats.clone(),
                         }))))
                     }
-                    OwnedFrame::MmapRef(_) => Err(ShmLinkRxError::UnsupportedMmapRef),
+                    // r[impl zerocopy.recv.shm.mmap]
+                    OwnedFrame::MmapRef(mmap_ref) => {
+                        self.stats
+                            .mmap_ref_recvs
+                            .fetch_add(1, AtomicOrdering::Relaxed);
+                        if matches!(
+                            self.doorbell.signal_now(),
+                            shm_primitives::SignalResult::PeerDead
+                        ) {
+                            self.peer_closed.store(true, Ordering::Release);
+                            self.stats
+                                .doorbell_peer_dead
+                                .fetch_add(1, AtomicOrdering::Relaxed);
+                        }
+
+                        // Drain any newly delivered fds before resolving
+                        self.mmap_attachments.drain_control();
+
+                        let mapping = self
+                            .mmap_attachments
+                            .resolve(
+                                mmap_ref.map_id,
+                                mmap_ref.map_generation,
+                                mmap_ref.map_offset,
+                                mmap_ref.payload_len,
+                            )
+                            .map_err(|e| ShmLinkRxError::MmapResolve(e))?;
+
+                        // r[impl zerocopy.backing.mmap]
+                        Ok(Some(Backing::shared(Arc::new(ShmMmapBacking {
+                            mapping,
+                            offset: mmap_ref.map_offset as usize,
+                            len: mmap_ref.payload_len as usize,
+                        }))))
+                    }
                 };
             }
 
@@ -798,6 +958,22 @@ impl Drop for ShmVarSlotBacking {
                 .doorbell_peer_dead
                 .fetch_add(1, AtomicOrdering::Relaxed);
         }
+    }
+}
+
+// r[impl zerocopy.backing.mmap]
+struct ShmMmapBacking {
+    mapping: Arc<mmap_registry::AttachedMapping>,
+    offset: usize,
+    len: usize,
+}
+
+impl SharedBacking for ShmMmapBacking {
+    fn as_bytes(&self) -> &[u8] {
+        let region = self.mapping.region.region();
+        let ptr = region.as_ptr();
+        // SAFETY: offset+len was bounds-checked during resolve
+        unsafe { std::slice::from_raw_parts(ptr.add(self.offset), self.len) }
     }
 }
 
@@ -975,5 +1151,102 @@ mod tests {
         assert!(tx_stats.varslot_exhausted >= 1);
         assert_eq!(rx_stats.inline_recvs, 1);
         assert_eq!(rx_stats.slot_ref_recvs, 1);
+    }
+
+    // Small varslot class to force mmap path for payloads > 60 bytes
+    const SMALL_CLASSES: &[SizeClassConfig] = &[SizeClassConfig {
+        slot_size: 64,
+        slot_count: 2,
+    }];
+
+    #[tokio::test]
+    async fn mmap_large_payload_roundtrip() {
+        let (a, b) = ShmLink::heap_pair(4096, 1 << 20, 32, SMALL_CLASSES).unwrap();
+        let (a_tx, _a_rx) = a.split();
+        let (_b_tx, mut b_rx) = b.split();
+
+        // 200 bytes exceeds max varslot payload (64 - 4 = 60 bytes) → mmap path
+        let payload = vec![0xAB_u8; 200];
+        let permit = a_tx.reserve().await.unwrap();
+        let mut slot = permit.alloc(payload.len()).unwrap();
+        slot.as_mut_slice().copy_from_slice(&payload);
+        slot.commit();
+
+        let backing = b_rx.recv().await.unwrap().unwrap();
+        match &backing {
+            Backing::Shared(shared) => assert_eq!(shared.as_bytes(), payload.as_slice()),
+            Backing::Boxed(_) => panic!("mmap path must be shared"),
+        }
+
+        let tx_stats = a_tx.stats();
+        let rx_stats = b_rx.stats();
+        assert_eq!(tx_stats.mmap_ref_sends, 1);
+        assert_eq!(rx_stats.mmap_ref_recvs, 1);
+    }
+
+    #[tokio::test]
+    async fn mmap_multiple_payloads_share_region() {
+        let (a, b) = ShmLink::heap_pair(4096, 1 << 20, 32, SMALL_CLASSES).unwrap();
+        let (a_tx, _a_rx) = a.split();
+        let (_b_tx, mut b_rx) = b.split();
+
+        // Send two mmap payloads — they should share the same region
+        for i in 0u8..3 {
+            let payload = vec![i; 200];
+            let permit = a_tx.reserve().await.unwrap();
+            let mut slot = permit.alloc(payload.len()).unwrap();
+            slot.as_mut_slice().copy_from_slice(&payload);
+            slot.commit();
+        }
+
+        for i in 0u8..3 {
+            let backing = b_rx.recv().await.unwrap().unwrap();
+            assert_eq!(backing.as_bytes(), &vec![i; 200]);
+        }
+
+        assert_eq!(a_tx.stats().mmap_ref_sends, 3);
+        assert_eq!(b_rx.stats().mmap_ref_recvs, 3);
+    }
+
+    #[tokio::test]
+    async fn mmap_mixed_with_inline_and_varslot() {
+        let (a, b) = ShmLink::heap_pair(4096, 1 << 20, 32, SMALL_CLASSES).unwrap();
+        let (a_tx, _a_rx) = a.split();
+        let (_b_tx, mut b_rx) = b.split();
+
+        // Inline (≤32 bytes)
+        let inline_payload = b"hello";
+        let permit = a_tx.reserve().await.unwrap();
+        let mut slot = permit.alloc(inline_payload.len()).unwrap();
+        slot.as_mut_slice().copy_from_slice(inline_payload);
+        slot.commit();
+
+        // Varslot (33..=60 bytes)
+        let varslot_payload = vec![0x42_u8; 50];
+        let permit = a_tx.reserve().await.unwrap();
+        let mut slot = permit.alloc(varslot_payload.len()).unwrap();
+        slot.as_mut_slice().copy_from_slice(&varslot_payload);
+        slot.commit();
+
+        // Mmap (>60 bytes)
+        let mmap_payload = vec![0xFF_u8; 500];
+        let permit = a_tx.reserve().await.unwrap();
+        let mut slot = permit.alloc(mmap_payload.len()).unwrap();
+        slot.as_mut_slice().copy_from_slice(&mmap_payload);
+        slot.commit();
+
+        let b1 = b_rx.recv().await.unwrap().unwrap();
+        assert!(b1.as_bytes().starts_with(inline_payload));
+
+        let b2 = b_rx.recv().await.unwrap().unwrap();
+        assert_eq!(b2.as_bytes(), varslot_payload.as_slice());
+
+        let b3 = b_rx.recv().await.unwrap().unwrap();
+        assert_eq!(b3.as_bytes(), mmap_payload.as_slice());
+
+        let stats = a_tx.stats();
+        assert_eq!(stats.inline_sends, 1);
+        assert_eq!(stats.slot_ref_sends, 1);
+        assert_eq!(stats.mmap_ref_sends, 1);
     }
 }

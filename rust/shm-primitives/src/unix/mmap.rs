@@ -6,7 +6,7 @@
 use std::fs::{File, OpenOptions};
 use std::io;
 use std::os::unix::fs::PermissionsExt;
-use std::os::unix::io::AsRawFd;
+use std::os::unix::io::{AsRawFd, FromRawFd, IntoRawFd, OwnedFd, RawFd};
 use std::path::{Path, PathBuf};
 
 use crate::Region;
@@ -160,6 +160,51 @@ impl MmapRegion {
             path: path.to_path_buf(),
             owns_file: false, // Attached regions don't own the file
         })
+    }
+
+    /// Attach to a memory-mapped region from a file descriptor.
+    ///
+    /// This is used on the receiver side after receiving an fd via SCM_RIGHTS.
+    /// The fd is mmap'd with MAP_SHARED at the given size.
+    pub fn attach_fd(fd: OwnedFd, size: usize) -> io::Result<Self> {
+        if size == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "size must be > 0",
+            ));
+        }
+
+        let raw_fd = fd.as_raw_fd();
+        let ptr = unsafe {
+            libc::mmap(
+                std::ptr::null_mut(),
+                size,
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_SHARED,
+                raw_fd,
+                0,
+            )
+        };
+
+        if ptr == libc::MAP_FAILED {
+            return Err(io::Error::last_os_error());
+        }
+
+        // Convert OwnedFd to File so we keep it alive for the mapping's lifetime
+        let file = unsafe { File::from_raw_fd(fd.into_raw_fd()) };
+
+        Ok(Self {
+            ptr: ptr as *mut u8,
+            len: size,
+            file,
+            path: PathBuf::new(),
+            owns_file: false,
+        })
+    }
+
+    /// Get the raw file descriptor of the backing file.
+    pub fn as_raw_fd(&self) -> RawFd {
+        self.file.as_raw_fd()
     }
 
     /// Get a `Region` view of this mmap.

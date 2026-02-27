@@ -19,6 +19,10 @@ roam-types.workspace = true
 shm-primitives.workspace = true
 tokio = { workspace = true, features = ["sync", "rt"] }
 zerocopy = { workspace = true }
+tempfile = "3"
+
+[target.'cfg(unix)'.dependencies]
+libc = { workspace = true }
 
 [target.'cfg(loom)'.dependencies]
 loom = { version = "0.7" }

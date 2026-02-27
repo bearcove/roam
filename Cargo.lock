@@ -1729,9 +1729,11 @@ dependencies = [
 name = "roam-shm"
 version = "3.0.0"
 dependencies = [
+ "libc",
  "loom",
  "roam-types",
  "shm-primitives",
+ "tempfile",
  "tokio",
  "zerocopy",
 ]

@@ -318,14 +318,23 @@ impl Segment {
         // Step 1: mark as Goodbye.
         entry.set_goodbye();
 
-        // Step 2: scan H2G BipBuffer for SLOT_REF frames; free those slots.
+        // Step 2: scan H2G BipBuffer for SLOT_REF/MMAP_REF frames; free slots.
         // This MUST happen before step 3 (resetting the buffer destroys content).
+        // r[impl shm.mmap.crash-recovery]
         {
             let h2g = self.h2g_bipbuf(peer_id);
             let (_, mut consumer) = h2g.split();
             while let Some(frame) = framing::read_frame(&mut consumer) {
-                if let OwnedFrame::SlotRef(slot_ref) = frame {
-                    let _ = self.var_pool.free(slot_ref);
+                match frame {
+                    OwnedFrame::SlotRef(slot_ref) => {
+                        let _ = self.var_pool.free(slot_ref);
+                    }
+                    OwnedFrame::MmapRef(_) => {
+                        // MmapRef frames reference regions allocated by the crashed peer.
+                        // Those regions are gone with the process — just drain the frame.
+                        // Per-link mmap leases are cleaned up when the ShmLink is dropped.
+                    }
+                    OwnedFrame::Inline(_) => {}
                 }
             }
             // consumer dropped here — borrow of h2g ends.

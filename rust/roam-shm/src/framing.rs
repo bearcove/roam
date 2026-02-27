@@ -82,15 +82,37 @@ pub struct SlotRefBody {
 /// The 24-byte mmap reference body that follows a `FrameHeader` when
 /// `FLAG_MMAP_REF` is set.
 ///
+/// This type is read/written manually via LE byte copies rather than zerocopy,
+/// because the BipBuffer is only 4-byte aligned and MmapRefBody contains a u64.
+///
+/// Layout: map_id(4) + map_generation(4) + map_offset(8) + payload_len(4) + reserved(4) = 24
+///
 /// r[impl shm.framing.mmap-ref]
-#[derive(FromBytes, IntoBytes, KnownLayout, Immutable)]
-#[repr(C)]
-pub struct MmapRefBody {
-    pub map_id: u32,
-    pub map_generation: u32,
-    pub map_offset: u64,
-    pub payload_len: u32,
-    pub _reserved: u32,
+pub struct MmapRefBody;
+
+impl MmapRefBody {
+    fn write(buf: &mut [u8], mmap: &MmapRef) {
+        debug_assert!(buf.len() >= MMAP_REF_BODY_SIZE);
+        buf[0..4].copy_from_slice(&mmap.map_id.to_le_bytes());
+        buf[4..8].copy_from_slice(&mmap.map_generation.to_le_bytes());
+        buf[8..16].copy_from_slice(&mmap.map_offset.to_le_bytes());
+        buf[16..20].copy_from_slice(&mmap.payload_len.to_le_bytes());
+        buf[20..24].copy_from_slice(&0u32.to_le_bytes()); // reserved
+    }
+
+    fn read(buf: &[u8]) -> Option<MmapRef> {
+        if buf.len() < MMAP_REF_BODY_SIZE {
+            return None;
+        }
+        Some(MmapRef {
+            map_id: u32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]),
+            map_generation: u32::from_le_bytes([buf[4], buf[5], buf[6], buf[7]]),
+            map_offset: u64::from_le_bytes([
+                buf[8], buf[9], buf[10], buf[11], buf[12], buf[13], buf[14], buf[15],
+            ]),
+            payload_len: u32::from_le_bytes([buf[16], buf[17], buf[18], buf[19]]),
+        })
+    }
 }
 
 /// Decoded mmap reference (no raw pointers).
@@ -106,8 +128,6 @@ pub struct MmapRef {
 const _: () = assert!(core::mem::size_of::<FrameHeader>() == FRAME_HEADER_SIZE);
 #[cfg(not(loom))]
 const _: () = assert!(core::mem::size_of::<SlotRefBody>() == SLOT_REF_BODY_SIZE);
-#[cfg(not(loom))]
-const _: () = assert!(core::mem::size_of::<MmapRefBody>() == MMAP_REF_BODY_SIZE);
 
 // ── align helper ──────────────────────────────────────────────────────────────
 
@@ -143,7 +163,7 @@ pub fn write_inline(producer: &mut BipBufProducer<'_>, payload: &[u8]) -> Result
 
 /// Write an mmap-ref frame to the producer.
 ///
-/// Always 32 bytes: 8-byte header + 24-byte [`MmapRefBody`].
+/// Always 32 bytes: 8-byte header + 24-byte body.
 ///
 /// r[impl shm.framing.mmap-ref]
 pub fn write_mmap_ref(producer: &mut BipBufProducer<'_>, mmap: &MmapRef) -> Result<(), BipBufFull> {
@@ -154,12 +174,7 @@ pub fn write_mmap_ref(producer: &mut BipBufProducer<'_>, mmap: &MmapRef) -> Resu
     hdr.flags = FLAG_MMAP_REF;
     hdr._reserved = [0; 3];
 
-    let body = MmapRefBody::mut_from_bytes(rest).expect("rest alignment/size");
-    body.map_id = mmap.map_id;
-    body.map_generation = mmap.map_generation;
-    body.map_offset = mmap.map_offset;
-    body.payload_len = mmap.payload_len;
-    body._reserved = 0;
+    MmapRefBody::write(rest, mmap);
 
     producer.commit(MMAP_REF_ENTRY_SIZE);
     Ok(())
@@ -245,13 +260,7 @@ pub fn peek_frame(data: &[u8]) -> Option<(Frame<'_>, u32)> {
         if total_len < FRAME_HEADER_SIZE + MMAP_REF_BODY_SIZE {
             return None;
         }
-        let (body, _) = MmapRefBody::ref_from_prefix(rest).ok()?;
-        Frame::MmapRef(MmapRef {
-            map_id: body.map_id,
-            map_generation: body.map_generation,
-            map_offset: body.map_offset,
-            payload_len: body.payload_len,
-        })
+        Frame::MmapRef(MmapRefBody::read(rest)?)
     } else {
         Frame::Inline(&data[FRAME_HEADER_SIZE..total_len])
     };
