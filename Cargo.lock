@@ -1166,6 +1166,7 @@ dependencies = [
 [[package]]
 name = "moire"
 version = "0.1.0"
+source = "git+https://github.com/bearcove/moire?branch=main#05c5ab92b4658a02ef8c18293bb4df685bccb540"
 dependencies = [
  "moire-macros",
  "moire-macros-noop",
@@ -1176,6 +1177,7 @@ dependencies = [
 [[package]]
 name = "moire-macros"
 version = "0.1.0"
+source = "git+https://github.com/bearcove/moire?branch=main#05c5ab92b4658a02ef8c18293bb4df685bccb540"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1185,10 +1187,12 @@ dependencies = [
 [[package]]
 name = "moire-macros-noop"
 version = "0.1.0"
+source = "git+https://github.com/bearcove/moire?branch=main#05c5ab92b4658a02ef8c18293bb4df685bccb540"
 
 [[package]]
 name = "moire-runtime"
 version = "0.1.0"
+source = "git+https://github.com/bearcove/moire?branch=main#05c5ab92b4658a02ef8c18293bb4df685bccb540"
 dependencies = [
  "ctor",
  "facet 0.43.2 (git+https://github.com/facet-rs/facet?branch=main)",
@@ -1204,6 +1208,7 @@ dependencies = [
 [[package]]
 name = "moire-tokio"
 version = "0.1.0"
+source = "git+https://github.com/bearcove/moire?branch=main#05c5ab92b4658a02ef8c18293bb4df685bccb540"
 dependencies = [
  "ctor",
  "moire-runtime",
@@ -1215,6 +1220,7 @@ dependencies = [
 [[package]]
 name = "moire-trace-capture"
 version = "0.1.0"
+source = "git+https://github.com/bearcove/moire?branch=main#05c5ab92b4658a02ef8c18293bb4df685bccb540"
 dependencies = [
  "libc",
  "moire-trace-types",
@@ -1223,6 +1229,7 @@ dependencies = [
 [[package]]
 name = "moire-trace-types"
 version = "0.1.0"
+source = "git+https://github.com/bearcove/moire?branch=main#05c5ab92b4658a02ef8c18293bb4df685bccb540"
 dependencies = [
  "facet 0.43.2 (git+https://github.com/facet-rs/facet?branch=main)",
 ]
@@ -1230,6 +1237,7 @@ dependencies = [
 [[package]]
 name = "moire-types"
 version = "0.1.0"
+source = "git+https://github.com/bearcove/moire?branch=main#05c5ab92b4658a02ef8c18293bb4df685bccb540"
 dependencies = [
  "facet 0.43.2 (git+https://github.com/facet-rs/facet?branch=main)",
  "facet-value",
@@ -1239,6 +1247,7 @@ dependencies = [
 [[package]]
 name = "moire-wasm"
 version = "0.1.0"
+source = "git+https://github.com/bearcove/moire?branch=main#05c5ab92b4658a02ef8c18293bb4df685bccb540"
 dependencies = [
  "async-channel",
  "async-lock",
@@ -1252,6 +1261,7 @@ dependencies = [
 [[package]]
 name = "moire-wire"
 version = "0.1.0"
+source = "git+https://github.com/bearcove/moire?branch=main#05c5ab92b4658a02ef8c18293bb4df685bccb540"
 dependencies = [
  "facet 0.43.2 (git+https://github.com/facet-rs/facet?branch=main)",
  "facet-json",
