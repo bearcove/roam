@@ -6,7 +6,7 @@
 
 use std::io;
 
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufWriter};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
@@ -78,7 +78,7 @@ where
 
     fn split(self) -> (Self::Tx, Self::Rx) {
         let (tx_chan, mut rx_chan) = mpsc::channel::<Vec<u8>>(1);
-        let mut writer = self.writer;
+        let mut writer = BufWriter::new(self.writer);
 
         let writer_task = tokio::spawn(async move {
             while let Some(bytes) = rx_chan.recv().await {
@@ -86,6 +86,14 @@ where
                     .write_all(&(bytes.len() as u32).to_le_bytes())
                     .await?;
                 writer.write_all(&bytes).await?;
+                // Drain any already-queued messages before flushing,
+                // so bursts coalesce into fewer syscalls.
+                while let Ok(bytes) = rx_chan.try_recv() {
+                    writer
+                        .write_all(&(bytes.len() as u32).to_le_bytes())
+                        .await?;
+                    writer.write_all(&bytes).await?;
+                }
                 writer.flush().await?;
             }
             writer.shutdown().await?;
