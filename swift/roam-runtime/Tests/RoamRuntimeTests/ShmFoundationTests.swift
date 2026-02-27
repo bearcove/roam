@@ -23,6 +23,9 @@ private func makeTempPath(_ suffix: String) -> String {
 }
 
 struct ShmFoundationFixtureParityTests {
+    // r[verify shm.segment.header]
+    // r[verify shm.segment.magic.v7]
+    // r[verify shm.segment.config]
     @Test func segmentHeaderFixtureParses() throws {
         let bytes = try loadShmFixture("segment_header")
         let header = try ShmSegmentHeader.decode(from: bytes)
@@ -36,6 +39,9 @@ struct ShmFoundationFixtureParityTests {
         #expect(header.varSlotPoolOffset > 0)
     }
 
+    // r[verify shm.segment]
+    // r[verify shm.peer-table]
+    // r[verify shm.peer-table.states]
     @Test func segmentLayoutPeerViewMatchesFixture() throws {
         let bytes = try loadShmFixture("segment_layout")
         let path = makeTempPath("segment.bin")
@@ -52,6 +58,10 @@ struct ShmFoundationFixtureParityTests {
 
     }
 
+    // r[verify shm.framing.header]
+    // r[verify shm.framing.inline]
+    // r[verify shm.framing.alignment]
+    // r[verify shm.framing.slot-ref]
     @Test func frameAndSlotRefFixtureParity() throws {
         let headerBytes = try loadShmFixture("frame_header")
         let header = try #require(ShmFrameHeader.read(from: headerBytes))
@@ -85,6 +95,8 @@ struct ShmFoundationFixtureParityTests {
 }
 
 struct ShmHeaderValidationTests {
+    // r[verify shm.segment.header]
+    // r[verify shm.segment.magic.v7]
     @Test func rejectsInvalidHeaderInvariants() throws {
         var bytes = try loadShmFixture("segment_header")
 
@@ -116,6 +128,9 @@ struct ShmHeaderValidationTests {
         }
     }
 
+    // r[verify shm.framing]
+    // r[verify shm.framing.header]
+    // r[verify shm.framing.slot-ref]
     @Test func rejectsMalformedFrames() throws {
         #expect(throws: ShmFrameDecodeError.shortHeader) {
             _ = try decodeShmFrame([1, 2, 3])
@@ -144,6 +159,12 @@ struct ShmBipBufferCorrectnessTests {
         case timeout
     }
 
+    // r[verify shm.bipbuf]
+    // r[verify shm.bipbuf.header]
+    // r[verify shm.bipbuf.init]
+    // r[verify shm.bipbuf.layout]
+    // r[verify shm.bipbuf.read]
+    // r[verify shm.bipbuf.release]
     @Test func contiguousReadWrite() throws {
         let path = makeTempPath("bipbuf.bin")
         defer { try? FileManager.default.removeItem(atPath: path) }
@@ -162,6 +183,8 @@ struct ShmBipBufferCorrectnessTests {
         #expect(buf.isEmpty())
     }
 
+    // r[verify shm.bipbuf]
+    // r[verify shm.bipbuf.backpressure]
     @Test func wrapAndWatermarkBehavior() throws {
         let path = makeTempPath("bipbuf-wrap.bin")
         defer { try? FileManager.default.removeItem(atPath: path) }
@@ -195,6 +218,7 @@ struct ShmBipBufferCorrectnessTests {
         #expect(buf.tryRead() == nil)
     }
 
+    // r[verify shm.bipbuf.backpressure]
     @Test func fullAndEmptyBoundaries() throws {
         let path = makeTempPath("bipbuf-boundary.bin")
         defer { try? FileManager.default.removeItem(atPath: path) }
@@ -215,6 +239,11 @@ struct ShmBipBufferCorrectnessTests {
         #expect(buf.isEmpty())
     }
 
+    // r[verify shm.bipbuf]
+    // r[verify shm.bipbuf.grant]
+    // r[verify shm.bipbuf.commit]
+    // r[verify shm.bipbuf.read]
+    // r[verify shm.bipbuf.release]
     @Test func randomizedModel() throws {
         let path = makeTempPath("bipbuf-model.bin")
         defer { try? FileManager.default.removeItem(atPath: path) }
@@ -266,6 +295,11 @@ struct ShmBipBufferCorrectnessTests {
         #expect(model.isEmpty)
     }
 
+    // r[verify shm.bipbuf]
+    // r[verify shm.bipbuf.grant]
+    // r[verify shm.bipbuf.commit]
+    // r[verify shm.bipbuf.read]
+    // r[verify shm.bipbuf.release]
     @Test func boundedConcurrentStress() async throws {
         let path = makeTempPath("bipbuf-stress.bin")
         defer { try? FileManager.default.removeItem(atPath: path) }

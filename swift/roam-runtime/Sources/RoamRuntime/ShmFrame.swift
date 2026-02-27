@@ -1,12 +1,20 @@
 import Foundation
 
+// r[impl shm.framing.header]
 public let shmFrameHeaderSize = 8
+// r[impl shm.framing.slot-ref]
 public let shmSlotRefSize = 12
+// r[impl shm.framing.slot-ref]
 public let shmSlotRefFrameSize = 20
+// r[impl shm.framing.mmap-ref]
 public let shmMmapRefSize = 24
+// r[impl shm.framing.mmap-ref]
 public let shmMmapRefFrameSize = 32
+// r[impl shm.framing.threshold]
 public let shmDefaultInlineThreshold: UInt32 = 256
+// r[impl shm.framing.flags]
 public let shmFlagSlotRef: UInt8 = 0x01
+// r[impl shm.framing.flags]
 public let shmFlagMmapRef: UInt8 = 0x02
 
 public enum ShmFrameDecodeError: Error, Equatable {
@@ -113,15 +121,19 @@ public enum ShmDecodedFrame: Sendable, Equatable {
 }
 
 @inline(__always)
+// r[impl shm.framing.inline]
+// r[impl shm.framing.alignment]
 public func shmInlineFrameSize(payloadLen: UInt32) -> UInt32 {
     (UInt32(shmFrameHeaderSize) + payloadLen + 3) & ~3
 }
 
 @inline(__always)
+// r[impl shm.framing.threshold]
 public func shmShouldInline(payloadLen: UInt32, threshold: UInt32) -> Bool {
     UInt32(shmFrameHeaderSize) + payloadLen <= threshold
 }
 
+// r[impl shm.framing.inline]
 public func encodeShmInlineFrame(payload: [UInt8]) -> [UInt8] {
     let payloadLen = UInt32(payload.count)
     let totalLen = shmInlineFrameSize(payloadLen: payloadLen)
@@ -133,6 +145,7 @@ public func encodeShmInlineFrame(payload: [UInt8]) -> [UInt8] {
     return bytes
 }
 
+// r[impl shm.framing.slot-ref]
 public func encodeShmSlotRefFrame(slotRef: ShmSlotRef) -> [UInt8] {
     var bytes = [UInt8](repeating: 0, count: shmSlotRefFrameSize)
     let header = ShmFrameHeader(totalLen: UInt32(shmSlotRefFrameSize), flags: shmFlagSlotRef)
@@ -144,6 +157,8 @@ public func encodeShmSlotRefFrame(slotRef: ShmSlotRef) -> [UInt8] {
     return bytes
 }
 
+// r[impl shm.framing]
+// r[impl shm.framing.flags]
 public func decodeShmFrame(_ frame: [UInt8]) throws -> ShmDecodedFrame {
     guard frame.count >= shmFrameHeaderSize else {
         throw ShmFrameDecodeError.shortHeader

@@ -11,6 +11,8 @@ private func assertShmRoundtrip(_ msg: Message) throws {
 }
 
 struct ShmTransportMappingTests {
+    // r[verify transport.shm]
+    // r[verify zerocopy.framing.link.shm]
     @Test func requestResponseRoundtrip() throws {
         let request = Message.request(
             connId: 7,
@@ -32,6 +34,7 @@ struct ShmTransportMappingTests {
         try assertShmRoundtrip(response)
     }
 
+    // r[verify transport.shm]
     @Test func channelControlRoundtrip() throws {
         try assertShmRoundtrip(.cancel(connId: 9, requestId: 11))
         try assertShmRoundtrip(.data(connId: 9, channelId: 15, payload: [4, 5, 6]))
@@ -40,6 +43,7 @@ struct ShmTransportMappingTests {
         try assertShmRoundtrip(.goodbye(connId: 0, reason: "bye"))
     }
 
+    // r[verify transport.shm]
     @Test func virtualConnectionControlRoundtrip() throws {
         try assertShmRoundtrip(.connect(requestId: 33, metadata: [(key: "a", value: .bytes([1]), flags: 0)]))
         try assertShmRoundtrip(
@@ -56,6 +60,7 @@ struct ShmTransportMappingTests {
             ))
     }
 
+    // r[verify transport.shm]
     @Test func helloAndCreditRoundtrip() throws {
         try assertShmRoundtrip(.hello(defaultHello()))
         try assertShmRoundtrip(.credit(connId: 0, channelId: 1, bytes: 64))

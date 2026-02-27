@@ -4,10 +4,14 @@ public enum ShmTransportConvertError: Error, Equatable {
     case decodeError(String)
 }
 
+// r[impl transport.shm]
+// r[impl zerocopy.framing.link.shm]
 func messageToShmFrame(_ msg: Message) throws -> ShmGuestFrame {
     ShmGuestFrame(payload: msg.encode())
 }
 
+// r[impl transport.shm]
+// r[impl zerocopy.framing.link.shm]
 func shmFrameToMessage(_ frame: ShmGuestFrame) throws -> Message {
     do {
         return try Message.decode(from: Data(frame.payload))
@@ -16,6 +20,7 @@ func shmFrameToMessage(_ frame: ShmGuestFrame) throws -> Message {
     }
 }
 
+// r[impl transport.shm]
 public final class ShmGuestTransport: MessageTransport, @unchecked Sendable {
     public let negotiated: Negotiated
 

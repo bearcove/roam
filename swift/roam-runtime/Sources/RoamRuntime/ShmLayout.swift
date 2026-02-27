@@ -1,6 +1,8 @@
 import Foundation
 
+// r[impl shm.segment.magic.v7]
 private let shmSegmentMagicLegacy = Array("RAPAHUB\u{01}".utf8)
+// r[impl shm.segment.magic.v7]
 private let shmSegmentMagicV7 = Array("ROAMHUB\u{07}".utf8)
 public let shmSegmentMagic = shmSegmentMagicV7
 public let shmSegmentHeaderSize = 128
@@ -24,6 +26,7 @@ public enum ShmLayoutError: Error, Equatable {
     case invalidChannelIndex(UInt32)
 }
 
+// r[impl shm.segment.header]
 public struct ShmSegmentHeader: Sendable, Equatable {
     public let magic: [UInt8]
     public let version: UInt32
@@ -46,6 +49,9 @@ public struct ShmSegmentHeader: Sendable, Equatable {
     public let numVarSlotClasses: UInt32
     public let reserved: [UInt8]
 
+    // r[impl shm.segment.header]
+    // r[impl shm.segment.config]
+    // r[impl shm.segment.magic.v7]
     public static func decode(from bytes: [UInt8]) throws -> ShmSegmentHeader {
         guard bytes.count >= shmSegmentHeaderSize else {
             throw ShmLayoutError.headerTooShort(bytes.count)
@@ -101,6 +107,8 @@ public struct ShmSegmentHeader: Sendable, Equatable {
         )
     }
 
+    // r[impl shm.segment.header]
+    // r[impl shm.segment.magic.v7]
     public func validateV2(mappedSize: UInt64? = nil) throws {
         if version != 2 && version != 7 {
             throw ShmLayoutError.unsupportedVersion(version)
@@ -168,6 +176,8 @@ public struct ShmSegmentHeader: Sendable, Equatable {
     }
 }
 
+// r[impl shm.peer-table]
+// r[impl shm.peer-table.states]
 public struct ShmPeerEntryView: Sendable, Equatable {
     public let state: UInt32
     public let epoch: UInt32
@@ -227,6 +237,7 @@ public struct ShmChannelEntryView: Sendable, Equatable {
     }
 }
 
+// r[impl shm.segment]
 public struct ShmSegmentView: Sendable {
     public let region: ShmRegion
     public let header: ShmSegmentHeader

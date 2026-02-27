@@ -119,6 +119,11 @@ private func isConnectionClosedTransportError(_ error: Error) -> Bool {
 }
 
 struct ShmVarSlotPoolTests {
+    // r[verify shm.varslot]
+    // r[verify shm.varslot.allocate]
+    // r[verify shm.varslot.free]
+    // r[verify shm.varslot.classes]
+    // r[verify shm.varslot.slot-meta]
     @Test func allocFreeAndGenerationTransitions() throws {
         let path = tmpPath("varslot.bin")
         defer { try? FileManager.default.removeItem(atPath: path) }
@@ -155,6 +160,9 @@ struct ShmVarSlotPoolTests {
         #expect(reused.generation > first.generation)
     }
 
+    // r[verify shm.varslot]
+    // r[verify shm.varslot.allocate]
+    // r[verify shm.varslot.free]
     @Test func stressChurnEndsWithNoLeakedSlots() async throws {
         let path = tmpPath("varslot-stress.bin")
         defer { try? FileManager.default.removeItem(atPath: path) }
@@ -226,6 +234,10 @@ struct ShmVarSlotPoolTests {
 }
 
 struct ShmGuestLifecycleTests {
+    // r[verify shm.architecture]
+    // r[verify shm.signal]
+    // r[verify shm.guest.attach]
+    // r[verify shm.guest.detach]
     @Test func attachDetachAndTicketValidation() throws {
         let path = tmpPath("guest-lifecycle.bin")
         defer { try? FileManager.default.removeItem(atPath: path) }
@@ -247,6 +259,7 @@ struct ShmGuestLifecycleTests {
         _ = fixture
     }
 
+    // r[verify shm.guest.attach]
     @Test func reservedTicketAttachSucceeds() throws {
         let path = tmpPath("guest-ticket.bin")
         defer { try? FileManager.default.removeItem(atPath: path) }
@@ -270,6 +283,7 @@ struct ShmGuestLifecycleTests {
         _ = fixture
     }
 
+    // r[verify shm.guest.attach-failure]
     @Test func invalidTicketPeerIsRejected() throws {
         let path = tmpPath("guest-invalid-peer.bin")
         defer { try? FileManager.default.removeItem(atPath: path) }
@@ -283,6 +297,8 @@ struct ShmGuestLifecycleTests {
         _ = fixture
     }
 
+    // r[verify shm.host.goodbye]
+    // r[verify shm.guest.attach-failure]
     @Test func hostGoodbyeRejectsAttach() throws {
         let path = tmpPath("guest-host-goodbye.bin")
         defer { try? FileManager.default.removeItem(atPath: path) }
@@ -301,6 +317,12 @@ struct ShmGuestLifecycleTests {
 }
 
 struct ShmDoorbellAndPayloadTests {
+    // r[verify zerocopy.send.shm]
+    // r[verify zerocopy.recv.shm.inline]
+    // r[verify zerocopy.recv.shm.slotref]
+    // r[verify shm.framing.inline]
+    // r[verify shm.framing.slot-ref]
+    // r[verify shm.framing.threshold]
     @Test func mixedInlineAndSlotRefPathsRoundTrip() throws {
         let path = tmpPath("guest-payload.bin")
         defer { try? FileManager.default.removeItem(atPath: path) }
@@ -376,6 +398,9 @@ struct ShmDoorbellAndPayloadTests {
         try pool.free(handle)
     }
 
+    // r[verify shm.signal.doorbell]
+    // r[verify shm.signal.doorbell.signal]
+    // r[verify shm.signal.doorbell.wait]
     @Test func doorbellSignalWaitDrain() throws {
         let pair = try makeDoorbellPair()
         defer {
@@ -391,6 +416,9 @@ struct ShmDoorbellAndPayloadTests {
         #expect(try host.wait(timeoutMs: 10) == .timeout)
     }
 
+    // r[verify shm.signal.doorbell]
+    // r[verify shm.signal.doorbell.signal]
+    // r[verify shm.signal.doorbell.wait]
     @Test func doorbellBurstSignalsCoalesce() throws {
         let pair = try makeDoorbellPair()
         defer {
@@ -409,6 +437,7 @@ struct ShmDoorbellAndPayloadTests {
         #expect(try host.wait(timeoutMs: 10) == .timeout)
     }
 
+    // r[verify shm.signal.doorbell.death]
     @Test func doorbellPeerDeathIsReported() throws {
         let pair = try makeDoorbellPair()
         defer { close(pair.host) }
@@ -421,6 +450,7 @@ struct ShmDoorbellAndPayloadTests {
 }
 
 struct ShmGuestRemapTests {
+    // r[verify transport.shm]
     @Test func closedTransportSendReturnsConnectionClosed() async throws {
         let path = tmpPath("transport-closed-send.bin")
         defer { try? FileManager.default.removeItem(atPath: path) }
@@ -438,6 +468,8 @@ struct ShmGuestRemapTests {
         _ = fixture
     }
 
+    // r[verify transport.shm]
+    // r[verify shm.signal.doorbell.death]
     @Test func peerDeathInRecvReturnsConnectionClosed() async throws {
         let path = tmpPath("transport-peer-dead.bin")
         let pair = try makeDoorbellPair()

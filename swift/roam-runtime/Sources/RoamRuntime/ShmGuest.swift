@@ -4,6 +4,7 @@ import CRoamShmFfi
 import Darwin
 #endif
 
+// r[impl shm.peer-table.states]
 public enum ShmPeerState: UInt32, Sendable {
     case empty = 0
     case attached = 1
@@ -11,12 +12,14 @@ public enum ShmPeerState: UInt32, Sendable {
     case reserved = 3
 }
 
+// r[impl shm.varslot.slot-meta]
 public enum ShmSlotState: UInt32, Sendable {
     case free = 0
     case allocated = 1
     case inFlight = 2
 }
 
+// r[impl shm.varslot.classes]
 public struct ShmVarSlotClass: Sendable, Equatable {
     public let slotSize: UInt32
     public let count: UInt32
@@ -49,6 +52,9 @@ public enum ShmVarSlotFreeError: Error, Equatable {
     case ffiError
 }
 
+// r[impl shm.varslot]
+// r[impl shm.varslot.allocate]
+// r[impl shm.varslot.free]
 public final class ShmVarSlotPool: @unchecked Sendable {
     private static let sizeClassHeaderSize = 64
 
@@ -81,6 +87,7 @@ public final class ShmVarSlotPool: @unchecked Sendable {
         }
     }
 
+    // r[impl shm.varslot.classes]
     public static func loadClasses(region: ShmRegion, header: ShmSegmentHeader) throws -> [ShmVarSlotClass] {
         let base = Int(header.varSlotPoolOffset)
         let numClasses = Int(header.numVarSlotClasses)
@@ -115,6 +122,7 @@ public final class ShmVarSlotPool: @unchecked Sendable {
         roam_var_slot_pool_init(pool)
     }
 
+    // r[impl shm.varslot.allocate]
     public func alloc(size: UInt32, owner: UInt8) -> ShmVarSlotHandle? {
         var out = RoamVarSlotHandle(class_idx: 0, extent_idx: 0, slot_idx: 0, generation: 0)
         let result = roam_var_slot_pool_alloc(pool, size, owner, &out)
@@ -136,6 +144,7 @@ public final class ShmVarSlotPool: @unchecked Sendable {
         }
     }
 
+    // r[impl shm.varslot.free]
     public func free(_ handle: ShmVarSlotHandle) throws {
         let result = roam_var_slot_pool_free(pool, toFfi(handle))
         if result != 0 {
@@ -195,6 +204,9 @@ public enum ShmDoorbellError: Error, Equatable {
     case unsupportedPlatform
 }
 
+// r[impl shm.signal.doorbell]
+// r[impl shm.signal.doorbell.signal]
+// r[impl shm.signal.doorbell.wait]
 public final class ShmDoorbell: @unchecked Sendable {
     public let fd: Int32
     private let ownsFd: Bool
@@ -266,6 +278,7 @@ public final class ShmDoorbell: @unchecked Sendable {
             }
             if n > 0 {
                 if (pfd.revents & Int16(POLLHUP | POLLERR | POLLNVAL)) != 0 {
+                    // r[impl shm.signal.doorbell.death]
                     return .peerDead
                 }
                 if (pfd.revents & Int16(POLLIN)) != 0 {
@@ -348,6 +361,15 @@ public enum ShmGuestReceiveError: Error, Equatable {
     case payloadTooLarge
 }
 
+// r[impl shm.guest.attach]
+// r[impl shm.guest.detach]
+// r[impl shm.host.goodbye]
+// r[impl shm.architecture]
+// r[impl shm.signal]
+// r[impl shm.framing.threshold]
+// r[impl zerocopy.send.shm]
+// r[impl zerocopy.recv.shm.inline]
+// r[impl zerocopy.recv.shm.slotref]
 public final class ShmGuestRuntime: @unchecked Sendable {
     public let peerId: UInt8
     public private(set) var region: ShmRegion
@@ -359,11 +381,15 @@ public final class ShmGuestRuntime: @unchecked Sendable {
     private let doorbell: ShmDoorbell?
     private var fatalError = false
 
+    // r[impl shm.guest.attach]
+    // r[impl shm.guest.attach-failure]
     public static func attach(path: String) throws -> ShmGuestRuntime {
         let region = try ShmRegion.attach(path: path)
         return try attach(region: region, ticket: nil)
     }
 
+    // r[impl shm.guest.attach]
+    // r[impl shm.guest.attach-failure]
     public static func attach(ticket: ShmBootstrapTicket) throws -> ShmGuestRuntime {
         let region: ShmRegion
         if ticket.shmFd >= 0 {
@@ -374,6 +400,8 @@ public final class ShmGuestRuntime: @unchecked Sendable {
         return try attach(region: region, ticket: ticket)
     }
 
+    // r[impl shm.guest.attach]
+    // r[impl shm.guest.attach-failure]
     private static func attach(region: ShmRegion, ticket: ShmBootstrapTicket?) throws -> ShmGuestRuntime {
         let view = try ShmSegmentView(region: region)
         let header = view.header
@@ -451,6 +479,10 @@ public final class ShmGuestRuntime: @unchecked Sendable {
         self.doorbell = doorbell
     }
 
+    // r[impl zerocopy.send.shm]
+    // r[impl shm.framing.inline]
+    // r[impl shm.framing.slot-ref]
+    // r[impl shm.framing.threshold]
     public func send(frame: ShmGuestFrame) throws {
         if fatalError || hostGoodbyeFlag() {
             throw ShmGuestSendError.hostGoodbye
@@ -523,6 +555,10 @@ public final class ShmGuestRuntime: @unchecked Sendable {
         throw ShmGuestSendError.ringFull
     }
 
+    // r[impl zerocopy.recv.shm.inline]
+    // r[impl zerocopy.recv.shm.slotref]
+    // r[impl shm.framing.inline]
+    // r[impl shm.framing.slot-ref]
     public func receive() throws -> ShmGuestFrame? {
         if fatalError || hostGoodbyeFlag() {
             return nil
@@ -618,6 +654,7 @@ public final class ShmGuestRuntime: @unchecked Sendable {
         return true
     }
 
+    // r[impl shm.guest.detach]
     public func detach() {
         if let statePtr = try? peerStatePointer() {
             atomicStoreU32Release(statePtr, ShmPeerState.goodbye.rawValue)

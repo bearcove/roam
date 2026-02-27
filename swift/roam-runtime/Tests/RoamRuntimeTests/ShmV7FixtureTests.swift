@@ -39,6 +39,8 @@ private func readU64LE(_ bytes: [UInt8], _ at: Int) -> UInt64 {
 }
 
 struct ShmV7FixtureTests {
+    // r[verify shm.segment.magic.v7]
+    // r[verify shm.segment.header]
     @Test func segmentHeaderHasV7MagicAndVersion() throws {
         let bytes = try loadShmV7Fixture("segment_header")
         #expect(bytes.count == 128)
@@ -47,6 +49,8 @@ struct ShmV7FixtureTests {
         #expect(readU32LE(bytes, 12) == 128)
     }
 
+    // r[verify shm.framing.header]
+    // r[verify shm.framing.flags]
     @Test func frameHeaderIsV7EightByteHeader() throws {
         let bytes = try loadShmV7Fixture("frame_header")
         #expect(bytes.count == 8)
@@ -57,6 +61,9 @@ struct ShmV7FixtureTests {
         #expect(bytes[7] == 0)
     }
 
+    // r[verify shm.framing.inline]
+    // r[verify shm.framing.slot-ref]
+    // r[verify shm.framing.mmap-ref]
     @Test func inlineAndReferenceFixturesHaveExpectedSizes() throws {
         let inline = try loadShmV7Fixture("frame_inline")
         #expect(inline.count == 20)
