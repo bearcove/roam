@@ -5,9 +5,15 @@ use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use facet_postcard::{from_slice_borrowed, to_vec};
 use roam_shm::framing::{OwnedFrame, read_frame, write_inline};
 use roam_shm::segment::{Segment, SegmentConfig};
 use roam_shm::varslot::SizeClassConfig;
+use roam_types::{
+    ChannelBody, ChannelClose, ChannelGrantCredit, ChannelId, ChannelMessage, ConnectionId,
+    Message, MessagePayload, Metadata, MetadataEntry, MetadataFlags, MetadataValue, Payload,
+    RequestBody, RequestId, RequestMessage, RequestResponse,
+};
 use shm_primitives::{FileCleanup, clear_cloexec};
 
 fn swift_runtime_package_path() -> PathBuf {
@@ -37,13 +43,14 @@ fn swift_shm_guest_client_path() -> PathBuf {
 fn read_guest_payloads(
     segment: &Segment,
     peer_id: shm_primitives::PeerId,
+    expected_count: usize,
     deadline: Instant,
 ) -> Vec<Vec<u8>> {
     let g2h = segment.g2h_bipbuf(peer_id);
     let (_tx, mut rx) = g2h.split();
     let mut payloads = Vec::new();
 
-    while Instant::now() < deadline && payloads.len() < 2 {
+    while Instant::now() < deadline && payloads.len() < expected_count {
         if let Some(frame) = read_frame(&mut rx) {
             match frame {
                 OwnedFrame::Inline(bytes) => payloads.push(bytes),
@@ -66,6 +73,21 @@ fn send_host_ack(segment: &Segment, peer_id: shm_primitives::PeerId, payload: &[
     let h2g = segment.h2g_bipbuf(peer_id);
     let (mut tx, _rx) = h2g.split();
     write_inline(&mut tx, payload).expect("write ack frame");
+}
+
+fn send_host_message(segment: &Segment, peer_id: shm_primitives::PeerId, message: &Message<'_>) {
+    let h2g = segment.h2g_bipbuf(peer_id);
+    let (mut tx, _rx) = h2g.split();
+    let payload = to_vec(message).expect("encode host message");
+    write_inline(&mut tx, &payload).expect("write host message");
+}
+
+fn sample_metadata<'a>() -> Metadata<'a> {
+    vec![MetadataEntry {
+        key: "trace-id",
+        value: MetadataValue::String("rust-trace"),
+        flags: MetadataFlags::NONE,
+    }]
 }
 
 fn make_socketpair() -> (i32, i32) {
@@ -113,7 +135,12 @@ fn rust_segment_to_swift_guest_data_path() {
         .spawn()
         .expect("spawn swift shm guest client");
 
-    let payloads = read_guest_payloads(&segment, peer_id, Instant::now() + Duration::from_secs(5));
+    let payloads = read_guest_payloads(
+        &segment,
+        peer_id,
+        2,
+        Instant::now() + Duration::from_secs(5),
+    );
     if payloads.len() < 2 {
         let output = child
             .wait_with_output()
@@ -139,6 +166,135 @@ fn rust_segment_to_swift_guest_data_path() {
 
     send_host_ack(&segment, peer_id, b"ack-inline");
     send_host_ack(&segment, peer_id, b"ack-slot");
+
+    let output = child
+        .wait_with_output()
+        .expect("wait for swift guest process");
+    unsafe {
+        libc::close(host_fd);
+        libc::close(guest_fd);
+    }
+    if !output.status.success() {
+        panic!(
+            "swift shm guest failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
+
+#[test]
+fn rust_segment_to_swift_guest_message_v7_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let shm_path = dir.path().join("xlang-shm-message-v7.shm");
+    let class = [SizeClassConfig {
+        slot_size: 4096,
+        slot_count: 2,
+    }];
+    let config = SegmentConfig {
+        max_guests: 1,
+        bipbuf_capacity: 64 * 1024,
+        max_payload_size: 4096,
+        inline_threshold: 64,
+        heartbeat_interval: 0,
+        size_classes: &class,
+    };
+    let segment = Segment::create(Path::new(&shm_path), config, FileCleanup::Manual).unwrap();
+
+    let peer_id = segment.reserve_peer().expect("reserve peer slot");
+    let (host_fd, guest_fd) = make_socketpair();
+    clear_cloexec(guest_fd).expect("clear close-on-exec");
+
+    let child = Command::new(swift_shm_guest_client_path())
+        .arg(format!("--hub-path={}", shm_path.display()))
+        .arg(format!("--peer-id={}", peer_id.get()))
+        .arg(format!("--doorbell-fd={guest_fd}"))
+        .arg("--size-class=4096:2")
+        .arg("--scenario=message-v7")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn swift shm guest client");
+
+    let payloads = read_guest_payloads(
+        &segment,
+        peer_id,
+        3,
+        Instant::now() + Duration::from_secs(5),
+    );
+    if payloads.len() < 3 {
+        let output = child
+            .wait_with_output()
+            .expect("wait for swift guest process");
+        panic!(
+            "expected three MessageV7 frames from Swift guest, got {}\nstatus: {}\nstdout:\n{}\nstderr:\n{}",
+            payloads.len(),
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    let req = from_slice_borrowed::<Message<'_>>(&payloads[0]).expect("decode request message");
+    assert_eq!(req.connection_id, ConnectionId(2));
+    match req.payload {
+        MessagePayload::RequestMessage(RequestMessage {
+            id: RequestId(11),
+            body: RequestBody::Call(call),
+        }) => {
+            assert_eq!(call.channels, vec![ChannelId(3), ChannelId(5)]);
+            let payload = match call.args {
+                Payload::Incoming(bytes) => bytes,
+                _ => panic!("expected incoming bytes payload"),
+            };
+            assert_eq!(payload, b"swift-request");
+        }
+        _ => panic!("unexpected first message payload"),
+    }
+
+    let close = from_slice_borrowed::<Message<'_>>(&payloads[1]).expect("decode channel close");
+    assert_eq!(close.connection_id, ConnectionId(2));
+    match close.payload {
+        MessagePayload::ChannelMessage(ChannelMessage {
+            id: ChannelId(3),
+            body: ChannelBody::Close(ChannelClose { metadata }),
+        }) => {
+            assert_eq!(metadata.len(), 1);
+            assert_eq!(metadata[0].key, "reason");
+        }
+        _ => panic!("unexpected second message payload"),
+    }
+
+    let proto = from_slice_borrowed::<Message<'_>>(&payloads[2]).expect("decode protocol error");
+    match proto.payload {
+        MessagePayload::ProtocolError(err) => {
+            assert_eq!(err.description, "swift protocol violation")
+        }
+        _ => panic!("unexpected third message payload"),
+    }
+
+    let ret: u32 = 42;
+    let response = Message {
+        connection_id: ConnectionId(2),
+        payload: MessagePayload::RequestMessage(RequestMessage {
+            id: RequestId(11),
+            body: RequestBody::Response(RequestResponse {
+                ret: Payload::outgoing(&ret),
+                channels: vec![ChannelId(7)],
+                metadata: sample_metadata(),
+            }),
+        }),
+    };
+    send_host_message(&segment, peer_id, &response);
+
+    let credit = Message {
+        connection_id: ConnectionId(2),
+        payload: MessagePayload::ChannelMessage(ChannelMessage {
+            id: ChannelId(3),
+            body: ChannelBody::GrantCredit(ChannelGrantCredit { additional: 4096 }),
+        }),
+    };
+    send_host_message(&segment, peer_id, &credit);
 
     let output = child
         .wait_with_output()

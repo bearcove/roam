@@ -15,6 +15,25 @@ func messageToShmFrame(_ msg: MessageV7) throws -> ShmGuestFrame {
 func shmFrameToMessage(_ frame: ShmGuestFrame) throws -> MessageV7 {
     do {
         return try MessageV7.decode(from: Data(frame.payload))
+    } catch WireV7Error.trailingBytes {
+        // Inline SHM frames are 4-byte aligned and can carry up to 3 trailing zero bytes.
+        // MessageV7 is self-delimiting; retry decode after trimming zero padding.
+        for pad in 1...3 {
+            guard frame.payload.count >= pad else {
+                break
+            }
+            let suffix = frame.payload[(frame.payload.count - pad)...]
+            guard suffix.allSatisfy({ $0 == 0 }) else {
+                break
+            }
+            let trimmed = Array(frame.payload.dropLast(pad))
+            do {
+                return try MessageV7.decode(from: Data(trimmed))
+            } catch {
+                continue
+            }
+        }
+        throw ShmTransportConvertError.decodeError("\(WireV7Error.trailingBytes)")
     } catch {
         throw ShmTransportConvertError.decodeError("\(error)")
     }

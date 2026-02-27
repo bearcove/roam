@@ -315,6 +315,76 @@ struct ShmGuestClientMain {
             print("ok")
             exit(0)
 
+        case "message-v7":
+            let transport = ShmGuestTransport(runtime: guest)
+
+            let metadata: MetadataV7 = [
+                MetadataEntryV7(key: "trace-id", value: .string("swift-trace"), flags: 0),
+                MetadataEntryV7(key: "attempt", value: .u64(1), flags: 0),
+            ]
+
+            do {
+                try await transport.send(
+                    .request(
+                        connId: 2,
+                        requestId: 11,
+                        methodId: 0xE5A1_D6B2_C390_F001,
+                        metadata: metadata,
+                        channels: [3, 5],
+                        payload: Array("swift-request".utf8)
+                    ))
+                try await transport.send(
+                    .close(
+                        connId: 2,
+                        channelId: 3,
+                        metadata: [MetadataEntryV7(key: "reason", value: .string("swift-close"), flags: 0)]
+                    ))
+                try await transport.send(.protocolError(description: "swift protocol violation"))
+            } catch {
+                fail("transport send failed: \(error)")
+            }
+
+            var sawResponse = false
+            var sawCredit = false
+            let deadline = Date().addingTimeInterval(5)
+
+            while Date() < deadline {
+                do {
+                    guard let msg = try await transport.recv() else {
+                        continue
+                    }
+                    switch msg.payload {
+                    case .requestMessage(let request):
+                        if request.id == 11,
+                           case .response(let response) = request.body,
+                           response.ret.bytes == [42],
+                           response.channels == [7]
+                        {
+                            sawResponse = true
+                        }
+                    case .channelMessage(let channel):
+                        if channel.id == 3,
+                           case .grantCredit(let credit) = channel.body,
+                           credit.additional == 4096
+                        {
+                            sawCredit = true
+                        }
+                    default:
+                        break
+                    }
+                    if sawResponse && sawCredit {
+                        try await transport.close()
+                        guest.detach()
+                        print("ok")
+                        exit(0)
+                    }
+                } catch {
+                    fail("transport receive failed: \(error)")
+                }
+            }
+
+            fail("timed out waiting for message-v7 responses")
+
         default:
             fail("unknown scenario: \(args.scenario)")
         }

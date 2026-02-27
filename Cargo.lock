@@ -1818,6 +1818,7 @@ dependencies = [
 name = "roam-shm"
 version = "3.0.0"
 dependencies = [
+ "facet-postcard",
  "libc",
  "loom",
  "roam-types",
