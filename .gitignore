@@ -6,6 +6,9 @@ fuzz/**/in/
 fuzz/**/out/
 fuzz/**/findings/
 fuzz/**/target/
+fuzz/**/.cur_input
+fuzz/**/afl-out/
+fuzz/**/afl-tmp/
 
 # Node.js / Playwright
 node_modules/

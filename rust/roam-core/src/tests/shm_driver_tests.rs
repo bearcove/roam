@@ -104,3 +104,81 @@ async fn echo_call_across_shm_link() {
     let result: u32 = facet_postcard::from_slice(ret_bytes).expect("deserialize response");
     assert_eq!(result, 42);
 }
+
+struct BlobEchoHandler;
+
+impl Handler<DriverReplySink> for BlobEchoHandler {
+    fn handle(
+        &self,
+        call: SelfRef<RequestCall<'static>>,
+        reply: DriverReplySink,
+    ) -> impl std::future::Future<Output = ()> + Send + '_ {
+        async move {
+            let args_bytes = match &call.args {
+                Payload::Incoming(bytes) => *bytes,
+                _ => panic!("expected incoming payload"),
+            };
+
+            let blob: Vec<u8> = facet_postcard::from_slice(args_bytes).expect("deserialize blob");
+            reply
+                .send_reply(RequestResponse {
+                    ret: Payload::outgoing(&blob),
+                    channels: vec![],
+                    metadata: Default::default(),
+                })
+                .await;
+        }
+    }
+}
+
+#[tokio::test]
+async fn echo_blob_stress_over_shm_link() {
+    let (client_conduit, server_conduit) = message_conduit_pair();
+
+    let server_task = moire::task::spawn(
+        async move {
+            let (mut server_session, server_handle) = acceptor(server_conduit)
+                .establish()
+                .await
+                .expect("server handshake failed");
+            let mut server_driver = Driver::new(server_handle, BlobEchoHandler, Parity::Even);
+            moire::task::spawn(async move { server_session.run().await }.named("server_session"));
+            moire::task::spawn(async move { server_driver.run().await }.named("server_driver"));
+        }
+        .named("server_setup"),
+    );
+
+    let (mut client_session, client_handle) = initiator(client_conduit)
+        .establish()
+        .await
+        .expect("client handshake failed");
+    let mut client_driver = Driver::new(client_handle, NoopHandler, Parity::Odd);
+    let caller = client_driver.caller();
+    moire::task::spawn(async move { client_session.run().await }.named("client_session"));
+    moire::task::spawn(async move { client_driver.run().await }.named("client_driver"));
+
+    server_task.await.expect("server setup failed");
+
+    // Alternate tiny and large payloads to exercise both inline and slot-ref SHM paths.
+    for i in 0..200 {
+        let len = if i % 2 == 0 { 32 } else { 2048 };
+        let payload = vec![(i % 251) as u8; len];
+        let response = caller
+            .call(RequestCall {
+                method_id: MethodId(2),
+                args: Payload::outgoing(&payload),
+                channels: vec![],
+                metadata: Default::default(),
+            })
+            .await
+            .expect("blob echo call should succeed");
+
+        let ret_bytes = match &response.ret {
+            Payload::Incoming(bytes) => *bytes,
+            _ => panic!("expected incoming payload in response"),
+        };
+        let echoed: Vec<u8> =
+            facet_postcard::from_slice(ret_bytes).expect("deserialize echoed blob");
+        assert_eq!(echoed, payload);
+    }
+}

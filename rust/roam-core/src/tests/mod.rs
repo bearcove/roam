@@ -271,6 +271,7 @@ async fn rx_recv_decodes_channel_items() {
 }
 
 mod driver_tests;
+mod service_macro_shared;
 mod service_macro_tests;
 mod shm_driver_tests;
 mod shm_service_macro_tests;

@@ -33,3 +33,7 @@ all *args:
     just rust {{ quote(args) }}
     just ts {{ quote(args) }}
     just swift {{ quote(args) }}
+
+fuzz-shm-build:
+    cargo afl build --manifest-path fuzz/roam-shm-afl/Cargo.toml --bin framing_peek
+    cargo afl build --manifest-path fuzz/roam-shm-afl/Cargo.toml --bin shm_link_roundtrip

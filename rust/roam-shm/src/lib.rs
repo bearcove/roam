@@ -579,4 +579,27 @@ mod tests {
             .alloc(payload.len())
             .expect("slot must be released after drop");
     }
+
+    #[tokio::test]
+    async fn mixed_payload_stress_roundtrip() {
+        let classes = [SizeClassConfig {
+            slot_size: 4096,
+            slot_count: 32,
+        }];
+        let (a, b) = ShmLink::heap_pair(1 << 16, 1 << 20, 256, &classes);
+        let (a_tx, _a_rx) = a.split();
+        let (_b_tx, mut b_rx) = b.split();
+
+        for i in 0..400 {
+            let len = if i % 3 == 0 { 48 } else { 1500 };
+            let payload = vec![(i % 239) as u8; len];
+            let permit = a_tx.reserve().await.unwrap();
+            let mut slot = permit.alloc(payload.len()).unwrap();
+            slot.as_mut_slice().copy_from_slice(&payload);
+            slot.commit();
+
+            let backing = b_rx.recv().await.unwrap().unwrap();
+            assert_eq!(backing.as_bytes(), payload.as_slice());
+        }
+    }
 }
