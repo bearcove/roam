@@ -566,10 +566,11 @@ mod tests {
 
         // single-slot pool: second allocation fails until backing is dropped
         let permit2 = a_tx.reserve().await.unwrap();
-        assert_eq!(
-            permit2.alloc(payload.len()).unwrap_err().kind(),
-            io::ErrorKind::WouldBlock
-        );
+        let err = match permit2.alloc(payload.len()) {
+            Ok(_) => panic!("expected slot allocation to fail while shared backing is alive"),
+            Err(err) => err,
+        };
+        assert_eq!(err.kind(), io::ErrorKind::WouldBlock);
 
         drop(backing);
 
