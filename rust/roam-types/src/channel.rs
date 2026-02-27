@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use facet::Facet;
 use facet_core::PtrConst;
-use tokio::sync::mpsc;
+use tokio::sync::{Semaphore, mpsc};
 
 use crate::{
     ChannelClose, ChannelGrantCredit, ChannelItem, ChannelReset, Metadata, Payload, SelfRef,
@@ -34,6 +34,62 @@ pub trait ChannelSink: Send + Sync + 'static {
         &self,
         metadata: Metadata,
     ) -> Pin<Box<dyn Future<Output = Result<(), TxError>> + Send + 'static>>;
+}
+
+// r[impl rpc.flow-control.credit]
+// r[impl rpc.flow-control.credit.exhaustion]
+/// A [`ChannelSink`] wrapper that enforces credit-based flow control.
+///
+/// Each `send_payload` acquires one permit from the semaphore, blocking if
+/// credit is zero. The semaphore is shared with the driver so that incoming
+/// `GrantCredit` messages can add permits via [`CreditSink::credit`].
+pub struct CreditSink<S: ChannelSink> {
+    inner: S,
+    credit: Arc<Semaphore>,
+}
+
+impl<S: ChannelSink> CreditSink<S> {
+    // r[impl rpc.flow-control.credit.initial]
+    // r[impl rpc.flow-control.credit.initial.zero]
+    /// Wrap `inner` with `initial_credit` permits (the const generic `N`).
+    pub fn new(inner: S, initial_credit: u32) -> Self {
+        Self {
+            inner,
+            credit: Arc::new(Semaphore::new(initial_credit as usize)),
+        }
+    }
+
+    /// Returns the credit semaphore. The driver holds a clone so
+    /// `GrantCredit` messages can call `add_permits`.
+    pub fn credit(&self) -> &Arc<Semaphore> {
+        &self.credit
+    }
+}
+
+impl<S: ChannelSink> ChannelSink for CreditSink<S> {
+    fn send_payload<'payload>(
+        &self,
+        payload: Payload<'payload>,
+    ) -> Pin<Box<dyn Future<Output = Result<(), TxError>> + Send + 'payload>> {
+        let credit = self.credit.clone();
+        let fut = self.inner.send_payload(payload);
+        Box::pin(async move {
+            let permit = credit
+                .acquire()
+                .await
+                .map_err(|_| TxError::Transport("channel credit semaphore closed".into()))?;
+            permit.forget();
+            fut.await
+        })
+    }
+
+    fn close_channel(
+        &self,
+        metadata: Metadata,
+    ) -> Pin<Box<dyn Future<Output = Result<(), TxError>> + Send + 'static>> {
+        // Close does not consume credit — it's a control message.
+        self.inner.close_channel(metadata)
+    }
 }
 
 /// Message delivered to an `Rx` by the driver.

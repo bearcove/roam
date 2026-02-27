@@ -270,6 +270,7 @@ async fn rx_recv_decodes_channel_items() {
     assert!(rx.recv().await.expect("recv close").is_none());
 }
 
+mod credit_tests;
 mod driver_tests;
 mod service_macro_shared;
 mod service_macro_tests;

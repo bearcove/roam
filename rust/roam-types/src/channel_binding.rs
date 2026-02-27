@@ -26,8 +26,9 @@ pub trait ChannelBinder: Send + Sync {
     /// Create an outbound channel (Tx on our side).
     ///
     /// Allocates a new channel ID and returns a sink for sending items.
+    /// `initial_credit` is the const generic `N` from `Tx<T, N>`.
     /// Used by the **client** when building `RequestCall.channels`.
-    fn create_tx(&self) -> (ChannelId, Arc<dyn ChannelSink>);
+    fn create_tx(&self, initial_credit: u32) -> (ChannelId, Arc<dyn ChannelSink>);
 
     /// Create an inbound channel (Rx on our side).
     ///
@@ -39,7 +40,8 @@ pub trait ChannelBinder: Send + Sync {
     ///
     /// The channel ID comes from `RequestCall.channels`. The server creates
     /// a sink that sends items to the client on this channel.
-    fn bind_tx(&self, channel_id: ChannelId) -> Arc<dyn ChannelSink>;
+    /// `initial_credit` is the const generic `N` from `Tx<T, N>`.
+    fn bind_tx(&self, channel_id: ChannelId, initial_credit: u32) -> Arc<dyn ChannelSink>;
 
     /// Register an inbound channel by ID and return the receiver (server side).
     ///
@@ -87,7 +89,7 @@ pub unsafe fn bind_channels_server(
 
                 match loc.kind {
                     ChannelKind::Tx => {
-                        let sink = binder.bind_tx(channel_id);
+                        let sink = binder.bind_tx(channel_id, loc.initial_credit);
                         if let Ok(mut ps) = channel_poke.into_struct()
                             && let Ok(mut sink_field) = ps.field_by_name("sink")
                             && let Ok(slot) = sink_field.get_mut::<SinkSlot>()
@@ -144,7 +146,7 @@ pub unsafe fn bind_channels_client(
         match poke.at_path_mut(&loc.path) {
             Ok(channel_poke) => match loc.kind {
                 ChannelKind::Tx => {
-                    let (channel_id, sink) = binder.create_tx();
+                    let (channel_id, sink) = binder.create_tx(loc.initial_credit);
                     channel_ids.push(channel_id);
                     if let Ok(mut ps) = channel_poke.into_struct()
                         && let Ok(mut sink_field) = ps.field_by_name("sink")

@@ -1,15 +1,16 @@
 use std::{collections::BTreeMap, pin::Pin, sync::Arc};
 
 use moire::sync::SyncMutex;
+use tokio::sync::Semaphore;
 
 use futures_util::StreamExt as _;
 use futures_util::stream::FuturesUnordered;
 use moire::task::FutureExt as _;
 use roam_types::{
     Caller, ChannelBinder, ChannelBody, ChannelClose, ChannelId, ChannelItem, ChannelMessage,
-    ChannelSink, Handler, IdAllocator, IncomingChannelMessage, Parity, Payload, ReplySink,
-    RequestBody, RequestCall, RequestId, RequestMessage, RequestResponse, RoamError, SelfRef,
-    TxError,
+    ChannelSink, CreditSink, Handler, IdAllocator, IncomingChannelMessage, Parity, Payload,
+    ReplySink, RequestBody, RequestCall, RequestId, RequestMessage, RequestResponse, RoamError,
+    SelfRef, TxError,
 };
 
 use crate::session::{ConnectionHandle, ConnectionMessage, ConnectionSender};
@@ -28,6 +29,9 @@ struct DriverShared {
     /// Registry mapping inbound channel IDs to the sender that feeds the Rx handle.
     channel_senders:
         SyncMutex<BTreeMap<ChannelId, tokio::sync::mpsc::Sender<IncomingChannelMessage>>>,
+    /// Credit semaphores for outbound channels (Tx on our side).
+    /// The driver's GrantCredit handler adds permits to these.
+    channel_credits: SyncMutex<BTreeMap<ChannelId, Arc<Semaphore>>>,
 }
 
 /// Concrete `ReplySink` implementation for the driver.
@@ -73,6 +77,7 @@ impl Drop for DriverReplySink {
 ///
 /// Created by the driver when setting up outbound channels (Tx handles).
 /// Sends `ChannelItem` and `ChannelClose` messages through the connection.
+/// Wrapped with [`CreditSink`] to enforce credit-based flow control.
 pub struct DriverChannelSink {
     sender: ConnectionSender,
     channel_id: ChannelId,
@@ -130,16 +135,25 @@ pub struct DriverCaller {
 }
 
 impl DriverCaller {
-    /// Allocate a channel ID and create a sink for outbound items (Tx on our side).
+    /// Allocate a channel ID and create a credit-controlled sink for outbound items.
     ///
-    /// The returned sink should be bound to a `Tx` handle via `Tx::bind()`.
-    /// The channel ID must be included in the `RequestCall.channels` list.
-    pub fn create_tx_channel(&self) -> (ChannelId, Arc<DriverChannelSink>) {
+    /// `initial_credit` is the const generic `N` from `Tx<T, N>`.
+    /// The returned sink enforces credit; the semaphore is registered so
+    /// `GrantCredit` messages can add permits.
+    pub fn create_tx_channel(
+        &self,
+        initial_credit: u32,
+    ) -> (ChannelId, Arc<CreditSink<DriverChannelSink>>) {
         let channel_id = self.shared.channel_ids.lock().next();
-        let sink = Arc::new(DriverChannelSink {
+        let inner = DriverChannelSink {
             sender: self.sender.clone(),
             channel_id,
-        });
+        };
+        let sink = Arc::new(CreditSink::new(inner, initial_credit));
+        self.shared
+            .channel_credits
+            .lock()
+            .insert(channel_id, Arc::clone(sink.credit()));
         (channel_id, sink)
     }
 
@@ -158,8 +172,8 @@ impl DriverCaller {
 }
 
 impl ChannelBinder for DriverCaller {
-    fn create_tx(&self) -> (ChannelId, Arc<dyn ChannelSink>) {
-        let (id, sink) = self.create_tx_channel();
+    fn create_tx(&self, initial_credit: u32) -> (ChannelId, Arc<dyn ChannelSink>) {
+        let (id, sink) = self.create_tx_channel(initial_credit);
         (id, sink as Arc<dyn ChannelSink>)
     }
 
@@ -174,11 +188,17 @@ impl ChannelBinder for DriverCaller {
         (channel_id, rx)
     }
 
-    fn bind_tx(&self, channel_id: ChannelId) -> Arc<dyn ChannelSink> {
-        Arc::new(DriverChannelSink {
+    fn bind_tx(&self, channel_id: ChannelId, initial_credit: u32) -> Arc<dyn ChannelSink> {
+        let inner = DriverChannelSink {
             sender: self.sender.clone(),
             channel_id,
-        })
+        };
+        let sink = Arc::new(CreditSink::new(inner, initial_credit));
+        self.shared
+            .channel_credits
+            .lock()
+            .insert(channel_id, Arc::clone(sink.credit()));
+        sink
     }
 
     fn register_rx(
@@ -259,8 +279,6 @@ pub struct Driver<H: Handler<DriverReplySink>> {
 }
 
 struct ChannelState {
-    /// Credit remaining (for sender side)
-    credit: u32,
     /// For inbound channels: sender that feeds the Rx handle.
     /// None for outbound-only channels (Tx on this side).
     rx_sender: Option<tokio::sync::mpsc::Sender<IncomingChannelMessage>>,
@@ -283,6 +301,7 @@ impl<H: Handler<DriverReplySink>> Driver<H> {
                 request_ids: SyncMutex::new("driver.request_ids", IdAllocator::new(parity)),
                 channel_ids: SyncMutex::new("driver.channel_ids", IdAllocator::new(parity)),
                 channel_senders: SyncMutex::new("driver.channel_senders", BTreeMap::new()),
+                channel_credits: SyncMutex::new("driver.channel_credits", BTreeMap::new()),
             }),
             channels: BTreeMap::new(),
         }
@@ -413,9 +432,9 @@ impl<H: Handler<DriverReplySink>> Driver<H> {
                     });
                     let _ = tx.try_send(IncomingChannelMessage::Close(close));
                 }
-                // Remove the channel from both registries
                 self.channels.remove(&chan_id);
                 self.shared.channel_senders.lock().remove(&chan_id);
+                self.shared.channel_credits.lock().remove(&chan_id);
             }
             // r[impl rpc.channel.reset]
             ChannelBody::Reset(_reset) => {
@@ -428,12 +447,13 @@ impl<H: Handler<DriverReplySink>> Driver<H> {
                 }
                 self.channels.remove(&chan_id);
                 self.shared.channel_senders.lock().remove(&chan_id);
+                self.shared.channel_credits.lock().remove(&chan_id);
             }
             // r[impl rpc.flow-control.credit.grant]
+            // r[impl rpc.flow-control.credit.grant.additive]
             ChannelBody::GrantCredit(grant) => {
-                if let Some(state) = self.channels.get_mut(&chan_id) {
-                    state.credit = state.credit.saturating_add(grant.additional);
-                    // [TODO] wake any sender blocked on zero credit
+                if let Some(semaphore) = self.shared.channel_credits.lock().get(&chan_id) {
+                    semaphore.add_permits(grant.additional as usize);
                 }
             }
         }
