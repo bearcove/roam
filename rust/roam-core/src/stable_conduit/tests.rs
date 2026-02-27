@@ -87,6 +87,7 @@ async fn recv_raw<LRx: LinkRx>(rx: &mut LRx) -> Vec<u8> {
     let backing = rx.recv().await.unwrap().unwrap();
     match backing {
         roam_types::Backing::Boxed(b) => b.to_vec(),
+        roam_types::Backing::Shared(s) => s.as_bytes().to_vec(),
     }
 }
 

@@ -330,6 +330,7 @@ mod tests {
     fn payload(link: &Backing) -> &[u8] {
         match link {
             Backing::Boxed(b) => b,
+            Backing::Shared(s) => s.as_bytes(),
         }
     }
 

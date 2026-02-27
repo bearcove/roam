@@ -1,6 +1,7 @@
 #![allow(unsafe_code)]
 
 use std::mem::ManuallyDrop;
+use std::sync::Arc;
 
 /// A decoded value `T` that may borrow from its own backing storage.
 ///
@@ -19,20 +20,29 @@ pub struct SelfRef<T: 'static> {
 }
 
 /// Backing storage for a [`SelfRef`].
+pub trait SharedBacking: Send + Sync + 'static {
+    /// Access backing bytes.
+    fn as_bytes(&self) -> &[u8];
+}
+
 pub enum Backing {
     /// Heap-allocated buffer (TCP read, BipBuffer copy-out for small messages).
     Boxed(Box<[u8]>),
-    // SHM VarSlot, pinned in shared memory:
-    // VarSlot(Arc<VarSlot>),
-    // Memory-mapped file region:
-    // Mmap(Arc<MmapRegion>),
+    /// Shared backing that can be provided by transports (for example SHM slots).
+    Shared(Arc<dyn SharedBacking>),
 }
 
 impl Backing {
+    /// Wrap a transport-provided shared backing.
+    pub fn shared(shared: Arc<dyn SharedBacking>) -> Self {
+        Self::Shared(shared)
+    }
+
     /// Access the backing bytes.
     pub fn as_bytes(&self) -> &[u8] {
         match self {
             Backing::Boxed(b) => b,
+            Backing::Shared(s) => s.as_bytes(),
         }
     }
 }

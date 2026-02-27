@@ -36,3 +36,5 @@ facet-error = "0.43.2"
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 roam.workspace = true
 facet-postcard.workspace = true
+shm-primitives.workspace = true
+roam-shm = { path = "../roam-shm" }

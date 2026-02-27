@@ -377,6 +377,17 @@ impl VarSlotPool {
         unsafe { core::slice::from_raw_parts_mut(view.data.add(offset), view.slot_size as usize) }
     }
 
+    /// Return an immutable slice into the slot's data area.
+    ///
+    /// # Safety
+    ///
+    /// The slot must be currently allocated and contain readable payload bytes.
+    pub unsafe fn slot_data<'a>(&self, slot_ref: &SlotRef) -> &'a [u8] {
+        let view = &self.classes[slot_ref.class_idx as usize];
+        let offset = slot_ref.slot_idx as usize * view.slot_size as usize;
+        unsafe { core::slice::from_raw_parts(view.data.add(offset), view.slot_size as usize) }
+    }
+
     /// Return the number of size classes.
     pub fn class_count(&self) -> usize {
         self.classes.len()
