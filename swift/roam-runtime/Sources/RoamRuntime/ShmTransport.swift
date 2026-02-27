@@ -6,15 +6,15 @@ public enum ShmTransportConvertError: Error, Equatable {
 
 // r[impl transport.shm]
 // r[impl zerocopy.framing.link.shm]
-func messageToShmFrame(_ msg: Message) throws -> ShmGuestFrame {
+func messageToShmFrame(_ msg: MessageV7) throws -> ShmGuestFrame {
     ShmGuestFrame(payload: msg.encode())
 }
 
 // r[impl transport.shm]
 // r[impl zerocopy.framing.link.shm]
-func shmFrameToMessage(_ frame: ShmGuestFrame) throws -> Message {
+func shmFrameToMessage(_ frame: ShmGuestFrame) throws -> MessageV7 {
     do {
-        return try Message.decode(from: Data(frame.payload))
+        return try MessageV7.decode(from: Data(frame.payload))
     } catch {
         throw ShmTransportConvertError.decodeError("\(error)")
     }
@@ -62,7 +62,7 @@ public final class ShmGuestTransport: MessageTransport, @unchecked Sendable {
         ShmGuestTransport(runtime: try ShmGuestRuntime.attach(path: path))
     }
 
-    public func send(_ message: Message) async throws {
+    public func send(_ message: MessageV7) async throws {
         let frame = try messageToShmFrame(message)
         do {
             try lock.withLock {
@@ -96,7 +96,7 @@ public final class ShmGuestTransport: MessageTransport, @unchecked Sendable {
         }
     }
 
-    public func recv() async throws -> Message? {
+    public func recv() async throws -> MessageV7? {
         while true {
             var frameToDecode: ShmGuestFrame?
             var sawHostGoodbye = false

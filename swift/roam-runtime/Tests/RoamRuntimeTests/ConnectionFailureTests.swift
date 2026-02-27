@@ -12,12 +12,12 @@ private let peepsRequestEntityIdMetadataKey = "moire.request_entity_id"
 private let peepsConnectionCorrelationIdMetadataKey = "moire.connection_correlation_id"
 
 private enum InboundEvent: Sendable {
-    case message(Message)
+    case message(MessageV7)
     case closed
 }
 
 private actor ScriptedTransport: MessageTransport {
-    private var sentMessages: [Message] = []
+    private var sentMessages: [MessageV7] = []
     private var inboundQueue: [InboundEvent] = []
     private var recvWaiters: [CheckedContinuation<InboundEvent, Never>] = []
 
@@ -27,37 +27,52 @@ private actor ScriptedTransport: MessageTransport {
     private var requestSends = 0
     private var didClose = false
 
-    init(autoRespondRequestCount: Int = 0, dropAfterRequestCount: Int? = nil) {
+    init(
+        autoRespondRequestCount: Int = 0,
+        dropAfterRequestCount: Int? = nil,
+        initialMessage: MessageV7? = .helloYourself(
+            HelloYourselfV7(
+                connectionSettings: ConnectionSettingsV7(parity: .even, maxConcurrentRequests: 64),
+                metadata: []
+            ))
+    ) {
         self.autoRespondRequestCount = autoRespondRequestCount
         self.dropAfterRequestCount = dropAfterRequestCount
-        inboundQueue.append(.message(.hello(defaultHello())))
+        if let initialMessage {
+            inboundQueue.append(.message(initialMessage))
+        }
     }
 
     func setFailNextRequestSend() {
         failNextRequestSend = true
     }
 
-    func enqueueMessage(_ message: Message) {
+    func enqueueMessage(_ message: MessageV7) {
         enqueueInbound(.message(message))
     }
 
-    func sent() -> [Message] {
+    func sent() -> [MessageV7] {
         sentMessages
     }
 
     func sentRequestIds() -> [UInt64] {
         sentMessages.compactMap { message in
-            if case .request(_, let requestId, _, _, _, _) = message {
-                return requestId
+            if case .requestMessage(let request) = message.payload,
+                case .call = request.body
+            {
+                return request.id
             }
             return nil
         }
     }
 
-    func send(_ message: Message) async throws {
+    func send(_ message: MessageV7) async throws {
         sentMessages.append(message)
 
-        if case .request(_, let requestId, _, _, _, _) = message {
+        if case .requestMessage(let request) = message.payload,
+            case .call = request.body
+        {
+            let requestId = request.id
             if failNextRequestSend {
                 failNextRequestSend = false
                 throw TestTransportError.sendFailed
@@ -79,7 +94,7 @@ private actor ScriptedTransport: MessageTransport {
         }
     }
 
-    func recv() async throws -> Message? {
+    func recv() async throws -> MessageV7? {
         let event: InboundEvent
         if !inboundQueue.isEmpty {
             event = inboundQueue.removeFirst()
@@ -159,7 +174,7 @@ private struct ImmediateResponseDispatcher: ServiceDispatcher {
     }
 }
 
-private func metadataString(_ metadata: [MetadataEntry], key: String) -> String? {
+private func metadataString(_ metadata: [MetadataEntryV7], key: String) -> String? {
     for entry in metadata where entry.key == key {
         if case .string(let value) = entry.value {
             return value
@@ -176,7 +191,14 @@ private func awaitHasCancel(
     let timeout = Duration.milliseconds(Int64(timeoutMs))
     while ContinuousClock.now - start < timeout {
         let sent = await transport.sent()
-        if sent.contains(where: { if case .cancel = $0 { true } else { false } }) {
+        if sent.contains(where: { message in
+            if case .requestMessage(let request) = message.payload,
+                case .cancel = request.body
+            {
+                return true
+            }
+            return false
+        }) {
             return true
         }
         try? await Task.sleep(nanoseconds: 5_000_000)
@@ -201,7 +223,7 @@ private func awaitRequestId(
     return nil
 }
 
-private func awaitGoodbyeReason(
+private func awaitProtocolReason(
     _ transport: ScriptedTransport,
     timeoutMs: UInt64 = 1_000
 ) async -> String? {
@@ -210,8 +232,8 @@ private func awaitGoodbyeReason(
     while ContinuousClock.now - start < timeout {
         let sent = await transport.sent()
         for msg in sent {
-            if case .goodbye(_, let reason) = msg {
-                return reason
+            if case .protocolError(let err) = msg.payload {
+                return err.description
             }
         }
         try? await Task.sleep(nanoseconds: 5_000_000)
@@ -272,14 +294,11 @@ struct ConnectionFailureTests {
             Issue.record("expected hello to be sent")
             return
         }
-        guard case .hello(let hello) = first else {
+        guard case .hello(let hello) = first.payload else {
             Issue.record("expected first sent message to be hello")
             return
         }
-        guard case .v6(_, _, _, let metadata) = hello else {
-            Issue.record("expected v6 hello")
-            return
-        }
+        let metadata = hello.metadata
 
         let correlationId = metadataString(metadata, key: peepsConnectionCorrelationIdMetadataKey)
         #expect(correlationId != nil)
@@ -287,7 +306,13 @@ struct ConnectionFailureTests {
     }
 
     @Test func serverResponsePreservesPeepsRequestMetadata() async throws {
-        let transport = ScriptedTransport()
+        let transport = ScriptedTransport(
+            initialMessage: .hello(
+                HelloV7(
+                    version: 7,
+                    connectionSettings: ConnectionSettingsV7(parity: .odd, maxConcurrentRequests: 64),
+                    metadata: []
+                )))
         let (_, driver) = try await establishAcceptor(
             transport: transport,
             dispatcher: ImmediateResponseDispatcher()
@@ -308,9 +333,17 @@ struct ConnectionFailureTests {
                 requestId: 77,
                 methodId: 42,
                 metadata: [
-                    (key: peepsMethodNameMetadataKey, value: .string("DemoRpc.test"), flags: 0),
-                    (key: peepsRequestEntityIdMetadataKey, value: .string("request:abc"), flags: 0),
-                    (key: "unrelated", value: .string("keep_out"), flags: 0),
+                    MetadataEntryV7(
+                        key: peepsMethodNameMetadataKey,
+                        value: .string("DemoRpc.test"),
+                        flags: 0
+                    ),
+                    MetadataEntryV7(
+                        key: peepsRequestEntityIdMetadataKey,
+                        value: .string("request:abc"),
+                        flags: 0
+                    ),
+                    MetadataEntryV7(key: "unrelated", value: .string("keep_out"), flags: 0),
                 ],
                 channels: [],
                 payload: []
@@ -319,14 +352,15 @@ struct ConnectionFailureTests {
 
         let start = ContinuousClock.now
         let timeout = Duration.milliseconds(1_000)
-        var responseMetadata: [MetadataEntry]? = nil
+        var responseMetadata: [MetadataEntryV7]? = nil
         while ContinuousClock.now - start < timeout {
             let sent = await transport.sent()
             for message in sent {
-                if case .response(_, let requestId, let metadata, _, _) = message,
-                    requestId == 77
+                if case .requestMessage(let request) = message.payload,
+                    case .response(let response) = request.body,
+                    request.id == 77
                 {
-                    responseMetadata = metadata
+                    responseMetadata = response.metadata
                     break
                 }
             }
@@ -497,8 +531,8 @@ struct ConnectionFailureTests {
             #expect(isProtocolViolation(error, rule: "call.lifecycle.unknown-request-id"))
         }
 
-        let goodbyeReason = await awaitGoodbyeReason(transport)
-        #expect(goodbyeReason == "call.lifecycle.unknown-request-id")
+        let protocolReason = await awaitProtocolReason(transport)
+        #expect(protocolReason == "call.lifecycle.unknown-request-id")
     }
 
     @Test func lateResponseAfterTimeoutTriggersProtocolViolation() async throws {

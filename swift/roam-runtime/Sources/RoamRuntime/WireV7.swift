@@ -564,3 +564,113 @@ private func decodeBytesV7(from data: Data, offset: inout Int) throws -> Data {
         throw error
     }
 }
+
+public extension MessageV7 {
+    static func hello(_ hello: HelloV7) -> MessageV7 {
+        MessageV7(connectionId: 0, payload: .hello(hello))
+    }
+
+    static func helloYourself(_ hello: HelloYourselfV7) -> MessageV7 {
+        MessageV7(connectionId: 0, payload: .helloYourself(hello))
+    }
+
+    static func protocolError(description: String) -> MessageV7 {
+        MessageV7(connectionId: 0, payload: .protocolError(.init(description: description)))
+    }
+
+    static func connectionOpen(connId: UInt64, settings: ConnectionSettingsV7, metadata: MetadataV7) -> MessageV7 {
+        MessageV7(
+            connectionId: connId,
+            payload: .connectionOpen(.init(connectionSettings: settings, metadata: metadata))
+        )
+    }
+
+    static func connectionAccept(connId: UInt64, settings: ConnectionSettingsV7, metadata: MetadataV7) -> MessageV7 {
+        MessageV7(
+            connectionId: connId,
+            payload: .connectionAccept(.init(connectionSettings: settings, metadata: metadata))
+        )
+    }
+
+    static func connectionReject(connId: UInt64, metadata: MetadataV7) -> MessageV7 {
+        MessageV7(connectionId: connId, payload: .connectionReject(.init(metadata: metadata)))
+    }
+
+    static func connectionClose(connId: UInt64, metadata: MetadataV7) -> MessageV7 {
+        MessageV7(connectionId: connId, payload: .connectionClose(.init(metadata: metadata)))
+    }
+
+    static func request(
+        connId: UInt64,
+        requestId: UInt64,
+        methodId: UInt64,
+        metadata: MetadataV7,
+        channels: [UInt64],
+        payload: [UInt8]
+    ) -> MessageV7 {
+        MessageV7(
+            connectionId: connId,
+            payload: .requestMessage(
+                .init(
+                    id: requestId,
+                    body: .call(.init(methodId: methodId, args: .init(payload), channels: channels, metadata: metadata))
+                ))
+        )
+    }
+
+    static func response(
+        connId: UInt64,
+        requestId: UInt64,
+        metadata: MetadataV7,
+        channels: [UInt64],
+        payload: [UInt8]
+    ) -> MessageV7 {
+        MessageV7(
+            connectionId: connId,
+            payload: .requestMessage(
+                .init(
+                    id: requestId,
+                    body: .response(.init(ret: .init(payload), channels: channels, metadata: metadata))
+                ))
+        )
+    }
+
+    static func cancel(connId: UInt64, requestId: UInt64, metadata: MetadataV7 = []) -> MessageV7 {
+        MessageV7(
+            connectionId: connId,
+            payload: .requestMessage(
+                .init(
+                    id: requestId,
+                    body: .cancel(.init(metadata: metadata))
+                ))
+        )
+    }
+
+    static func data(connId: UInt64, channelId: UInt64, payload: [UInt8]) -> MessageV7 {
+        MessageV7(
+            connectionId: connId,
+            payload: .channelMessage(.init(id: channelId, body: .item(.init(item: .init(payload)))))
+        )
+    }
+
+    static func close(connId: UInt64, channelId: UInt64, metadata: MetadataV7 = []) -> MessageV7 {
+        MessageV7(
+            connectionId: connId,
+            payload: .channelMessage(.init(id: channelId, body: .close(.init(metadata: metadata))))
+        )
+    }
+
+    static func reset(connId: UInt64, channelId: UInt64, metadata: MetadataV7 = []) -> MessageV7 {
+        MessageV7(
+            connectionId: connId,
+            payload: .channelMessage(.init(id: channelId, body: .reset(.init(metadata: metadata))))
+        )
+    }
+
+    static func credit(connId: UInt64, channelId: UInt64, bytes: UInt32) -> MessageV7 {
+        MessageV7(
+            connectionId: connId,
+            payload: .channelMessage(.init(id: channelId, body: .grantCredit(.init(additional: bytes))))
+        )
+    }
+}
