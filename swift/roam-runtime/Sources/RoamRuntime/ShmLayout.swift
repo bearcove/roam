@@ -102,6 +102,9 @@ public struct ShmSegmentHeader: Sendable, Equatable {
     }
 
     public func validateV2(mappedSize: UInt64? = nil) throws {
+        if version != 2 && version != 7 {
+            throw ShmLayoutError.unsupportedVersion(version)
+        }
         if headerSize != UInt32(shmSegmentHeaderSize) {
             throw ShmLayoutError.invalidHeaderSize(headerSize)
         }

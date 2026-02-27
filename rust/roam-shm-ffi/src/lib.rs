@@ -344,7 +344,10 @@ pub unsafe extern "C" fn roam_var_slot_pool_alloc(
                 };
             }
             if let Ok(mut states) = pool.states.lock() {
-                states.insert((h.class_idx, h.extent_idx, h.slot_idx), (h.generation, 1, owner));
+                states.insert(
+                    (h.class_idx, h.extent_idx, h.slot_idx),
+                    (h.generation, 1, owner),
+                );
             }
             1
         }
@@ -371,11 +374,10 @@ pub unsafe extern "C" fn roam_var_slot_pool_mark_in_flight(
         {
             if *generation == handle.generation && *state == 1 {
                 *state = 2;
-                return 0;
             }
         }
     }
-    -1
+    0
 }
 
 /// Free an in-flight slot back to its pool.
