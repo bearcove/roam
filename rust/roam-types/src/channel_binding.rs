@@ -48,6 +48,7 @@ pub trait ChannelBinder: Send + Sync {
     fn register_rx(&self, channel_id: ChannelId) -> mpsc::Receiver<IncomingChannelMessage>;
 }
 
+// r[impl rpc.channel.binding]
 /// Bind channels in a deserialized args value on the **server** side.
 ///
 /// Iterates the precomputed channel locations in `plan`, navigates to each
@@ -113,6 +114,7 @@ pub unsafe fn bind_channels_server(
     }
 }
 
+// r[impl rpc.channel.allocation]
 /// Bind channels in an args value on the **client** side, returning channel IDs.
 ///
 /// Iterates the precomputed channel locations in `plan`, navigates to each

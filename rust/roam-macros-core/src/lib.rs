@@ -61,11 +61,15 @@ pub fn roam_crate() -> TokenStream2 {
 }
 
 // r[service-macro.is-source-of-truth]
+// r[impl rpc]
+// r[impl rpc.service]
+// r[impl rpc.service.methods]
 /// Generate all service code for a parsed trait.
 ///
 /// Takes a `roam` token stream (the path to the roam crate) so that this function
 /// can be called from tests with a fixed path like `::roam`.
 pub fn generate_service(parsed: &ServiceTrait, roam: &TokenStream2) -> Result<TokenStream2, Error> {
+    // r[impl rpc.channel.placement]
     // Validate: no channels in error types
     for method in parsed.methods() {
         let return_type = method.return_type();
@@ -236,6 +240,7 @@ fn generate_dispatcher(parsed: &ServiceTrait, roam: &TokenStream2) -> TokenStrea
             let _ = (call, reply);
         }
     } else {
+        // r[impl rpc.unknown-method]
         quote! {
             let method_id = call.method_id;
             let args_bytes = match &call.args {
@@ -246,6 +251,7 @@ fn generate_dispatcher(parsed: &ServiceTrait, roam: &TokenStream2) -> TokenStrea
                 }
             };
             #(#dispatch_arms)*
+            reply.send_error(#roam::RoamError::<::core::convert::Infallible>::UnknownMethod).await;
         }
     };
 
@@ -371,6 +377,7 @@ fn generate_dispatch_arm(
 // Client Generation
 // ============================================================================
 
+// r[impl rpc.caller]
 fn generate_client(parsed: &ServiceTrait, roam: &TokenStream2) -> TokenStream2 {
     let client_name = format_ident!("{}Client", parsed.name());
     let descriptor_fn_name = format_ident!("{}_service_descriptor", parsed.name().to_snake_case());
@@ -449,7 +456,8 @@ fn generate_client_method(
         _ => quote! { (#(#arg_names),*) },
     };
 
-    // Return type
+    // r[impl rpc.fallible]
+    // r[impl rpc.fallible.caller-signature]
     let return_type = method.return_type();
     let (ok_ty, err_ty, client_return) = if let Some((ok, err)) = return_type.as_result() {
         let ok_t = ok.to_token_stream();

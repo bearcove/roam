@@ -1,5 +1,7 @@
 use facet::Facet;
 
+// r[impl rpc.metadata]
+// r[impl rpc.metadata.value]
 /// Metadata value.
 #[repr(u8)]
 #[derive(Debug, Clone, PartialEq, Eq, Facet)]
@@ -12,6 +14,9 @@ pub enum MetadataValue<'a> {
 /// Metadata entry flags.
 ///
 /// Flags control metadata handling behavior.
+// r[impl rpc.metadata.flags]
+// r[impl rpc.metadata.flags.sensitive]
+// r[impl rpc.metadata.flags.no-propagate]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Facet)]
 pub struct MetadataFlags(u64);
 
@@ -57,6 +62,8 @@ impl std::ops::BitAndAssign for MetadataFlags {
     }
 }
 
+// r[impl rpc.metadata.keys]
+// r[impl rpc.metadata.duplicates]
 /// A single metadata entry with a key, value, and flags.
 #[derive(Debug, Clone, PartialEq, Eq, Facet)]
 pub struct MetadataEntry<'a> {
@@ -65,5 +72,6 @@ pub struct MetadataEntry<'a> {
     pub flags: MetadataFlags,
 }
 
+// r[impl rpc.metadata.unknown]
 /// A list of metadata entries.
 pub type Metadata<'a> = Vec<MetadataEntry<'a>>;

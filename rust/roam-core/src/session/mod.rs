@@ -16,6 +16,7 @@ pub const PROTOCOL_VERSION: u32 = 7;
 
 /// Session state machine.
 // r[impl session]
+// r[impl rpc.one-service-per-connection]
 pub struct Session<C: Conduit> {
     /// Conduit receiver
     rx: C::Rx,

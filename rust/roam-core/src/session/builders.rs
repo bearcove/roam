@@ -3,6 +3,7 @@ use roam_types::{Conduit, ConduitTx, ConnectionSettings, MessageFamily, Metadata
 
 use super::{ConnectionHandle, Session, SessionError};
 
+// r[impl rpc.session-setup]
 // r[impl session.role]
 pub fn initiator<C>(conduit: C) -> SessionInitiatorBuilder<'static, C> {
     SessionInitiatorBuilder::new(conduit)

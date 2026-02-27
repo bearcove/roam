@@ -97,6 +97,9 @@ where
             self.handler.count_up(sink_call, start, output).await;
             return;
         }
+        reply
+            .send_error(::roam::RoamError::<::core::convert::Infallible>::UnknownMethod)
+            .await;
     }
 }
 #[doc = "Client for the `Streamer` service.\n\nGeneric over any [`Caller`](:: roam::Caller) implementation."]

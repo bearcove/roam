@@ -40,6 +40,7 @@ pub trait IdType: Copy {
 ///
 /// Odd parity: 1, 3, 5, 7, ...
 /// Even parity: 2, 4, 6, 8, ...
+// r[impl rpc.request.id-allocation]
 pub struct IdAllocator<T: IdType> {
     next: u64,
     _phantom: std::marker::PhantomData<T>,

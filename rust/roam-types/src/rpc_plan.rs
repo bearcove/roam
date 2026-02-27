@@ -72,6 +72,8 @@ impl RpcPlan {
 }
 
 /// Visitor that discovers Rx/Tx channel locations in a type structure.
+// r[impl rpc.channel.discovery]
+// r[impl rpc.channel.no-collections]
 struct ChannelDiscovery {
     locations: Vec<ChannelLocation>,
 }

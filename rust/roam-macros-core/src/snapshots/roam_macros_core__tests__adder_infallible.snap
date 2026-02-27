@@ -82,6 +82,9 @@ where
             self.handler.add(sink_call, a, b).await;
             return;
         }
+        reply
+            .send_error(::roam::RoamError::<::core::convert::Infallible>::UnknownMethod)
+            .await;
     }
 }
 #[doc = "Client for the `Adder` service.\n\nGeneric over any [`Caller`](:: roam::Caller) implementation."]

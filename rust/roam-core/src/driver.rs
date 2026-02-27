@@ -356,6 +356,7 @@ impl<H: Handler<DriverReplySink>> Driver<H> {
 
         if is_call {
             // r[impl rpc.request]
+            // r[impl rpc.error.scope]
             let reply = DriverReplySink {
                 sender: Some(self.sender.clone()),
                 request_id: req_id,

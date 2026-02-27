@@ -80,6 +80,9 @@ where
             self.handler.ping(sink_call).await;
             return;
         }
+        reply
+            .send_error(::roam::RoamError::<::core::convert::Infallible>::UnknownMethod)
+            .await;
     }
 }
 #[doc = "Client for the `Ping` service.\n\nGeneric over any [`Caller`](:: roam::Caller) implementation."]

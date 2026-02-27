@@ -11,6 +11,9 @@ use facet::{Facet, FacetOpaqueAdapter, OpaqueDeserialize, OpaqueSerialize, PtrCo
 // r[impl session.connection-settings]
 // r[impl session.parity]
 // r[impl connection.parity]
+// r[impl rpc.flow-control]
+// r[impl rpc.flow-control.max-concurrent-requests]
+// r[impl rpc.flow-control.max-concurrent-requests.default]
 #[derive(Debug, Clone, PartialEq, Eq, Facet)]
 pub struct ConnectionSettings {
     /// Whether this peer will use odd or even IDs for requests and channels on this connection.

@@ -266,6 +266,7 @@ fn encode_scalar(scalar: ScalarType, out: &mut Vec<u8>) {
 }
 
 /// Encode a method signature: args tuple type followed by return type.
+// r[impl rpc.schema-evolution]
 // r[impl signature.method]
 // r[impl signature.hash.algorithm]
 fn encode_method_signature(args: &'static Shape, return_type: &'static Shape, out: &mut Vec<u8>) {
@@ -276,6 +277,9 @@ fn encode_method_signature(args: &'static Shape, return_type: &'static Shape, ou
 /// Compute the final method ID from type parameters.
 ///
 /// `A` is the args tuple type (e.g. `(f64, f64)`), `R` is the return type.
+// r[impl rpc.method-id]
+// r[impl rpc.method-id.algorithm]
+// r[impl rpc.method-id.no-collisions]
 // r[impl method.identity.computation]
 // r[impl signature.endianness]
 pub fn method_id<'a, 'r, A: Facet<'a>, R: Facet<'r>>(

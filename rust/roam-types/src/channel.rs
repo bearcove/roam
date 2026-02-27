@@ -74,6 +74,9 @@ impl ReceiverSlot {
 ///
 /// Wire encoding is always unit (`()`), with channel IDs carried exclusively
 /// in `Message::{Request,Response}.channels`.
+// r[impl rpc.channel]
+// r[impl rpc.channel.direction]
+// r[impl rpc.channel.payload-encoding]
 #[derive(Facet)]
 #[facet(proxy = ())]
 pub struct Tx<T, const N: usize = 16> {
@@ -108,6 +111,7 @@ impl<T, const N: usize> Tx<T, N> {
         result
     }
 
+    // r[impl rpc.channel.lifecycle]
     pub async fn close<'value>(&self, metadata: Metadata<'value>) -> Result<(), TxError> {
         let sink = self.sink.inner.as_ref().ok_or(TxError::Unbound)?;
         sink.close_channel(metadata).await
