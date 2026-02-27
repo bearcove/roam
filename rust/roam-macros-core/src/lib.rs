@@ -90,14 +90,11 @@ pub fn generate_service(parsed: &ServiceTrait, roam: &TokenStream2) -> Result<To
     let service_trait = generate_service_trait(parsed, roam);
     let dispatcher = generate_dispatcher(parsed, roam);
     let client = generate_client(parsed, roam);
-    let service_detail_fn = generate_service_detail_fn(parsed, roam);
-
     Ok(quote! {
         #service_descriptor_fn
         #service_trait
         #dispatcher
         #client
-        #service_detail_fn
     })
 }
 
@@ -521,90 +518,25 @@ fn generate_client_method(
                 channels,
                 metadata: Default::default(),
             };
-            let response = self.caller.call(req).await?;
+            let response = self.caller.call(req).await.map_err(|e| match e {
+                #roam::RoamError::UnknownMethod => #roam::RoamError::<#err_ty>::UnknownMethod,
+                #roam::RoamError::InvalidPayload => #roam::RoamError::<#err_ty>::InvalidPayload,
+                #roam::RoamError::Cancelled => #roam::RoamError::<#err_ty>::Cancelled,
+                #roam::RoamError::User(never) => match never {},
+            })?;
             response.try_repack(|resp, _bytes| {
                 let ret_bytes = match &resp.ret {
                     #roam::Payload::Incoming(bytes) => bytes,
-                    _ => return Err(#roam::RoamError::InvalidPayload),
+                    _ => return Err(#roam::RoamError::<#err_ty>::InvalidPayload),
                 };
                 let result: Result<#ok_ty, #roam::RoamError<#err_ty>> =
                     #roam::facet_postcard::from_slice_borrowed(ret_bytes)
-                        .map_err(|_| #roam::RoamError::InvalidPayload)?;
+                        .map_err(|_| #roam::RoamError::<#err_ty>::InvalidPayload)?;
                 let ret = result?;
                 Ok(#roam::ResponseParts { ret, metadata: resp.metadata })
             })
         }
     }
-}
-
-// ============================================================================
-// Service Detail Function Generation (for codegen in other languages)
-// ============================================================================
-
-fn generate_service_detail_fn(parsed: &ServiceTrait, roam: &TokenStream2) -> TokenStream2 {
-    let trait_name = parsed.name();
-    let trait_snake = trait_name.to_snake_case();
-    let fn_name = format_ident!("{}_service_detail", trait_snake);
-
-    let method_details = generate_method_details(parsed, roam);
-
-    let service_doc = parsed
-        .doc()
-        .map(|d| quote! { Some(#d.into()) })
-        .unwrap_or_else(|| quote! { None });
-
-    quote! {
-        /// Returns the service detail for codegen.
-        pub fn #fn_name() -> #roam::schema::ServiceDetail {
-            #roam::schema::ServiceDetail {
-                name: #trait_name.into(),
-                methods: vec![#(#method_details),*],
-                doc: #service_doc,
-            }
-        }
-    }
-}
-
-fn generate_method_details(parsed: &ServiceTrait, roam: &TokenStream2) -> Vec<TokenStream2> {
-    let service_name = parsed.name();
-
-    parsed
-        .methods()
-        .map(|m| {
-            let method_name = m.name();
-            let method_doc = m
-                .doc()
-                .map(|d| quote! { Some(#d.into()) })
-                .unwrap_or_else(|| quote! { None });
-
-            let arg_exprs: Vec<TokenStream2> = m
-                .args()
-                .map(|arg| {
-                    let arg_name = arg.name();
-                    let ty = arg.ty.to_token_stream();
-                    quote! {
-                        #roam::schema::ArgDetail {
-                            name: #arg_name.into(),
-                            ty: <#ty as #roam::facet::Facet>::SHAPE,
-                        }
-                    }
-                })
-                .collect();
-
-            let return_type = m.return_type();
-            let return_ty_tokens = return_type.to_token_stream();
-
-            quote! {
-                #roam::schema::MethodDetail {
-                    service_name: #service_name.into(),
-                    method_name: #method_name.into(),
-                    args: vec![#(#arg_exprs),*],
-                    return_type: <#return_ty_tokens as #roam::facet::Facet>::SHAPE,
-                    doc: #method_doc,
-                }
-            }
-        })
-        .collect()
 }
 
 #[cfg(test)]

@@ -214,7 +214,7 @@ fn codegen_typescript(workspace_root: &std::path::Path) -> Result<(), Box<dyn st
     // Generate TypeScript for all services in spec-proto
     for service in spec_proto::all_services() {
         let ts = roam_codegen::targets::typescript::generate_service(&service);
-        let filename = format!("{}.ts", service.name.to_lowercase());
+        let filename = format!("{}.ts", service.service_name.to_lowercase());
         let out_path = out_dir.join(&filename);
         std::fs::write(&out_path, ts)?;
         println!("Wrote {}", out_path.display());
@@ -237,7 +237,7 @@ fn codegen_swift(
         .join("subject-swift");
     std::fs::create_dir_all(&out_dir)?;
 
-    let testbed = spec_proto::testbed_service_detail();
+    let testbed = spec_proto::testbed_service_descriptor();
     if swift && !swift_client && !swift_server {
         let code = roam_codegen::targets::swift::generate_service(&testbed);
         let out_path = out_dir.join("Testbed.swift");

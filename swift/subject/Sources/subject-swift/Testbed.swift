@@ -16,7 +16,7 @@ public enum TestbedMethodId {
     public static let transform: UInt64 = 0x5d9895604eb18b19
     public static let echoPoint: UInt64 = 0x453fa9bf6932528c
     public static let createPerson: UInt64 = 0x3dd231f57b1bca21
-    public static let rectangleArea: UInt64 = 0x04ef653fdf0653c4
+    public static let rectangleArea: UInt64 = 0xba75c48683f1d9e6
     public static let parseColor: UInt64 = 0xe285f31c6dfffbfc
     public static let shapeArea: UInt64 = 0x6e706354167c00c2
     public static let createCanvas: UInt64 = 0xa914982e7d3c7b55
@@ -257,7 +257,7 @@ public final class TestbedClient: TestbedCaller {
         let payload = Data(payloadBytes)
         let channels = collectChannelIds(schemas: testbed_schemas["sum"]!.args, args: [numbers])
 
-        let response = try await connection.call(methodId: 0x855b3a25d97bfefd, metadata: [], payload: payload, channels: channels, timeout: timeout)
+        let response = try await connection.call(methodId: 0x855b3a25d97bfefd, payload: payload, channels: channels, timeout: timeout)
         var cursor = 0
         try decodeRpcResult(from: response, offset: &cursor)
         let result = try decodeI64(from: response, offset: &cursor)
@@ -282,7 +282,7 @@ public final class TestbedClient: TestbedCaller {
         let payload = Data(payloadBytes)
         let channels = collectChannelIds(schemas: testbed_schemas["generate"]!.args, args: [count, output])
 
-        let response = try await connection.call(methodId: 0x54d2273d8cdb9c38, metadata: [], payload: payload, channels: channels, timeout: timeout)
+        let response = try await connection.call(methodId: 0x54d2273d8cdb9c38, payload: payload, channels: channels, timeout: timeout)
         var cursor = 0
         try decodeRpcResult(from: response, offset: &cursor)
     }
@@ -305,7 +305,7 @@ public final class TestbedClient: TestbedCaller {
         let payload = Data(payloadBytes)
         let channels = collectChannelIds(schemas: testbed_schemas["transform"]!.args, args: [input, output])
 
-        let response = try await connection.call(methodId: 0x5d9895604eb18b19, metadata: [], payload: payload, channels: channels, timeout: timeout)
+        let response = try await connection.call(methodId: 0x5d9895604eb18b19, payload: payload, channels: channels, timeout: timeout)
         var cursor = 0
         try decodeRpcResult(from: response, offset: &cursor)
     }
@@ -343,7 +343,7 @@ public final class TestbedClient: TestbedCaller {
         var payloadBytes: [UInt8] = []
         payloadBytes += encodeI32(rect.topLeft.x) + encodeI32(rect.topLeft.y) + encodeI32(rect.bottomRight.x) + encodeI32(rect.bottomRight.y) + encodeOption(rect.label, encoder: { encodeString($0) })
         let payload = Data(payloadBytes)
-        let response = try await connection.call(methodId: 0x04ef653fdf0653c4, payload: payload, timeout: timeout)
+        let response = try await connection.call(methodId: 0xba75c48683f1d9e6, payload: payload, timeout: timeout)
         var cursor = 0
         try decodeRpcResult(from: response, offset: &cursor)
         let result = try decodeF64(from: response, offset: &cursor)
@@ -595,7 +595,7 @@ public final class TestbedChannelingDispatcher {
             await dispatch_echoPoint(requestId: requestId, channels: channels, payload: payload)
         case 0x3dd231f57b1bca21:
             await dispatch_createPerson(requestId: requestId, channels: channels, payload: payload)
-        case 0x04ef653fdf0653c4:
+        case 0xba75c48683f1d9e6:
             await dispatch_rectangleArea(requestId: requestId, channels: channels, payload: payload)
         case 0xe285f31c6dfffbfc:
             await dispatch_parseColor(requestId: requestId, channels: channels, payload: payload)
@@ -1027,3 +1027,4 @@ public struct TestbedSerializers: BindingSerializers {
         }
     }
 }
+

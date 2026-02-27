@@ -17,7 +17,8 @@ pub mod server;
 pub mod types;
 
 use crate::code_writer::CodeWriter;
-use roam_schema::{MethodDetail, ServiceDetail};
+use roam_schema::ServiceDetail;
+use roam_types::{MethodDescriptor, ServiceDescriptor};
 
 pub use client::generate_client;
 pub use http_client::generate_http_client;
@@ -26,12 +27,12 @@ pub use server::generate_server;
 pub use types::{collect_named_types, generate_named_types};
 
 /// Generate method IDs as a TypeScript constant record.
-pub fn generate_method_ids(methods: &[MethodDetail]) -> String {
+pub fn generate_method_ids(methods: &[&MethodDescriptor]) -> String {
     use crate::render::{fq_name, hex_u64};
 
     let mut items = methods
         .iter()
-        .map(|m| (fq_name(m), crate::method_id(m)))
+        .map(|m| (fq_name(m), m.id.0))
         .collect::<Vec<_>>();
     items.sort_by(|a, b| a.0.cmp(&b.0));
 
@@ -49,7 +50,8 @@ pub fn generate_method_ids(methods: &[MethodDetail]) -> String {
 /// Generate a complete TypeScript module for a service.
 ///
 /// This is the main entry point for TypeScript code generation.
-pub fn generate_service(service: &ServiceDetail) -> String {
+pub fn generate_service(service: &ServiceDescriptor) -> String {
+    let service = crate::to_service_detail(service);
     use crate::code_writer::CodeWriter;
     use crate::{cw_writeln, render::hex_u64};
     use heck::ToLowerCamelCase;
@@ -67,7 +69,7 @@ pub fn generate_service(service: &ServiceDetail) -> String {
     w.blank_line().unwrap();
 
     // TODO: This import list should probably be in roam-core or generated more intelligently
-    generate_imports(service, &mut w);
+    generate_imports(&service, &mut w);
     w.blank_line().unwrap();
 
     // Method IDs
@@ -84,20 +86,20 @@ pub fn generate_service(service: &ServiceDetail) -> String {
     w.blank_line().unwrap();
 
     // Named types (structs and enums)
-    let named_types = collect_named_types(service);
+    let named_types = collect_named_types(&service);
     output.push_str(&generate_named_types(&named_types));
 
     // Type aliases for request/response (only if they don't conflict with named types)
-    output.push_str(&generate_request_response_types(service, &named_types));
+    output.push_str(&generate_request_response_types(&service, &named_types));
 
     // Client
-    output.push_str(&generate_client(service));
+    output.push_str(&generate_client(&service));
 
     // Server
-    output.push_str(&generate_server(service));
+    output.push_str(&generate_server(&service));
 
     // Schemas
-    output.push_str(&generate_schemas(service));
+    output.push_str(&generate_schemas(&service));
 
     output
 }
@@ -108,7 +110,7 @@ pub fn generate_service(service: &ServiceDetail) -> String {
 /// which specific functions are used. The bundler will tree-shake unused exports.
 fn generate_imports(service: &ServiceDetail, w: &mut CodeWriter<&mut String>) {
     use crate::cw_writeln;
-    use roam_schema::{ShapeKind, classify_shape, is_rx, is_tx};
+    use roam_schema::{classify_shape, is_rx, is_tx, ShapeKind};
 
     // Check if any method uses channels
     let has_streaming = service.methods.iter().any(|m| {

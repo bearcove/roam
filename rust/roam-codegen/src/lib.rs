@@ -36,7 +36,7 @@
 //! # The Pipeline
 //!
 //! ```text
-//! #[service] trait     →    ServiceDetail    →    roam-codegen    →    .ts, .go, .swift, ...
+//! #[service] trait     →    ServiceDescriptor    →    roam-codegen    →    .ts, .go, .swift, ...
 //!   (your code)            (runtime metadata)     (build script)       (generated code)
 //! ```
 //!
@@ -77,7 +77,63 @@ mod render;
 pub mod targets;
 
 use roam_schema::MethodDetail;
+use roam_types::ServiceDescriptor;
+use std::collections::HashMap;
+use std::sync::{OnceLock, RwLock};
 
 pub fn method_id(detail: &MethodDetail) -> u64 {
-    roam_hash::method_id_from_detail(detail)
+    let key = (
+        detail.service_name.to_string(),
+        detail.method_name.to_string(),
+    );
+    method_id_map()
+        .read()
+        .expect("method id map lock poisoned")
+        .get(&key)
+        .copied()
+        .unwrap_or_else(|| panic!("missing method id mapping for {}.{}", key.0, key.1))
+}
+
+fn to_service_detail(service: &ServiceDescriptor) -> roam_schema::ServiceDetail {
+    let mut ids = HashMap::new();
+    for method in service.methods {
+        ids.insert(
+            (
+                method.service_name.to_string(),
+                method.method_name.to_string(),
+            ),
+            method.id.0,
+        );
+    }
+    *method_id_map()
+        .write()
+        .expect("method id map lock poisoned") = ids;
+
+    roam_schema::ServiceDetail {
+        name: service.service_name.into(),
+        methods: service
+            .methods
+            .iter()
+            .map(|method| roam_schema::MethodDetail {
+                service_name: method.service_name.into(),
+                method_name: method.method_name.into(),
+                args: method
+                    .args
+                    .iter()
+                    .map(|arg| roam_schema::ArgDetail {
+                        name: arg.name.into(),
+                        ty: arg.shape,
+                    })
+                    .collect(),
+                return_type: method.return_shape,
+                doc: method.doc.map(Into::into),
+            })
+            .collect(),
+        doc: service.doc.map(Into::into),
+    }
+}
+
+fn method_id_map() -> &'static RwLock<HashMap<(String, String), u64>> {
+    static MAP: OnceLock<RwLock<HashMap<(String, String), u64>>> = OnceLock::new();
+    MAP.get_or_init(|| RwLock::new(HashMap::new()))
 }

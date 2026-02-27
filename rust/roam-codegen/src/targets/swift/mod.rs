@@ -16,7 +16,7 @@ pub mod schema;
 pub mod server;
 pub mod types;
 
-use roam_schema::{MethodDetail, ServiceDetail};
+use roam_types::{MethodDescriptor, ServiceDescriptor};
 
 pub use client::generate_client;
 pub use schema::generate_schemas;
@@ -35,12 +35,12 @@ pub enum SwiftBindings {
 }
 
 /// Generate method IDs as a Swift enum.
-pub fn generate_method_ids(methods: &[MethodDetail]) -> String {
+pub fn generate_method_ids(methods: &[&MethodDescriptor]) -> String {
     use crate::render::{fq_name, hex_u64};
 
     let mut items = methods
         .iter()
-        .map(|m| (fq_name(m), crate::method_id(m)))
+        .map(|m| (fq_name(m), m.id.0))
         .collect::<Vec<_>>();
     items.sort_by(|a, b| a.0.cmp(&b.0));
 
@@ -60,14 +60,18 @@ pub fn generate_method_ids(methods: &[MethodDetail]) -> String {
 /// Generate a complete Swift module for a service.
 ///
 /// This is the main entry point for Swift code generation.
-pub fn generate_service(service: &ServiceDetail) -> String {
+pub fn generate_service(service: &ServiceDescriptor) -> String {
     generate_service_with_bindings(service, SwiftBindings::ClientAndServer)
 }
 
 /// Generate a Swift module for a service with explicit client/server selection.
 ///
 /// Shared sections (method IDs, named types, schemas) are always included.
-pub fn generate_service_with_bindings(service: &ServiceDetail, bindings: SwiftBindings) -> String {
+pub fn generate_service_with_bindings(
+    service: &ServiceDescriptor,
+    bindings: SwiftBindings,
+) -> String {
+    let service = crate::to_service_detail(service);
     use crate::render::hex_u64;
     use heck::{ToLowerCamelCase, ToUpperCamelCase};
 
@@ -94,30 +98,30 @@ pub fn generate_service_with_bindings(service: &ServiceDetail, bindings: SwiftBi
 
     // Generate named types
     out.push_str(&format!("// MARK: - {service_name} Types\n\n"));
-    let named_types = collect_named_types(service);
+    let named_types = collect_named_types(&service);
     out.push_str(&generate_named_types(&named_types));
 
     match bindings {
         SwiftBindings::Client => {
             out.push_str(&format!("// MARK: - {service_name} Client\n\n"));
-            out.push_str(&generate_client(service));
+            out.push_str(&generate_client(&service));
         }
         SwiftBindings::Server => {
             out.push_str(&format!("// MARK: - {service_name} Server\n\n"));
-            out.push_str(&generate_server(service));
+            out.push_str(&generate_server(&service));
         }
         SwiftBindings::ClientAndServer => {
             out.push_str(&format!("// MARK: - {service_name} Client\n\n"));
-            out.push_str(&generate_client(service));
+            out.push_str(&generate_client(&service));
 
             out.push_str(&format!("// MARK: - {service_name} Server\n\n"));
-            out.push_str(&generate_server(service));
+            out.push_str(&generate_server(&service));
         }
     }
 
     // Always generate runtime schema info used for channel binding.
     out.push_str(&format!("// MARK: - {service_name} Schemas\n\n"));
-    out.push_str(&generate_schemas(service));
+    out.push_str(&generate_schemas(&service));
 
     out
 }

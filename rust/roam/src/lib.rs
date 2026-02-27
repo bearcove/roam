@@ -48,8 +48,3 @@ pub use roam_types::{
 pub mod session {
     pub use roam_types::{MethodDescriptor, ServiceDescriptor};
 }
-
-// Re-export the schema module (generated code uses `roam::schema::ServiceDetail` etc.)
-pub mod schema {
-    pub use roam_types::schema::*;
-}
