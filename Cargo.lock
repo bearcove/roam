@@ -1673,7 +1673,6 @@ dependencies = [
  "facet-format",
  "facet-postcard",
  "facet-reflect",
- "futures-util",
  "getrandom 0.2.17",
  "moire",
  "roam",

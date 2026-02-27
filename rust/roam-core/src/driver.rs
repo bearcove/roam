@@ -3,8 +3,6 @@ use std::{collections::BTreeMap, pin::Pin, sync::Arc};
 use moire::sync::SyncMutex;
 use tokio::sync::Semaphore;
 
-use futures_util::StreamExt as _;
-use futures_util::stream::FuturesUnordered;
 use moire::task::FutureExt as _;
 use roam_types::{
     Caller, ChannelBinder, ChannelBody, ChannelClose, ChannelId, ChannelItem, ChannelMessage,
@@ -17,9 +15,6 @@ use crate::session::{ConnectionHandle, ConnectionMessage, ConnectionSender};
 use moire::sync::mpsc;
 
 type ResponseSlot = moire::sync::oneshot::Sender<SelfRef<RequestMessage<'static>>>;
-
-/// A boxed, Send future representing an in-flight handler task.
-type HandlerFuture = Pin<Box<dyn std::future::Future<Output = ()> + Send>>;
 
 /// State shared between the driver loop and any DriverCaller/DriverChannelSink handles.
 struct DriverShared {
@@ -276,6 +271,9 @@ pub struct Driver<H: Handler<DriverReplySink>> {
     shared: Arc<DriverShared>,
     /// Channels we know about on this connection.
     channels: BTreeMap<ChannelId, ChannelState>,
+    /// In-flight server-side handler tasks, keyed by request ID.
+    /// Used to abort handlers on cancel.
+    in_flight_handlers: BTreeMap<RequestId, moire::task::JoinHandle<()>>,
 }
 
 struct ChannelState {
@@ -304,6 +302,7 @@ impl<H: Handler<DriverReplySink>> Driver<H> {
                 channel_credits: SyncMutex::new("driver.channel_credits", BTreeMap::new()),
             }),
             channels: BTreeMap::new(),
+            in_flight_handlers: BTreeMap::new(),
         }
     }
 
@@ -317,25 +316,20 @@ impl<H: Handler<DriverReplySink>> Driver<H> {
 
     // r[impl rpc.pipelining]
     /// Main loop: receive messages from the session and dispatch them.
-    /// Handler calls run concurrently in a FuturesUnordered — we don't
-    /// block the driver loop waiting for a handler to finish.
+    /// Handler calls run as spawned tasks — we don't block the driver
+    /// loop waiting for a handler to finish.
     pub async fn run(&mut self) {
-        let mut in_flight: FuturesUnordered<HandlerFuture> = FuturesUnordered::new();
-
         loop {
             tokio::select! {
                 msg = self.rx.recv() => {
                     match msg {
-                        Some(msg) => {
-                            if let Some(fut) = self.handle_msg(msg) {
-                                in_flight.push(fut);
-                            }
-                        }
+                        Some(msg) => self.handle_msg(msg),
                         None => break,
                     }
                 }
-                Some(()) = in_flight.next() => {}
                 Some((req_id, _reason)) = self.failures_rx.recv() => {
+                    // Clean up the handler tracking entry.
+                    self.in_flight_handlers.remove(&req_id);
                     if self.shared.pending_responses.lock().remove(&req_id).is_none() {
                         // Incoming call — handler failed to reply, send Cancelled back
                         let error = RoamError::<core::convert::Infallible>::Cancelled;
@@ -350,28 +344,28 @@ impl<H: Handler<DriverReplySink>> Driver<H> {
         }
     }
 
-    fn handle_msg(&mut self, msg: SelfRef<ConnectionMessage<'static>>) -> Option<HandlerFuture> {
+    fn handle_msg(&mut self, msg: SelfRef<ConnectionMessage<'static>>) {
         let is_request = matches!(&*msg, ConnectionMessage::Request(_));
         if is_request {
             let msg = msg.map(|m| match m {
                 ConnectionMessage::Request(r) => r,
                 _ => unreachable!(),
             });
-            self.handle_request(msg)
+            self.handle_request(msg);
         } else {
             let msg = msg.map(|m| match m {
                 ConnectionMessage::Channel(c) => c,
                 _ => unreachable!(),
             });
             self.handle_channel(msg);
-            None
         }
     }
 
-    fn handle_request(&mut self, msg: SelfRef<RequestMessage<'static>>) -> Option<HandlerFuture> {
+    fn handle_request(&mut self, msg: SelfRef<RequestMessage<'static>>) {
         let req_id = msg.id;
         let is_call = matches!(&msg.body, RequestBody::Call(_));
         let is_response = matches!(&msg.body, RequestBody::Response(_));
+        let is_cancel = matches!(&msg.body, RequestBody::Cancel(_));
 
         if is_call {
             // r[impl rpc.request]
@@ -386,21 +380,28 @@ impl<H: Handler<DriverReplySink>> Driver<H> {
                 _ => unreachable!(),
             });
             let handler = Arc::clone(&self.handler);
-            Some(Box::pin(
+            let join_handle = moire::task::spawn(
                 async move {
                     handler.handle(call, reply).await;
                 }
                 .named("handler"),
-            ))
+            );
+            self.in_flight_handlers.insert(req_id, join_handle);
         } else if is_response {
             // r[impl rpc.response.one-per-request]
             if let Some(tx) = self.shared.pending_responses.lock().remove(&req_id) {
                 let _: Result<(), _> = tx.send(msg);
             }
-            None
-        } else {
-            // [TODO] r[impl rpc.cancel] signal cancellation to in-flight handler task
-            None
+        } else if is_cancel {
+            // r[impl rpc.cancel]
+            // r[impl rpc.cancel.channels]
+            // Abort the in-flight handler task. Channels are intentionally left
+            // intact — they have independent lifecycles per spec.
+            if let Some(handle) = self.in_flight_handlers.remove(&req_id) {
+                handle.abort();
+            }
+            // The response is sent automatically: aborting drops DriverReplySink →
+            // mark_failure fires → failures_rx arm sends RoamError::Cancelled.
         }
     }
 
