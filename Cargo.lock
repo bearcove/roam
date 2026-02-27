@@ -1650,6 +1650,8 @@ dependencies = [
  "prost",
  "roam",
  "roam-core",
+ "roam-shm",
+ "roam-stream",
  "roam-types",
  "serde",
  "tarpc",

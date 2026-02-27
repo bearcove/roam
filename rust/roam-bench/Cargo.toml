@@ -13,6 +13,8 @@ rustdoc-args = ["--html-in-header", "arborium-header.html"]
 roam.workspace = true
 roam-core.workspace = true
 roam-types.workspace = true
+roam-shm = { path = "../roam-shm" }
+roam-stream.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net"] }
 moire.workspace = true
 futures-util.workspace = true

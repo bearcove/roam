@@ -35,7 +35,7 @@ mod roam_bench {
     }
 
     #[derive(Clone)]
-    struct Handler;
+    pub struct Handler;
 
     impl BenchServer for Handler {
         async fn add(&self, call: impl roam::Call<i32, core::convert::Infallible>, a: i32, b: i32) {
@@ -64,7 +64,7 @@ mod roam_bench {
         }
     }
 
-    struct NoopHandler;
+    pub struct NoopHandler;
 
     impl roam_types::Handler<roam_core::DriverReplySink> for NoopHandler {
         fn handle(
@@ -153,6 +153,220 @@ fn roam_stream(bencher: divan::Bencher, n: usize) {
                 count
             });
             call.await.expect("roam generate failed");
+            let count = recv_task.await.unwrap();
+            divan::black_box(count);
+        })
+    });
+}
+
+// ============================================================================
+// roam-shm (shared memory transport)
+// ============================================================================
+
+mod roam_shm_bench {
+    use moire::task::FutureExt;
+    use roam_core::{BareConduit, Driver, acceptor, initiator};
+    use roam_shm::ShmLink;
+    use roam_shm::varslot::SizeClassConfig;
+    use roam_types::Parity;
+
+    use super::roam_bench::{BenchClient, BenchDispatcher, Handler, NoopHandler};
+
+    type MessageConduit = BareConduit<roam_types::MessageFamily, ShmLink>;
+
+    pub async fn setup() -> BenchClient<roam_core::DriverCaller> {
+        let classes = [
+            SizeClassConfig {
+                slot_size: 4096,
+                slot_count: 16,
+            },
+            SizeClassConfig {
+                slot_size: 65536 + 256,
+                slot_count: 4,
+            },
+        ];
+        let (a, b) = ShmLink::heap_pair(1 << 16, 1 << 20, 256, &classes).unwrap();
+        let client_conduit: MessageConduit = BareConduit::new(a);
+        let server_conduit: MessageConduit = BareConduit::new(b);
+
+        let server_task = moire::task::spawn(
+            async move {
+                let (mut server_session, server_handle) = acceptor(server_conduit)
+                    .establish()
+                    .await
+                    .expect("server handshake failed");
+                let dispatcher = BenchDispatcher::new(Handler);
+                let mut server_driver = Driver::new(server_handle, dispatcher, Parity::Even);
+                moire::task::spawn(
+                    async move { server_session.run().await }.named("server_session"),
+                );
+                moire::task::spawn(async move { server_driver.run().await }.named("server_driver"));
+            }
+            .named("server_setup"),
+        );
+
+        let (mut client_session, client_handle) = initiator(client_conduit)
+            .establish()
+            .await
+            .expect("client handshake failed");
+        let mut client_driver = Driver::new(client_handle, NoopHandler, Parity::Odd);
+        let caller = client_driver.caller();
+        moire::task::spawn(async move { client_session.run().await }.named("client_session"));
+        moire::task::spawn(async move { client_driver.run().await }.named("client_driver"));
+
+        server_task.await.expect("server setup failed");
+
+        BenchClient::new(caller)
+    }
+}
+
+#[divan::bench]
+fn roam_shm_add(bencher: divan::Bencher) {
+    let client = TOKIO.block_on(roam_shm_bench::setup());
+    bencher.bench_local(|| {
+        TOKIO.block_on(async {
+            let resp = client.add(3, 5).await.expect("roam-shm add failed");
+            divan::black_box(resp.ret);
+        })
+    });
+}
+
+#[divan::bench(args = PAYLOAD_SIZES)]
+fn roam_shm_echo(bencher: divan::Bencher, n: usize) {
+    let client = TOKIO.block_on(roam_shm_bench::setup());
+    let payload = vec![42u8; n];
+    bencher.bench_local(|| {
+        TOKIO.block_on(async {
+            let resp = client
+                .echo(payload.clone())
+                .await
+                .expect("roam-shm echo failed");
+            divan::black_box(resp.ret.len());
+        })
+    });
+}
+
+#[divan::bench(args = STREAM_COUNTS)]
+fn roam_shm_stream(bencher: divan::Bencher, n: usize) {
+    let client = TOKIO.block_on(roam_shm_bench::setup());
+    bencher.bench_local(|| {
+        TOKIO.block_on(async {
+            let (tx, mut rx) = roam::channel::<i32, 16>();
+            let call = client.generate(n as u32, tx);
+            let recv_task = tokio::spawn(async move {
+                let mut count = 0u32;
+                while let Ok(Some(_item)) = rx.recv().await {
+                    count += 1;
+                }
+                count
+            });
+            call.await.expect("roam-shm generate failed");
+            let count = recv_task.await.unwrap();
+            divan::black_box(count);
+        })
+    });
+}
+
+// ============================================================================
+// roam-tcp (TCP loopback transport)
+// ============================================================================
+
+mod roam_tcp_bench {
+    use moire::task::FutureExt;
+    use roam_core::{BareConduit, Driver, acceptor, initiator};
+    use roam_stream::StreamLink;
+    use roam_types::Parity;
+    use tokio::net::TcpListener;
+
+    use super::roam_bench::{BenchClient, BenchDispatcher, Handler, NoopHandler};
+
+    type TcpStreamLink =
+        StreamLink<tokio::net::tcp::OwnedReadHalf, tokio::net::tcp::OwnedWriteHalf>;
+    type MessageConduit = BareConduit<roam_types::MessageFamily, TcpStreamLink>;
+
+    pub async fn setup() -> BenchClient<roam_core::DriverCaller> {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let server_task = moire::task::spawn(
+            async move {
+                let (stream, _) = listener.accept().await.unwrap();
+                stream.set_nodelay(true).unwrap();
+                let server_conduit: MessageConduit = BareConduit::new(StreamLink::tcp(stream));
+                let (mut server_session, server_handle) = acceptor(server_conduit)
+                    .establish()
+                    .await
+                    .expect("server handshake failed");
+                let dispatcher = BenchDispatcher::new(Handler);
+                let mut server_driver = Driver::new(server_handle, dispatcher, Parity::Even);
+                moire::task::spawn(
+                    async move { server_session.run().await }.named("server_session"),
+                );
+                moire::task::spawn(async move { server_driver.run().await }.named("server_driver"));
+            }
+            .named("server_setup"),
+        );
+
+        let stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+        stream.set_nodelay(true).unwrap();
+        let client_conduit: MessageConduit = BareConduit::new(StreamLink::tcp(stream));
+
+        let (mut client_session, client_handle) = initiator(client_conduit)
+            .establish()
+            .await
+            .expect("client handshake failed");
+        let mut client_driver = Driver::new(client_handle, NoopHandler, Parity::Odd);
+        let caller = client_driver.caller();
+        moire::task::spawn(async move { client_session.run().await }.named("client_session"));
+        moire::task::spawn(async move { client_driver.run().await }.named("client_driver"));
+
+        server_task.await.expect("server setup failed");
+
+        BenchClient::new(caller)
+    }
+}
+
+#[divan::bench]
+fn roam_tcp_add(bencher: divan::Bencher) {
+    let client = TOKIO.block_on(roam_tcp_bench::setup());
+    bencher.bench_local(|| {
+        TOKIO.block_on(async {
+            let resp = client.add(3, 5).await.expect("roam-tcp add failed");
+            divan::black_box(resp.ret);
+        })
+    });
+}
+
+#[divan::bench(args = PAYLOAD_SIZES)]
+fn roam_tcp_echo(bencher: divan::Bencher, n: usize) {
+    let client = TOKIO.block_on(roam_tcp_bench::setup());
+    let payload = vec![42u8; n];
+    bencher.bench_local(|| {
+        TOKIO.block_on(async {
+            let resp = client
+                .echo(payload.clone())
+                .await
+                .expect("roam-tcp echo failed");
+            divan::black_box(resp.ret.len());
+        })
+    });
+}
+
+#[divan::bench(args = STREAM_COUNTS)]
+fn roam_tcp_stream(bencher: divan::Bencher, n: usize) {
+    let client = TOKIO.block_on(roam_tcp_bench::setup());
+    bencher.bench_local(|| {
+        TOKIO.block_on(async {
+            let (tx, mut rx) = roam::channel::<i32, 16>();
+            let call = client.generate(n as u32, tx);
+            let recv_task = tokio::spawn(async move {
+                let mut count = 0u32;
+                while let Ok(Some(_item)) = rx.recv().await {
+                    count += 1;
+                }
+                count
+            });
+            call.await.expect("roam-tcp generate failed");
             let count = recv_task.await.unwrap();
             divan::black_box(count);
         })
@@ -292,7 +506,7 @@ mod tonic_bench {
         }
     }
 
-    pub async fn setup() -> AdderClient<tonic::transport::Channel> {
+    pub async fn setup_duplex() -> AdderClient<tonic::transport::Channel> {
         let (client, server) = tokio::io::duplex(1024);
 
         tokio::spawn(async move {
@@ -319,11 +533,35 @@ mod tonic_bench {
 
         AdderClient::new(channel)
     }
+
+    pub async fn setup_tcp() -> AdderClient<tonic::transport::Channel> {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            stream.set_nodelay(true).unwrap();
+            Server::builder()
+                .add_service(AdderServer::new(Handler))
+                .serve_with_incoming(tokio_stream::once(Ok::<_, std::io::Error>(stream)))
+                .await
+                .unwrap();
+        });
+
+        let channel = Endpoint::try_from(format!("http://{addr}"))
+            .unwrap()
+            .tcp_nodelay(true)
+            .connect()
+            .await
+            .unwrap();
+
+        AdderClient::new(channel)
+    }
 }
 
 #[divan::bench]
 fn tonic_add(bencher: divan::Bencher) {
-    let mut client = TOKIO.block_on(tonic_bench::setup());
+    let mut client = TOKIO.block_on(tonic_bench::setup_duplex());
     bencher.bench_local(|| {
         TOKIO.block_on(async {
             let resp = client
@@ -338,7 +576,7 @@ fn tonic_add(bencher: divan::Bencher) {
 
 #[divan::bench(args = PAYLOAD_SIZES)]
 fn tonic_echo(bencher: divan::Bencher, n: usize) {
-    let mut client = TOKIO.block_on(tonic_bench::setup());
+    let mut client = TOKIO.block_on(tonic_bench::setup_duplex());
     let payload = vec![42u8; n];
     bencher.bench_local(|| {
         TOKIO.block_on(async {
@@ -356,7 +594,7 @@ fn tonic_echo(bencher: divan::Bencher, n: usize) {
 
 #[divan::bench(args = STREAM_COUNTS)]
 fn tonic_stream(bencher: divan::Bencher, n: usize) {
-    let mut client = TOKIO.block_on(tonic_bench::setup());
+    let mut client = TOKIO.block_on(tonic_bench::setup_duplex());
     bencher.bench_local(|| {
         TOKIO.block_on(async {
             use tokio_stream::StreamExt;
@@ -364,6 +602,63 @@ fn tonic_stream(bencher: divan::Bencher, n: usize) {
                 .generate(tonic_bench::pb::GenerateRequest { count: n as i32 })
                 .await
                 .expect("tonic generate failed")
+                .into_inner();
+            let mut count = 0u32;
+            while let Some(Ok(_)) = stream.next().await {
+                count += 1;
+            }
+            divan::black_box(count);
+        })
+    });
+}
+
+// ============================================================================
+// tonic-tcp (TCP loopback)
+// ============================================================================
+
+#[divan::bench]
+fn tonic_tcp_add(bencher: divan::Bencher) {
+    let mut client = TOKIO.block_on(tonic_bench::setup_tcp());
+    bencher.bench_local(|| {
+        TOKIO.block_on(async {
+            let resp = client
+                .add(tonic_bench::pb::AddRequest { a: 3, b: 5 })
+                .await
+                .expect("tonic-tcp add failed")
+                .into_inner();
+            divan::black_box(resp.result);
+        })
+    });
+}
+
+#[divan::bench(args = PAYLOAD_SIZES)]
+fn tonic_tcp_echo(bencher: divan::Bencher, n: usize) {
+    let mut client = TOKIO.block_on(tonic_bench::setup_tcp());
+    let payload = vec![42u8; n];
+    bencher.bench_local(|| {
+        TOKIO.block_on(async {
+            let resp = client
+                .echo(tonic_bench::pb::EchoRequest {
+                    data: payload.clone(),
+                })
+                .await
+                .expect("tonic-tcp echo failed")
+                .into_inner();
+            divan::black_box(resp.data.len());
+        })
+    });
+}
+
+#[divan::bench(args = STREAM_COUNTS)]
+fn tonic_tcp_stream(bencher: divan::Bencher, n: usize) {
+    let mut client = TOKIO.block_on(tonic_bench::setup_tcp());
+    bencher.bench_local(|| {
+        TOKIO.block_on(async {
+            use tokio_stream::StreamExt;
+            let mut stream = client
+                .generate(tonic_bench::pb::GenerateRequest { count: n as i32 })
+                .await
+                .expect("tonic-tcp generate failed")
                 .into_inner();
             let mut count = 0u32;
             while let Some(Ok(_)) = stream.next().await {
