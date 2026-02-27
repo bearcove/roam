@@ -157,6 +157,14 @@ pub struct BipBufConsumer<'a> {
 pub struct BipBufFull;
 
 impl<'a> BipBufProducer<'a> {
+    /// Check whether `len` bytes could be granted contiguously right now.
+    ///
+    /// This is a non-mutating readiness probe used for backpressure decisions.
+    /// Unlike [`try_grant`](Self::try_grant), this does not perform wrapping.
+    pub fn can_grant(&self, len: u32) -> bool {
+        self.buf.inner.can_grant(len)
+    }
+
     /// Try to reserve a contiguous region of `len` bytes for writing.
     ///
     /// On success, returns a mutable slice. The caller MUST write their
@@ -316,6 +324,36 @@ impl BipBufRaw {
             } else {
                 None
             }
+        }
+    }
+
+    /// Check whether `len` bytes could be granted contiguously right now.
+    ///
+    /// This is a read-only predicate for backpressure checks and must not
+    /// mutate write/watermark state.
+    pub fn can_grant(&self, len: u32) -> bool {
+        if len == 0 {
+            return true;
+        }
+
+        let header = self.header();
+        let capacity = header.capacity;
+        if len > capacity {
+            return false;
+        }
+
+        let write = header.write.load(Ordering::Relaxed);
+        let read = header.read.load(Ordering::Acquire);
+
+        if write >= read {
+            let space_at_end = capacity - write;
+            if space_at_end >= len {
+                true
+            } else {
+                read != 0 && len < read
+            }
+        } else {
+            write + len < read
         }
     }
 
@@ -584,6 +622,27 @@ mod tests {
         let (mut producer, _consumer) = buf.split();
 
         assert!(producer.try_grant(33).is_none());
+        assert!(!producer.can_grant(33));
+    }
+
+    #[test]
+    fn can_grant_is_non_mutating() {
+        let (_region, buf) = make_bipbuf(32);
+        let (mut producer, mut consumer) = buf.split();
+
+        let grant = producer.try_grant(24).unwrap();
+        grant.fill(0xAA);
+        producer.commit(24);
+
+        consumer.release(20);
+        let header = unsafe { &*buf.inner().header };
+        assert_eq!(header.write.load(Ordering::Relaxed), 24);
+        assert_eq!(header.watermark.load(Ordering::Relaxed), 0);
+
+        // A 16-byte grant would need wrapping. can_grant() must not mutate.
+        assert!(producer.can_grant(16));
+        assert_eq!(header.write.load(Ordering::Relaxed), 24);
+        assert_eq!(header.watermark.load(Ordering::Relaxed), 0);
     }
 
     #[test]

@@ -6,10 +6,12 @@
 
 use std::io;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use std::sync::{Arc, Mutex};
 
 use roam_types::{Backing, Link, LinkRx, LinkTx, LinkTxPermit, SharedBacking, WriteSlot};
 use shm_primitives::{BIPBUF_HEADER_SIZE, BipBuf, HeapRegion, PeerId};
+use tokio::sync::Notify;
 
 use crate::framing::{DEFAULT_INLINE_THRESHOLD, OwnedFrame};
 use crate::segment::Segment;
@@ -74,6 +76,8 @@ struct TxShared {
     max_payload_size: u32,
     inline_threshold: u32,
     tx_lock: Mutex<()>,
+    ring_ready: Arc<Notify>,
+    stats: Arc<ShmTransportStats>,
 }
 
 /// A [`Link`] over shared memory ring buffers.
@@ -84,6 +88,45 @@ pub struct ShmLink {
     rx_backend: Backend,
     tx_closed: Arc<AtomicBool>,
     peer_closed: Arc<AtomicBool>,
+}
+
+#[derive(Default)]
+struct ShmTransportStats {
+    inline_sends: AtomicU64,
+    slot_ref_sends: AtomicU64,
+    inline_recvs: AtomicU64,
+    slot_ref_recvs: AtomicU64,
+    varslot_exhausted: AtomicU64,
+    ring_exhausted: AtomicU64,
+    reserve_waits: AtomicU64,
+    commit_retries: AtomicU64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ShmTransportStatsSnapshot {
+    pub inline_sends: u64,
+    pub slot_ref_sends: u64,
+    pub inline_recvs: u64,
+    pub slot_ref_recvs: u64,
+    pub varslot_exhausted: u64,
+    pub ring_exhausted: u64,
+    pub reserve_waits: u64,
+    pub commit_retries: u64,
+}
+
+impl ShmTransportStats {
+    fn snapshot(&self) -> ShmTransportStatsSnapshot {
+        ShmTransportStatsSnapshot {
+            inline_sends: self.inline_sends.load(AtomicOrdering::Relaxed),
+            slot_ref_sends: self.slot_ref_sends.load(AtomicOrdering::Relaxed),
+            inline_recvs: self.inline_recvs.load(AtomicOrdering::Relaxed),
+            slot_ref_recvs: self.slot_ref_recvs.load(AtomicOrdering::Relaxed),
+            varslot_exhausted: self.varslot_exhausted.load(AtomicOrdering::Relaxed),
+            ring_exhausted: self.ring_exhausted.load(AtomicOrdering::Relaxed),
+            reserve_waits: self.reserve_waits.load(AtomicOrdering::Relaxed),
+            commit_retries: self.commit_retries.load(AtomicOrdering::Relaxed),
+        }
+    }
 }
 
 impl ShmLink {
@@ -105,6 +148,8 @@ impl ShmLink {
         tx_closed: Arc<AtomicBool>,
         peer_closed: Arc<AtomicBool>,
     ) -> Self {
+        let ring_ready = Arc::new(Notify::new());
+        let stats = Arc::new(ShmTransportStats::default());
         let tx_shared = Arc::new(TxShared {
             tx_bipbuf,
             backend: backend.clone(),
@@ -112,6 +157,8 @@ impl ShmLink {
             max_payload_size,
             inline_threshold: Self::normalize_threshold(inline_threshold),
             tx_lock: Mutex::new(()),
+            ring_ready: ring_ready.clone(),
+            stats: stats.clone(),
         });
 
         Self {
@@ -227,6 +274,8 @@ pub struct ShmLinkRx {
     rx_bipbuf: Arc<BipBuf>,
     backend: Backend,
     peer_closed: Arc<AtomicBool>,
+    ring_ready: Arc<Notify>,
+    stats: Arc<ShmTransportStats>,
 }
 
 pub struct ShmTxPermit {
@@ -264,15 +313,20 @@ impl Link for ShmLink {
     type Rx = ShmLinkRx;
 
     fn split(self) -> (Self::Tx, Self::Rx) {
+        let tx_shared = self.tx_shared;
+        let ring_ready = tx_shared.ring_ready.clone();
+        let stats = tx_shared.stats.clone();
         (
             ShmLinkTx {
-                shared: self.tx_shared,
+                shared: tx_shared,
                 tx_closed: self.tx_closed,
             },
             ShmLinkRx {
                 rx_bipbuf: self.rx_bipbuf,
                 backend: self.rx_backend,
                 peer_closed: self.peer_closed,
+                ring_ready,
+                stats,
             },
         )
     }
@@ -282,20 +336,48 @@ impl LinkTx for ShmLinkTx {
     type Permit = ShmTxPermit;
 
     async fn reserve(&self) -> io::Result<Self::Permit> {
-        if self.tx_closed.load(Ordering::Acquire) {
-            return Err(io::Error::new(
-                io::ErrorKind::BrokenPipe,
-                "shm tx is closed",
-            ));
+        loop {
+            if self.tx_closed.load(Ordering::Acquire) {
+                return Err(io::Error::new(
+                    io::ErrorKind::BrokenPipe,
+                    "shm tx is closed",
+                ));
+            }
+
+            if self.tx_closed.load(Ordering::Acquire) {
+                return Err(io::Error::new(
+                    io::ErrorKind::BrokenPipe,
+                    "shm tx is closed",
+                ));
+            }
+
+            let notified = self.shared.ring_ready.notified();
+            if self
+                .shared
+                .tx_bipbuf
+                .inner()
+                .can_grant(framing::FRAME_HEADER_SIZE as u32)
+            {
+                return Ok(ShmTxPermit {
+                    shared: self.shared.clone(),
+                    tx_closed: self.tx_closed.clone(),
+                });
+            }
+
+            self.shared
+                .stats
+                .reserve_waits
+                .fetch_add(1, AtomicOrdering::Relaxed);
+            tokio::select! {
+                _ = notified => {}
+                _ = tokio::time::sleep(std::time::Duration::from_millis(1)) => {}
+            }
         }
-        Ok(ShmTxPermit {
-            shared: self.shared.clone(),
-            tx_closed: self.tx_closed.clone(),
-        })
     }
 
     async fn close(self) -> io::Result<()> {
         self.tx_closed.store(true, Ordering::Release);
+        self.shared.ring_ready.notify_waiters();
         Ok(())
     }
 }
@@ -318,12 +400,33 @@ impl LinkTxPermit for ShmTxPermit {
         }
 
         if len as u32 <= self.shared.inline_threshold {
+            let entry_len = ((framing::FRAME_HEADER_SIZE + len + 3) & !3) as u32;
+            if !self.shared.tx_bipbuf.inner().can_grant(entry_len) {
+                self.shared
+                    .stats
+                    .ring_exhausted
+                    .fetch_add(1, AtomicOrdering::Relaxed);
+                return Err(io::Error::new(io::ErrorKind::WouldBlock, "ring is full"));
+            }
             return Ok(ShmWriteSlot {
                 shared: self.shared,
                 inner: ShmWriteSlotInner::Inline {
                     bytes: vec![0; len],
                 },
             });
+        }
+
+        if !self
+            .shared
+            .tx_bipbuf
+            .inner()
+            .can_grant(framing::SLOT_REF_ENTRY_SIZE)
+        {
+            self.shared
+                .stats
+                .ring_exhausted
+                .fetch_add(1, AtomicOrdering::Relaxed);
+            return Err(io::Error::new(io::ErrorKind::WouldBlock, "ring is full"));
         }
 
         let slot_payload_len = len.checked_add(SLOT_LEN_PREFIX_SIZE).ok_or_else(|| {
@@ -333,7 +436,13 @@ impl LinkTxPermit for ShmTxPermit {
             .shared
             .backend
             .allocate_slot(slot_payload_len as u32, self.shared.owner_peer)
-            .ok_or_else(|| io::Error::new(io::ErrorKind::WouldBlock, "varslot exhausted"))?;
+            .ok_or_else(|| {
+                self.shared
+                    .stats
+                    .varslot_exhausted
+                    .fetch_add(1, AtomicOrdering::Relaxed);
+                io::Error::new(io::ErrorKind::WouldBlock, "varslot exhausted")
+            })?;
 
         Ok(ShmWriteSlot {
             shared: self.shared,
@@ -371,8 +480,20 @@ impl WriteSlot for ShmWriteSlot {
                 let result = framing::write_inline(&mut producer, bytes);
                 drop(lock);
                 match result {
-                    Ok(()) => return,
-                    Err(_) => std::thread::yield_now(),
+                    Ok(()) => {
+                        self.shared
+                            .stats
+                            .inline_sends
+                            .fetch_add(1, AtomicOrdering::Relaxed);
+                        return;
+                    }
+                    Err(_) => {
+                        self.shared
+                            .stats
+                            .commit_retries
+                            .fetch_add(1, AtomicOrdering::Relaxed);
+                        std::thread::yield_now();
+                    }
                 }
             },
             ShmWriteSlotInner::VarSlot {
@@ -397,9 +518,19 @@ impl WriteSlot for ShmWriteSlot {
                     match result {
                         Ok(()) => {
                             *slot_ref = None;
+                            self.shared
+                                .stats
+                                .slot_ref_sends
+                                .fetch_add(1, AtomicOrdering::Relaxed);
                             return;
                         }
-                        Err(_) => std::thread::yield_now(),
+                        Err(_) => {
+                            self.shared
+                                .stats
+                                .commit_retries
+                                .fetch_add(1, AtomicOrdering::Relaxed);
+                            std::thread::yield_now();
+                        }
                     }
                 }
             }
@@ -441,8 +572,18 @@ impl LinkRx for ShmLinkRx {
             let (_, mut consumer) = self.rx_bipbuf.split();
             if let Some(frame) = framing::read_frame(&mut consumer) {
                 return match frame {
-                    OwnedFrame::Inline(bytes) => Ok(Some(Backing::Boxed(bytes.into_boxed_slice()))),
+                    OwnedFrame::Inline(bytes) => {
+                        self.stats
+                            .inline_recvs
+                            .fetch_add(1, AtomicOrdering::Relaxed);
+                        self.ring_ready.notify_waiters();
+                        Ok(Some(Backing::Boxed(bytes.into_boxed_slice())))
+                    }
                     OwnedFrame::SlotRef(slot_ref) => {
+                        self.stats
+                            .slot_ref_recvs
+                            .fetch_add(1, AtomicOrdering::Relaxed);
+                        self.ring_ready.notify_waiters();
                         let slot = unsafe { self.backend.slot_data(&slot_ref) };
                         if slot.len() < SLOT_LEN_PREFIX_SIZE {
                             self.backend.free_slot(slot_ref);
@@ -481,6 +622,18 @@ impl LinkRx for ShmLinkRx {
     }
 }
 
+impl ShmLinkTx {
+    pub fn stats(&self) -> ShmTransportStatsSnapshot {
+        self.shared.stats.snapshot()
+    }
+}
+
+impl ShmLinkRx {
+    pub fn stats(&self) -> ShmTransportStatsSnapshot {
+        self.stats.snapshot()
+    }
+}
+
 struct ShmVarSlotBacking {
     backend: Backend,
     slot_ref: SlotRef,
@@ -503,7 +656,10 @@ impl Drop for ShmVarSlotBacking {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use roam_types::{LinkRx as _, LinkTx as _, LinkTxPermit as _};
+    use tokio::time::timeout;
 
     use super::*;
 
@@ -601,5 +757,75 @@ mod tests {
             let backing = b_rx.recv().await.unwrap().unwrap();
             assert_eq!(backing.as_bytes(), payload.as_slice());
         }
+    }
+
+    #[tokio::test]
+    async fn reserve_waits_until_rx_frees_ring_space() {
+        let (a, b) = ShmLink::heap_pair(32, 1024, 256, CLASSES);
+        let (a_tx, _a_rx) = a.split();
+        let (_b_tx, mut b_rx) = b.split();
+
+        let payload = vec![9_u8; 24]; // align4(8 + 24) = 32 (fills ring)
+        let permit = a_tx.reserve().await.unwrap();
+        let mut slot = permit.alloc(payload.len()).unwrap();
+        slot.as_mut_slice().copy_from_slice(&payload);
+        slot.commit();
+
+        let reserve_fut = a_tx.reserve();
+        tokio::pin!(reserve_fut);
+        assert!(
+            timeout(Duration::from_millis(20), &mut reserve_fut)
+                .await
+                .is_err(),
+            "reserve should wait while ring is full"
+        );
+
+        let _ = b_rx.recv().await.unwrap().unwrap();
+        let permit2 = timeout(Duration::from_secs(1), &mut reserve_fut)
+            .await
+            .expect("reserve should wake after recv")
+            .expect("reserve should succeed");
+        drop(permit2);
+    }
+
+    #[tokio::test]
+    async fn transport_stats_track_send_recv_and_exhaustion() {
+        let (a, b) = ShmLink::heap_pair(4096, 1024, 64, CLASSES);
+        let (a_tx, _a_rx) = a.split();
+        let (_b_tx, mut b_rx) = b.split();
+
+        let inline = b"hello";
+        let permit = a_tx.reserve().await.unwrap();
+        let mut slot = permit.alloc(inline.len()).unwrap();
+        slot.as_mut_slice().copy_from_slice(inline);
+        slot.commit();
+
+        let large = vec![1_u8; 200];
+        let permit = a_tx.reserve().await.unwrap();
+        let mut slot = permit.alloc(large.len()).unwrap();
+        slot.as_mut_slice().copy_from_slice(&large);
+        slot.commit();
+
+        let backing1 = b_rx.recv().await.unwrap().unwrap();
+        assert!(backing1.as_bytes().starts_with(inline));
+        let backing2 = b_rx.recv().await.unwrap().unwrap();
+        assert_eq!(backing2.as_bytes(), large.as_slice());
+
+        let permit = a_tx.reserve().await.unwrap();
+        let err = match permit.alloc(large.len()) {
+            Ok(_) => panic!("expected varslot exhaustion"),
+            Err(err) => err,
+        };
+        assert_eq!(err.kind(), io::ErrorKind::WouldBlock);
+        drop(backing2); // free slot for future sends
+
+        let tx_stats = a_tx.stats();
+        let rx_stats = b_rx.stats();
+
+        assert_eq!(tx_stats.inline_sends, 1);
+        assert_eq!(tx_stats.slot_ref_sends, 1);
+        assert_eq!(tx_stats.varslot_exhausted, 1);
+        assert_eq!(rx_stats.inline_recvs, 1);
+        assert_eq!(rx_stats.slot_ref_recvs, 1);
     }
 }
