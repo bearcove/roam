@@ -11,6 +11,7 @@ use std::sync::{Arc, Mutex};
 
 use roam_types::{Backing, Link, LinkRx, LinkTx, LinkTxPermit, SharedBacking, WriteSlot};
 use shm_primitives::{BIPBUF_HEADER_SIZE, BipBuf, Doorbell, HeapRegion, PeerId};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 use crate::framing::{DEFAULT_INLINE_THRESHOLD, OwnedFrame};
 use crate::segment::Segment;
@@ -66,6 +67,22 @@ impl Backend {
             Backend::Heap(heap) => unsafe { heap.var_pool.slot_data_mut(slot_ref) },
         }
     }
+
+    fn max_slot_size(&self) -> Option<u32> {
+        let pool = match self {
+            Backend::Segment(segment) => segment.var_pool(),
+            Backend::Heap(heap) => &heap.var_pool,
+        };
+        let class_count = pool.class_count();
+        if class_count == 0 {
+            return None;
+        }
+        let mut max_size = 0u32;
+        for class_idx in 0..class_count {
+            max_size = max_size.max(pool.slot_size(class_idx));
+        }
+        Some(max_size)
+    }
 }
 
 struct TxShared {
@@ -74,7 +91,10 @@ struct TxShared {
     owner_peer: u8,
     max_payload_size: u32,
     inline_threshold: u32,
+    reserve_ring_bytes: u32,
+    reserve_slot_bytes: Option<u32>,
     tx_lock: Mutex<()>,
+    send_turn: Arc<Semaphore>,
     doorbell: Arc<Doorbell>,
     doorbell_dead: AtomicBool,
     stats: Arc<ShmTransportStats>,
@@ -155,6 +175,21 @@ impl ShmLink {
         tx_closed: Arc<AtomicBool>,
         peer_closed: Arc<AtomicBool>,
     ) -> Self {
+        let ring_capacity = tx_bipbuf.capacity();
+        let ring_contiguous_ceiling = ring_capacity.saturating_sub(1);
+        let inline_ceiling = max_payload_size
+            .min(Self::normalize_threshold(inline_threshold))
+            .min(ring_contiguous_ceiling.saturating_sub(framing::FRAME_HEADER_SIZE as u32));
+        let reserve_inline_bytes = ((framing::FRAME_HEADER_SIZE as u32 + inline_ceiling) + 3) & !3;
+        let reserve_ring_bytes = reserve_inline_bytes
+            .max(framing::SLOT_REF_ENTRY_SIZE)
+            .min(ring_contiguous_ceiling);
+        let reserve_slot_bytes = if max_payload_size > Self::normalize_threshold(inline_threshold) {
+            backend.max_slot_size()
+        } else {
+            None
+        };
+
         let stats = Arc::new(ShmTransportStats::default());
         let tx_shared = Arc::new(TxShared {
             tx_bipbuf,
@@ -162,7 +197,10 @@ impl ShmLink {
             owner_peer,
             max_payload_size,
             inline_threshold: Self::normalize_threshold(inline_threshold),
+            reserve_ring_bytes,
+            reserve_slot_bytes,
             tx_lock: Mutex::new(()),
+            send_turn: Arc::new(Semaphore::new(1)),
             doorbell,
             doorbell_dead: AtomicBool::new(false),
             stats: stats.clone(),
@@ -294,6 +332,8 @@ pub struct ShmLinkRx {
 pub struct ShmTxPermit {
     shared: Arc<TxShared>,
     tx_closed: Arc<AtomicBool>,
+    send_turn: Option<OwnedSemaphorePermit>,
+    reserved_slot: Option<SlotRef>,
 }
 
 enum ShmWriteSlotInner {
@@ -309,6 +349,7 @@ enum ShmWriteSlotInner {
 pub struct ShmWriteSlot {
     shared: Arc<TxShared>,
     inner: ShmWriteSlotInner,
+    _send_turn: Option<OwnedSemaphorePermit>,
 }
 
 impl Drop for ShmWriteSlot {
@@ -317,6 +358,34 @@ impl Drop for ShmWriteSlot {
             && let Some(slot_ref) = slot_ref.take()
         {
             self.shared.backend.free_slot(slot_ref);
+            if matches!(
+                self.shared.doorbell.signal_now(),
+                shm_primitives::SignalResult::PeerDead
+            ) {
+                self.shared.doorbell_dead.store(true, Ordering::Release);
+                self.shared
+                    .stats
+                    .doorbell_peer_dead
+                    .fetch_add(1, AtomicOrdering::Relaxed);
+            }
+        }
+    }
+}
+
+impl Drop for ShmTxPermit {
+    fn drop(&mut self) {
+        if let Some(slot_ref) = self.reserved_slot.take() {
+            self.shared.backend.free_slot(slot_ref);
+            if matches!(
+                self.shared.doorbell.signal_now(),
+                shm_primitives::SignalResult::PeerDead
+            ) {
+                self.shared.doorbell_dead.store(true, Ordering::Release);
+                self.shared
+                    .stats
+                    .doorbell_peer_dead
+                    .fetch_add(1, AtomicOrdering::Relaxed);
+            }
         }
     }
 }
@@ -350,6 +419,14 @@ impl LinkTx for ShmLinkTx {
 
     async fn reserve(&self) -> io::Result<Self::Permit> {
         loop {
+            let send_turn = self
+                .shared
+                .send_turn
+                .clone()
+                .acquire_owned()
+                .await
+                .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "shm send queue closed"))?;
+
             if self.tx_closed.load(Ordering::Acquire) {
                 return Err(io::Error::new(
                     io::ErrorKind::BrokenPipe,
@@ -366,17 +443,56 @@ impl LinkTx for ShmLinkTx {
                 .shared
                 .tx_bipbuf
                 .inner()
-                .can_grant(framing::FRAME_HEADER_SIZE as u32)
+                .can_grant(self.shared.reserve_ring_bytes)
             {
+                let reserved_slot = if let Some(slot_bytes) = self.shared.reserve_slot_bytes {
+                    match self
+                        .shared
+                        .backend
+                        .allocate_slot(slot_bytes, self.shared.owner_peer)
+                    {
+                        Some(slot_ref) => Some(slot_ref),
+                        None => {
+                            self.shared
+                                .stats
+                                .varslot_exhausted
+                                .fetch_add(1, AtomicOrdering::Relaxed);
+                            self.shared
+                                .stats
+                                .reserve_waits
+                                .fetch_add(1, AtomicOrdering::Relaxed);
+                            if let Err(err) = self.shared.doorbell.wait().await {
+                                self.shared
+                                    .stats
+                                    .doorbell_wait_errors
+                                    .fetch_add(1, AtomicOrdering::Relaxed);
+                                return Err(io::Error::new(
+                                    io::ErrorKind::BrokenPipe,
+                                    format!("shm doorbell wait failed: {err}"),
+                                ));
+                            }
+                            continue;
+                        }
+                    }
+                } else {
+                    None
+                };
+
                 return Ok(ShmTxPermit {
                     shared: self.shared.clone(),
                     tx_closed: self.tx_closed.clone(),
+                    send_turn: Some(send_turn),
+                    reserved_slot,
                 });
             }
 
             self.shared
                 .stats
                 .reserve_waits
+                .fetch_add(1, AtomicOrdering::Relaxed);
+            self.shared
+                .stats
+                .ring_exhausted
                 .fetch_add(1, AtomicOrdering::Relaxed);
             if let Err(err) = self.shared.doorbell.wait().await {
                 self.shared
@@ -413,7 +529,7 @@ impl LinkTx for ShmLinkTx {
 impl LinkTxPermit for ShmTxPermit {
     type Slot = ShmWriteSlot;
 
-    fn alloc(self, len: usize) -> io::Result<Self::Slot> {
+    fn alloc(mut self, len: usize) -> io::Result<Self::Slot> {
         if self.tx_closed.load(Ordering::Acquire) {
             return Err(io::Error::new(
                 io::ErrorKind::BrokenPipe,
@@ -428,56 +544,40 @@ impl LinkTxPermit for ShmTxPermit {
         }
 
         if len as u32 <= self.shared.inline_threshold {
-            let entry_len = ((framing::FRAME_HEADER_SIZE + len + 3) & !3) as u32;
-            if !self.shared.tx_bipbuf.inner().can_grant(entry_len) {
-                self.shared
-                    .stats
-                    .ring_exhausted
-                    .fetch_add(1, AtomicOrdering::Relaxed);
-                return Err(io::Error::new(io::ErrorKind::WouldBlock, "ring is full"));
+            if let Some(slot_ref) = self.reserved_slot.take() {
+                self.shared.backend.free_slot(slot_ref);
             }
             return Ok(ShmWriteSlot {
-                shared: self.shared,
+                shared: self.shared.clone(),
                 inner: ShmWriteSlotInner::Inline {
                     bytes: vec![0; len],
                 },
+                _send_turn: self.send_turn.take(),
             });
         }
-
-        if !self
-            .shared
-            .tx_bipbuf
-            .inner()
-            .can_grant(framing::SLOT_REF_ENTRY_SIZE)
-        {
-            self.shared
-                .stats
-                .ring_exhausted
-                .fetch_add(1, AtomicOrdering::Relaxed);
-            return Err(io::Error::new(io::ErrorKind::WouldBlock, "ring is full"));
+        let slot_ref = self.reserved_slot.take().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "payload exceeds inline threshold but no varslot class is configured",
+            )
+        })?;
+        let slot = unsafe { self.shared.backend.slot_data(&slot_ref) };
+        let needed = len + SLOT_LEN_PREFIX_SIZE;
+        if slot.len() < needed {
+            self.shared.backend.free_slot(slot_ref);
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "payload exceeds reserved varslot capacity",
+            ));
         }
 
-        let slot_payload_len = len.checked_add(SLOT_LEN_PREFIX_SIZE).ok_or_else(|| {
-            io::Error::new(io::ErrorKind::InvalidInput, "payload length overflow")
-        })?;
-        let slot_ref = self
-            .shared
-            .backend
-            .allocate_slot(slot_payload_len as u32, self.shared.owner_peer)
-            .ok_or_else(|| {
-                self.shared
-                    .stats
-                    .varslot_exhausted
-                    .fetch_add(1, AtomicOrdering::Relaxed);
-                io::Error::new(io::ErrorKind::WouldBlock, "varslot exhausted")
-            })?;
-
         Ok(ShmWriteSlot {
-            shared: self.shared,
+            shared: self.shared.clone(),
             inner: ShmWriteSlotInner::VarSlot {
                 slot_ref: Some(slot_ref),
                 payload_len: len,
             },
+            _send_turn: self.send_turn.take(),
         })
     }
 }
@@ -668,6 +768,9 @@ impl LinkRx for ShmLinkRx {
                             backend: self.backend.clone(),
                             slot_ref,
                             payload_len,
+                            doorbell: self.doorbell.clone(),
+                            peer_closed: self.peer_closed.clone(),
+                            stats: self.stats.clone(),
                         }))))
                     }
                     OwnedFrame::MmapRef(_) => Err(ShmLinkRxError::UnsupportedMmapRef),
@@ -704,6 +807,9 @@ struct ShmVarSlotBacking {
     backend: Backend,
     slot_ref: SlotRef,
     payload_len: usize,
+    doorbell: Arc<Doorbell>,
+    peer_closed: Arc<AtomicBool>,
+    stats: Arc<ShmTransportStats>,
 }
 
 impl SharedBacking for ShmVarSlotBacking {
@@ -717,6 +823,15 @@ impl SharedBacking for ShmVarSlotBacking {
 impl Drop for ShmVarSlotBacking {
     fn drop(&mut self) {
         self.backend.free_slot(self.slot_ref);
+        if matches!(
+            self.doorbell.signal_now(),
+            shm_primitives::SignalResult::PeerDead
+        ) {
+            self.peer_closed.store(true, Ordering::Release);
+            self.stats
+                .doorbell_peer_dead
+                .fetch_add(1, AtomicOrdering::Relaxed);
+        }
     }
 }
 
@@ -786,17 +901,22 @@ mod tests {
 
         let backing = b_rx.recv().await.unwrap().unwrap();
 
-        // single-slot pool: second allocation fails until backing is dropped
-        let permit2 = a_tx.reserve().await.unwrap();
-        let err = match permit2.alloc(payload.len()) {
-            Ok(_) => panic!("expected slot allocation to fail while shared backing is alive"),
-            Err(err) => err,
-        };
-        assert_eq!(err.kind(), io::ErrorKind::WouldBlock);
+        // single-slot pool: second reserve waits until backing is dropped
+        let reserve_fut = a_tx.reserve();
+        tokio::pin!(reserve_fut);
+        assert!(
+            timeout(Duration::from_millis(20), &mut reserve_fut)
+                .await
+                .is_err(),
+            "reserve should wait while slot is held by shared backing"
+        );
 
         drop(backing);
 
-        let permit3 = a_tx.reserve().await.unwrap();
+        let permit3 = timeout(Duration::from_secs(1), &mut reserve_fut)
+            .await
+            .expect("reserve should wake after backing drop")
+            .expect("reserve should succeed");
         let _slot3 = permit3
             .alloc(payload.len())
             .expect("slot must be released after drop");
@@ -877,20 +997,27 @@ mod tests {
         let backing2 = b_rx.recv().await.unwrap().unwrap();
         assert_eq!(backing2.as_bytes(), large.as_slice());
 
-        let permit = a_tx.reserve().await.unwrap();
-        let err = match permit.alloc(large.len()) {
-            Ok(_) => panic!("expected varslot exhaustion"),
-            Err(err) => err,
-        };
-        assert_eq!(err.kind(), io::ErrorKind::WouldBlock);
+        let reserve_fut = a_tx.reserve();
+        tokio::pin!(reserve_fut);
+        assert!(
+            timeout(Duration::from_millis(20), &mut reserve_fut)
+                .await
+                .is_err(),
+            "reserve should wait while slot is exhausted"
+        );
         drop(backing2); // free slot for future sends
+        let permit = timeout(Duration::from_secs(1), &mut reserve_fut)
+            .await
+            .expect("reserve should wake after slot release")
+            .expect("reserve should succeed");
+        let _slot = permit.alloc(large.len()).unwrap();
 
         let tx_stats = a_tx.stats();
         let rx_stats = b_rx.stats();
 
         assert_eq!(tx_stats.inline_sends, 1);
         assert_eq!(tx_stats.slot_ref_sends, 1);
-        assert_eq!(tx_stats.varslot_exhausted, 1);
+        assert!(tx_stats.varslot_exhausted >= 1);
         assert_eq!(rx_stats.inline_recvs, 1);
         assert_eq!(rx_stats.slot_ref_recvs, 1);
     }
