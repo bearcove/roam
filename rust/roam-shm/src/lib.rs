@@ -76,6 +76,7 @@ struct TxShared {
     inline_threshold: u32,
     tx_lock: Mutex<()>,
     doorbell: Arc<Doorbell>,
+    doorbell_dead: AtomicBool,
     stats: Arc<ShmTransportStats>,
 }
 
@@ -99,6 +100,8 @@ struct ShmTransportStats {
     ring_exhausted: AtomicU64,
     reserve_waits: AtomicU64,
     commit_retries: AtomicU64,
+    doorbell_peer_dead: AtomicU64,
+    doorbell_wait_errors: AtomicU64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -111,6 +114,8 @@ pub struct ShmTransportStatsSnapshot {
     pub ring_exhausted: u64,
     pub reserve_waits: u64,
     pub commit_retries: u64,
+    pub doorbell_peer_dead: u64,
+    pub doorbell_wait_errors: u64,
 }
 
 impl ShmTransportStats {
@@ -124,6 +129,8 @@ impl ShmTransportStats {
             ring_exhausted: self.ring_exhausted.load(AtomicOrdering::Relaxed),
             reserve_waits: self.reserve_waits.load(AtomicOrdering::Relaxed),
             commit_retries: self.commit_retries.load(AtomicOrdering::Relaxed),
+            doorbell_peer_dead: self.doorbell_peer_dead.load(AtomicOrdering::Relaxed),
+            doorbell_wait_errors: self.doorbell_wait_errors.load(AtomicOrdering::Relaxed),
         }
     }
 }
@@ -157,6 +164,7 @@ impl ShmLink {
             inline_threshold: Self::normalize_threshold(inline_threshold),
             tx_lock: Mutex::new(()),
             doorbell,
+            doorbell_dead: AtomicBool::new(false),
             stats: stats.clone(),
         });
 
@@ -348,6 +356,12 @@ impl LinkTx for ShmLinkTx {
                     "shm tx is closed",
                 ));
             }
+            if self.shared.doorbell_dead.load(Ordering::Acquire) {
+                return Err(io::Error::new(
+                    io::ErrorKind::BrokenPipe,
+                    "shm doorbell peer is closed",
+                ));
+            }
             if self
                 .shared
                 .tx_bipbuf
@@ -364,14 +378,35 @@ impl LinkTx for ShmLinkTx {
                 .stats
                 .reserve_waits
                 .fetch_add(1, AtomicOrdering::Relaxed);
-            let _ = self.shared.doorbell.wait().await;
+            if let Err(err) = self.shared.doorbell.wait().await {
+                self.shared
+                    .stats
+                    .doorbell_wait_errors
+                    .fetch_add(1, AtomicOrdering::Relaxed);
+                return Err(io::Error::new(
+                    io::ErrorKind::BrokenPipe,
+                    format!("shm doorbell wait failed: {err}"),
+                ));
+            }
         }
     }
 
     async fn close(self) -> io::Result<()> {
         self.tx_closed.store(true, Ordering::Release);
-        let _ = self.shared.doorbell.signal().await;
-        Ok(())
+        match self.shared.doorbell.signal_now() {
+            shm_primitives::SignalResult::PeerDead => {
+                self.shared.doorbell_dead.store(true, Ordering::Release);
+                self.shared
+                    .stats
+                    .doorbell_peer_dead
+                    .fetch_add(1, AtomicOrdering::Relaxed);
+                Err(io::Error::new(
+                    io::ErrorKind::BrokenPipe,
+                    "shm doorbell peer is closed",
+                ))
+            }
+            _ => Ok(()),
+        }
     }
 }
 
@@ -466,26 +501,17 @@ impl WriteSlot for ShmWriteSlot {
     }
 
     fn commit(mut self) {
-        fn ring_doorbell(doorbell: Arc<Doorbell>) {
-            if let Ok(handle) = tokio::runtime::Handle::try_current() {
-                handle.spawn(async move {
-                    let _ = doorbell.signal().await;
-                });
-                return;
+        fn ring_doorbell(shared: &TxShared) {
+            if matches!(
+                shared.doorbell.signal_now(),
+                shm_primitives::SignalResult::PeerDead
+            ) {
+                shared.doorbell_dead.store(true, Ordering::Release);
+                shared
+                    .stats
+                    .doorbell_peer_dead
+                    .fetch_add(1, AtomicOrdering::Relaxed);
             }
-
-            let _ = std::thread::Builder::new()
-                .name("roam-shm-doorbell".to_string())
-                .spawn(move || {
-                    if let Ok(rt) = tokio::runtime::Builder::new_current_thread()
-                        .enable_io()
-                        .build()
-                    {
-                        rt.block_on(async move {
-                            let _ = doorbell.signal().await;
-                        });
-                    }
-                });
         }
 
         match &mut self.inner {
@@ -500,7 +526,7 @@ impl WriteSlot for ShmWriteSlot {
                             .stats
                             .inline_sends
                             .fetch_add(1, AtomicOrdering::Relaxed);
-                        ring_doorbell(self.shared.doorbell.clone());
+                        ring_doorbell(&self.shared);
                         return;
                     }
                     Err(_) => {
@@ -538,7 +564,7 @@ impl WriteSlot for ShmWriteSlot {
                                 .stats
                                 .slot_ref_sends
                                 .fetch_add(1, AtomicOrdering::Relaxed);
-                            ring_doorbell(self.shared.doorbell.clone());
+                            ring_doorbell(&self.shared);
                             return;
                         }
                         Err(_) => {
@@ -558,6 +584,7 @@ impl WriteSlot for ShmWriteSlot {
 #[derive(Debug)]
 pub enum ShmLinkRxError {
     UnsupportedMmapRef,
+    DoorbellWait(io::Error),
     MalformedSlotRefLength {
         slot_bytes: usize,
         payload_len: usize,
@@ -568,6 +595,7 @@ impl std::fmt::Display for ShmLinkRxError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ShmLinkRxError::UnsupportedMmapRef => write!(f, "mmap-ref frames are not implemented"),
+            ShmLinkRxError::DoorbellWait(err) => write!(f, "doorbell wait failed: {err}"),
             ShmLinkRxError::MalformedSlotRefLength {
                 slot_bytes,
                 payload_len,
@@ -593,14 +621,30 @@ impl LinkRx for ShmLinkRx {
                         self.stats
                             .inline_recvs
                             .fetch_add(1, AtomicOrdering::Relaxed);
-                        let _ = self.doorbell.signal().await;
+                        if matches!(
+                            self.doorbell.signal_now(),
+                            shm_primitives::SignalResult::PeerDead
+                        ) {
+                            self.peer_closed.store(true, Ordering::Release);
+                            self.stats
+                                .doorbell_peer_dead
+                                .fetch_add(1, AtomicOrdering::Relaxed);
+                        }
                         Ok(Some(Backing::Boxed(bytes.into_boxed_slice())))
                     }
                     OwnedFrame::SlotRef(slot_ref) => {
                         self.stats
                             .slot_ref_recvs
                             .fetch_add(1, AtomicOrdering::Relaxed);
-                        let _ = self.doorbell.signal().await;
+                        if matches!(
+                            self.doorbell.signal_now(),
+                            shm_primitives::SignalResult::PeerDead
+                        ) {
+                            self.peer_closed.store(true, Ordering::Release);
+                            self.stats
+                                .doorbell_peer_dead
+                                .fetch_add(1, AtomicOrdering::Relaxed);
+                        }
                         let slot = unsafe { self.backend.slot_data(&slot_ref) };
                         if slot.len() < SLOT_LEN_PREFIX_SIZE {
                             self.backend.free_slot(slot_ref);
@@ -634,7 +678,12 @@ impl LinkRx for ShmLinkRx {
                 return Ok(None);
             }
 
-            let _ = self.doorbell.wait().await;
+            if let Err(err) = self.doorbell.wait().await {
+                self.stats
+                    .doorbell_wait_errors
+                    .fetch_add(1, AtomicOrdering::Relaxed);
+                return Err(ShmLinkRxError::DoorbellWait(err));
+            }
         }
     }
 }

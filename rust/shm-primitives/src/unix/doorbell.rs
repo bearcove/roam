@@ -116,6 +116,47 @@ fn drain_fd(fd: RawFd, would_block_is_error: bool) -> io::Result<bool> {
 }
 
 impl Doorbell {
+    /// Signal the other side without awaiting readiness.
+    ///
+    /// Performs a single non-blocking send attempt and returns immediately.
+    pub fn signal_now(&self) -> SignalResult {
+        let fd = self.async_fd.get_ref().as_raw_fd();
+        let buf = [1u8];
+
+        let ret = unsafe {
+            libc::send(
+                fd,
+                buf.as_ptr() as *const libc::c_void,
+                buf.len(),
+                libc::MSG_DONTWAIT,
+            )
+        };
+
+        if ret > 0 {
+            return SignalResult::Sent;
+        }
+        if ret == 0 {
+            return SignalResult::PeerDead;
+        }
+
+        let err = io::Error::last_os_error();
+        if err.kind() == ErrorKind::WouldBlock || err.raw_os_error() == Some(libc::ENOBUFS) {
+            return SignalResult::BufferFull;
+        }
+
+        match err.kind() {
+            ErrorKind::BrokenPipe | ErrorKind::ConnectionReset | ErrorKind::NotConnected => {
+                SignalResult::PeerDead
+            }
+            _ => {
+                if !self.peer_dead_logged.swap(true, Ordering::Relaxed) {
+                    tracing::debug!(fd, error = %err, "doorbell signal failed (peer likely dead)");
+                }
+                SignalResult::PeerDead
+            }
+        }
+    }
+
     /// Create a socketpair and return (host_doorbell, guest_handle).
     ///
     /// The guest_handle should be passed to the plugin (e.g., via command line).
@@ -175,48 +216,7 @@ impl Doorbell {
     /// r[impl shm.signal.doorbell.signal]
     /// r[impl shm.signal.doorbell.integration]
     pub async fn signal(&self) -> SignalResult {
-        let fd = self.async_fd.get_ref().as_raw_fd();
-        let buf = [1u8];
-
-        let ret = unsafe {
-            libc::send(
-                fd,
-                buf.as_ptr() as *const libc::c_void,
-                buf.len(),
-                libc::MSG_DONTWAIT,
-            )
-        };
-
-        if ret > 0 {
-            return SignalResult::Sent;
-        }
-
-        if ret == 0 {
-            // For SOCK_STREAM, 0 bytes sent means connection closed
-            return SignalResult::PeerDead;
-        }
-
-        let err = io::Error::last_os_error();
-
-        // WouldBlock (EAGAIN) and ENOBUFS both mean the socket buffer is
-        // temporarily saturated — the peer is alive, coalesce the signal.
-        if err.kind() == ErrorKind::WouldBlock || err.raw_os_error() == Some(libc::ENOBUFS) {
-            return SignalResult::BufferFull;
-        }
-
-        match err.kind() {
-            // These all indicate the peer is gone
-            ErrorKind::BrokenPipe | ErrorKind::ConnectionReset | ErrorKind::NotConnected => {
-                SignalResult::PeerDead
-            }
-            _ => {
-                // Some other error - also indicates peer is dead, but log it once
-                if !self.peer_dead_logged.swap(true, Ordering::Relaxed) {
-                    tracing::debug!(fd, error = %err, "doorbell signal failed (peer likely dead)");
-                }
-                SignalResult::PeerDead
-            }
-        }
+        self.signal_now()
     }
 
     /// Check if the peer appears to be dead (signal has failed).
