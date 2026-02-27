@@ -230,15 +230,6 @@ fn generate_dispatcher(parsed: &ServiceTrait, roam: &TokenStream2) -> TokenStrea
         .collect();
 
     let no_methods = dispatch_arms.is_empty();
-    let any_method_has_channels = parsed
-        .methods()
-        .any(|m| m.args().any(|a| a.ty.contains_channel()));
-
-    let channel_ids_binding = if any_method_has_channels {
-        quote! { let channel_ids = call.channels.clone(); }
-    } else {
-        quote! {}
-    };
 
     let dispatch_body = if no_methods {
         quote! {
@@ -247,7 +238,6 @@ fn generate_dispatcher(parsed: &ServiceTrait, roam: &TokenStream2) -> TokenStrea
     } else {
         quote! {
             let method_id = call.method_id;
-            #channel_ids_binding
             let args_bytes = match &call.args {
                 #roam::Payload::Incoming(bytes) => bytes,
                 _ => {
@@ -341,7 +331,7 @@ fn generate_dispatch_arm(
                         #roam::bind_channels_server(
                             &mut args as *mut #args_tuple_type as *mut u8,
                             plan,
-                            &channel_ids,
+                            &call.channels,
                             binder,
                         );
                     }

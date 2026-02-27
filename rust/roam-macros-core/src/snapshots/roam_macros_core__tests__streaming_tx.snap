@@ -56,7 +56,6 @@ where
 {
     async fn handle(&self, call: ::roam::SelfRef<::roam::RequestCall<'static>>, reply: R) {
         let method_id = call.method_id;
-        let channel_ids = call.channels.clone();
         let args_bytes = match &call.args {
             ::roam::Payload::Incoming(bytes) => bytes,
             _ => {
@@ -87,7 +86,7 @@ where
                         ::roam::bind_channels_server(
                             &mut args as *mut (i32, Tx<i32>) as *mut u8,
                             plan,
-                            &channel_ids,
+                            &call.channels,
                             binder,
                         );
                     }
