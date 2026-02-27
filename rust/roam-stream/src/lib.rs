@@ -6,7 +6,7 @@
 
 use std::io;
 
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufWriter};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader, BufWriter};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
@@ -74,7 +74,7 @@ where
     W: AsyncWrite + Send + Unpin + 'static,
 {
     type Tx = StreamLinkTx;
-    type Rx = StreamLinkRx<R>;
+    type Rx = StreamLinkRx<BufReader<R>>;
 
     fn split(self) -> (Self::Tx, Self::Rx) {
         let (tx_chan, mut rx_chan) = mpsc::channel::<Vec<u8>>(1);
@@ -106,7 +106,7 @@ where
                 writer_task,
             },
             StreamLinkRx {
-                reader: self.reader,
+                reader: BufReader::new(self.reader),
             },
         )
     }
@@ -241,7 +241,7 @@ impl LocalLink {
 
 impl Link for LocalLink {
     type Tx = StreamLinkTx;
-    type Rx = StreamLinkRx<BoxReader>;
+    type Rx = StreamLinkRx<BufReader<BoxReader>>;
 
     fn split(self) -> (Self::Tx, Self::Rx) {
         self.inner.split()
