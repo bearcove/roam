@@ -21,20 +21,23 @@ struct WireV7CrossLanguageTests {
     // r[verify session.message]
     // r[verify session.message.payloads]
     // r[verify session.connection-settings.hello]
-    @Test func rustV7HelloFixtureIsNotLegacyWireCompatibleYet() throws {
+    @Test func rustV7HelloFixtureRoundTripsInV7Codec() throws {
         let bytes = try loadWireV7Fixture("message_hello")
-        do {
-            let decoded = try Message.decode(from: Data(bytes))
-            let reencoded = decoded.encode()
-            #expect(reencoded != bytes)
-        } catch {
-            // Any decode error is also acceptable for this pre-migration compatibility check.
+        let decoded = try MessageV7.decode(from: Data(bytes))
+        #expect(decoded.connectionId == 0)
+        guard case .hello(let hello) = decoded.payload else {
+            Issue.record("expected hello payload")
+            return
         }
+        #expect(hello.version == 7)
+        #expect(hello.connectionSettings.parity == .odd)
+        #expect(hello.connectionSettings.maxConcurrentRequests == 64)
+        #expect(decoded.encode() == bytes)
     }
 
     // r[verify session.message]
     // r[verify session.message.payloads]
-    @Test func rustV7NestedPayloadFixturesAreTracked() throws {
+    @Test func rustV7NestedPayloadFixturesRoundTrip() throws {
         let names = [
             "message_hello",
             "message_hello_yourself",
@@ -55,13 +58,8 @@ struct WireV7CrossLanguageTests {
         for name in names {
             let bytes = try loadWireV7Fixture(name)
             #expect(!bytes.isEmpty)
-            do {
-                let decoded = try Message.decode(from: Data(bytes))
-                let reencoded = decoded.encode()
-                #expect(reencoded != bytes, "\(name) unexpectedly round-tripped through legacy wire codec")
-            } catch {
-                // Decode errors are expected until Swift moves to the v7 nested wire model.
-            }
+            let decoded = try MessageV7.decode(from: Data(bytes))
+            #expect(decoded.encode() == bytes, "\(name) failed byte-for-byte round trip")
         }
     }
 }
