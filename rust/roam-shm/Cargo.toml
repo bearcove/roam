@@ -26,3 +26,7 @@ libc = { workspace = true }
 
 [target.'cfg(loom)'.dependencies]
 loom = { version = "0.7" }
+
+[dev-dependencies]
+tempfile = "3"
+libc.workspace = true
