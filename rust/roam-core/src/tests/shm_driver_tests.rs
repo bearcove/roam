@@ -16,7 +16,7 @@ fn message_conduit_pair() -> (MessageConduit, MessageConduit) {
         slot_size: 4096,
         slot_count: 16,
     }];
-    let (a, b) = ShmLink::heap_pair(1 << 16, 1 << 20, 256, &classes);
+    let (a, b) = ShmLink::heap_pair(1 << 16, 1 << 20, 256, &classes).unwrap();
     (BareConduit::new(a), BareConduit::new(b))
 }
 

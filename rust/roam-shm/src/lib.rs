@@ -10,8 +10,7 @@ use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use std::sync::{Arc, Mutex};
 
 use roam_types::{Backing, Link, LinkRx, LinkTx, LinkTxPermit, SharedBacking, WriteSlot};
-use shm_primitives::{BIPBUF_HEADER_SIZE, BipBuf, HeapRegion, PeerId};
-use tokio::sync::Notify;
+use shm_primitives::{BIPBUF_HEADER_SIZE, BipBuf, Doorbell, HeapRegion, PeerId};
 
 use crate::framing::{DEFAULT_INLINE_THRESHOLD, OwnedFrame};
 use crate::segment::Segment;
@@ -76,7 +75,7 @@ struct TxShared {
     max_payload_size: u32,
     inline_threshold: u32,
     tx_lock: Mutex<()>,
-    ring_ready: Arc<Notify>,
+    doorbell: Arc<Doorbell>,
     stats: Arc<ShmTransportStats>,
 }
 
@@ -142,13 +141,13 @@ impl ShmLink {
         tx_bipbuf: Arc<BipBuf>,
         rx_bipbuf: Arc<BipBuf>,
         backend: Backend,
+        doorbell: Arc<Doorbell>,
         owner_peer: u8,
         max_payload_size: u32,
         inline_threshold: u32,
         tx_closed: Arc<AtomicBool>,
         peer_closed: Arc<AtomicBool>,
     ) -> Self {
-        let ring_ready = Arc::new(Notify::new());
         let stats = Arc::new(ShmTransportStats::default());
         let tx_shared = Arc::new(TxShared {
             tx_bipbuf,
@@ -157,7 +156,7 @@ impl ShmLink {
             max_payload_size,
             inline_threshold: Self::normalize_threshold(inline_threshold),
             tx_lock: Mutex::new(()),
-            ring_ready: ring_ready.clone(),
+            doorbell,
             stats: stats.clone(),
         });
 
@@ -171,7 +170,7 @@ impl ShmLink {
     }
 
     /// Build a guest-side SHM link from a shared segment.
-    pub fn for_guest(segment: Arc<Segment>, peer_id: PeerId) -> Self {
+    pub fn for_guest(segment: Arc<Segment>, peer_id: PeerId, doorbell: Doorbell) -> Self {
         let tx_bipbuf = Arc::new(segment.g2h_bipbuf(peer_id));
         let rx_bipbuf = Arc::new(segment.h2g_bipbuf(peer_id));
         let backend = Backend::Segment(segment.clone());
@@ -180,6 +179,7 @@ impl ShmLink {
             tx_bipbuf,
             rx_bipbuf,
             backend,
+            Arc::new(doorbell),
             peer_id.get(),
             segment.header().max_payload_size,
             segment.header().inline_threshold,
@@ -189,7 +189,7 @@ impl ShmLink {
     }
 
     /// Build a host-side SHM link for one peer from a shared segment.
-    pub fn for_host(segment: Arc<Segment>, peer_id: PeerId) -> Self {
+    pub fn for_host(segment: Arc<Segment>, peer_id: PeerId, doorbell: Doorbell) -> Self {
         let tx_bipbuf = Arc::new(segment.h2g_bipbuf(peer_id));
         let rx_bipbuf = Arc::new(segment.g2h_bipbuf(peer_id));
         let backend = Backend::Segment(segment.clone());
@@ -198,6 +198,7 @@ impl ShmLink {
             tx_bipbuf,
             rx_bipbuf,
             backend,
+            Arc::new(doorbell),
             0,
             segment.header().max_payload_size,
             segment.header().inline_threshold,
@@ -212,7 +213,7 @@ impl ShmLink {
         max_payload_size: u32,
         inline_threshold: u32,
         size_classes: &[SizeClassConfig],
-    ) -> (Self, Self) {
+    ) -> io::Result<(Self, Self)> {
         fn align_up(n: usize, align: usize) -> usize {
             (n + align - 1) & !(align - 1)
         }
@@ -235,6 +236,8 @@ impl ShmLink {
             _region: region,
             var_pool,
         }));
+        let (a_doorbell, b_handle) = Doorbell::create_pair()?;
+        let b_doorbell = Doorbell::from_handle(b_handle)?;
 
         let a_closed = Arc::new(AtomicBool::new(false));
         let b_closed = Arc::new(AtomicBool::new(false));
@@ -243,6 +246,7 @@ impl ShmLink {
             g2h.clone(),
             h2g.clone(),
             backend.clone(),
+            Arc::new(a_doorbell),
             1,
             max_payload_size,
             inline_threshold,
@@ -253,13 +257,14 @@ impl ShmLink {
             h2g,
             g2h,
             backend,
+            Arc::new(b_doorbell),
             2,
             max_payload_size,
             inline_threshold,
             b_closed,
             a_closed,
         );
-        (a, b)
+        Ok((a, b))
     }
 }
 
@@ -274,7 +279,7 @@ pub struct ShmLinkRx {
     rx_bipbuf: Arc<BipBuf>,
     backend: Backend,
     peer_closed: Arc<AtomicBool>,
-    ring_ready: Arc<Notify>,
+    doorbell: Arc<Doorbell>,
     stats: Arc<ShmTransportStats>,
 }
 
@@ -314,7 +319,7 @@ impl Link for ShmLink {
 
     fn split(self) -> (Self::Tx, Self::Rx) {
         let tx_shared = self.tx_shared;
-        let ring_ready = tx_shared.ring_ready.clone();
+        let doorbell = tx_shared.doorbell.clone();
         let stats = tx_shared.stats.clone();
         (
             ShmLinkTx {
@@ -325,7 +330,7 @@ impl Link for ShmLink {
                 rx_bipbuf: self.rx_bipbuf,
                 backend: self.rx_backend,
                 peer_closed: self.peer_closed,
-                ring_ready,
+                doorbell,
                 stats,
             },
         )
@@ -343,15 +348,6 @@ impl LinkTx for ShmLinkTx {
                     "shm tx is closed",
                 ));
             }
-
-            if self.tx_closed.load(Ordering::Acquire) {
-                return Err(io::Error::new(
-                    io::ErrorKind::BrokenPipe,
-                    "shm tx is closed",
-                ));
-            }
-
-            let notified = self.shared.ring_ready.notified();
             if self
                 .shared
                 .tx_bipbuf
@@ -368,16 +364,13 @@ impl LinkTx for ShmLinkTx {
                 .stats
                 .reserve_waits
                 .fetch_add(1, AtomicOrdering::Relaxed);
-            tokio::select! {
-                _ = notified => {}
-                _ = tokio::time::sleep(std::time::Duration::from_millis(1)) => {}
-            }
+            let _ = self.shared.doorbell.wait().await;
         }
     }
 
     async fn close(self) -> io::Result<()> {
         self.tx_closed.store(true, Ordering::Release);
-        self.shared.ring_ready.notify_waiters();
+        let _ = self.shared.doorbell.signal().await;
         Ok(())
     }
 }
@@ -473,6 +466,28 @@ impl WriteSlot for ShmWriteSlot {
     }
 
     fn commit(mut self) {
+        fn ring_doorbell(doorbell: Arc<Doorbell>) {
+            if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                handle.spawn(async move {
+                    let _ = doorbell.signal().await;
+                });
+                return;
+            }
+
+            let _ = std::thread::Builder::new()
+                .name("roam-shm-doorbell".to_string())
+                .spawn(move || {
+                    if let Ok(rt) = tokio::runtime::Builder::new_current_thread()
+                        .enable_io()
+                        .build()
+                    {
+                        rt.block_on(async move {
+                            let _ = doorbell.signal().await;
+                        });
+                    }
+                });
+        }
+
         match &mut self.inner {
             ShmWriteSlotInner::Inline { bytes } => loop {
                 let lock = self.shared.tx_lock.lock().expect("tx lock poisoned");
@@ -485,6 +500,7 @@ impl WriteSlot for ShmWriteSlot {
                             .stats
                             .inline_sends
                             .fetch_add(1, AtomicOrdering::Relaxed);
+                        ring_doorbell(self.shared.doorbell.clone());
                         return;
                     }
                     Err(_) => {
@@ -522,6 +538,7 @@ impl WriteSlot for ShmWriteSlot {
                                 .stats
                                 .slot_ref_sends
                                 .fetch_add(1, AtomicOrdering::Relaxed);
+                            ring_doorbell(self.shared.doorbell.clone());
                             return;
                         }
                         Err(_) => {
@@ -576,14 +593,14 @@ impl LinkRx for ShmLinkRx {
                         self.stats
                             .inline_recvs
                             .fetch_add(1, AtomicOrdering::Relaxed);
-                        self.ring_ready.notify_waiters();
+                        let _ = self.doorbell.signal().await;
                         Ok(Some(Backing::Boxed(bytes.into_boxed_slice())))
                     }
                     OwnedFrame::SlotRef(slot_ref) => {
                         self.stats
                             .slot_ref_recvs
                             .fetch_add(1, AtomicOrdering::Relaxed);
-                        self.ring_ready.notify_waiters();
+                        let _ = self.doorbell.signal().await;
                         let slot = unsafe { self.backend.slot_data(&slot_ref) };
                         if slot.len() < SLOT_LEN_PREFIX_SIZE {
                             self.backend.free_slot(slot_ref);
@@ -617,7 +634,7 @@ impl LinkRx for ShmLinkRx {
                 return Ok(None);
             }
 
-            tokio::task::yield_now().await;
+            let _ = self.doorbell.wait().await;
         }
     }
 }
@@ -670,7 +687,7 @@ mod tests {
 
     #[tokio::test]
     async fn inline_payload_roundtrip_is_boxed() {
-        let (a, b) = ShmLink::heap_pair(4096, 1024, 128, CLASSES);
+        let (a, b) = ShmLink::heap_pair(4096, 1024, 128, CLASSES).unwrap();
         let (a_tx, _a_rx) = a.split();
         let (_b_tx, mut b_rx) = b.split();
 
@@ -689,7 +706,7 @@ mod tests {
 
     #[tokio::test]
     async fn slot_ref_payload_is_zero_copy_shared_backing() {
-        let (a, b) = ShmLink::heap_pair(4096, 1024, 64, CLASSES);
+        let (a, b) = ShmLink::heap_pair(4096, 1024, 64, CLASSES).unwrap();
         let (a_tx, _a_rx) = a.split();
         let (_b_tx, mut b_rx) = b.split();
 
@@ -708,7 +725,7 @@ mod tests {
 
     #[tokio::test]
     async fn shared_backing_drop_releases_slot() {
-        let (a, b) = ShmLink::heap_pair(4096, 1024, 64, CLASSES);
+        let (a, b) = ShmLink::heap_pair(4096, 1024, 64, CLASSES).unwrap();
         let (a_tx, _a_rx) = a.split();
         let (_b_tx, mut b_rx) = b.split();
 
@@ -742,7 +759,7 @@ mod tests {
             slot_size: 4096,
             slot_count: 32,
         }];
-        let (a, b) = ShmLink::heap_pair(1 << 16, 1 << 20, 256, &classes);
+        let (a, b) = ShmLink::heap_pair(1 << 16, 1 << 20, 256, &classes).unwrap();
         let (a_tx, _a_rx) = a.split();
         let (_b_tx, mut b_rx) = b.split();
 
@@ -761,7 +778,7 @@ mod tests {
 
     #[tokio::test]
     async fn reserve_waits_until_rx_frees_ring_space() {
-        let (a, b) = ShmLink::heap_pair(32, 1024, 256, CLASSES);
+        let (a, b) = ShmLink::heap_pair(32, 1024, 256, CLASSES).unwrap();
         let (a_tx, _a_rx) = a.split();
         let (_b_tx, mut b_rx) = b.split();
 
@@ -790,7 +807,7 @@ mod tests {
 
     #[tokio::test]
     async fn transport_stats_track_send_recv_and_exhaustion() {
-        let (a, b) = ShmLink::heap_pair(4096, 1024, 64, CLASSES);
+        let (a, b) = ShmLink::heap_pair(4096, 1024, 64, CLASSES).unwrap();
         let (a_tx, _a_rx) = a.split();
         let (_b_tx, mut b_rx) = b.split();
 
