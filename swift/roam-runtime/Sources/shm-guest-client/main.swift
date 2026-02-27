@@ -71,6 +71,7 @@ struct SpawnArgs {
     let doorbellFd: Int32
     let scenario: String
     let classes: [ShmVarSlotClass]
+    let iterations: Int?
 }
 
 private func fail(_ message: String) -> Never {
@@ -84,6 +85,7 @@ private func parseArgs(_ args: [String]) -> SpawnArgs {
     var doorbellFd: Int32?
     var scenario = "data-path"
     var classes: [ShmVarSlotClass] = []
+    var iterations: Int?
 
     for arg in args {
         if let value = arg.split(separator: "=", maxSplits: 1).last, arg.hasPrefix("--hub-path=") {
@@ -108,6 +110,11 @@ private func parseArgs(_ args: [String]) -> SpawnArgs {
                 fail("invalid --size-class value (expected SLOT_SIZE:COUNT)")
             }
             classes.append(ShmVarSlotClass(slotSize: slotSize, count: count))
+        } else if let value = arg.split(separator: "=", maxSplits: 1).last, arg.hasPrefix("--iterations=") {
+            guard let n = Int(value), n > 0 else {
+                fail("invalid --iterations value")
+            }
+            iterations = n
         }
     }
 
@@ -124,7 +131,14 @@ private func parseArgs(_ args: [String]) -> SpawnArgs {
         fail("missing --size-class (repeatable, format SLOT_SIZE:COUNT)")
     }
 
-    return SpawnArgs(hubPath: hubPath, peerId: peerId, doorbellFd: doorbellFd, scenario: scenario, classes: classes)
+    return SpawnArgs(
+        hubPath: hubPath,
+        peerId: peerId,
+        doorbellFd: doorbellFd,
+        scenario: scenario,
+        classes: classes,
+        iterations: iterations
+    )
 }
 
 @main
@@ -384,6 +398,47 @@ struct ShmGuestClientMain {
             }
 
             fail("timed out waiting for message-v7 responses")
+
+        case "rpc-bench-echo":
+            guard let iterations = args.iterations else {
+                fail("missing --iterations for rpc-bench-echo scenario")
+            }
+
+            let transport = ShmGuestTransport(runtime: guest)
+            var handled = 0
+            let deadline = Date().addingTimeInterval(30)
+
+            while handled < iterations {
+                if Date() > deadline {
+                    fail("timed out waiting for rpc-bench-echo requests")
+                }
+                do {
+                    guard let msg = try await transport.recv() else {
+                        continue
+                    }
+                    guard case .requestMessage(let request) = msg.payload else {
+                        continue
+                    }
+                    guard case .call(let call) = request.body else {
+                        continue
+                    }
+                    let response = MessageV7.response(
+                        connId: msg.connectionId,
+                        requestId: request.id,
+                        metadata: [],
+                        channels: [],
+                        payload: call.args.bytes
+                    )
+                    try await transport.send(response)
+                    handled += 1
+                } catch {
+                    fail("rpc-bench-echo failed: \(error)")
+                }
+            }
+
+            try? await transport.close()
+            print("ok")
+            exit(0)
 
         default:
             fail("unknown scenario: \(args.scenario)")
