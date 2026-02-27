@@ -99,10 +99,11 @@ impl<C: ::roam::Caller> NotifierClient<C> {
     ) -> Result<::roam::SelfRef<::roam::ResponseParts<'static, ()>>, ::roam::RoamError> {
         let method_id = notifier_service_descriptor().methods[0usize].id;
         let args = (msg,);
+        let channels = vec![];
         let req = ::roam::RequestCall {
             method_id,
             args: ::roam::Payload::outgoing(&args),
-            channels: vec![],
+            channels,
             metadata: Default::default(),
         };
         let response = self.caller.call(req).await?;

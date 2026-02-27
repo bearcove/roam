@@ -100,10 +100,11 @@ impl<C: ::roam::Caller> CalcClient<C> {
     {
         let method_id = calc_service_descriptor().methods[0usize].id;
         let args = (a, b);
+        let channels = vec![];
         let req = ::roam::RequestCall {
             method_id,
             args: ::roam::Payload::outgoing(&args),
-            channels: vec![],
+            channels,
             metadata: Default::default(),
         };
         let response = self.caller.call(req).await?;

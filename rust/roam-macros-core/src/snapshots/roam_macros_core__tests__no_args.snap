@@ -97,10 +97,11 @@ impl<C: ::roam::Caller> PingClient<C> {
     ) -> Result<::roam::SelfRef<::roam::ResponseParts<'static, u64>>, ::roam::RoamError> {
         let method_id = ping_service_descriptor().methods[0usize].id;
         let args = ();
+        let channels = vec![];
         let req = ::roam::RequestCall {
             method_id,
             args: ::roam::Payload::outgoing(&args),
-            channels: vec![],
+            channels,
             metadata: Default::default(),
         };
         let response = self.caller.call(req).await?;

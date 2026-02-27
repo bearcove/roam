@@ -230,6 +230,15 @@ fn generate_dispatcher(parsed: &ServiceTrait, roam: &TokenStream2) -> TokenStrea
         .collect();
 
     let no_methods = dispatch_arms.is_empty();
+    let any_method_has_channels = parsed
+        .methods()
+        .any(|m| m.args().any(|a| a.ty.contains_channel()));
+
+    let channel_ids_binding = if any_method_has_channels {
+        quote! { let channel_ids = call.channels.clone(); }
+    } else {
+        quote! {}
+    };
 
     let dispatch_body = if no_methods {
         quote! {
@@ -238,6 +247,7 @@ fn generate_dispatcher(parsed: &ServiceTrait, roam: &TokenStream2) -> TokenStrea
     } else {
         quote! {
             let method_id = call.method_id;
+            #channel_ids_binding
             let args_bytes = match &call.args {
                 #roam::Payload::Incoming(bytes) => bytes,
                 _ => {
@@ -317,15 +327,48 @@ fn generate_dispatch_arm(
 
     let _ = idx;
 
+    let has_channels = method.args().any(|a| a.ty.contains_channel());
+
+    let channel_binding = if has_channels {
+        quote! {
+            if let Some(binder) = reply.channel_binder() {
+                let plan = #roam::RpcPlan::for_type::<#args_tuple_type>();
+                if !plan.channel_locations.is_empty() {
+                    // SAFETY: args is a valid, initialized value of type #args_tuple_type
+                    // and we have exclusive access to it via &mut.
+                    #[allow(unsafe_code)]
+                    unsafe {
+                        #roam::bind_channels_server(
+                            &mut args as *mut #args_tuple_type as *mut u8,
+                            plan,
+                            &channel_ids,
+                            binder,
+                        );
+                    }
+                }
+            }
+        }
+    } else {
+        quote! {}
+    };
+
+    // When there are channels, args must be mut for binding
+    let args_let = if has_channels {
+        quote! { let mut args: #args_tuple_type }
+    } else {
+        quote! { let args: #args_tuple_type }
+    };
+
     quote! {
         if method_id == #descriptor_fn_name().methods[#idx].id {
-            let args: #args_tuple_type = match #roam::facet_postcard::from_slice_borrowed(args_bytes) {
+            #args_let = match #roam::facet_postcard::from_slice_borrowed(args_bytes) {
                 Ok(v) => v,
                 Err(_) => {
                     reply.send_error(#roam::RoamError::<::core::convert::Infallible>::InvalidPayload).await;
                     return;
                 }
             };
+            #channel_binding
             #destructure
             let sink_call = #roam::SinkCall::new(reply);
             self.handler.#method_fn(sink_call, #(#arg_names),*).await;
@@ -395,6 +438,17 @@ fn generate_client_method(
         .map(|arg| format_ident!("{}", arg.name().to_snake_case()))
         .collect();
 
+    // Args tuple type (for RpcPlan::for_type)
+    let arg_types: Vec<TokenStream2> = method.args().map(|a| a.ty.to_token_stream()).collect();
+    let args_tuple_type = match arg_types.len() {
+        0 => quote! { () },
+        1 => {
+            let t = &arg_types[0];
+            quote! { (#t,) }
+        }
+        _ => quote! { (#(#arg_types),*) },
+    };
+
     // Args tuple value (for serialization)
     let args_tuple = match arg_names.len() {
         0 => quote! { () },
@@ -424,15 +478,46 @@ fn generate_client_method(
         )
     };
 
+    let has_channels = method.args().any(|a| a.ty.contains_channel());
+
+    let (args_binding, channel_binding) = if has_channels {
+        (
+            quote! { let mut args = #args_tuple; },
+            quote! {
+                let channels = if let Some(binder) = self.caller.channel_binder() {
+                    let plan = #roam::RpcPlan::for_type::<#args_tuple_type>();
+                    // SAFETY: args is a valid, initialized value of the args tuple type
+                    // and we have exclusive access to it via &mut.
+                    #[allow(unsafe_code)]
+                    unsafe {
+                        #roam::bind_channels_client(
+                            &mut args as *mut #args_tuple_type as *mut u8,
+                            plan,
+                            binder,
+                        )
+                    }
+                } else {
+                    vec![]
+                };
+            },
+        )
+    } else {
+        (
+            quote! { let args = #args_tuple; },
+            quote! { let channels = vec![]; },
+        )
+    };
+
     quote! {
         #method_doc
         pub async fn #method_name(&self, #(#params),*) -> #client_return {
             let method_id = #descriptor_fn_name().methods[#idx].id;
-            let args = #args_tuple;
+            #args_binding
+            #channel_binding
             let req = #roam::RequestCall {
                 method_id,
                 args: #roam::Payload::outgoing(&args),
-                channels: vec![],
+                channels,
                 metadata: Default::default(),
             };
             let response = self.caller.call(req).await?;
@@ -586,6 +671,13 @@ mod tests {
     fn unit_return() {
         assert_snapshot!(generate(quote! {
             trait Notifier { async fn notify(&self, msg: String); }
+        }));
+    }
+
+    #[test]
+    fn streaming_tx() {
+        assert_snapshot!(generate(quote! {
+            trait Streamer { async fn count_up(&self, start: i32, output: Tx<i32>) -> i32; }
         }));
     }
 }

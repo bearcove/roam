@@ -1,35 +1,35 @@
 ---
 source: rust/roam-macros-core/src/lib.rs
-expression: "generate(quote!\n{ pub trait Adder { async fn add(&self, a: i32, b: i32) -> i32; } })"
+expression: "generate(quote!\n{\n    trait Streamer\n    { async fn count_up(&self, start: i32, output: Tx<i32>) -> i32; }\n})"
 ---
 #[allow(non_snake_case, clippy::all)]
-pub fn adder_service_descriptor() -> &'static ::roam::session::ServiceDescriptor {
+pub fn streamer_service_descriptor() -> &'static ::roam::session::ServiceDescriptor {
     static DESCRIPTOR: std::sync::OnceLock<&'static ::roam::session::ServiceDescriptor> =
         std::sync::OnceLock::new();
     DESCRIPTOR.get_or_init(|| {
         let methods: Vec<&'static ::roam::session::MethodDescriptor> =
-            vec![::roam::hash::method_descriptor::<(i32, i32), i32>(
-                "Adder",
-                "add",
-                &["a", "b"],
+            vec![::roam::hash::method_descriptor::<(i32, Tx<i32>), i32>(
+                "Streamer",
+                "count_up",
+                &["start", "output"],
                 None,
             )];
         Box::leak(Box::new(::roam::session::ServiceDescriptor {
-            service_name: "Adder",
+            service_name: "Streamer",
             methods: Box::leak(methods.into_boxed_slice()),
             doc: None,
         }))
     })
 }
-pub trait AdderServer
+pub trait StreamerServer
 where
     Self: Send + Sync,
 {
-    fn add(
+    fn count_up(
         &self,
         call: impl ::roam::Call<i32, ::core::convert::Infallible>,
-        a: i32,
-        b: i32,
+        start: i32,
+        output: Tx<i32>,
     ) -> impl std::future::Future<Output = ()> + Send;
 }
 #[doc = r" Dispatcher for this service."]
@@ -37,25 +37,26 @@ where
 #[doc = r" Wraps a handler and implements [`#roam::Handler`] by routing incoming"]
 #[doc = r" calls to the appropriate trait method by method ID."]
 #[derive(Clone)]
-pub struct AdderDispatcher<H> {
+pub struct StreamerDispatcher<H> {
     handler: H,
 }
-impl<H> AdderDispatcher<H>
+impl<H> StreamerDispatcher<H>
 where
-    H: AdderServer + Clone + Send + Sync + 'static,
+    H: StreamerServer + Clone + Send + Sync + 'static,
 {
     #[doc = r" Create a new dispatcher wrapping the given handler."]
     pub fn new(handler: H) -> Self {
         Self { handler }
     }
 }
-impl<H, R> ::roam::Handler<R> for AdderDispatcher<H>
+impl<H, R> ::roam::Handler<R> for StreamerDispatcher<H>
 where
-    H: AdderServer + Clone + Send + Sync + 'static,
+    H: StreamerServer + Clone + Send + Sync + 'static,
     R: ::roam::ReplySink,
 {
     async fn handle(&self, call: ::roam::SelfRef<::roam::RequestCall<'static>>, reply: R) {
         let method_id = call.method_id;
+        let channel_ids = call.channels.clone();
         let args_bytes = match &call.args {
             ::roam::Payload::Incoming(bytes) => bytes,
             _ => {
@@ -65,43 +66,70 @@ where
                 return;
             }
         };
-        if method_id == adder_service_descriptor().methods[0usize].id {
-            let args: (i32, i32) = match ::roam::facet_postcard::from_slice_borrowed(args_bytes) {
-                Ok(v) => v,
-                Err(_) => {
-                    reply
-                        .send_error(
-                            ::roam::RoamError::<::core::convert::Infallible>::InvalidPayload,
-                        )
-                        .await;
-                    return;
+        if method_id == streamer_service_descriptor().methods[0usize].id {
+            let mut args: (i32, Tx<i32>) =
+                match ::roam::facet_postcard::from_slice_borrowed(args_bytes) {
+                    Ok(v) => v,
+                    Err(_) => {
+                        reply
+                            .send_error(
+                                ::roam::RoamError::<::core::convert::Infallible>::InvalidPayload,
+                            )
+                            .await;
+                        return;
+                    }
+                };
+            if let Some(binder) = reply.channel_binder() {
+                let plan = ::roam::RpcPlan::for_type::<(i32, Tx<i32>)>();
+                if !plan.channel_locations.is_empty() {
+                    #[allow(unsafe_code)]
+                    unsafe {
+                        ::roam::bind_channels_server(
+                            &mut args as *mut (i32, Tx<i32>) as *mut u8,
+                            plan,
+                            &channel_ids,
+                            binder,
+                        );
+                    }
                 }
-            };
-            let (a, b) = args;
+            }
+            let (start, output) = args;
             let sink_call = ::roam::SinkCall::new(reply);
-            self.handler.add(sink_call, a, b).await;
+            self.handler.count_up(sink_call, start, output).await;
             return;
         }
     }
 }
-#[doc = "Client for the `Adder` service.\n\nGeneric over any [`Caller`](:: roam::Caller) implementation."]
+#[doc = "Client for the `Streamer` service.\n\nGeneric over any [`Caller`](:: roam::Caller) implementation."]
 #[derive(Clone)]
-pub struct AdderClient<C: ::roam::Caller> {
+pub struct StreamerClient<C: ::roam::Caller> {
     caller: C,
 }
-impl<C: ::roam::Caller> AdderClient<C> {
+impl<C: ::roam::Caller> StreamerClient<C> {
     #[doc = r" Create a new client wrapping the given caller."]
     pub fn new(caller: C) -> Self {
         Self { caller }
     }
-    pub async fn add(
+    pub async fn count_up(
         &self,
-        a: i32,
-        b: i32,
+        start: i32,
+        output: Tx<i32>,
     ) -> Result<::roam::SelfRef<::roam::ResponseParts<'static, i32>>, ::roam::RoamError> {
-        let method_id = adder_service_descriptor().methods[0usize].id;
-        let args = (a, b);
-        let channels = vec![];
+        let method_id = streamer_service_descriptor().methods[0usize].id;
+        let mut args = (start, output);
+        let channels = if let Some(binder) = self.caller.channel_binder() {
+            let plan = ::roam::RpcPlan::for_type::<(i32, Tx<i32>)>();
+            #[allow(unsafe_code)]
+            unsafe {
+                ::roam::bind_channels_client(
+                    &mut args as *mut (i32, Tx<i32>) as *mut u8,
+                    plan,
+                    binder,
+                )
+            }
+        } else {
+            vec![]
+        };
         let req = ::roam::RequestCall {
             method_id,
             args: ::roam::Payload::outgoing(&args),
@@ -126,20 +154,20 @@ impl<C: ::roam::Caller> AdderClient<C> {
     }
 }
 #[doc = r" Returns the service detail for codegen."]
-pub fn adder_service_detail() -> ::roam::schema::ServiceDetail {
+pub fn streamer_service_detail() -> ::roam::schema::ServiceDetail {
     ::roam::schema::ServiceDetail {
-        name: "Adder".into(),
+        name: "Streamer".into(),
         methods: vec![::roam::schema::MethodDetail {
-            service_name: "Adder".into(),
-            method_name: "add".into(),
+            service_name: "Streamer".into(),
+            method_name: "count_up".into(),
             args: vec![
                 ::roam::schema::ArgDetail {
-                    name: "a".into(),
+                    name: "start".into(),
                     ty: <i32 as ::roam::facet::Facet>::SHAPE,
                 },
                 ::roam::schema::ArgDetail {
-                    name: "b".into(),
-                    ty: <i32 as ::roam::facet::Facet>::SHAPE,
+                    name: "output".into(),
+                    ty: <Tx<i32> as ::roam::facet::Facet>::SHAPE,
                 },
             ],
             return_type: <i32 as ::roam::facet::Facet>::SHAPE,

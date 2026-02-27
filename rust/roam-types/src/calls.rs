@@ -142,6 +142,14 @@ pub trait ReplySink: Send + Sync + 'static {
             .await;
         }
     }
+
+    /// Return a channel binder for binding Tx/Rx handles in deserialized args.
+    ///
+    /// Returns `None` by default. The driver's `ReplySink` implementation
+    /// overrides this to provide actual channel binding.
+    fn channel_binder(&self) -> Option<&dyn crate::ChannelBinder> {
+        None
+    }
 }
 
 /// Type-erased handler for incoming service calls.
@@ -164,6 +172,14 @@ pub trait Caller: Clone + Send + Sync + 'static {
         &self,
         call: RequestCall<'a>,
     ) -> Result<SelfRef<RequestResponse<'static>>, RoamError>;
+
+    /// Return a channel binder for binding Tx/Rx handles in args before sending.
+    ///
+    /// Returns `None` by default. The driver's `Caller` implementation
+    /// overrides this to provide actual channel binding.
+    fn channel_binder(&self) -> Option<&dyn crate::ChannelBinder> {
+        None
+    }
 }
 
 pub trait Handler<R: ReplySink>: Send + Sync + 'static {

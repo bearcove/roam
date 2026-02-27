@@ -99,4 +99,7 @@ pub use calls::*;
 mod channel;
 pub use channel::*;
 
+mod channel_binding;
+pub use channel_binding::*;
+
 pub mod schema;

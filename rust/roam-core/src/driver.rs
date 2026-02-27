@@ -6,9 +6,10 @@ use futures_util::StreamExt as _;
 use futures_util::stream::FuturesUnordered;
 use moire::task::FutureExt as _;
 use roam_types::{
-    Caller, ChannelBody, ChannelClose, ChannelId, ChannelItem, ChannelMessage, ChannelSink,
-    Handler, IdAllocator, IncomingChannelMessage, Parity, Payload, ReplySink, RequestBody,
-    RequestCall, RequestId, RequestMessage, RequestResponse, RoamError, SelfRef, TxError,
+    Caller, ChannelBinder, ChannelBody, ChannelClose, ChannelId, ChannelItem, ChannelMessage,
+    ChannelSink, Handler, IdAllocator, IncomingChannelMessage, Parity, Payload, ReplySink,
+    RequestBody, RequestCall, RequestId, RequestMessage, RequestResponse, RoamError, SelfRef,
+    TxError,
 };
 
 use crate::session::{ConnectionHandle, ConnectionMessage, ConnectionSender};
@@ -38,6 +39,7 @@ struct DriverShared {
 pub struct DriverReplySink {
     sender: Option<ConnectionSender>,
     request_id: RequestId,
+    binder: DriverCaller,
 }
 
 impl ReplySink for DriverReplySink {
@@ -49,6 +51,10 @@ impl ReplySink for DriverReplySink {
         if let Err(_e) = sender.send_response(self.request_id, response).await {
             sender.mark_failure(self.request_id, "send_response failed");
         }
+    }
+
+    fn channel_binder(&self) -> Option<&dyn ChannelBinder> {
+        Some(&self.binder)
     }
 }
 
@@ -151,6 +157,38 @@ impl DriverCaller {
     }
 }
 
+impl ChannelBinder for DriverCaller {
+    fn create_tx(&self) -> (ChannelId, Arc<dyn ChannelSink>) {
+        let (id, sink) = self.create_tx_channel();
+        (id, sink as Arc<dyn ChannelSink>)
+    }
+
+    fn create_rx(
+        &self,
+    ) -> (
+        ChannelId,
+        tokio::sync::mpsc::Receiver<IncomingChannelMessage>,
+    ) {
+        let channel_id = self.shared.channel_ids.lock().next();
+        let rx = self.register_rx_channel(channel_id);
+        (channel_id, rx)
+    }
+
+    fn bind_tx(&self, channel_id: ChannelId) -> Arc<dyn ChannelSink> {
+        Arc::new(DriverChannelSink {
+            sender: self.sender.clone(),
+            channel_id,
+        })
+    }
+
+    fn register_rx(
+        &self,
+        channel_id: ChannelId,
+    ) -> tokio::sync::mpsc::Receiver<IncomingChannelMessage> {
+        self.register_rx_channel(channel_id)
+    }
+}
+
 impl Caller for DriverCaller {
     async fn call<'a>(
         &self,
@@ -197,6 +235,10 @@ impl Caller for DriverCaller {
         }
         .named("Caller::call")
         .await
+    }
+
+    fn channel_binder(&self) -> Option<&dyn ChannelBinder> {
+        Some(self)
     }
 }
 
@@ -317,6 +359,7 @@ impl<H: Handler<DriverReplySink>> Driver<H> {
             let reply = DriverReplySink {
                 sender: Some(self.sender.clone()),
                 request_id: req_id,
+                binder: self.caller(),
             };
             let call = msg.map(|m| match m.body {
                 RequestBody::Call(c) => c,
