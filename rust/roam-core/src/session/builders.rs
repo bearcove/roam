@@ -1,5 +1,7 @@
 use moire::sync::mpsc;
-use roam_types::{Conduit, ConduitTx, ConnectionSettings, MessageFamily, Metadata, Parity};
+use roam_types::{
+    Conduit, ConduitTx, ConnectionSettings, MaybeSend, MaybeSync, MessageFamily, Metadata, Parity,
+};
 
 use super::{
     CloseRequest, ConnectionAcceptor, ConnectionHandle, OpenRequest, Session, SessionError,
@@ -67,9 +69,9 @@ impl<'a, C> SessionInitiatorBuilder<'a, C> {
     ) -> Result<(Session<C>, ConnectionHandle, SessionHandle), SessionError>
     where
         C: Conduit<Msg = MessageFamily>,
-        C::Tx: Send + Sync + 'static,
-        for<'p> <C::Tx as ConduitTx>::Permit<'p>: Send,
-        C::Rx: Send,
+        C::Tx: MaybeSend + MaybeSync + 'static,
+        for<'p> <C::Tx as ConduitTx>::Permit<'p>: MaybeSend,
+        C::Rx: MaybeSend,
     {
         let (tx, rx) = self.conduit.split();
         let (open_tx, open_rx) = mpsc::channel::<OpenRequest>("session.open", 4);
@@ -129,9 +131,9 @@ impl<'a, C> SessionAcceptorBuilder<'a, C> {
     ) -> Result<(Session<C>, ConnectionHandle, SessionHandle), SessionError>
     where
         C: Conduit<Msg = MessageFamily>,
-        C::Tx: Send + Sync + 'static,
-        for<'p> <C::Tx as ConduitTx>::Permit<'p>: Send,
-        C::Rx: Send,
+        C::Tx: MaybeSend + MaybeSync + 'static,
+        for<'p> <C::Tx as ConduitTx>::Permit<'p>: MaybeSend,
+        C::Rx: MaybeSend,
     {
         let (tx, rx) = self.conduit.split();
         let (open_tx, open_rx) = mpsc::channel::<OpenRequest>("session.open", 4);

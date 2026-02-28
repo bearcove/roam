@@ -324,19 +324,22 @@ fn generate_dispatch_arm(
 
     let channel_binding = if has_channels {
         quote! {
-            if let Some(binder) = reply.channel_binder() {
-                let plan = #roam::RpcPlan::for_type::<#args_tuple_type>();
-                if !plan.channel_locations.is_empty() {
-                    // SAFETY: args is a valid, initialized value of type #args_tuple_type
-                    // and we have exclusive access to it via &mut.
-                    #[allow(unsafe_code)]
-                    unsafe {
-                        #roam::bind_channels_server(
-                            &mut args as *mut #args_tuple_type as *mut u8,
-                            plan,
-                            &call.channels,
-                            binder,
-                        );
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                if let Some(binder) = reply.channel_binder() {
+                    let plan = #roam::RpcPlan::for_type::<#args_tuple_type>();
+                    if !plan.channel_locations.is_empty() {
+                        // SAFETY: args is a valid, initialized value of type #args_tuple_type
+                        // and we have exclusive access to it via &mut.
+                        #[allow(unsafe_code)]
+                        unsafe {
+                            #roam::bind_channels_server(
+                                &mut args as *mut #args_tuple_type as *mut u8,
+                                plan,
+                                &call.channels,
+                                binder,
+                            );
+                        }
                     }
                 }
             }
@@ -482,6 +485,7 @@ fn generate_client_method(
         (
             quote! { let mut args = #args_tuple; },
             quote! {
+                #[cfg(not(target_arch = "wasm32"))]
                 let channels = if let Some(binder) = self.caller.channel_binder() {
                     let plan = #roam::RpcPlan::for_type::<#args_tuple_type>();
                     // SAFETY: args is a valid, initialized value of the args tuple type
@@ -497,6 +501,8 @@ fn generate_client_method(
                 } else {
                     vec![]
                 };
+                #[cfg(target_arch = "wasm32")]
+                let channels: Vec<#roam::ChannelId> = vec![];
             },
         )
     } else {

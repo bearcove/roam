@@ -20,9 +20,10 @@ pub use roam_types::{
     // Traits
     Call,
     Caller,
+    // Descriptors
+    ChannelId,
     Handler,
     MethodDescriptor,
-    // Descriptors
     MethodId,
     // Types
     Payload,
@@ -38,11 +39,13 @@ pub use roam_types::{
     SinkCall,
     // Channels
     Tx,
-    // Channel binding (used by generated dispatcher/client code)
-    bind_channels_client,
-    bind_channels_server,
+    // Channels
     channel,
 };
+
+// Channel binding is only available on non-wasm32 targets
+#[cfg(not(target_arch = "wasm32"))]
+pub use roam_types::{bind_channels_client, bind_channels_server};
 
 // Re-export the session module (generated code uses `roam::session::ServiceDescriptor`)
 pub mod session {

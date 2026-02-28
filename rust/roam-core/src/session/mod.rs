@@ -294,9 +294,9 @@ impl std::error::Error for SessionError {}
 impl<C> Session<C>
 where
     C: Conduit<Msg = MessageFamily>,
-    C::Tx: Send + Sync + 'static,
-    for<'p> <C::Tx as ConduitTx>::Permit<'p>: Send,
-    C::Rx: Send,
+    C::Tx: MaybeSend + MaybeSync + 'static,
+    for<'p> <C::Tx as ConduitTx>::Permit<'p>: MaybeSend,
+    C::Rx: MaybeSend,
 {
     fn pre_handshake(
         tx: C::Tx,

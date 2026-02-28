@@ -17,6 +17,7 @@ members = [
   "rust/roam-bench",
   "rust-legacy/roam-schema",
   "rust/roam-codegen",
+  "rust/wasm-browser-tests",
 ]
 exclude = ["fuzz"]
 

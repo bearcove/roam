@@ -29,6 +29,11 @@ mod driver;
 #[cfg(not(target_arch = "wasm32"))]
 pub use driver::*;
 
+#[cfg(target_arch = "wasm32")]
+mod wasm_driver;
+#[cfg(target_arch = "wasm32")]
+pub use wasm_driver::*;
+
 use facet_format::{FormatDeserializer, MetaSource};
 use facet_postcard::PostcardParser;
 use facet_reflect::Partial;

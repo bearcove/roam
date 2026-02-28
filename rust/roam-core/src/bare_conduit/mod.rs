@@ -4,8 +4,8 @@ use facet_core::{PtrConst, Shape};
 use facet_reflect::Peek;
 
 use roam_types::{
-    Conduit, ConduitRx, ConduitTx, ConduitTxPermit, Link, LinkTx, LinkTxPermit, MsgFamily, SelfRef,
-    WriteSlot,
+    Conduit, ConduitRx, ConduitTx, ConduitTxPermit, Link, LinkTx, LinkTxPermit, MaybeSend,
+    MsgFamily, SelfRef, WriteSlot,
 };
 
 /// Wraps a [`Link`] with postcard serialization. No reconnect, no reliability.
@@ -38,8 +38,8 @@ impl<F: MsgFamily, L: Link> BareConduit<F, L> {
 
 impl<F: MsgFamily, L: Link> Conduit for BareConduit<F, L>
 where
-    L::Tx: Send + 'static,
-    L::Rx: Send + 'static,
+    L::Tx: MaybeSend + 'static,
+    L::Rx: MaybeSend + 'static,
 {
     type Msg = F;
     type Tx = BareConduitTx<F, L::Tx>;
@@ -71,7 +71,7 @@ pub struct BareConduitTx<F: MsgFamily, LTx: LinkTx> {
     _phantom: PhantomData<fn(F)>,
 }
 
-impl<F: MsgFamily, LTx: LinkTx + Send + 'static> ConduitTx for BareConduitTx<F, LTx> {
+impl<F: MsgFamily, LTx: LinkTx + MaybeSend + 'static> ConduitTx for BareConduitTx<F, LTx> {
     type Msg = F;
     type Permit<'a>
         = BareConduitPermit<'a, F, LTx>
@@ -145,7 +145,7 @@ pub struct BareConduitRx<F: MsgFamily, LRx> {
 
 impl<F: MsgFamily, LRx> ConduitRx for BareConduitRx<F, LRx>
 where
-    LRx: roam_types::LinkRx + Send + 'static,
+    LRx: roam_types::LinkRx + MaybeSend + 'static,
 {
     type Msg = F;
     type Error = BareConduitError;

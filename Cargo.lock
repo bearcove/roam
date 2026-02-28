@@ -2811,6 +2811,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "wasm-browser-tests"
+version = "3.0.0"
+dependencies = [
+ "roam-core",
+ "roam-types",
+ "roam-websocket",
+ "spec-proto",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+]
+
+[[package]]
 name = "wasm-encoder"
 version = "0.244.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
