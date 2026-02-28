@@ -133,11 +133,16 @@ fn generate_imports(service: &ServiceDescriptor, w: &mut CodeWriter<&mut String>
     // Namespace import for all postcard encoding/decoding functions
     // This avoids tracking which specific functions are used - bundler will tree-shake
     cw_writeln!(w, "import * as pc from \"@bearcove/roam-postcard\";").unwrap();
-
-    // Core runtime imports (non-postcard)
     cw_writeln!(
         w,
-        "import {{ encodeWithSchema, decodeWithSchema, helloExchangeInitiator, defaultHello, CallBuilder }} from \"@bearcove/roam-core\";"
+        "import {{ encodeWithSchema, decodeWithSchema }} from \"@bearcove/roam-postcard\";"
+    )
+    .unwrap();
+
+    // Core runtime imports
+    cw_writeln!(
+        w,
+        "import {{ helloExchangeInitiator, defaultHello, CallBuilder }} from \"@bearcove/roam-core\";"
     )
     .unwrap();
 

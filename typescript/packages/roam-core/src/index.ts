@@ -1,63 +1,6 @@
 // @bearcove/roam-runtime - TypeScript runtime for roam RPC
 // This package provides the core primitives and dispatcher for roam services.
 
-// Binary encoding primitives
-export {
-  encodeVarint,
-  decodeVarint,
-  decodeVarintNumber,
-} from "../../roam-postcard/src/binary/varint.ts";
-export { concat } from "../../roam-postcard/src/binary/bytes.ts";
-
-// Postcard encoding/decoding - comprehensive type support
-export {
-  // Decode result type
-  type DecodeResult,
-  // Primitives
-  encodeBool,
-  decodeBool,
-  encodeU8,
-  decodeU8,
-  encodeI8,
-  decodeI8,
-  encodeU16,
-  decodeU16,
-  encodeI16,
-  decodeI16,
-  encodeU32,
-  decodeU32,
-  encodeI32,
-  decodeI32,
-  encodeU64,
-  decodeU64,
-  encodeI64,
-  decodeI64,
-  encodeF32,
-  decodeF32,
-  encodeF64,
-  decodeF64,
-  // String and bytes
-  encodeString,
-  decodeString,
-  encodeBytes,
-  decodeBytes,
-  // Containers
-  encodeOption,
-  decodeOption,
-  encodeVec,
-  decodeVec,
-  encodeTuple2,
-  decodeTuple2,
-  encodeTuple3,
-  decodeTuple3,
-  // Enum support
-  encodeEnumVariant,
-  decodeEnumVariant,
-} from "@bearcove/roam-postcard";
-
-// Schema-driven encoding/decoding
-export { encodeWithSchema, decodeWithSchema } from "@bearcove/roam-postcard";
-
 // RPC error types (for client-side error handling)
 export {
   RpcError,
