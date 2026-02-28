@@ -53,9 +53,6 @@ export type {
 } from "./types.ts";
 
 export {
-  MessageDiscriminant,
-  MetadataValueDiscriminant,
-  HelloDiscriminant,
   MetadataFlags,
   parityOdd,
   parityEven,
@@ -81,23 +78,6 @@ export {
   messageReset,
   messageCredit,
 } from "./types.ts";
-
-export {
-  ParitySchema,
-  ConnectionSettingsSchema,
-  HelloSchema,
-  HelloYourselfSchema,
-  ProtocolErrorSchema,
-  MetadataValueSchema,
-  MetadataEntrySchema,
-  RequestBodySchema,
-  RequestMessageSchema,
-  ChannelBodySchema,
-  ChannelMessageSchema,
-  MessagePayloadSchema,
-  MessageSchema,
-  wireSchemaRegistry,
-} from "./schemas.ts";
 
 export {
   encodeHello,

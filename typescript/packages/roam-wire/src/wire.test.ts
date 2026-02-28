@@ -24,16 +24,16 @@ import {
   messageClose,
   messageReset,
   messageCredit,
-  HelloSchema,
-  RequestBodySchema,
-  MessageSchema,
+} from "./types.ts";
+import { HelloSchema, RequestBodySchema, MessageSchema } from "./schemas.ts";
+import {
   encodeMetadataValue,
   decodeMetadataValue,
   encodeMessage,
   decodeMessage,
   encodeMessages,
   decodeMessages,
-} from "./index.ts";
+} from "./codec.ts";
 import { encodeU32 } from "@bearcove/roam-postcard";
 
 describe("wire discriminants", () => {

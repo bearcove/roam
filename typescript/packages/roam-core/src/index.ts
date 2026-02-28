@@ -89,10 +89,6 @@ export type {
 } from "@bearcove/roam-wire";
 
 export {
-  // Wire discriminants
-  MessageDiscriminant,
-  MetadataValueDiscriminant,
-  HelloDiscriminant,
   // Metadata flags
   MetadataFlags,
   // Wire factory functions
@@ -111,12 +107,6 @@ export {
   messageClose,
   messageReset,
   messageCredit,
-  // Wire schemas
-  HelloSchema,
-  MetadataValueSchema,
-  MetadataEntrySchema,
-  MessageSchema,
-  wireSchemaRegistry,
   // Wire codec
   encodeHello,
   decodeHello,
