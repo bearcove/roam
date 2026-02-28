@@ -62,7 +62,12 @@ pub struct FrameHeader {
     /// Bit 0: `FLAG_SLOT_REF`. Bit 1: `FLAG_MMAP_REF`. Both MUST NOT be set
     /// simultaneously. All other bits reserved and zero.
     pub flags: u8,
-    pub _reserved: [u8; 3],
+    /// Reserved byte, must be zero.
+    pub _reserved0: u8,
+    /// For inline frames: the actual payload length (excluding padding) as
+    /// little-endian u16. Zero means "unknown" (legacy writer), in which case
+    /// the reader should use `total_len - 8`.
+    pub inline_payload_len: [u8; 2],
 }
 
 /// The 12-byte slot reference body that follows a `FrameHeader` when
@@ -149,10 +154,12 @@ pub fn write_inline(producer: &mut BipBufProducer<'_>, payload: &[u8]) -> Result
     let entry_len = align4(8 + payload.len() as u32);
     let buf = producer.try_grant(entry_len).ok_or(BipBufFull)?;
 
+    let payload_len_u16 = payload.len() as u16;
     let (hdr, rest) = FrameHeader::mut_from_prefix(buf).expect("buf alignment/size");
     hdr.total_len = entry_len;
     hdr.flags = 0;
-    hdr._reserved = [0; 3];
+    hdr._reserved0 = 0;
+    hdr.inline_payload_len = payload_len_u16.to_le_bytes();
 
     rest[..payload.len()].copy_from_slice(payload);
     rest[payload.len()..].fill(0);
@@ -172,7 +179,8 @@ pub fn write_mmap_ref(producer: &mut BipBufProducer<'_>, mmap: &MmapRef) -> Resu
     let (hdr, rest) = FrameHeader::mut_from_prefix(buf).expect("buf alignment/size");
     hdr.total_len = MMAP_REF_ENTRY_SIZE;
     hdr.flags = FLAG_MMAP_REF;
-    hdr._reserved = [0; 3];
+    hdr._reserved0 = 0;
+    hdr.inline_payload_len = [0; 2];
 
     MmapRefBody::write(rest, mmap);
 
@@ -191,7 +199,8 @@ pub fn write_slot_ref(producer: &mut BipBufProducer<'_>, slot: &SlotRef) -> Resu
     let (hdr, rest) = FrameHeader::mut_from_prefix(buf).expect("buf alignment/size");
     hdr.total_len = SLOT_REF_ENTRY_SIZE;
     hdr.flags = FLAG_SLOT_REF;
-    hdr._reserved = [0; 3];
+    hdr._reserved0 = 0;
+    hdr.inline_payload_len = [0; 2];
 
     let body = SlotRefBody::mut_from_bytes(rest).expect("rest alignment/size");
     body.class_idx = slot.class_idx;
@@ -262,7 +271,19 @@ pub fn peek_frame(data: &[u8]) -> Option<(Frame<'_>, u32)> {
         }
         Frame::MmapRef(MmapRefBody::read(rest)?)
     } else {
-        Frame::Inline(&data[FRAME_HEADER_SIZE..total_len])
+        // Use inline_payload_len if set (non-zero), otherwise fall back to total_len.
+        let payload_len = u16::from_le_bytes(hdr.inline_payload_len) as usize;
+        let end = if payload_len > 0 {
+            let end = FRAME_HEADER_SIZE + payload_len;
+            if end > total_len {
+                return None; // corrupt: payload_len exceeds frame
+            }
+            end
+        } else {
+            // Legacy writer didn't set inline_payload_len — include padding.
+            total_len
+        };
+        Frame::Inline(&data[FRAME_HEADER_SIZE..end])
     };
 
     Some((frame, hdr.total_len))
@@ -456,7 +477,8 @@ mod tests {
         let (hdr, rest) = FrameHeader::mut_from_prefix(buf).unwrap();
         hdr.total_len = entry_len;
         hdr.flags = FLAG_SLOT_REF | FLAG_MMAP_REF;
-        hdr._reserved = [0; 3];
+        hdr._reserved0 = 0;
+        hdr.inline_payload_len = [0; 2];
         rest.fill(0);
         tx.commit(entry_len);
 

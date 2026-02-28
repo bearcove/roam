@@ -18,6 +18,8 @@ pub enum MetadataValue<'a> {
 // r[impl rpc.metadata.flags.sensitive]
 // r[impl rpc.metadata.flags.no-propagate]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Facet)]
+#[repr(transparent)]
+#[facet(transparent)]
 pub struct MetadataFlags(u64);
 
 impl MetadataFlags {

@@ -124,7 +124,7 @@ pub fn generate_decode_stmt_from_with_cursor(
             // Named enum - decode discriminant then decode variant
             let mut out = String::new();
             out.push_str(&format!(
-                "{indent}let _{var_name}_disc = try decodeU8(from: {data_var}, offset: &{cursor_var})\n"
+                "{indent}let _{var_name}_disc = try decodeVarint(from: {data_var}, offset: &{cursor_var})\n"
             ));
             out.push_str(&format!("{indent}let {var_name}: {name}\n"));
             out.push_str(&format!("{indent}switch _{var_name}_disc {{\n"));
@@ -211,7 +211,7 @@ pub fn generate_decode_stmt_from_with_cursor(
             let err_type = super::types::swift_type_base(err);
             let mut out = String::new();
             out.push_str(&format!(
-                "{indent}let _{var_name}_disc = try decodeU8(from: {data_var}, offset: &{cursor_var})\n"
+                "{indent}let _{var_name}_disc = try decodeVarint(from: {data_var}, offset: &{cursor_var})\n"
             ));
             out.push_str(&format!(
                 "{indent}let {var_name}: Result<{ok_type}, {err_type}>\n"
@@ -320,7 +320,7 @@ pub fn generate_decode_closure(shape: &'static Shape) -> String {
         }) => {
             // Generate inline enum decode closure
             let mut code = format!(
-                "{{ data, off in\n    let disc = try decodeU8(from: data, offset: &off)\n    let result: {name}\n    switch disc {{\n"
+                "{{ data, off in\n    let disc = try decodeVarint(from: data, offset: &off)\n    let result: {name}\n    switch disc {{\n"
             );
             for (i, v) in variants.iter().enumerate() {
                 code.push_str(&format!("    case {i}:\n"));

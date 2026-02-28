@@ -50,6 +50,9 @@ enum Commands {
         /// Generate Swift server-only bindings
         #[facet(args::named, default)]
         swift_server: bool,
+        /// Generate Swift wire protocol types (WireV7.swift)
+        #[facet(args::named, default)]
+        swift_wire: bool,
     },
 }
 
@@ -194,12 +197,16 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             swift,
             swift_client,
             swift_server,
+            swift_wire,
         } => {
             if typescript {
                 codegen_typescript(&workspace_root)?;
             }
             if swift || swift_client || swift_server {
                 codegen_swift(&workspace_root, swift, swift_client, swift_server)?;
+            }
+            if swift_wire {
+                codegen_swift_wire(&workspace_root)?;
             }
         }
     }
@@ -404,6 +411,59 @@ fn codegen_swift(
         println!("Wrote {}", out_path.display());
     }
 
+    Ok(())
+}
+
+fn codegen_swift_wire(workspace_root: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
+    use roam_codegen::targets::swift::wire::{WireType, generate_wire_types};
+    use roam_types as rt;
+
+    let out_path = workspace_root
+        .join("swift")
+        .join("roam-runtime")
+        .join("Sources")
+        .join("RoamRuntime")
+        .join("WireV7.swift");
+
+    macro_rules! wire_type {
+        ($swift_name:literal, $ty:ty) => {
+            WireType {
+                swift_name: $swift_name.to_string(),
+                shape: <$ty as facet::Facet<'static>>::SHAPE,
+            }
+        };
+    }
+
+    let types = vec![
+        wire_type!("ParityV7", rt::Parity),
+        wire_type!("ConnectionSettingsV7", rt::ConnectionSettings),
+        wire_type!("MetadataValueV7", rt::MetadataValue<'static>),
+        wire_type!("MetadataEntryV7", rt::MetadataEntry<'static>),
+        wire_type!("HelloV7", rt::Hello<'static>),
+        wire_type!("HelloYourselfV7", rt::HelloYourself<'static>),
+        wire_type!("ProtocolErrorV7", rt::ProtocolError<'static>),
+        wire_type!("ConnectionOpenV7", rt::ConnectionOpen<'static>),
+        wire_type!("ConnectionAcceptV7", rt::ConnectionAccept<'static>),
+        wire_type!("ConnectionRejectV7", rt::ConnectionReject<'static>),
+        wire_type!("ConnectionCloseV7", rt::ConnectionClose<'static>),
+        wire_type!("RequestCallV7", rt::RequestCall<'static>),
+        wire_type!("RequestResponseV7", rt::RequestResponse<'static>),
+        wire_type!("RequestCancelV7", rt::RequestCancel<'static>),
+        wire_type!("RequestBodyV7", rt::RequestBody<'static>),
+        wire_type!("RequestMessageV7", rt::RequestMessage<'static>),
+        wire_type!("ChannelItemV7", rt::ChannelItem<'static>),
+        wire_type!("ChannelCloseV7", rt::ChannelClose<'static>),
+        wire_type!("ChannelResetV7", rt::ChannelReset<'static>),
+        wire_type!("ChannelGrantCreditV7", rt::ChannelGrantCredit),
+        wire_type!("ChannelBodyV7", rt::ChannelBody<'static>),
+        wire_type!("ChannelMessageV7", rt::ChannelMessage<'static>),
+        wire_type!("MessagePayloadV7", rt::MessagePayload<'static>),
+        wire_type!("MessageV7", rt::Message<'static>),
+    ];
+
+    let code = generate_wire_types(&types);
+    std::fs::write(&out_path, &code)?;
+    println!("Wrote {}", out_path.display());
     Ok(())
 }
 

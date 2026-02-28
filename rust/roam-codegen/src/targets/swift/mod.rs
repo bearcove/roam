@@ -15,6 +15,7 @@ pub mod encode;
 pub mod schema;
 pub mod server;
 pub mod types;
+pub mod wire;
 
 use roam_types::{MethodDescriptor, ServiceDescriptor};
 

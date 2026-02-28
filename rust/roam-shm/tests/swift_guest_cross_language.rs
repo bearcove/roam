@@ -223,6 +223,8 @@ fn rust_segment_to_swift_guest_message_v7_path() {
         Instant::now() + Duration::from_secs(5),
     );
     if payloads.len() < 3 {
+        let mut child = child;
+        let _ = child.kill();
         let output = child
             .wait_with_output()
             .expect("wait for swift guest process");

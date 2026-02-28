@@ -29,10 +29,14 @@ public enum ShmFrameDecodeError: Error, Equatable {
 public struct ShmFrameHeader: Sendable, Equatable {
     public var totalLen: UInt32
     public var flags: UInt8
+    /// For inline frames: the actual payload length (without padding).
+    /// Zero means "unknown" (legacy writer); reader uses `totalLen - 8`.
+    public var inlinePayloadLen: UInt16
 
-    public init(totalLen: UInt32, flags: UInt8) {
+    public init(totalLen: UInt32, flags: UInt8, inlinePayloadLen: UInt16 = 0) {
         self.totalLen = totalLen
         self.flags = flags
+        self.inlinePayloadLen = inlinePayloadLen
     }
 
     public var hasSlotRef: Bool {
@@ -47,9 +51,9 @@ public struct ShmFrameHeader: Sendable, Equatable {
         precondition(buffer.count >= shmFrameHeaderSize)
         writeU32LE(totalLen, to: &buffer, at: 0)
         buffer[4] = flags
-        buffer[5] = 0
-        buffer[6] = 0
-        buffer[7] = 0
+        buffer[5] = 0  // reserved
+        buffer[6] = UInt8(truncatingIfNeeded: inlinePayloadLen)
+        buffer[7] = UInt8(truncatingIfNeeded: inlinePayloadLen >> 8)
     }
 
     public static func read(from buffer: [UInt8]) -> ShmFrameHeader? {
@@ -59,7 +63,8 @@ public struct ShmFrameHeader: Sendable, Equatable {
 
         return ShmFrameHeader(
             totalLen: readU32LE(from: buffer, at: 0),
-            flags: buffer[4]
+            flags: buffer[4],
+            inlinePayloadLen: UInt16(buffer[6]) | (UInt16(buffer[7]) << 8)
         )
     }
 }
@@ -139,7 +144,7 @@ public func encodeShmInlineFrame(payload: [UInt8]) -> [UInt8] {
     let totalLen = shmInlineFrameSize(payloadLen: payloadLen)
     var bytes = [UInt8](repeating: 0, count: Int(totalLen))
 
-    let header = ShmFrameHeader(totalLen: totalLen, flags: 0)
+    let header = ShmFrameHeader(totalLen: totalLen, flags: 0, inlinePayloadLen: UInt16(payload.count))
     header.write(to: &bytes)
     bytes.replaceSubrange(shmFrameHeaderSize..<(shmFrameHeaderSize + payload.count), with: payload)
     return bytes
@@ -211,9 +216,19 @@ public func decodeShmFrame(_ frame: [UInt8]) throws -> ShmDecodedFrame {
     }
 
     let payloadStart = shmFrameHeaderSize
-    let payloadEnd = Int(header.totalLen)
-    guard payloadEnd <= frame.count else {
-        throw ShmFrameDecodeError.shortFrame(required: payloadEnd, available: frame.count)
+    let frameEnd = Int(header.totalLen)
+    guard frameEnd <= frame.count else {
+        throw ShmFrameDecodeError.shortFrame(required: frameEnd, available: frame.count)
+    }
+
+    // Use inlinePayloadLen to strip alignment padding when available.
+    let payloadEnd: Int
+    if header.inlinePayloadLen > 0 {
+        let exact = payloadStart + Int(header.inlinePayloadLen)
+        payloadEnd = min(exact, frameEnd)
+    } else {
+        // Legacy writer — include padding.
+        payloadEnd = frameEnd
     }
 
     return .inline(header: header, payload: Array(frame[payloadStart..<payloadEnd]))
