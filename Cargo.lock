@@ -1540,6 +1540,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "peer-server"
+version = "3.0.0"
+dependencies = [
+ "roam",
+ "roam-core",
+ "roam-types",
+ "roam-websocket",
+ "spec-proto",
+ "tokio",
+]
+
+[[package]]
 name = "percent-encoding"
 version = "2.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
