@@ -34,7 +34,6 @@ fn channeling_sum_client_to_server() {
         Ok::<_, String>(())
     })
     .unwrap();
-}
 
 // r[verify channeling.type]
 // r[verify channeling.data]
