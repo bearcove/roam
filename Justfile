@@ -37,9 +37,12 @@ all *args:
 wasm-build:
     wasm-pack build --target web rust/wasm-browser-tests --out-dir ../../typescript/tests/browser-wasm/pkg
 
-wasm *args:
+ws-wasm *args:
     just wasm-build
-    cd typescript/tests/playwright && pnpm exec playwright test wasm.spec.ts {{ quote(args) }}
+    cd typescript/tests/playwright && pnpm exec playwright test ws-wasm.spec.ts {{ quote(args) }}
+
+ws-ts *args:
+    cd typescript/tests/playwright && pnpm exec playwright test ws-ts.spec.ts {{ quote(args) }}
 
 fuzz-shm-build:
     cargo afl build --manifest-path fuzz/roam-shm-afl/Cargo.toml --bin framing_peek
