@@ -942,9 +942,11 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "899def5c37c4fd7b2664648c28120ecec138e4d395b459e5ca34f9cce2dd77fd"
 dependencies = [
  "cfg-if",
+ "js-sys",
  "libc",
  "r-efi",
  "wasip2",
+ "wasm-bindgen",
 ]
 
 [[package]]
@@ -1974,10 +1976,15 @@ dependencies = [
 name = "roam-websocket"
 version = "3.0.0"
 dependencies = [
+ "futures-channel",
  "futures-util",
+ "getrandom 0.3.4",
+ "js-sys",
  "roam-types",
  "tokio",
  "tokio-tungstenite",
+ "wasm-bindgen",
+ "web-sys",
 ]
 
 [[package]]

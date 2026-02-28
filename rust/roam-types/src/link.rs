@@ -4,6 +4,28 @@ use std::future::Future;
 
 use crate::Backing;
 
+/// Marker trait that requires [`Send`] on native targets, nothing on wasm32.
+#[cfg(not(target_arch = "wasm32"))]
+pub trait MaybeSend: Send {}
+#[cfg(not(target_arch = "wasm32"))]
+impl<T: Send> MaybeSend for T {}
+
+#[cfg(target_arch = "wasm32")]
+pub trait MaybeSend {}
+#[cfg(target_arch = "wasm32")]
+impl<T> MaybeSend for T {}
+
+/// Marker trait that requires [`Sync`] on native targets, nothing on wasm32.
+#[cfg(not(target_arch = "wasm32"))]
+pub trait MaybeSync: Sync {}
+#[cfg(not(target_arch = "wasm32"))]
+impl<T: Sync> MaybeSync for T {}
+
+#[cfg(target_arch = "wasm32")]
+pub trait MaybeSync {}
+#[cfg(target_arch = "wasm32")]
+impl<T> MaybeSync for T {}
+
 /// Bidirectional raw-bytes transport.
 ///
 /// TCP, WebSocket, SHM all implement this. No knowledge of what's being
@@ -48,8 +70,8 @@ pub trait LinkTxPermit {
 ///    then the caller fills it and calls [`WriteSlot::commit`].
 ///
 /// `reserve` is the backpressure point.
-pub trait LinkTx: Send + Sync + 'static {
-    type Permit: LinkTxPermit + Send;
+pub trait LinkTx: MaybeSend + MaybeSync + 'static {
+    type Permit: LinkTxPermit + MaybeSend;
 
     /// Reserve capacity to send exactly one payload.
     ///
@@ -60,11 +82,11 @@ pub trait LinkTx: Send + Sync + 'static {
     /// release the reservation.
     // r[impl link.tx.reserve]
     // r[impl link.tx.cancel-safe]
-    fn reserve(&self) -> impl Future<Output = std::io::Result<Self::Permit>> + Send + '_;
+    fn reserve(&self) -> impl Future<Output = std::io::Result<Self::Permit>> + MaybeSend + '_;
 
     /// Graceful close of the outbound direction.
     // r[impl link.tx.close]
-    fn close(self) -> impl Future<Output = std::io::Result<()>> + Send
+    fn close(self) -> impl Future<Output = std::io::Result<()>> + MaybeSend
     where
         Self: Sized;
 }
@@ -97,8 +119,8 @@ pub trait WriteSlot {
 ///
 /// For SHM: the Backing might be a VarSlot reference.
 /// For TCP: the Backing is a heap-allocated buffer.
-pub trait LinkRx: Send + 'static {
-    type Error: std::error::Error + Send + Sync + 'static;
+pub trait LinkRx: MaybeSend + 'static {
+    type Error: std::error::Error + MaybeSend + MaybeSync + 'static;
 
     /// Receive the next message's raw bytes.
     ///
@@ -106,7 +128,9 @@ pub trait LinkRx: Send + 'static {
     // r[impl link.rx.recv]
     // r[impl link.rx.error]
     // r[impl link.rx.eof]
-    fn recv(&mut self) -> impl Future<Output = Result<Option<Backing>, Self::Error>> + Send + '_;
+    fn recv(
+        &mut self,
+    ) -> impl Future<Output = Result<Option<Backing>, Self::Error>> + MaybeSend + '_;
 }
 
 /// A [`Link`] assembled from pre-split Tx and Rx halves.
