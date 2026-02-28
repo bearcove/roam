@@ -5,7 +5,7 @@
 //! - `generate(count: u32, output: Tx<i32>)` - server-to-client channel
 //! - `transform(input: Rx<String>, output: Tx<String>)` - bidirectional channels
 
-use spec_tests::harness::{accept_subject, run_async};
+use spec_tests::harness::{accept_subject, run_async, spawn_loud};
 
 // r[verify channeling.type]
 // r[verify channeling.data]
@@ -18,7 +18,7 @@ fn channeling_sum_client_to_server() {
         let (client, mut child) = accept_subject().await?;
 
         let (tx, rx) = roam::channel::<i32>();
-        moire::task::spawn(async move {
+        spawn_loud(async move {
             for n in [1i32, 2, 3, 4, 5] {
                 tx.send(n).await.unwrap();
             }
@@ -45,7 +45,7 @@ fn channeling_generate_server_to_client() {
         let (client, mut child) = accept_subject().await?;
 
         let (tx, mut rx) = roam::channel::<i32>();
-        let recv = moire::task::spawn(async move {
+        let recv = spawn_loud(async move {
             let mut received = Vec::new();
             while let Ok(Some(n)) = rx.recv().await {
                 received.push(*n);
@@ -81,14 +81,14 @@ fn channeling_transform_bidirectional() {
         let (output_tx, mut output_rx) = roam::channel::<String>();
 
         let messages = ["hello", "world", "test"];
-        moire::task::spawn(async move {
+        spawn_loud(async move {
             for msg in messages {
                 input_tx.send(msg.to_string()).await.unwrap();
             }
             input_tx.close(Default::default()).await.unwrap();
         });
 
-        let recv = moire::task::spawn(async move {
+        let recv = spawn_loud(async move {
             let mut received = Vec::new();
             while let Ok(Some(s)) = output_rx.recv().await {
                 received.push(s.clone());

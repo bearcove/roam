@@ -85,7 +85,7 @@ where
                     if !plan.channel_locations.is_empty() {
                         #[allow(unsafe_code)]
                         unsafe {
-                            ::roam::bind_channels_server(
+                            ::roam::bind_channels_callee_args(
                                 &mut args as *mut (i32, Tx<i32>) as *mut u8,
                                 plan,
                                 &call.channels,
@@ -127,7 +127,7 @@ impl<C: ::roam::Caller> StreamerClient<C> {
             let plan = ::roam::RpcPlan::for_type::<(i32, Tx<i32>)>();
             #[allow(unsafe_code)]
             unsafe {
-                ::roam::bind_channels_client(
+                ::roam::bind_channels_caller_args(
                     &mut args as *mut (i32, Tx<i32>) as *mut u8,
                     plan,
                     binder,

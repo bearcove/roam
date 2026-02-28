@@ -423,9 +423,134 @@ metadata.push((
 
 > r[rpc.channel.binding]
 >
-> On the handler side, implementations MUST use the channel IDs from
+> On the callee side, implementations MUST use the channel IDs from
 > `Request.channels` as authoritative, patching them into deserialized
 > argument values before binding streams. On the caller side, implementations
 > MUST use the channel IDs from `Response.channels` to bind return-type
 > channel handles. This separation enables transparent proxying: a proxy
 > can forward `Request` and `Response` messages without parsing payloads.
+
+## Channel pairs and shared state
+
+> r[rpc.channel.pair]
+>
+> `channel<T>()` returns a `(Tx<T>, Rx<T>)` pair that share a single
+> channel core. Both handles hold an `Arc` reference to the core. The
+> core contains a `OnceLock<ChannelBinding>` where `ChannelBinding` is
+> either a `Sink` or a `Receiver` — never both.
+
+> r[rpc.channel.pair.binding-propagation]
+>
+> When the framework binds a channel handle that is part of a pair
+> (created via `channel()`), the binding is stored in the shared core.
+> The paired handle — which the caller or callee kept — reads or takes
+> the binding from the same core. This allows the framework to bind
+> both ends by touching only the handle that appears in the args or
+> return value.
+
+## Caller-side binding (args)
+
+> r[rpc.channel.binding.caller-args]
+>
+> When the caller sends a request containing channel handles in the
+> arguments, the framework iterates the channel locations from the
+> `RpcPlan`, allocates a channel ID for each, and binds the handle
+> in the args tuple. Channel IDs are collected into `Request.channels`.
+
+> r[rpc.channel.binding.caller-args.rx]
+>
+> For an `Rx<T>` in arg position: the handler will receive, so the
+> caller must send. The framework allocates a channel ID and creates
+> a sink (via `ChannelBinder::create_tx`). The sink is stored in the
+> shared core so the caller's paired `Tx<T>` can send through it.
+
+> r[rpc.channel.binding.caller-args.tx]
+>
+> For a `Tx<T>` in arg position: the handler will send, so the caller
+> must receive. The framework allocates a channel ID and creates a
+> receiver (via `ChannelBinder::create_rx`). The receiver is stored
+> in the shared core so the caller's paired `Rx<T>` can receive from it.
+
+## Callee-side binding (args)
+
+> r[rpc.channel.binding.callee-args]
+>
+> When the callee receives a request, channel handles in the deserialized
+> arguments are standalone (not part of a pair). The framework iterates
+> the channel locations from the `RpcPlan` and binds each handle directly
+> using the channel IDs from `Request.channels`.
+
+> r[rpc.channel.binding.callee-args.rx]
+>
+> For an `Rx<T>` in arg position: the handler receives. The framework
+> calls `ChannelBinder::register_rx` with the channel ID to register
+> the channel for routing and stores the receiver directly in the
+> `Rx`'s receiver slot.
+
+> r[rpc.channel.binding.callee-args.tx]
+>
+> For a `Tx<T>` in arg position: the handler sends. The framework
+> calls `ChannelBinder::bind_tx` with the channel ID and stores the
+> sink directly in the `Tx`'s sink slot.
+
+## Callee-side binding (return)
+
+> r[rpc.channel.binding.callee-return]
+>
+> When the callee returns a response containing channel handles, those
+> handles were created via `channel()` and are part of a pair. The
+> framework iterates the channel locations in the return type's `RpcPlan`,
+> allocates a channel ID for each, and binds the handle in the return
+> value. Channel IDs are collected into `Response.channels`.
+
+> r[rpc.channel.binding.callee-return.rx]
+>
+> For an `Rx<T>` in return position: the caller will receive, so the
+> callee must send. The framework allocates a channel ID and creates
+> a sink. The sink is stored in the shared core so the callee's
+> paired `Tx<T>` can send through it.
+
+> r[rpc.channel.binding.callee-return.tx]
+>
+> For a `Tx<T>` in return position: the caller will send, so the
+> callee must receive. The framework allocates a channel ID and creates
+> a receiver. The receiver is stored in the shared core so the callee's
+> paired `Rx<T>` can receive from it.
+
+## Caller-side binding (return)
+
+> r[rpc.channel.binding.caller-return]
+>
+> When the caller receives a response containing channel handles, those
+> handles are standalone (deserialized from the response). The framework
+> iterates the channel locations in the return type's `RpcPlan` and binds
+> each handle directly using the channel IDs from `Response.channels`.
+
+> r[rpc.channel.binding.caller-return.rx]
+>
+> For an `Rx<T>` in return position: the caller receives. The framework
+> calls `ChannelBinder::register_rx` with the channel ID and stores the
+> receiver directly in the `Rx`'s receiver slot.
+
+> r[rpc.channel.binding.caller-return.tx]
+>
+> For a `Tx<T>` in return position: the caller sends. The framework
+> calls `ChannelBinder::bind_tx` with the channel ID and stores the
+> sink directly in the `Tx`'s sink slot.
+
+## Handle hot path
+
+> r[rpc.channel.pair.tx-read]
+>
+> `Tx::send` reads the sink from the shared core. If the `Tx` was
+> created standalone (deserialized), it reads from its local sink slot.
+> If it was created via `channel()`, it reads from the shared core's
+> `ChannelBinding::Sink`.
+
+> r[rpc.channel.pair.rx-take]
+>
+> `Rx::recv` takes the receiver on first call. If the `Rx` was created
+> standalone (deserialized), the receiver is already in its local slot.
+> If it was created via `channel()`, the first `recv` call takes the
+> receiver from the shared core's `ChannelBinding::Receiver` into the
+> local slot. Subsequent calls use the local slot directly.

@@ -3,6 +3,8 @@ use std::future::Future;
 use std::marker::PhantomData;
 use std::pin::Pin;
 use std::sync::Arc;
+#[cfg(not(target_arch = "wasm32"))]
+use std::sync::Mutex;
 
 use facet::Facet;
 use facet_core::PtrConst;
@@ -11,12 +13,98 @@ use tokio::sync::{Semaphore, mpsc};
 
 use crate::{ChannelClose, ChannelItem, ChannelReset, Metadata, Payload, SelfRef};
 
-/// Create an unbound channel pair.
+// r[impl rpc.channel.pair]
+/// The binding stored in a channel core — either a sink or a receiver, never both.
+#[cfg(not(target_arch = "wasm32"))]
+pub enum ChannelBinding {
+    Sink(Arc<dyn ChannelSink>),
+    Receiver(mpsc::Receiver<IncomingChannelMessage>),
+}
+
+// r[impl rpc.channel.pair]
+/// Shared state between a `Tx`/`Rx` pair created by `channel()`.
 ///
-/// Both ends start hollow and must be hydrated by the session driver using
-/// channel IDs from `Message::{Request,Response}.channels`.
+/// Contains a `Mutex<Option<ChannelBinding>>` that is written once during
+/// binding and read/taken by the paired handle. The mutex is only locked
+/// during binding (once) and on first use by the paired handle (once).
+#[cfg(not(target_arch = "wasm32"))]
+pub struct ChannelCore {
+    binding: Mutex<Option<ChannelBinding>>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl ChannelCore {
+    fn new() -> Self {
+        Self {
+            binding: Mutex::new(None),
+        }
+    }
+
+    /// Store a binding in the core. Panics if already set.
+    pub fn set_binding(&self, binding: ChannelBinding) {
+        let mut guard = self.binding.lock().expect("channel core mutex poisoned");
+        assert!(guard.is_none(), "channel binding already set");
+        *guard = Some(binding);
+    }
+
+    /// Clone the sink from the core (for Tx reading the sink).
+    /// Returns None if no sink has been set or if the binding is a Receiver.
+    pub fn get_sink(&self) -> Option<Arc<dyn ChannelSink>> {
+        let guard = self.binding.lock().expect("channel core mutex poisoned");
+        match guard.as_ref() {
+            Some(ChannelBinding::Sink(sink)) => Some(sink.clone()),
+            _ => None,
+        }
+    }
+
+    /// Take the receiver out of the core (for Rx on first recv).
+    /// Returns None if no receiver has been set or if it was already taken.
+    pub fn take_receiver(&self) -> Option<mpsc::Receiver<IncomingChannelMessage>> {
+        let mut guard = self.binding.lock().expect("channel core mutex poisoned");
+        match guard.take() {
+            Some(ChannelBinding::Receiver(rx)) => Some(rx),
+            other => {
+                // Put it back if it wasn't a receiver
+                *guard = other;
+                None
+            }
+        }
+    }
+}
+
+/// Slot for the shared channel core, accessible via facet reflection.
+#[derive(Facet)]
+#[facet(opaque)]
+pub(crate) struct CoreSlot {
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) inner: Option<Arc<ChannelCore>>,
+}
+
+impl CoreSlot {
+    pub(crate) fn empty() -> Self {
+        Self {
+            #[cfg(not(target_arch = "wasm32"))]
+            inner: None,
+        }
+    }
+}
+
+// r[impl rpc.channel.pair]
+/// Create a channel pair with shared state.
+///
+/// Both ends hold an `Arc` reference to the same `ChannelCore`. The framework
+/// binds the handle that appears in args or return values, and the paired
+/// handle reads or takes the binding from the shared core.
 pub fn channel<T>() -> (Tx<T>, Rx<T>) {
-    (Tx::unbound(), Rx::unbound())
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let core = Arc::new(ChannelCore::new());
+        (Tx::paired(core.clone()), Rx::paired(core))
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        (Tx::unbound(), Rx::unbound())
+    }
 }
 
 /// Runtime sink implemented by the session driver.
@@ -151,23 +239,68 @@ impl ReceiverSlot {
 #[facet(proxy = ())]
 pub struct Tx<T, const N: usize = 16> {
     pub(crate) sink: SinkSlot,
+    pub(crate) core: CoreSlot,
     #[facet(opaque)]
     _marker: PhantomData<T>,
 }
 
 impl<T, const N: usize> Tx<T, N> {
+    /// Create a standalone unbound Tx (used by deserialization).
     pub fn unbound() -> Self {
         Self {
             sink: SinkSlot::empty(),
+            core: CoreSlot::empty(),
+            _marker: PhantomData,
+        }
+    }
+
+    /// Create a Tx that is part of a `channel()` pair.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn paired(core: Arc<ChannelCore>) -> Self {
+        Self {
+            sink: SinkSlot::empty(),
+            core: CoreSlot { inner: Some(core) },
             _marker: PhantomData,
         }
     }
 
     pub fn is_bound(&self) -> bool {
         #[cfg(not(target_arch = "wasm32"))]
-        return self.sink.inner.is_some();
+        {
+            if self.sink.inner.is_some() {
+                return true;
+            }
+            if let Some(core) = &self.core.inner {
+                return core.get_sink().is_some();
+            }
+            false
+        }
+        #[cfg(target_arch = "wasm32")]
+        false
+    }
+
+    /// Check if this Tx is part of a channel() pair (has a shared core).
+    pub fn has_core(&self) -> bool {
+        #[cfg(not(target_arch = "wasm32"))]
+        return self.core.inner.is_some();
         #[cfg(target_arch = "wasm32")]
         return false;
+    }
+
+    // r[impl rpc.channel.pair.tx-read]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn resolve_sink(&self) -> Result<Arc<dyn ChannelSink>, TxError> {
+        // Fast path: local slot (standalone/callee-side handle)
+        if let Some(sink) = &self.sink.inner {
+            return Ok(sink.clone());
+        }
+        // Slow path: read from shared core (paired handle)
+        if let Some(core) = &self.core.inner {
+            if let Some(sink) = core.get_sink() {
+                return Ok(sink);
+            }
+        }
+        Err(TxError::Unbound)
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -175,7 +308,7 @@ impl<T, const N: usize> Tx<T, N> {
     where
         T: Facet<'value>,
     {
-        let sink = self.sink.inner.as_ref().ok_or(TxError::Unbound)?;
+        let sink = self.resolve_sink()?;
         let ptr = PtrConst::new((&value as *const T).cast::<u8>());
         // SAFETY: `value` is explicitly dropped only after `await`, so the pointer
         // remains valid for the whole send operation.
@@ -188,7 +321,7 @@ impl<T, const N: usize> Tx<T, N> {
     // r[impl rpc.channel.lifecycle]
     #[cfg(not(target_arch = "wasm32"))]
     pub async fn close<'value>(&self, metadata: Metadata<'value>) -> Result<(), TxError> {
-        let sink = self.sink.inner.as_ref().ok_or(TxError::Unbound)?;
+        let sink = self.resolve_sink()?;
         sink.close_channel(metadata).await
     }
 
@@ -246,30 +379,66 @@ impl std::error::Error for TxError {}
 #[facet(proxy = ())]
 pub struct Rx<T, const N: usize = 16> {
     pub(crate) receiver: ReceiverSlot,
+    pub(crate) core: CoreSlot,
     #[facet(opaque)]
     _marker: PhantomData<T>,
 }
 
 impl<T, const N: usize> Rx<T, N> {
+    /// Create a standalone unbound Rx (used by deserialization).
     pub fn unbound() -> Self {
         Self {
             receiver: ReceiverSlot::empty(),
+            core: CoreSlot::empty(),
+            _marker: PhantomData,
+        }
+    }
+
+    /// Create an Rx that is part of a `channel()` pair.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn paired(core: Arc<ChannelCore>) -> Self {
+        Self {
+            receiver: ReceiverSlot::empty(),
+            core: CoreSlot { inner: Some(core) },
             _marker: PhantomData,
         }
     }
 
     pub fn is_bound(&self) -> bool {
         #[cfg(not(target_arch = "wasm32"))]
-        return self.receiver.inner.is_some();
+        {
+            if self.receiver.inner.is_some() {
+                return true;
+            }
+            false
+        }
+        #[cfg(target_arch = "wasm32")]
+        false
+    }
+
+    /// Check if this Rx is part of a channel() pair (has a shared core).
+    pub fn has_core(&self) -> bool {
+        #[cfg(not(target_arch = "wasm32"))]
+        return self.core.inner.is_some();
         #[cfg(target_arch = "wasm32")]
         return false;
     }
 
+    // r[impl rpc.channel.pair.rx-take]
     #[cfg(not(target_arch = "wasm32"))]
     pub async fn recv(&mut self) -> Result<Option<SelfRef<T>>, RxError>
     where
         T: Facet<'static>,
     {
+        // On first call, take receiver from shared core into local slot
+        if self.receiver.inner.is_none() {
+            if let Some(core) = &self.core.inner {
+                if let Some(rx) = core.take_receiver() {
+                    self.receiver.inner = Some(rx);
+                }
+            }
+        }
+
         let receiver = self.receiver.inner.as_mut().ok_or(RxError::Unbound)?;
         match receiver.recv().await {
             Some(IncomingChannelMessage::Close(_)) | None => Ok(None),
@@ -334,12 +503,12 @@ impl std::fmt::Display for RxError {
 
 impl std::error::Error for RxError {}
 
-/// Check if a shape represents a `Tx` (caller -> callee) channel.
+/// Check if a shape represents a `Tx` channel.
 pub fn is_tx(shape: &facet_core::Shape) -> bool {
     shape.decl_id == Tx::<()>::SHAPE.decl_id
 }
 
-/// Check if a shape represents an `Rx` (callee -> caller) channel.
+/// Check if a shape represents an `Rx` channel.
 pub fn is_rx(shape: &facet_core::Shape) -> bool {
     shape.decl_id == Rx::<()>::SHAPE.decl_id
 }

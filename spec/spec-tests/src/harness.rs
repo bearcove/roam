@@ -8,6 +8,38 @@ use spec_proto::TestbedClient;
 use std::process::Stdio;
 use tokio::net::TcpListener;
 use tokio::process::{Child, Command};
+/// Spawn a task that catches panics and makes them loud.
+///
+/// If the spawned future panics, the panic message is printed to stderr
+/// immediately and then re-raised. This prevents the silent-task-panic
+/// problem where tokio tasks panic and nobody notices, causing mysterious
+/// timeouts in tests.
+pub fn spawn_loud<F>(fut: F) -> moire::task::JoinHandle<F::Output>
+where
+    F: Future + Send + 'static,
+    F::Output: Send + 'static,
+{
+    moire::task::spawn(async move {
+        // Inner spawn so we can catch the panic via JoinError
+        let inner = tokio::task::spawn(fut);
+        match inner.await {
+            Ok(v) => v,
+            Err(e) if e.is_panic() => {
+                let panic = e.into_panic();
+                let msg = panic
+                    .downcast_ref::<&str>()
+                    .map(|s| s.to_string())
+                    .or_else(|| panic.downcast_ref::<String>().cloned())
+                    .unwrap_or_else(|| format!("{panic:?}"));
+                eprintln!("\n\n!!! SPAWNED TASK PANICKED !!!\n{msg}\n");
+                std::panic::resume_unwind(panic);
+            }
+            Err(e) => {
+                panic!("spawned task failed: {e}");
+            }
+        }
+    })
+}
 
 type TcpLink = StreamLink<tokio::net::tcp::OwnedReadHalf, tokio::net::tcp::OwnedWriteHalf>;
 

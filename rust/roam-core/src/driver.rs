@@ -24,6 +24,13 @@ struct DriverShared {
     /// Registry mapping inbound channel IDs to the sender that feeds the Rx handle.
     channel_senders:
         SyncMutex<BTreeMap<ChannelId, tokio::sync::mpsc::Sender<IncomingChannelMessage>>>,
+    /// Buffer for channel messages that arrive before the channel is registered.
+    ///
+    /// This handles the race between the caller sending items immediately after
+    /// `bind_channels_caller_args` creates the sink, and the callee's handler task
+    /// calling `register_rx` via `bind_channels_callee_args`. Items arriving in
+    /// that window are buffered here and drained when the channel is registered.
+    channel_buffers: SyncMutex<BTreeMap<ChannelId, Vec<IncomingChannelMessage>>>,
     /// Credit semaphores for outbound channels (Tx on our side).
     /// The driver's GrantCredit handler adds permits to these.
     channel_credits: SyncMutex<BTreeMap<ChannelId, Arc<Semaphore>>>,
@@ -161,6 +168,12 @@ impl DriverCaller {
         channel_id: ChannelId,
     ) -> tokio::sync::mpsc::Receiver<IncomingChannelMessage> {
         let (tx, rx) = tokio::sync::mpsc::channel(64);
+        // Drain any buffered messages that arrived before registration.
+        if let Some(buffered) = self.shared.channel_buffers.lock().remove(&channel_id) {
+            for msg in buffered {
+                let _ = tx.try_send(msg);
+            }
+        }
         self.shared.channel_senders.lock().insert(channel_id, tx);
         rx
     }
@@ -291,6 +304,7 @@ impl<H: Handler<DriverReplySink>> Driver<H> {
                 request_ids: SyncMutex::new("driver.request_ids", IdAllocator::new(parity)),
                 channel_ids: SyncMutex::new("driver.channel_ids", IdAllocator::new(parity)),
                 channel_senders: SyncMutex::new("driver.channel_senders", BTreeMap::new()),
+                channel_buffers: SyncMutex::new("driver.channel_buffers", BTreeMap::new()),
                 channel_credits: SyncMutex::new("driver.channel_credits", BTreeMap::new()),
             }),
             in_flight_handlers: BTreeMap::new(),
@@ -413,6 +427,18 @@ impl<H: Handler<DriverReplySink>> Driver<H> {
                     });
                     // try_send: if the Rx has been dropped or the buffer is full, drop the item.
                     let _ = tx.try_send(IncomingChannelMessage::Item(item));
+                } else {
+                    // Channel not yet registered — buffer until register_rx_channel is called.
+                    let item = msg.map(|m| match m.body {
+                        ChannelBody::Item(item) => item,
+                        _ => unreachable!(),
+                    });
+                    self.shared
+                        .channel_buffers
+                        .lock()
+                        .entry(chan_id)
+                        .or_default()
+                        .push(IncomingChannelMessage::Item(item));
                 }
             }
             // r[impl rpc.channel.close]
@@ -423,6 +449,18 @@ impl<H: Handler<DriverReplySink>> Driver<H> {
                         _ => unreachable!(),
                     });
                     let _ = tx.try_send(IncomingChannelMessage::Close(close));
+                } else {
+                    // Channel not yet registered — buffer the close.
+                    let close = msg.map(|m| match m.body {
+                        ChannelBody::Close(close) => close,
+                        _ => unreachable!(),
+                    });
+                    self.shared
+                        .channel_buffers
+                        .lock()
+                        .entry(chan_id)
+                        .or_default()
+                        .push(IncomingChannelMessage::Close(close));
                 }
                 self.shared.channel_senders.lock().remove(&chan_id);
                 self.shared.channel_credits.lock().remove(&chan_id);
@@ -435,6 +473,18 @@ impl<H: Handler<DriverReplySink>> Driver<H> {
                         _ => unreachable!(),
                     });
                     let _ = tx.try_send(IncomingChannelMessage::Reset(reset));
+                } else {
+                    // Channel not yet registered — buffer the reset.
+                    let reset = msg.map(|m| match m.body {
+                        ChannelBody::Reset(reset) => reset,
+                        _ => unreachable!(),
+                    });
+                    self.shared
+                        .channel_buffers
+                        .lock()
+                        .entry(chan_id)
+                        .or_default()
+                        .push(IncomingChannelMessage::Reset(reset));
                 }
                 self.shared.channel_senders.lock().remove(&chan_id);
                 self.shared.channel_credits.lock().remove(&chan_id);

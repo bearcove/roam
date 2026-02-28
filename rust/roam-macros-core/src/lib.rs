@@ -333,7 +333,7 @@ fn generate_dispatch_arm(
                         // and we have exclusive access to it via &mut.
                         #[allow(unsafe_code)]
                         unsafe {
-                            #roam::bind_channels_server(
+                            #roam::bind_channels_callee_args(
                                 &mut args as *mut #args_tuple_type as *mut u8,
                                 plan,
                                 &call.channels,
@@ -492,7 +492,7 @@ fn generate_client_method(
                     // and we have exclusive access to it via &mut.
                     #[allow(unsafe_code)]
                     unsafe {
-                        #roam::bind_channels_client(
+                        #roam::bind_channels_caller_args(
                             &mut args as *mut #args_tuple_type as *mut u8,
                             plan,
                             binder,
