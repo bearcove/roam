@@ -1,6 +1,7 @@
 // TODO: move to roam-wire
 
-import { encodeVarint } from "./binary/varint.ts";
+import { encodeWithSchema } from "./schema_codec.ts";
+import { RoamErrorPayloadSchema, rpcWireSchemaRegistry } from "./result.ts";
 
 export const ROAM_ERROR = {
   USER: 0,
@@ -10,9 +11,17 @@ export const ROAM_ERROR = {
 } as const;
 
 export function encodeUnknownMethod(): Uint8Array {
-  return encodeVarint(ROAM_ERROR.UNKNOWN_METHOD);
+  return encodeWithSchema(
+    { tag: "UnknownMethod" },
+    RoamErrorPayloadSchema,
+    rpcWireSchemaRegistry,
+  );
 }
 
 export function encodeInvalidPayload(): Uint8Array {
-  return encodeVarint(ROAM_ERROR.INVALID_PAYLOAD);
+  return encodeWithSchema(
+    { tag: "InvalidPayload" },
+    RoamErrorPayloadSchema,
+    rpcWireSchemaRegistry,
+  );
 }
