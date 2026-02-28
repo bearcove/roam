@@ -11,7 +11,7 @@
 //! ] }
 //! ```
 
-use facet_core::{ScalarType, Shape};
+use facet_core::{Field, ScalarType, Shape};
 use heck::ToLowerCamelCase;
 use roam_types::{
     EnumInfo, ServiceDescriptor, ShapeKind, StructInfo, VariantKind, classify_shape,
@@ -21,42 +21,72 @@ use roam_types::{
 /// Generate a TypeScript Schema object literal for a type.
 /// Used by the runtime binder to find and bind Tx/Rx channels.
 pub fn generate_schema(shape: &'static Shape) -> String {
+    generate_schema_with_field(shape, None)
+}
+
+fn generate_schema_with_field(shape: &'static Shape, field: Option<&Field>) -> String {
+    let bytes_schema = if field.is_some_and(|f| f.has_builtin_attr("trailing")) {
+        "{ kind: 'bytes', trailing: true }"
+    } else {
+        "{ kind: 'bytes' }"
+    };
+
     // Check for bytes first (Vec<u8>)
     if is_bytes(shape) {
-        return "{ kind: 'bytes' }".into();
+        return bytes_schema.into();
     }
 
     match classify_shape(shape) {
         ShapeKind::Scalar(scalar) => generate_scalar_schema(scalar),
         ShapeKind::Tx { inner } => {
-            format!("{{ kind: 'tx', element: {} }}", generate_schema(inner))
+            format!(
+                "{{ kind: 'tx', element: {} }}",
+                generate_schema_with_field(inner, None)
+            )
         }
         ShapeKind::Rx { inner } => {
-            format!("{{ kind: 'rx', element: {} }}", generate_schema(inner))
+            format!(
+                "{{ kind: 'rx', element: {} }}",
+                generate_schema_with_field(inner, None)
+            )
         }
         ShapeKind::List { element } => {
-            format!("{{ kind: 'vec', element: {} }}", generate_schema(element))
+            format!(
+                "{{ kind: 'vec', element: {} }}",
+                generate_schema_with_field(element, None)
+            )
         }
         ShapeKind::Option { inner } => {
-            format!("{{ kind: 'option', inner: {} }}", generate_schema(inner))
+            format!(
+                "{{ kind: 'option', inner: {} }}",
+                generate_schema_with_field(inner, None)
+            )
         }
         ShapeKind::Array { element, .. } | ShapeKind::Slice { element } => {
-            format!("{{ kind: 'vec', element: {} }}", generate_schema(element))
+            format!(
+                "{{ kind: 'vec', element: {} }}",
+                generate_schema_with_field(element, None)
+            )
         }
         ShapeKind::Map { key, value } => {
             format!(
                 "{{ kind: 'map', key: {}, value: {} }}",
-                generate_schema(key),
-                generate_schema(value)
+                generate_schema_with_field(key, None),
+                generate_schema_with_field(value, None)
             )
         }
         ShapeKind::Set { element } => {
-            format!("{{ kind: 'vec', element: {} }}", generate_schema(element))
+            format!(
+                "{{ kind: 'vec', element: {} }}",
+                generate_schema_with_field(element, None)
+            )
         }
         ShapeKind::Tuple { elements } => {
             // Generate as TupleSchema
-            let element_schemas: Vec<_> =
-                elements.iter().map(|p| generate_schema(p.shape)).collect();
+            let element_schemas: Vec<_> = elements
+                .iter()
+                .map(|p| generate_schema_with_field(p.shape, None))
+                .collect();
             format!(
                 "{{ kind: 'tuple', elements: [{}] }}",
                 element_schemas.join(", ")
@@ -65,7 +95,13 @@ pub fn generate_schema(shape: &'static Shape) -> String {
         ShapeKind::Struct(StructInfo { fields, .. }) => {
             let field_schemas: Vec<_> = fields
                 .iter()
-                .map(|f| format!("'{}': {}", f.name, generate_schema(f.shape())))
+                .map(|f| {
+                    format!(
+                        "'{}': {}",
+                        f.name,
+                        generate_schema_with_field(f.shape(), Some(f))
+                    )
+                })
                 .collect();
             format!(
                 "{{ kind: 'struct', fields: {{ {} }} }}",
@@ -85,15 +121,18 @@ pub fn generate_schema(shape: &'static Shape) -> String {
             // Represent Result as enum with Ok/Err variants using new format
             format!(
                 "{{ kind: 'enum', variants: [{{ name: 'Ok', fields: {} }}, {{ name: 'Err', fields: {} }}] }}",
-                generate_schema(ok),
-                generate_schema(err)
+                generate_schema_with_field(ok, None),
+                generate_schema_with_field(err, None)
             )
         }
         ShapeKind::TupleStruct { fields } => {
-            let inner: Vec<String> = fields.iter().map(|f| generate_schema(f.shape())).collect();
+            let inner: Vec<String> = fields
+                .iter()
+                .map(|f| generate_schema_with_field(f.shape(), Some(f)))
+                .collect();
             format!("{{ kind: 'tuple', elements: [{}] }}", inner.join(", "))
         }
-        ShapeKind::Opaque => "{ kind: 'bytes' }".into(),
+        ShapeKind::Opaque => bytes_schema.into(),
     }
 }
 
@@ -105,15 +144,19 @@ fn generate_enum_variant(variant: &facet_core::Variant) -> String {
         }
         VariantKind::Newtype { inner } => {
             // Newtype variant: fields is a single Schema
+            let field = variant.data.fields.first();
             format!(
                 "{{ name: '{}', fields: {} }}",
                 variant.name,
-                generate_schema(inner)
+                generate_schema_with_field(inner, field)
             )
         }
         VariantKind::Tuple { fields } => {
             // Tuple variant: fields is Schema[]
-            let field_schemas: Vec<_> = fields.iter().map(|f| generate_schema(f.shape())).collect();
+            let field_schemas: Vec<_> = fields
+                .iter()
+                .map(|f| generate_schema_with_field(f.shape(), Some(f)))
+                .collect();
             format!(
                 "{{ name: '{}', fields: [{}] }}",
                 variant.name,
@@ -124,7 +167,13 @@ fn generate_enum_variant(variant: &facet_core::Variant) -> String {
             // Struct variant: fields is Record<string, Schema>
             let field_schemas: Vec<_> = fields
                 .iter()
-                .map(|f| format!("'{}': {}", f.name, generate_schema(f.shape())))
+                .map(|f| {
+                    format!(
+                        "'{}': {}",
+                        f.name,
+                        generate_schema_with_field(f.shape(), Some(f))
+                    )
+                })
                 .collect();
             format!(
                 "{{ name: '{}', fields: {{ {} }} }}",

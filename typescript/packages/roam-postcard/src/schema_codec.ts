@@ -13,6 +13,7 @@ import type {
   VecSchema,
   OptionSchema,
   MapSchema,
+  BytesSchema,
 } from "./schema.ts";
 import {
   resolveSchema,
@@ -152,6 +153,8 @@ class DecodeContext {
         return `map<${this.schemaToString(schema.key)}, ${this.schemaToString(schema.value)}>`;
       case "tuple":
         return `tuple(${schema.elements.length} elements)`;
+      case "bytes":
+        return schema.trailing ? "bytes(trailing)" : "bytes";
       default:
         return schema.kind;
     }
@@ -205,7 +208,7 @@ export function encodeWithSchema(
     case "string":
       return encodeString(value as string);
     case "bytes":
-      return encodeBytes(value as Uint8Array);
+      return encodeBytesWithSchema(value, resolved);
 
     // Containers
     case "vec":
@@ -290,6 +293,14 @@ function encodeStructWithSchema(
     parts.push(encodeWithSchema(obj[fieldName], fieldSchema, registry));
   }
   return concat(...parts);
+}
+
+function encodeBytesWithSchema(value: unknown, schema: BytesSchema): Uint8Array {
+  const bytes = value as Uint8Array;
+  if (schema.trailing) {
+    return bytes;
+  }
+  return encodeBytes(bytes);
 }
 
 function encodeTupleWithSchema(
@@ -407,7 +418,7 @@ function decodeWithSchemaImpl(
       case "string":
         return decodeString(buf, offset);
       case "bytes":
-        return decodeBytes(buf, offset);
+        return decodeBytesWithSchema(buf, offset, resolved);
 
       // Containers
       case "vec":
@@ -534,6 +545,17 @@ function decodeStructWithSchemaImpl(
     ctx.pop();
   }
   return { value: obj, next: pos };
+}
+
+function decodeBytesWithSchema(
+  buf: Uint8Array,
+  offset: number,
+  schema: BytesSchema,
+): DecodeResult<Uint8Array> {
+  if (schema.trailing) {
+    return { value: buf.subarray(offset), next: buf.length };
+  }
+  return decodeBytes(buf, offset);
 }
 
 function decodeTupleWithSchemaImpl(
