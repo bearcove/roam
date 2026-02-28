@@ -78,17 +78,20 @@ where
                         return;
                     }
                 };
-            if let Some(binder) = reply.channel_binder() {
-                let plan = ::roam::RpcPlan::for_type::<(i32, Tx<i32>)>();
-                if !plan.channel_locations.is_empty() {
-                    #[allow(unsafe_code)]
-                    unsafe {
-                        ::roam::bind_channels_server(
-                            &mut args as *mut (i32, Tx<i32>) as *mut u8,
-                            plan,
-                            &call.channels,
-                            binder,
-                        );
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                if let Some(binder) = reply.channel_binder() {
+                    let plan = ::roam::RpcPlan::for_type::<(i32, Tx<i32>)>();
+                    if !plan.channel_locations.is_empty() {
+                        #[allow(unsafe_code)]
+                        unsafe {
+                            ::roam::bind_channels_server(
+                                &mut args as *mut (i32, Tx<i32>) as *mut u8,
+                                plan,
+                                &call.channels,
+                                binder,
+                            );
+                        }
                     }
                 }
             }
@@ -119,6 +122,7 @@ impl<C: ::roam::Caller> StreamerClient<C> {
     ) -> Result<::roam::SelfRef<::roam::ResponseParts<'static, i32>>, ::roam::RoamError> {
         let method_id = streamer_service_descriptor().methods[0usize].id;
         let mut args = (start, output);
+        #[cfg(not(target_arch = "wasm32"))]
         let channels = if let Some(binder) = self.caller.channel_binder() {
             let plan = ::roam::RpcPlan::for_type::<(i32, Tx<i32>)>();
             #[allow(unsafe_code)]
@@ -132,49 +136,40 @@ impl<C: ::roam::Caller> StreamerClient<C> {
         } else {
             vec![]
         };
+        #[cfg(target_arch = "wasm32")]
+        let channels: Vec<::roam::ChannelId> = vec![];
         let req = ::roam::RequestCall {
             method_id,
             args: ::roam::Payload::outgoing(&args),
             channels,
             metadata: Default::default(),
         };
-        let response = self.caller.call(req).await?;
+        let response = self.caller.call(req).await.map_err(|e| match e {
+            ::roam::RoamError::UnknownMethod => {
+                ::roam::RoamError::<::core::convert::Infallible>::UnknownMethod
+            }
+            ::roam::RoamError::InvalidPayload => {
+                ::roam::RoamError::<::core::convert::Infallible>::InvalidPayload
+            }
+            ::roam::RoamError::Cancelled => {
+                ::roam::RoamError::<::core::convert::Infallible>::Cancelled
+            }
+            ::roam::RoamError::User(never) => match never {},
+        })?;
         response.try_repack(|resp, _bytes| {
             let ret_bytes = match &resp.ret {
                 ::roam::Payload::Incoming(bytes) => bytes,
-                _ => return Err(::roam::RoamError::InvalidPayload),
+                _ => return Err(::roam::RoamError::<::core::convert::Infallible>::InvalidPayload),
             };
             let result: Result<i32, ::roam::RoamError<::core::convert::Infallible>> =
-                ::roam::facet_postcard::from_slice_borrowed(ret_bytes)
-                    .map_err(|_| ::roam::RoamError::InvalidPayload)?;
+                ::roam::facet_postcard::from_slice_borrowed(ret_bytes).map_err(|_| {
+                    ::roam::RoamError::<::core::convert::Infallible>::InvalidPayload
+                })?;
             let ret = result?;
             Ok(::roam::ResponseParts {
                 ret,
                 metadata: resp.metadata,
             })
         })
-    }
-}
-#[doc = r" Returns the service detail for codegen."]
-pub fn streamer_service_detail() -> ::roam::schema::ServiceDetail {
-    ::roam::schema::ServiceDetail {
-        name: "Streamer".into(),
-        methods: vec![::roam::schema::MethodDetail {
-            service_name: "Streamer".into(),
-            method_name: "count_up".into(),
-            args: vec![
-                ::roam::schema::ArgDetail {
-                    name: "start".into(),
-                    ty: <i32 as ::roam::facet::Facet>::SHAPE,
-                },
-                ::roam::schema::ArgDetail {
-                    name: "output".into(),
-                    ty: <Tx<i32> as ::roam::facet::Facet>::SHAPE,
-                },
-            ],
-            return_type: <i32 as ::roam::facet::Facet>::SHAPE,
-            doc: None,
-        }],
-        doc: None,
     }
 }
