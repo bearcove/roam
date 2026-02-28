@@ -163,27 +163,29 @@ structstruck::strike! {
                                     /// Unique method identifier, hash of fully qualified name + args etc.
                                     pub method_id: MethodId,
 
-                                    /// Argument tuple
-                                    pub args: Payload<'payload>,
-
                                     /// Channel identifiers, allocated by the caller, that are passed as part
                                     /// of the arguments.
                                     pub channels: Vec<ChannelId>,
 
                                     /// Metadata associated with this call
                                     pub metadata: Metadata<'payload>,
+
+                                    /// Argument tuple
+                                    #[facet(trailing)]
+                                    pub args: Payload<'payload>,
                                 }),
 
                                 /// Respond to a request
                                 Response(struct RequestResponse<'payload> {
-                                    /// Return value (Result<T, RoamError<E>>, where E could be Infallible depending on signature)
-                                    pub ret: Payload<'payload>,
-
                                     /// Channel IDs for streams in the response, in return type declaration order.
                                     pub channels: Vec<ChannelId>,
 
                                     /// Arbitrary response metadata
                                     pub metadata: Metadata<'payload>,
+
+                                    /// Return value (Result<T, RoamError<E>>, where E could be Infallible depending on signature)
+                                    #[facet(trailing)]
+                                    pub ret: Payload<'payload>,
                                 }),
 
                                 /// Cancel processing of a request.
@@ -212,6 +214,7 @@ structstruck::strike! {
                                 /// implicitly by calls.
                                 Item(pub struct ChannelItem<'payload> {
                                     /// The item itself
+                                    #[facet(trailing)]
                                     pub item: Payload<'payload>,
                                 }),
 
