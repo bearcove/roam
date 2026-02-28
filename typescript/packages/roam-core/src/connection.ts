@@ -33,15 +33,22 @@ import {
   ChannelIdAllocator,
   ChannelError,
   Role,
+  Tx,
+  Rx,
+  createServerTx,
+  createServerRx,
   type TaskMessage,
   type TaskSender,
+  type MethodDescriptor,
+  type ServiceDescriptor,
+  type RoamCall,
 } from "./channeling/index.ts";
 import { type MessageTransport } from "./transport.ts";
 import type { Caller, CallerRequest } from "./caller.ts";
 import { MiddlewareCaller } from "./caller.ts";
 import type { ClientMiddleware } from "./middleware.ts";
 import { clientMetadataToEntries } from "./metadata.ts";
-import { encodeWithSchema, decodeWithSchema, decodeVarintNumber } from "@bearcove/roam-postcard";
+import { encodeWithSchema, decodeWithSchema } from "@bearcove/roam-postcard";
 import { RpcError, RpcErrorCode } from "@bearcove/roam-wire";
 
 // Note: Role is exported from streaming/index.ts in roam-core's main export
@@ -88,7 +95,7 @@ function msgTag(msg: Message): Message["payload"]["tag"] {
   return msg.payload.tag;
 }
 
-/** Trait for dispatching RPC requests to a service. */
+/** Trait for dispatching RPC requests to a service (simple non-channeling mode). */
 export interface ServiceDispatcher {
   /**
    * Dispatch an RPC request and return the response payload.
@@ -103,37 +110,68 @@ export interface ServiceDispatcher {
 }
 
 /**
- * Channel-aware service dispatcher.
+ * Channel-aware service dispatcher using service descriptors.
  *
- * Unlike ServiceDispatcher which returns a response directly, this interface
- * sends responses (and channel Data/Close messages) via a TaskSender callback.
- * This ensures proper ordering: all Data/Close messages are sent before Response.
+ * The runtime handles all arg decoding and response encoding using the
+ * descriptor's schemas. Generated dispatchers only do routing and call
+ * handler methods with pre-decoded args.
  */
 export interface ChannelingDispatcher {
+  /** Return the service descriptor for schema-driven dispatch. */
+  getDescriptor(): ServiceDescriptor;
+
   /**
-   * Dispatch a request that may involve channels.
+   * Dispatch a decoded request to the appropriate handler method.
    *
-   * The dispatcher is responsible for:
-   * - Looking up the method by method_id
-   * - Deserializing arguments from payload
-   * - Creating Rx/Tx handles for channel arguments using the registry
-   * - Calling the service method
-   * - Sending Data/Close messages for any Tx channels via taskSender
-   * - Sending the Response message via taskSender when done
+   * Called by the runtime after:
+   * - Finding the method in the descriptor by ID
+   * - Decoding args with the method's args tuple schema
+   * - Binding any channel args (Tx/Rx) using the registry
+   * - Creating a RoamCall for the response
    *
-   * @param methodId - The method ID to dispatch
-   * @param payload - The request payload
-   * @param requestId - The request ID for the response
-   * @param registry - Channel registry for binding channel arguments
-   * @param taskSender - Callback to send TaskMessage (Data/Close/Response)
+   * @param method - The matched method descriptor
+   * @param args - Pre-decoded argument values (channels already bound)
+   * @param call - Interface for sending the response
    */
-  dispatch(
-    methodId: bigint,
-    payload: Uint8Array,
-    requestId: bigint,
-    registry: ChannelRegistry,
-    taskSender: TaskSender,
-  ): Promise<void>;
+  dispatch(method: MethodDescriptor, args: unknown[], call: RoamCall): Promise<void>;
+}
+
+/** Implementation of RoamCall that encodes responses using a method descriptor. */
+class RoamCallImpl implements RoamCall {
+  private responded = false;
+
+  constructor(
+    private readonly method: MethodDescriptor,
+    private readonly requestId: bigint,
+    private readonly taskSender: TaskSender,
+  ) {}
+
+  reply(value: unknown): void {
+    if (this.responded) return;
+    this.responded = true;
+    const payload = encodeWithSchema({ tag: "Ok", value }, this.method.result);
+    this.taskSender({ kind: "response", requestId: this.requestId, payload });
+  }
+
+  replyErr(error: unknown): void {
+    if (this.responded) return;
+    this.responded = true;
+    const payload = encodeWithSchema(
+      { tag: "Err", value: { tag: "User", value: error } },
+      this.method.result,
+    );
+    this.taskSender({ kind: "response", requestId: this.requestId, payload });
+  }
+
+  replyInternalError(): void {
+    if (this.responded) return;
+    this.responded = true;
+    const payload = encodeWithSchema(
+      { tag: "Err", value: { tag: "InvalidPayload" } },
+      this.method.result,
+    );
+    this.taskSender({ kind: "response", requestId: this.requestId, payload });
+  }
 }
 
 /**
@@ -634,13 +672,70 @@ export class Connection<T extends MessageTransport = MessageTransport> {
             context: "payload exceeds max size",
           });
         }
-        return dispatcher.dispatch(
-          request.body.value.method_id,
-          request.body.value.args,
-          request.id,
-          this.channelRegistry,
-          taskSender,
-        );
+
+        const methodId = request.body.value.method_id;
+        const rawPayload = request.body.value.args;
+        const requestId = request.id;
+        const descriptor = dispatcher.getDescriptor();
+        const method = descriptor.methods.find((m) => m.id === methodId);
+
+        if (!method) {
+          // r[impl call.error.unknown-method]
+          taskSender({
+            kind: "response",
+            requestId,
+            payload: new Uint8Array([0x01, 0x01]),
+          });
+          return undefined;
+        }
+
+        // Decode args using the method's tuple schema
+        let rawArgs: unknown[];
+        let decodeEnd: number;
+        try {
+          const decoded = decodeWithSchema(rawPayload, 0, method.args);
+          rawArgs = decoded.value as unknown[];
+          decodeEnd = decoded.next;
+        } catch {
+          // r[impl call.error.invalid-payload]
+          taskSender({
+            kind: "response",
+            requestId,
+            payload: new Uint8Array([0x01, 0x02]),
+          });
+          return undefined;
+        }
+
+        if (decodeEnd !== rawPayload.length) {
+          // Trailing bytes in args
+          taskSender({
+            kind: "response",
+            requestId,
+            payload: new Uint8Array([0x01, 0x02]),
+          });
+          return undefined;
+        }
+
+        // Bind channel args: replace { channelId } placeholders with Tx/Rx handles
+        const args: unknown[] = rawArgs.map((raw, i) => {
+          const argSchema = method.args.elements[i];
+          if (argSchema.kind === "tx") {
+            const { channelId } = raw as { channelId: bigint };
+            return createServerTx(channelId, taskSender, (v: unknown) =>
+              encodeWithSchema(v, argSchema.element),
+            );
+          } else if (argSchema.kind === "rx") {
+            const { channelId } = raw as { channelId: bigint };
+            const receiver = this.channelRegistry.registerIncoming(channelId);
+            return createServerRx(channelId, receiver, (b: Uint8Array) =>
+              decodeWithSchema(b, 0, argSchema.element).value,
+            );
+          }
+          return raw;
+        });
+
+        const call = new RoamCallImpl(method, requestId, taskSender);
+        return dispatcher.dispatch(method, args, call);
       }
       return undefined;
     }
@@ -1052,18 +1147,12 @@ export class ConnectionCaller<T extends MessageTransport = MessageTransport> imp
   }
 
   async call(request: CallerRequest): Promise<unknown> {
-    // Encode the payload using the schema
-    const argNames = Object.keys(request.args);
-    let payload: Uint8Array;
-    if (argNames.length === 0) {
-      payload = new Uint8Array(0);
-    } else if (argNames.length === 1) {
-      payload = encodeWithSchema(request.args[argNames[0]], request.schema.args[0]);
-    } else {
-      // Multiple args: encode as tuple
-      const values = argNames.map((name) => request.args[name]);
-      payload = encodeWithSchema(values, { kind: "tuple", elements: request.schema.args });
-    }
+    // Encode args using the method's tuple schema
+    const values = Object.values(request.args);
+    const payload =
+      values.length === 0
+        ? new Uint8Array(0)
+        : encodeWithSchema(values, request.descriptor.args);
 
     // Convert metadata to wire format entries
     const metadataEntries = request.metadata ? clientMetadataToEntries(request.metadata) : [];
@@ -1089,29 +1178,36 @@ export class ConnectionCaller<T extends MessageTransport = MessageTransport> imp
     // Send request with metadata
     await this.conn["io"].send(
       encodeMessage(
-        messageRequest(requestId, request.methodId, payload, metadataEntries, channels),
+        messageRequest(requestId, request.descriptor.id, payload, metadataEntries, channels),
       ),
     );
 
     // Flush outgoing channels
     await this.conn.flushOutgoing();
 
-    // Wait for response and decode
-    // Wire format: [disc=0 Ok | disc=1 Err][payload...]
+    // Wait for response and decode full Result<T, RoamError<E>> using descriptor.result schema
     const responsePayload = await responsePromise;
-    const disc = responsePayload[0];
-    if (disc === 0) {
-      return decodeWithSchema(responsePayload, 1, request.schema.returns).value;
-    } else if (disc === 1) {
-      // RoamError<E>: [variant_varint][...payload]
-      const errVariant = decodeVarintNumber(responsePayload, 1);
-      if (errVariant.value === RpcErrorCode.USER) {
-        throw new RpcError(RpcErrorCode.USER, responsePayload.slice(errVariant.next));
-      } else {
-        throw new RpcError(errVariant.value as RpcErrorCode);
-      }
+    const decoded = decodeWithSchema(responsePayload, 0, request.descriptor.result).value as {
+      tag: string;
+      value?: unknown;
+    };
+
+    if (decoded.tag === "Ok") {
+      return decoded.value;
     } else {
-      throw new Error(`unexpected result discriminant: ${disc}`);
+      const err = decoded.value as { tag: string; value?: unknown };
+      switch (err.tag) {
+        case "User":
+          throw new RpcError(RpcErrorCode.USER, null, err.value);
+        case "UnknownMethod":
+          throw new RpcError(RpcErrorCode.UNKNOWN_METHOD);
+        case "InvalidPayload":
+          throw new RpcError(RpcErrorCode.INVALID_PAYLOAD);
+        case "Cancelled":
+          throw new RpcError(RpcErrorCode.CANCELLED);
+        default:
+          throw new RpcError(RpcErrorCode.INVALID_PAYLOAD);
+      }
     }
   }
 

@@ -15,21 +15,9 @@ import type {
   MathError,
   LookupError,
 } from "@bearcove/roam-generated/testbed.ts";
-import {
-  testbed_channelingHandlers,
-  TestbedClient,
-  type ChannelingMethodHandler,
-} from "@bearcove/roam-generated/testbed.ts";
+import { TestbedClient, TestbedDispatcher } from "@bearcove/roam-generated/testbed.ts";
 import { Server } from "@bearcove/roam-tcp";
-import {
-  type ChannelingDispatcher,
-  type ChannelRegistry,
-  type TaskSender,
-  type Tx,
-  type Rx,
-  channel,
-  ConnectionError,
-} from "@bearcove/roam-core";
+import { type Tx, type Rx, channel, ConnectionError } from "@bearcove/roam-core";
 
 // Service implementation
 class TestbedService implements TestbedHandler {
@@ -159,37 +147,6 @@ class TestbedService implements TestbedHandler {
   }
 }
 
-// Channeling dispatcher that uses the generated channeling handlers
-class TestbedChannelingDispatcher implements ChannelingDispatcher {
-  private service = new TestbedService();
-  private handlers: Map<bigint, ChannelingMethodHandler<TestbedHandler>>;
-
-  constructor() {
-    this.handlers = testbed_channelingHandlers;
-  }
-
-  async dispatch(
-    methodId: bigint,
-    payload: Uint8Array,
-    requestId: bigint,
-    registry: ChannelRegistry,
-    taskSender: TaskSender,
-  ): Promise<void> {
-    const handler = this.handlers.get(methodId);
-    if (!handler) {
-      // Unknown method - send error response
-      // Err(RoamError::UnknownMethod) = [0x01=Err, 0x01=UnknownMethod]
-      taskSender({
-        kind: "response",
-        requestId,
-        payload: new Uint8Array([0x01, 0x01]),
-      });
-      return;
-    }
-
-    await handler(this.service, payload, requestId, registry, taskSender);
-  }
-}
 
 async function runServer() {
   const addr = process.env.PEER_ADDR;
@@ -205,7 +162,7 @@ async function runServer() {
   const conn = await server.connect(addr, { acceptConnections });
 
   try {
-    await conn.runChanneling(new TestbedChannelingDispatcher());
+    await conn.runChanneling(new TestbedDispatcher(new TestbedService()));
   } catch (e) {
     if (e instanceof ConnectionError && e.kind === "closed") {
       // Clean shutdown

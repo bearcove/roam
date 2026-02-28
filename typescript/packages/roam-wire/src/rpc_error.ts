@@ -26,15 +26,18 @@ export type RpcErrorCode = (typeof RpcErrorCode)[keyof typeof RpcErrorCode];
 export class RpcError extends Error {
   /** The error code discriminant */
   readonly code: RpcErrorCode;
-  /** Raw error payload bytes (for user errors) */
+  /** Raw error payload bytes (for user errors, legacy). */
   readonly payload: Uint8Array | null;
+  /** Decoded user error value (set by ConnectionCaller when using descriptors). */
+  readonly userError?: unknown;
 
-  constructor(code: RpcErrorCode, payload: Uint8Array | null = null) {
+  constructor(code: RpcErrorCode, payload: Uint8Array | null = null, userError?: unknown) {
     const message = RpcError.codeToMessage(code);
     super(message);
     this.name = "RpcError";
     this.code = code;
     this.payload = payload;
+    this.userError = userError;
   }
 
   /** Check if this is a user-defined error */
@@ -73,10 +76,16 @@ export class RpcError extends Error {
  */
 export function decodeUserError<E>(
   error: RpcError,
-  decoder: (buf: Uint8Array, offset: number) => DecodeResult<E>,
+  decoder?: (buf: Uint8Array, offset: number) => DecodeResult<E>,
 ): E {
-  if (!error.isUserError() || error.payload === null) {
+  if (!error.isUserError()) {
     throw new Error("Cannot decode user error: not a user error");
   }
-  return decoder(error.payload, 0).value;
+  if (error.userError !== undefined) {
+    return error.userError as E;
+  }
+  if (decoder && error.payload !== null) {
+    return decoder(error.payload, 0).value;
+  }
+  throw new Error("Cannot decode user error: no payload or decoded value");
 }

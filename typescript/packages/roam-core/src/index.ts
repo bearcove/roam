@@ -74,6 +74,10 @@ export {
   type TaskMessage,
   type TaskSender,
   type ChannelContext,
+  // Descriptor types
+  type MethodDescriptor,
+  type ServiceDescriptor,
+  type RoamCall,
   // Schema types and binding
   type PrimitiveKind,
   type TxSchema,
@@ -88,7 +92,6 @@ export {
   type RefSchema,
   type Schema,
   type SchemaRegistry,
-  type MethodSchema,
   // Schema helper functions
   resolveSchema,
   findVariantByDiscriminant,
@@ -99,7 +102,6 @@ export {
   isNewtypeVariant,
   isRefSchema,
   bindChannels,
-  type BindingSerializers,
 } from "./channeling/index.ts";
 
 // Transport abstraction
@@ -147,33 +149,3 @@ export {
   clientMetadataToEntries,
   metadataEntriesToClientMetadata,
 } from "./metadata.ts";
-
-// Type definitions for method handlers
-export type MethodHandler<H> = (handler: H, payload: Uint8Array) => Promise<Uint8Array>;
-
-// Generic RPC dispatcher
-export class RpcDispatcher<H> {
-  private methodHandlers: Map<bigint, MethodHandler<H>>;
-
-  constructor(methodHandlers: Map<bigint, MethodHandler<H>>) {
-    this.methodHandlers = methodHandlers;
-  }
-
-  async dispatch(handler: H, methodId: bigint, payload: Uint8Array): Promise<Uint8Array> {
-    const methodHandler = this.methodHandlers.get(methodId);
-    if (!methodHandler) {
-      // r[impl call.error.unknown-method]
-      // Err(RoamError::UnknownMethod) = [0x01=Err, 0x01=UnknownMethod]
-      return new Uint8Array([0x01, 0x01]);
-    }
-
-    // Method handlers are responsible for their own error handling:
-    // - Decode errors return InvalidPayload (per r[impl call.error.invalid-payload])
-    // - Fallible methods encode errors as RoamError::User(E)
-    // - Infallible methods that throw indicate bugs and should propagate
-    return await methodHandler(handler, payload);
-  }
-}
-
-/** @deprecated Use RpcDispatcher instead */
-export const UnaryDispatcher = RpcDispatcher;

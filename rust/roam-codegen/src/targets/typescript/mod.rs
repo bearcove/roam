@@ -4,9 +4,9 @@
 //! The generated code includes:
 //! - Type definitions for all named types (structs, enums)
 //! - Client interface and implementation for making RPC calls
-//! - Server handler interface for implementing services
-//! - Encoding/decoding logic for all types
-//! - Runtime schema information for channel binding
+//! - Handler interface for implementing the service
+//! - A Dispatcher class that routes calls to handler methods
+//! - A service descriptor for runtime schema-driven encode/decode
 
 pub mod client;
 pub mod decode;
@@ -21,7 +21,7 @@ use roam_types::{MethodDescriptor, ServiceDescriptor};
 
 pub use client::generate_client;
 pub use http_client::generate_http_client;
-pub use schema::generate_schemas;
+pub use schema::generate_descriptor;
 pub use server::generate_server;
 pub use types::{collect_named_types, generate_named_types};
 
@@ -51,8 +51,7 @@ pub fn generate_method_ids(methods: &[&MethodDescriptor]) -> String {
 /// This is the main entry point for TypeScript code generation.
 pub fn generate_service(service: &ServiceDescriptor) -> String {
     use crate::code_writer::CodeWriter;
-    use crate::{cw_writeln, render::hex_u64};
-    use heck::ToLowerCamelCase;
+    use crate::cw_writeln;
 
     let mut output = String::new();
     let mut w = CodeWriter::with_indent_spaces(&mut output, 2);
@@ -66,46 +65,29 @@ pub fn generate_service(service: &ServiceDescriptor) -> String {
     .unwrap();
     w.blank_line().unwrap();
 
-    // TODO: This import list should probably be in roam-core or generated more intelligently
     generate_imports(&service, &mut w);
-    w.blank_line().unwrap();
-
-    // Method IDs
-    cw_writeln!(w, "export const METHOD_ID = {{").unwrap();
-    {
-        let _indent = w.indent();
-        for method in service.methods {
-            let id = crate::method_id(method);
-            let method_name = method.method_name.to_lower_camel_case();
-            cw_writeln!(w, "{method_name}: {}n,", hex_u64(id)).unwrap();
-        }
-    }
-    cw_writeln!(w, "}} as const;").unwrap();
     w.blank_line().unwrap();
 
     // Named types (structs and enums)
     let named_types = collect_named_types(&service);
     output.push_str(&generate_named_types(&named_types));
 
-    // Type aliases for request/response (only if they don't conflict with named types)
+    // Request/Response type aliases
     output.push_str(&generate_request_response_types(&service, &named_types));
 
     // Client
     output.push_str(&generate_client(&service));
 
-    // Server
+    // Server (handler interface + dispatcher)
     output.push_str(&generate_server(&service));
 
-    // Schemas
-    output.push_str(&generate_schemas(&service));
+    // Service descriptor
+    output.push_str(&generate_descriptor(&service));
 
     output
 }
 
 /// Generate imports for the service module.
-///
-/// Uses namespace imports for postcard encoding functions to avoid tracking
-/// which specific functions are used. The bundler will tree-shake unused exports.
 fn generate_imports(service: &ServiceDescriptor, w: &mut CodeWriter<&mut String>) {
     use crate::cw_writeln;
     use roam_types::{ShapeKind, classify_shape, is_rx, is_tx};
@@ -123,46 +105,31 @@ fn generate_imports(service: &ServiceDescriptor, w: &mut CodeWriter<&mut String>
         .iter()
         .any(|m| matches!(classify_shape(m.return_shape), ShapeKind::Result { .. }));
 
-    // Type imports
+    // Core runtime: descriptor types + Caller + CallBuilder + connection helpers
     cw_writeln!(
         w,
-        "import type {{ MethodHandler, MethodSchema, Caller }} from \"@bearcove/roam-core\";"
+        "import type {{ Caller, MethodDescriptor, ServiceDescriptor, RoamCall, ChannelingDispatcher }} from \"@bearcove/roam-core\";"
     )
     .unwrap();
-
-    // Namespace import for all postcard encoding/decoding functions
-    // This avoids tracking which specific functions are used - bundler will tree-shake
-    cw_writeln!(w, "import * as pc from \"@bearcove/roam-postcard\";").unwrap();
     cw_writeln!(
         w,
-        "import {{ encodeWithSchema, decodeWithSchema }} from \"@bearcove/roam-postcard\";"
-    )
-    .unwrap();
-
-    // Core runtime imports
-    cw_writeln!(
-        w,
-        "import {{ helloExchangeInitiator, defaultHello, CallBuilder }} from \"@bearcove/roam-core\";"
+        "import {{ CallBuilder, helloExchangeInitiator, defaultHello }} from \"@bearcove/roam-core\";"
     )
     .unwrap();
 
     // WebSocket transport for connect helper
     cw_writeln!(w, "import {{ connectWs }} from \"@bearcove/roam-ws\";").unwrap();
 
-    // RpcError for fallible methods (methods returning Result<T, E>)
+    // RpcError for fallible client methods
     if has_fallible {
         cw_writeln!(w, "import {{ RpcError }} from \"@bearcove/roam-core\";").unwrap();
     }
 
+    // Tx/Rx and bindChannels for streaming handler args and type aliases
     if has_streaming {
         cw_writeln!(
             w,
-            "import {{ Tx, Rx, createServerTx, createServerRx, bindChannels }} from \"@bearcove/roam-core\";"
-        )
-        .unwrap();
-        cw_writeln!(
-            w,
-            "import type {{ ChannelId, ChannelRegistry, TaskSender, BindingSerializers, Schema }} from \"@bearcove/roam-core\";"
+            "import {{ Tx, Rx, bindChannels }} from \"@bearcove/roam-core\";"
         )
         .unwrap();
     }
