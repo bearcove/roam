@@ -4,9 +4,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use roam_types::{
-    Backing, ChannelClose, ChannelItem, ChannelSink, Conduit, ConduitRx, ConduitTx,
-    ConduitTxPermit, IncomingChannelMessage, Metadata, MsgFamily, Payload, Rx, SelfRef, Tx,
-    TxError,
+    Backing, ChannelClose, ChannelItem, ChannelReset, ChannelSink, Conduit, ConduitRx, ConduitTx,
+    ConduitTxPermit, IncomingChannelMessage, Metadata, MsgFamily, Payload, Rx, RxError, SelfRef,
+    Tx, TxError,
 };
 use tokio::sync::{Notify, mpsc};
 
@@ -237,6 +237,8 @@ async fn tx_send_accepts_borrowed_payloads() {
     );
 }
 
+// r[verify rpc.channel.item]
+// r[verify rpc.channel.close]
 #[tokio::test]
 async fn rx_recv_decodes_channel_items() {
     let mut rx = Rx::<u32>::unbound();
@@ -268,6 +270,29 @@ async fn rx_recv_decodes_channel_items() {
         .await
         .expect("send close to rx");
     assert!(rx.recv().await.expect("recv close").is_none());
+}
+
+// r[verify rpc.channel.reset]
+#[tokio::test]
+async fn rx_recv_signals_reset() {
+    let mut rx = Rx::<u32>::unbound();
+    let (tx_items, rx_items) = mpsc::channel(4);
+    rx.bind(rx_items);
+
+    let reset = ChannelReset {
+        metadata: Metadata::default(),
+    };
+    let reset_ref = SelfRef::owning(Backing::Boxed(Box::<[u8]>::default()), reset);
+    tx_items
+        .send(IncomingChannelMessage::Reset(reset_ref))
+        .await
+        .expect("send reset to rx");
+
+    let result = rx.recv().await;
+    assert!(
+        matches!(result, Err(RxError::Reset)),
+        "expected RxError::Reset"
+    );
 }
 
 mod credit_tests;

@@ -23,12 +23,11 @@ impl AdderServer for MyAdder {
 struct NoopHandler;
 
 impl roam_types::Handler<crate::DriverReplySink> for NoopHandler {
-    fn handle(
+    async fn handle(
         &self,
         _call: roam_types::SelfRef<roam_types::RequestCall<'static>>,
         _reply: crate::DriverReplySink,
-    ) -> impl std::future::Future<Output = ()> + Send + '_ {
-        async {}
+    ) {
     }
 }
 

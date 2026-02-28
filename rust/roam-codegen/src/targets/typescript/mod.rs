@@ -65,24 +65,24 @@ pub fn generate_service(service: &ServiceDescriptor) -> String {
     .unwrap();
     w.blank_line().unwrap();
 
-    generate_imports(&service, &mut w);
+    generate_imports(service, &mut w);
     w.blank_line().unwrap();
 
     // Named types (structs and enums)
-    let named_types = collect_named_types(&service);
+    let named_types = collect_named_types(service);
     output.push_str(&generate_named_types(&named_types));
 
     // Request/Response type aliases
-    output.push_str(&generate_request_response_types(&service, &named_types));
+    output.push_str(&generate_request_response_types(service, &named_types));
 
     // Client
-    output.push_str(&generate_client(&service));
+    output.push_str(&generate_client(service));
 
     // Server (handler interface + dispatcher)
-    output.push_str(&generate_server(&service));
+    output.push_str(&generate_server(service));
 
     // Service descriptor
-    output.push_str(&generate_descriptor(&service));
+    output.push_str(&generate_descriptor(service));
 
     output
 }

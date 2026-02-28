@@ -67,12 +67,11 @@ mod roam_bench {
     pub struct NoopHandler;
 
     impl roam_types::Handler<roam_core::DriverReplySink> for NoopHandler {
-        fn handle(
+        async fn handle(
             &self,
             _call: roam_types::SelfRef<roam_types::RequestCall<'static>>,
             _reply: roam_core::DriverReplySink,
-        ) -> impl std::future::Future<Output = ()> + Send + '_ {
-            async {}
+        ) {
         }
     }
 
@@ -143,7 +142,7 @@ fn roam_stream(bencher: divan::Bencher, n: usize) {
     let client = TOKIO.block_on(roam_bench::setup());
     bencher.bench_local(|| {
         TOKIO.block_on(async {
-            let (tx, mut rx) = roam::channel::<i32, 16>();
+            let (tx, mut rx) = roam::channel::<i32>();
             let call = client.generate(n as u32, tx);
             let recv_task = tokio::spawn(async move {
                 let mut count = 0u32;
@@ -251,7 +250,7 @@ fn roam_shm_stream(bencher: divan::Bencher, n: usize) {
     let client = TOKIO.block_on(roam_shm_bench::setup());
     bencher.bench_local(|| {
         TOKIO.block_on(async {
-            let (tx, mut rx) = roam::channel::<i32, 16>();
+            let (tx, mut rx) = roam::channel::<i32>();
             let call = client.generate(n as u32, tx);
             let recv_task = tokio::spawn(async move {
                 let mut count = 0u32;
@@ -357,7 +356,7 @@ fn roam_tcp_stream(bencher: divan::Bencher, n: usize) {
     let client = TOKIO.block_on(roam_tcp_bench::setup());
     bencher.bench_local(|| {
         TOKIO.block_on(async {
-            let (tx, mut rx) = roam::channel::<i32, 16>();
+            let (tx, mut rx) = roam::channel::<i32>();
             let call = client.generate(n as u32, tx);
             let recv_task = tokio::spawn(async move {
                 let mut count = 0u32;

@@ -233,7 +233,7 @@ fn codegen_typescript(workspace_root: &std::path::Path) -> Result<(), Box<dyn st
 
     // Generate TypeScript for all services in spec-proto
     for service in spec_proto::all_services() {
-        let ts = roam_codegen::targets::typescript::generate_service(&service);
+        let ts = roam_codegen::targets::typescript::generate_service(service);
         let filename = format!("{}.ts", service.service_name.to_lowercase());
         let out_path = out_dir.join(&filename);
         std::fs::write(&out_path, fmt_typescript(&out_path, ts))?;
@@ -377,7 +377,7 @@ fn codegen_swift(
 
     let testbed = spec_proto::testbed_service_descriptor();
     if swift && !swift_client && !swift_server {
-        let code = roam_codegen::targets::swift::generate_service(&testbed);
+        let code = roam_codegen::targets::swift::generate_service(testbed);
         let out_path = out_dir.join("Testbed.swift");
         std::fs::write(&out_path, code)?;
         println!("Wrote {}", out_path.display());
@@ -386,7 +386,7 @@ fn codegen_swift(
 
     if swift_client || (swift && !swift_server) {
         let code = roam_codegen::targets::swift::generate_service_with_bindings(
-            &testbed,
+            testbed,
             roam_codegen::targets::swift::SwiftBindings::Client,
         );
         let out_path = out_dir.join("TestbedClient.swift");
@@ -396,7 +396,7 @@ fn codegen_swift(
 
     if swift_server || (swift && !swift_client) {
         let code = roam_codegen::targets::swift::generate_service_with_bindings(
-            &testbed,
+            testbed,
             roam_codegen::targets::swift::SwiftBindings::Server,
         );
         let out_path = out_dir.join("TestbedServer.swift");

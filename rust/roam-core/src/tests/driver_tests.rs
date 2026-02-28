@@ -24,26 +24,20 @@ fn message_conduit_pair() -> (MessageConduit, MessageConduit) {
 struct EchoHandler;
 
 impl Handler<DriverReplySink> for EchoHandler {
-    fn handle(
-        &self,
-        call: SelfRef<RequestCall<'static>>,
-        reply: DriverReplySink,
-    ) -> impl std::future::Future<Output = ()> + Send + '_ {
-        async move {
-            let args_bytes = match &call.args {
-                Payload::Incoming(bytes) => *bytes,
-                _ => panic!("expected incoming payload"),
-            };
+    async fn handle(&self, call: SelfRef<RequestCall<'static>>, reply: DriverReplySink) {
+        let args_bytes = match &call.args {
+            Payload::Incoming(bytes) => *bytes,
+            _ => panic!("expected incoming payload"),
+        };
 
-            let result: u32 = facet_postcard::from_slice(args_bytes).expect("deserialize args");
-            reply
-                .send_reply(RequestResponse {
-                    ret: Payload::outgoing(&result),
-                    channels: vec![],
-                    metadata: Default::default(),
-                })
-                .await;
-        }
+        let result: u32 = facet_postcard::from_slice(args_bytes).expect("deserialize args");
+        reply
+            .send_reply(RequestResponse {
+                ret: Payload::outgoing(&result),
+                channels: vec![],
+                metadata: Default::default(),
+            })
+            .await;
     }
 }
 
@@ -51,13 +45,7 @@ impl Handler<DriverReplySink> for EchoHandler {
 struct NoopHandler;
 
 impl Handler<DriverReplySink> for NoopHandler {
-    fn handle(
-        &self,
-        _call: SelfRef<RequestCall<'static>>,
-        _reply: DriverReplySink,
-    ) -> impl std::future::Future<Output = ()> + Send + '_ {
-        async {}
-    }
+    async fn handle(&self, _call: SelfRef<RequestCall<'static>>, _reply: DriverReplySink) {}
 }
 
 /// A handler that blocks forever until its task is cancelled.
@@ -67,26 +55,20 @@ struct BlockingHandler {
 }
 
 impl Handler<DriverReplySink> for BlockingHandler {
-    fn handle(
-        &self,
-        _call: SelfRef<RequestCall<'static>>,
-        reply: DriverReplySink,
-    ) -> impl std::future::Future<Output = ()> + Send + '_ {
+    async fn handle(&self, _call: SelfRef<RequestCall<'static>>, reply: DriverReplySink) {
         let was_cancelled = self.was_cancelled.clone();
-        async move {
-            // Hold the reply to prevent premature DriverReplySink::drop
-            let _reply = reply;
-            // Create a drop guard that records cancellation
-            struct DropGuard(Arc<AtomicBool>);
-            impl Drop for DropGuard {
-                fn drop(&mut self) {
-                    self.0.store(true, Ordering::SeqCst);
-                }
+        // Hold the reply to prevent premature DriverReplySink::drop
+        let _reply = reply;
+        // Create a drop guard that records cancellation
+        struct DropGuard(Arc<AtomicBool>);
+        impl Drop for DropGuard {
+            fn drop(&mut self) {
+                self.0.store(true, Ordering::SeqCst);
             }
-            let _guard = DropGuard(was_cancelled);
-            // Block forever — only cancellation (abort) will stop this
-            std::future::pending::<()>().await;
         }
+        let _guard = DropGuard(was_cancelled);
+        // Block forever — only cancellation (abort) will stop this
+        std::future::pending::<()>().await;
     }
 }
 

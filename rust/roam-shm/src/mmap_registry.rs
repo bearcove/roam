@@ -161,12 +161,8 @@ impl MmapRegistry {
 }
 
 fn create_mmap_region(size: usize) -> io::Result<MmapRegion> {
-    let dir = tempfile::tempdir().map_err(|e| {
-        io::Error::new(
-            io::ErrorKind::Other,
-            format!("failed to create temp dir for mmap region: {e}"),
-        )
-    })?;
+    let dir = tempfile::tempdir()
+        .map_err(|e| io::Error::other(format!("failed to create temp dir for mmap region: {e}")))?;
     let path = dir.path().join("mmap_payload.shm");
     MmapRegion::create(&path, size, shm_primitives::FileCleanup::Auto)
 }

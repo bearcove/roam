@@ -232,7 +232,7 @@ pub fn peek_frame(data: &[u8]) -> Option<(Frame<'_>, u32)> {
     if total_len < FRAME_HEADER_SIZE {
         return None;
     }
-    if total_len % 4 != 0 {
+    if !total_len.is_multiple_of(4) {
         return None;
     }
     if data.len() < total_len {

@@ -60,7 +60,7 @@ impl<T: IdType> IdAllocator<T> {
     }
 
     /// Allocate the next ID.
-    pub fn next(&mut self) -> T {
+    pub fn alloc(&mut self) -> T {
         let id = T::from_raw(self.next);
         self.next += 2;
         id

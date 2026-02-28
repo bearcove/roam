@@ -12,8 +12,8 @@ pub fn normalized_method(name: &str) -> String {
 pub fn fq_name(detail: &MethodDescriptor) -> String {
     format!(
         "{}.{}",
-        normalized_service(&detail.service_name),
-        normalized_method(&detail.method_name)
+        normalized_service(detail.service_name),
+        normalized_method(detail.method_name)
     )
 }
 

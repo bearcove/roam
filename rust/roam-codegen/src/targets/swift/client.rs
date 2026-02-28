@@ -147,13 +147,13 @@ fn generate_client_method(
 
     {
         let _indent = w.indent();
-        let cursor_var = unique_decode_cursor_name(&method.args);
+        let cursor_var = unique_decode_cursor_name(method.args);
 
         if has_streaming {
             generate_streaming_client_body(w, method, service_name, &method_id_name, &cursor_var);
         } else {
             // Encode arguments
-            generate_encode_args(w, &method.args);
+            generate_encode_args(w, method.args);
 
             // Make call
             let method_id = crate::method_id(method);

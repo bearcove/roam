@@ -139,7 +139,7 @@ impl DriverCaller {
         &self,
         initial_credit: u32,
     ) -> (ChannelId, Arc<CreditSink<DriverChannelSink>>) {
-        let channel_id = self.shared.channel_ids.lock().next();
+        let channel_id = self.shared.channel_ids.lock().alloc();
         let inner = DriverChannelSink {
             sender: self.sender.clone(),
             channel_id,
@@ -178,7 +178,7 @@ impl ChannelBinder for DriverCaller {
         ChannelId,
         tokio::sync::mpsc::Receiver<IncomingChannelMessage>,
     ) {
-        let channel_id = self.shared.channel_ids.lock().next();
+        let channel_id = self.shared.channel_ids.lock().alloc();
         let rx = self.register_rx_channel(channel_id);
         (channel_id, rx)
     }
@@ -211,7 +211,7 @@ impl Caller for DriverCaller {
     ) -> Result<SelfRef<RequestResponse<'static>>, RoamError> {
         async {
             // Allocate a request ID.
-            let req_id = self.shared.request_ids.lock().next();
+            let req_id = self.shared.request_ids.lock().alloc();
 
             // Register the response slot before sending, so the driver can
             // route the response even if it arrives before we start awaiting.
@@ -269,17 +269,9 @@ pub struct Driver<H: Handler<DriverReplySink>> {
     failures_rx: mpsc::UnboundedReceiver<(RequestId, &'static str)>,
     handler: Arc<H>,
     shared: Arc<DriverShared>,
-    /// Channels we know about on this connection.
-    channels: BTreeMap<ChannelId, ChannelState>,
     /// In-flight server-side handler tasks, keyed by request ID.
     /// Used to abort handlers on cancel.
     in_flight_handlers: BTreeMap<RequestId, moire::task::JoinHandle<()>>,
-}
-
-struct ChannelState {
-    /// For inbound channels: sender that feeds the Rx handle.
-    /// None for outbound-only channels (Tx on this side).
-    rx_sender: Option<tokio::sync::mpsc::Sender<IncomingChannelMessage>>,
 }
 
 impl<H: Handler<DriverReplySink>> Driver<H> {
@@ -301,7 +293,6 @@ impl<H: Handler<DriverReplySink>> Driver<H> {
                 channel_senders: SyncMutex::new("driver.channel_senders", BTreeMap::new()),
                 channel_credits: SyncMutex::new("driver.channel_credits", BTreeMap::new()),
             }),
-            channels: BTreeMap::new(),
             in_flight_handlers: BTreeMap::new(),
         }
     }
@@ -433,7 +424,6 @@ impl<H: Handler<DriverReplySink>> Driver<H> {
                     });
                     let _ = tx.try_send(IncomingChannelMessage::Close(close));
                 }
-                self.channels.remove(&chan_id);
                 self.shared.channel_senders.lock().remove(&chan_id);
                 self.shared.channel_credits.lock().remove(&chan_id);
             }
@@ -446,7 +436,6 @@ impl<H: Handler<DriverReplySink>> Driver<H> {
                     });
                     let _ = tx.try_send(IncomingChannelMessage::Reset(reset));
                 }
-                self.channels.remove(&chan_id);
                 self.shared.channel_senders.lock().remove(&chan_id);
                 self.shared.channel_credits.lock().remove(&chan_id);
             }

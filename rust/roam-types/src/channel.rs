@@ -9,15 +9,13 @@ use facet_core::PtrConst;
 #[cfg(not(target_arch = "wasm32"))]
 use tokio::sync::{Semaphore, mpsc};
 
-use crate::{
-    ChannelClose, ChannelGrantCredit, ChannelItem, ChannelReset, Metadata, Payload, SelfRef,
-};
+use crate::{ChannelClose, ChannelItem, ChannelReset, Metadata, Payload, SelfRef};
 
 /// Create an unbound channel pair.
 ///
 /// Both ends start hollow and must be hydrated by the session driver using
 /// channel IDs from `Message::{Request,Response}.channels`.
-pub fn channel<T, const N: usize>() -> (Tx<T, N>, Rx<T, N>) {
+pub fn channel<T>() -> (Tx<T>, Rx<T>) {
     (Tx::unbound(), Rx::unbound())
 }
 
@@ -103,7 +101,6 @@ pub enum IncomingChannelMessage {
     Item(SelfRef<ChannelItem<'static>>),
     Close(SelfRef<ChannelClose<'static>>),
     Reset(SelfRef<ChannelReset<'static>>),
-    GrantCredit(SelfRef<ChannelGrantCredit>),
 }
 
 /// Sender-side runtime slot.
@@ -271,11 +268,6 @@ impl<T, const N: usize> Rx<T, N> {
         match receiver.recv().await {
             Some(IncomingChannelMessage::Close(_)) | None => Ok(None),
             Some(IncomingChannelMessage::Reset(_)) => Err(RxError::Reset),
-            Some(IncomingChannelMessage::GrantCredit(_)) => {
-                // credit grants are flow-control only; skip and wait for the next message
-                // TODO: handle properly
-                Ok(None)
-            }
             Some(IncomingChannelMessage::Item(msg)) => msg
                 .try_repack(|item, _backing_bytes| {
                     let Payload::Incoming(bytes) = item.item else {

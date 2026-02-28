@@ -583,18 +583,16 @@ where
     async fn recv(&mut self) -> Result<Option<SelfRef<F::Msg<'static>>>, Self::Error> {
         loop {
             // Phase 1: take current Rx out of shared state, then await without locks held.
-            let (mut rx, generation) = {
+            let (rx_opt, generation) = {
                 let mut inner = self.shared.lock_inner()?;
-                let generation = inner.link_generation;
-                let rx = match inner.rx.take() {
-                    Some(rx) => rx,
-                    None => {
-                        drop(inner);
-                        self.shared.ensure_reconnected(generation).await?;
-                        continue;
-                    }
-                };
-                (rx, generation)
+                (inner.rx.take(), inner.link_generation)
+            }; // lock released here — no guard held across any await below
+            let mut rx = match rx_opt {
+                Some(rx) => rx,
+                None => {
+                    self.shared.ensure_reconnected(generation).await?;
+                    continue;
+                }
             };
 
             // Any link termination — graceful EOF or error — triggers reconnect.

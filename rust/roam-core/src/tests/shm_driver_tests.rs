@@ -23,39 +23,27 @@ fn message_conduit_pair() -> (MessageConduit, MessageConduit) {
 struct EchoHandler;
 
 impl Handler<DriverReplySink> for EchoHandler {
-    fn handle(
-        &self,
-        call: SelfRef<RequestCall<'static>>,
-        reply: DriverReplySink,
-    ) -> impl std::future::Future<Output = ()> + Send + '_ {
-        async move {
-            let args_bytes = match &call.args {
-                Payload::Incoming(bytes) => *bytes,
-                _ => panic!("expected incoming payload"),
-            };
+    async fn handle(&self, call: SelfRef<RequestCall<'static>>, reply: DriverReplySink) {
+        let args_bytes = match &call.args {
+            Payload::Incoming(bytes) => *bytes,
+            _ => panic!("expected incoming payload"),
+        };
 
-            let result: u32 = facet_postcard::from_slice(args_bytes).expect("deserialize args");
-            reply
-                .send_reply(RequestResponse {
-                    ret: Payload::outgoing(&result),
-                    channels: vec![],
-                    metadata: Default::default(),
-                })
-                .await;
-        }
+        let result: u32 = facet_postcard::from_slice(args_bytes).expect("deserialize args");
+        reply
+            .send_reply(RequestResponse {
+                ret: Payload::outgoing(&result),
+                channels: vec![],
+                metadata: Default::default(),
+            })
+            .await;
     }
 }
 
 struct NoopHandler;
 
 impl Handler<DriverReplySink> for NoopHandler {
-    fn handle(
-        &self,
-        _call: SelfRef<RequestCall<'static>>,
-        _reply: DriverReplySink,
-    ) -> impl std::future::Future<Output = ()> + Send + '_ {
-        async {}
-    }
+    async fn handle(&self, _call: SelfRef<RequestCall<'static>>, _reply: DriverReplySink) {}
 }
 
 #[tokio::test]
@@ -108,26 +96,20 @@ async fn echo_call_across_shm_link() {
 struct BlobEchoHandler;
 
 impl Handler<DriverReplySink> for BlobEchoHandler {
-    fn handle(
-        &self,
-        call: SelfRef<RequestCall<'static>>,
-        reply: DriverReplySink,
-    ) -> impl std::future::Future<Output = ()> + Send + '_ {
-        async move {
-            let args_bytes = match &call.args {
-                Payload::Incoming(bytes) => *bytes,
-                _ => panic!("expected incoming payload"),
-            };
+    async fn handle(&self, call: SelfRef<RequestCall<'static>>, reply: DriverReplySink) {
+        let args_bytes = match &call.args {
+            Payload::Incoming(bytes) => *bytes,
+            _ => panic!("expected incoming payload"),
+        };
 
-            let blob: Vec<u8> = facet_postcard::from_slice(args_bytes).expect("deserialize blob");
-            reply
-                .send_reply(RequestResponse {
-                    ret: Payload::outgoing(&blob),
-                    channels: vec![],
-                    metadata: Default::default(),
-                })
-                .await;
-        }
+        let blob: Vec<u8> = facet_postcard::from_slice(args_bytes).expect("deserialize blob");
+        reply
+            .send_reply(RequestResponse {
+                ret: Payload::outgoing(&blob),
+                channels: vec![],
+                metadata: Default::default(),
+            })
+            .await;
     }
 }
 

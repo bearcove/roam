@@ -97,30 +97,30 @@ pub fn generate_service_with_bindings(
 
     // Generate named types
     out.push_str(&format!("// MARK: - {service_name} Types\n\n"));
-    let named_types = collect_named_types(&service);
+    let named_types = collect_named_types(service);
     out.push_str(&generate_named_types(&named_types));
 
     match bindings {
         SwiftBindings::Client => {
             out.push_str(&format!("// MARK: - {service_name} Client\n\n"));
-            out.push_str(&generate_client(&service));
+            out.push_str(&generate_client(service));
         }
         SwiftBindings::Server => {
             out.push_str(&format!("// MARK: - {service_name} Server\n\n"));
-            out.push_str(&generate_server(&service));
+            out.push_str(&generate_server(service));
         }
         SwiftBindings::ClientAndServer => {
             out.push_str(&format!("// MARK: - {service_name} Client\n\n"));
-            out.push_str(&generate_client(&service));
+            out.push_str(&generate_client(service));
 
             out.push_str(&format!("// MARK: - {service_name} Server\n\n"));
-            out.push_str(&generate_server(&service));
+            out.push_str(&generate_server(service));
         }
     }
 
     // Always generate runtime schema info used for channel binding.
     out.push_str(&format!("// MARK: - {service_name} Schemas\n\n"));
-    out.push_str(&generate_schemas(&service));
+    out.push_str(&generate_schemas(service));
 
     out
 }

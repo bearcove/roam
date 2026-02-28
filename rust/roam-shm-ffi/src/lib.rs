@@ -31,6 +31,9 @@ pub struct RoamVarSlotHandle {
     pub generation: u32,
 }
 
+/// Key: (class_idx, extent_idx, slot_idx). Value: (generation, refcount, state).
+type SlotStateMap = Mutex<HashMap<(u8, u8, u32), (u32, i32, u8)>>;
+
 /// Opaque wrapper around the Rust VarSlotPool (heap-allocated, Box'd).
 pub struct RoamVarSlotPool {
     inner: VarSlotPool,
@@ -38,7 +41,7 @@ pub struct RoamVarSlotPool {
     region_len: usize,
     base_offset: usize,
     configs: Vec<SizeClassConfig>,
-    states: Mutex<HashMap<(u8, u8, u32), (u32, i32, u8)>>,
+    states: SlotStateMap,
 }
 
 // ─── BipBuf FFI ─────────────────────────────────────────────────────────────
@@ -368,14 +371,13 @@ pub unsafe extern "C" fn roam_var_slot_pool_mark_in_flight(
     handle: RoamVarSlotHandle,
 ) -> i32 {
     let pool = unsafe { &*pool };
-    if let Ok(mut states) = pool.states.lock() {
-        if let Some((generation, state, _)) =
+    if let Ok(mut states) = pool.states.lock()
+        && let Some((generation, state, _)) =
             states.get_mut(&(handle.class_idx, handle.extent_idx, handle.slot_idx))
-        {
-            if *generation == handle.generation && *state == 1 {
-                *state = 2;
-            }
-        }
+        && *generation == handle.generation
+        && *state == 1
+    {
+        *state = 2;
     }
     0
 }
@@ -454,15 +456,14 @@ pub unsafe extern "C" fn roam_var_slot_pool_slot_state(
     handle: RoamVarSlotHandle,
 ) -> i32 {
     let pool = unsafe { &*pool };
-    if let Ok(states) = pool.states.lock() {
-        if let Some((generation, state, _)) =
+    if let Ok(states) = pool.states.lock()
+        && let Some((generation, state, _)) =
             states.get(&(handle.class_idx, handle.extent_idx, handle.slot_idx))
-        {
-            if *generation == handle.generation {
-                return *state;
-            }
-            return -1;
+    {
+        if *generation == handle.generation {
+            return *state;
         }
+        return -1;
     }
     0
 }

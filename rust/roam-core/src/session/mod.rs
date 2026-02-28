@@ -449,7 +449,7 @@ where
     ) -> ConnectionHandle {
         let label = format!("session.conn{}", conn_id.0);
         let (conn_tx, conn_rx) = mpsc::channel::<SelfRef<ConnectionMessage<'static>>>(&label, 64);
-        let (failures_tx, failures_rx) = mpsc::unbounded_channel(&format!("{label}.failures"));
+        let (failures_tx, failures_rx) = mpsc::unbounded_channel(format!("{label}.failures"));
 
         let sender = ConnectionSender {
             connection_id: conn_id,
@@ -679,7 +679,7 @@ where
 
     // r[impl connection.open]
     async fn handle_open_request(&mut self, req: OpenRequest) {
-        let conn_id = self.conn_ids.next();
+        let conn_id = self.conn_ids.alloc();
 
         // Send ConnectionOpen to the peer.
         let send_result = self
@@ -787,7 +787,7 @@ where
             let permit = self.reserve().await?;
             permit
                 .send(msg)
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
+                .map_err(|e| std::io::Error::other(e.to_string()))
         })
     }
 }

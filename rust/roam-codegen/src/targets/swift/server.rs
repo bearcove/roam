@@ -75,138 +75,6 @@ fn generate_handler_protocol(service: &ServiceDescriptor) -> String {
     out
 }
 
-#[cfg(test)]
-/// Generate dispatcher for handling incoming calls.
-fn generate_dispatcher(service: &ServiceDescriptor) -> String {
-    let mut out = String::new();
-    let mut w = CodeWriter::with_indent_spaces(&mut out, 4);
-    let service_name = service.service_name.to_upper_camel_case();
-
-    cw_writeln!(w, "public final class {service_name}Dispatcher {{").unwrap();
-    {
-        let _indent = w.indent();
-        cw_writeln!(w, "private let handler: {service_name}Handler").unwrap();
-        w.blank_line().unwrap();
-        cw_writeln!(w, "public init(handler: {service_name}Handler) {{").unwrap();
-        {
-            let _indent = w.indent();
-            w.writeln("self.handler = handler").unwrap();
-        }
-        w.writeln("}").unwrap();
-        w.blank_line().unwrap();
-
-        // Main dispatch method
-        w.writeln("public func dispatch(methodId: UInt64, payload: Data) async throws -> Data {")
-            .unwrap();
-        {
-            let _indent = w.indent();
-            w.writeln("switch methodId {").unwrap();
-            for method in service.methods {
-                let method_name = method.method_name.to_lower_camel_case();
-                let method_id = crate::method_id(method);
-                let dispatch_name = dispatch_helper_name(&method_name);
-                cw_writeln!(w, "case {}:", hex_u64(method_id)).unwrap();
-                cw_writeln!(w, "    return try await {dispatch_name}(payload: payload)").unwrap();
-            }
-            w.writeln("default:").unwrap();
-            w.writeln("    throw RoamError.unknownMethod").unwrap();
-            w.writeln("}").unwrap();
-        }
-        w.writeln("}").unwrap();
-
-        // Individual dispatch methods
-        for method in service.methods {
-            w.blank_line().unwrap();
-            generate_dispatch_method(&mut w, method);
-        }
-    }
-    w.writeln("}").unwrap();
-    w.blank_line().unwrap();
-
-    out
-}
-
-#[cfg(test)]
-/// Generate a single dispatch method for non-channeling dispatcher.
-fn generate_dispatch_method(w: &mut CodeWriter<&mut String>, method: &MethodDescriptor) {
-    let method_name = method.method_name.to_lower_camel_case();
-    let dispatch_name = dispatch_helper_name(&method_name);
-    let has_channeling =
-        method.args.iter().any(|a| is_channel(a.shape)) || is_channel(method.return_shape);
-
-    cw_writeln!(
-        w,
-        "private func {dispatch_name}(payload: Data) async throws -> Data {{"
-    )
-    .unwrap();
-    {
-        let _indent = w.indent();
-
-        if has_channeling {
-            w.writeln("// TODO: Implement channeling dispatch").unwrap();
-            w.writeln("throw RoamError.notImplemented").unwrap();
-        } else {
-            // Decode arguments
-            generate_decode_args(w, &method.args);
-
-            // Call handler
-            let arg_names: Vec<String> = method
-                .args
-                .iter()
-                .map(|a| {
-                    let name = a.name.to_lower_camel_case();
-                    format!("{name}: {name}")
-                })
-                .collect();
-
-            let ret_type = swift_type_server_return(method.return_shape);
-
-            if ret_type == "Void" {
-                cw_writeln!(
-                    w,
-                    "try await handler.{method_name}({})",
-                    arg_names.join(", ")
-                )
-                .unwrap();
-                w.writeln("return Data()").unwrap();
-            } else {
-                cw_writeln!(
-                    w,
-                    "let result = try await handler.{method_name}({})",
-                    arg_names.join(", ")
-                )
-                .unwrap();
-                let encode_closure = generate_encode_closure(method.return_shape);
-                cw_writeln!(
-                    w,
-                    "return Data(encodeResultOk(result, encoder: {encode_closure}))"
-                )
-                .unwrap();
-            }
-        }
-    }
-    w.writeln("}").unwrap();
-}
-
-#[cfg(test)]
-/// Generate code to decode method arguments (for dispatcher).
-fn generate_decode_args(w: &mut CodeWriter<&mut String>, args: &[roam_types::ArgDescriptor]) {
-    if args.is_empty() {
-        w.writeln("// No arguments to decode").unwrap();
-        return;
-    }
-
-    let cursor_var = unique_decode_cursor_name(args);
-    cw_writeln!(w, "var {cursor_var} = 0").unwrap();
-    for arg in args {
-        let arg_name = arg.name.to_lower_camel_case();
-        let decode_stmt = generate_decode_stmt_with_cursor(arg.shape, &arg_name, "", &cursor_var);
-        for line in decode_stmt.lines() {
-            w.writeln(line).unwrap();
-        }
-    }
-}
-
 /// Generate channeling dispatcher for handling incoming calls with channel support.
 fn generate_channeling_dispatcher(service: &ServiceDescriptor) -> String {
     let mut out = String::new();
@@ -363,7 +231,7 @@ fn generate_channeling_dispatch_method(w: &mut CodeWriter<&mut String>, method: 
                 .any(|a| !is_rx(a.shape) && !is_tx(a.shape));
             let has_channel_args = method.args.iter().any(|a| is_rx(a.shape) || is_tx(a.shape));
             let cursor_var = if has_payload_args {
-                let name = unique_decode_cursor_name(&method.args);
+                let name = unique_decode_cursor_name(method.args);
                 cw_writeln!(w, "var {name} = 0").unwrap();
                 Some(name)
             } else {

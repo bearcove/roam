@@ -176,6 +176,7 @@ impl ShmLink {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn from_parts(
         tx_bipbuf: Arc<BipBuf>,
         rx_bipbuf: Arc<BipBuf>,
@@ -574,9 +575,9 @@ impl LinkTxPermit for ShmTxPermit {
                 .mmap_registry
                 .lock()
                 .expect("mmap registry poisoned");
-            let alloc = registry.alloc(len).map_err(|e| {
-                io::Error::new(io::ErrorKind::Other, format!("mmap alloc failed: {e}"))
-            })?;
+            let alloc = registry
+                .alloc(len)
+                .map_err(|e| io::Error::other(format!("mmap alloc failed: {e}")))?;
             return Ok(ShmWriteSlot {
                 shared: self.shared.clone(),
                 inner: ShmWriteSlotInner::MmapRef {
@@ -890,7 +891,7 @@ impl LinkRx for ShmLinkRx {
                                 mmap_ref.map_offset,
                                 mmap_ref.payload_len,
                             )
-                            .map_err(|e| ShmLinkRxError::MmapResolve(e))?;
+                            .map_err(ShmLinkRxError::MmapResolve)?;
 
                         // r[impl zerocopy.backing.mmap]
                         Ok(Some(Backing::shared(Arc::new(ShmMmapBacking {

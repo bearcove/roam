@@ -14,13 +14,7 @@ type TcpLink = StreamLink<tokio::net::tcp::OwnedReadHalf, tokio::net::tcp::Owned
 struct NoopHandler;
 
 impl roam_types::Handler<DriverReplySink> for NoopHandler {
-    fn handle(
-        &self,
-        _call: SelfRef<RequestCall<'static>>,
-        _reply: DriverReplySink,
-    ) -> impl Future<Output = ()> + Send + '_ {
-        async {}
-    }
+    async fn handle(&self, _call: SelfRef<RequestCall<'static>>, _reply: DriverReplySink) {}
 }
 
 pub fn workspace_root() -> &'static std::path::Path {
