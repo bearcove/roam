@@ -41,14 +41,12 @@ export interface MetadataValueU64 {
 
 export type MetadataValue = MetadataValueString | MetadataValueBytes | MetadataValueU64;
 
-export interface MetadataFlagsRepr {
-  0: bigint;
-}
+export type MetadataFlagsRepr = bigint;
 
 export const MetadataFlags = {
-  NONE: { 0: 0n } as MetadataFlagsRepr,
-  SENSITIVE: { 0: 1n << 0n } as MetadataFlagsRepr,
-  NO_PROPAGATE: { 0: 1n << 1n } as MetadataFlagsRepr,
+  NONE: 0n,
+  SENSITIVE: 1n << 0n,
+  NO_PROPAGATE: 1n << 1n,
 } as const;
 
 export interface MetadataEntry {

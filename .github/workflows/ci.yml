@@ -257,7 +257,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Run SHM cross-language regression tests
-        run: cargo nextest run -p roam-shm --test bootstrap_cross_language
+        run: cargo nextest run -p roam-shm --test swift_guest_cross_language
 
   rust-wasm:
     name: Rust / WebAssembly

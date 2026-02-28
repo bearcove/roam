@@ -96,7 +96,7 @@ describe("schema-driven codec", () => {
   it("roundtrips message with nested request body", () => {
     const metadata = [
       metadataEntry("trace-id", metadataString("abc123"), MetadataFlags.NONE),
-      metadataEntry("auth", metadataBytes(new Uint8Array([0xde, 0xad, 0xbe, 0xef])), { 0: 3n }),
+      metadataEntry("auth", metadataBytes(new Uint8Array([0xde, 0xad, 0xbe, 0xef])), 3n),
       metadataEntry("attempt", metadataU64(2n), MetadataFlags.NONE),
     ];
 

@@ -58,6 +58,21 @@ public extension RoamConnection {
             timeout: timeout
         )
     }
+
+    func call(
+        methodId: UInt64,
+        payload: Data,
+        channels: [UInt64],
+        timeout: TimeInterval?
+    ) async throws -> Data {
+        try await call(
+            methodId: methodId,
+            metadata: [],
+            payload: payload,
+            channels: channels,
+            timeout: timeout
+        )
+    }
 }
 
 // MARK: - ConnectionHandle RoamConnection Conformance

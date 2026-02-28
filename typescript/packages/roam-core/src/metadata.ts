@@ -3,7 +3,7 @@
 // Provides ClientMetadata class for building metadata with flags,
 // and conversion functions to/from wire format.
 
-import type { MetadataEntry, MetadataFlagsRepr, MetadataValue } from "@bearcove/roam-wire";
+import type { MetadataEntry, MetadataValue } from "@bearcove/roam-wire";
 import { metadataString, metadataBytes, metadataU64, MetadataFlags } from "@bearcove/roam-wire";
 
 /**
@@ -20,13 +20,7 @@ interface MetadataEntryInternal {
   flags: bigint;
 }
 
-function toFlagsRepr(flags: bigint): MetadataFlagsRepr {
-  return { 0: flags };
-}
 
-function fromFlagsRepr(flags: MetadataFlagsRepr): bigint {
-  return flags[0];
-}
 
 /**
  * Client-side metadata storage with flag support.
@@ -48,7 +42,7 @@ export class ClientMetadata {
    * Set a metadata entry with default flags (none).
    */
   set(key: string, value: ClientMetadataValue): this {
-    this.entries.set(key, { value, flags: MetadataFlags.NONE[0] });
+    this.entries.set(key, { value, flags: MetadataFlags.NONE });
     return this;
   }
 
@@ -57,7 +51,7 @@ export class ClientMetadata {
    * r[impl call.metadata.flags] - SENSITIVE flag marks values for redaction
    */
   setSensitive(key: string, value: ClientMetadataValue): this {
-    this.entries.set(key, { value, flags: MetadataFlags.SENSITIVE[0] });
+    this.entries.set(key, { value, flags: MetadataFlags.SENSITIVE });
     return this;
   }
 
@@ -80,7 +74,7 @@ export class ClientMetadata {
    * Get the flags for a key.
    */
   getFlags(key: string): bigint {
-    return this.entries.get(key)?.flags ?? MetadataFlags.NONE[0];
+    return this.entries.get(key)?.flags ?? MetadataFlags.NONE;
   }
 
   /**
@@ -88,7 +82,7 @@ export class ClientMetadata {
    */
   isSensitive(key: string): boolean {
     const flags = this.getFlags(key);
-    return (flags & MetadataFlags.SENSITIVE[0]) !== 0n;
+    return (flags & MetadataFlags.SENSITIVE) !== 0n;
   }
 
   /**
@@ -142,7 +136,7 @@ export class ClientMetadata {
       } else {
         wireValue = metadataBytes(entry.value);
       }
-      result.push({ key, value: wireValue, flags: toFlagsRepr(entry.flags) });
+      result.push({ key, value: wireValue, flags: entry.flags });
     }
     return result;
   }
@@ -153,7 +147,7 @@ export class ClientMetadata {
   static fromWireEntries(entries: MetadataEntry[]): ClientMetadata {
     const meta = new ClientMetadata();
     for (const entry of entries) {
-      meta.setWithFlags(entry.key, entry.value.value, fromFlagsRepr(entry.flags));
+      meta.setWithFlags(entry.key, entry.value.value, entry.flags);
     }
     return meta;
   }

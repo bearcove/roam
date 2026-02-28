@@ -48,7 +48,7 @@ function sampleMetadata() {
     metadataEntry(
       "auth",
       metadataBytes(new Uint8Array([0xde, 0xad, 0xbe, 0xef])),
-      { 0: MetadataFlags.SENSITIVE[0] | MetadataFlags.NO_PROPAGATE[0] },
+      MetadataFlags.SENSITIVE | MetadataFlags.NO_PROPAGATE,
     ),
     metadataEntry("attempt", metadataU64(2n), MetadataFlags.NONE),
   ];

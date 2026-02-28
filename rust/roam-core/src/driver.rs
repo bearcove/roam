@@ -75,7 +75,7 @@ impl Drop for DriverReplySink {
 
 // r[impl rpc.channel.item]
 // r[impl rpc.channel.close]
-/// Concrete [`ChannelSink`] backed by a [`ConnectionSender`].
+/// Concrete [`ChannelSink`] backed by a `ConnectionSender`.
 ///
 /// Created by the driver when setting up outbound channels (Tx handles).
 /// Sends `ChannelItem` and `ChannelClose` messages through the connection.

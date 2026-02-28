@@ -1,6 +1,6 @@
 //! Shared-memory transport for roam.
 //!
-//! Implements [`Link`](roam_types::Link) over lock-free ring buffers in shared memory.
+//! Implements [`Link`] over lock-free ring buffers in shared memory.
 //! Inline bipbuf payloads are copied into boxed backing; slot-ref payloads are exposed
 //! as shared zero-copy backing and freed when the backing is dropped.
 

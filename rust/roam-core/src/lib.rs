@@ -40,8 +40,8 @@ use facet_reflect::Partial;
 use roam_types::{Backing, SelfRef};
 
 /// Return a process-global cached `&'static RpcPlan` for type `T`.
-/// [FIXME] requiring 'static here is wrong
-/// [FIXME] this function is now useless since we have RpcPlan::for_type
+/// FIXME: requiring 'static here is wrong
+/// FIXME: this function is now useless since we have RpcPlan::for_type
 pub fn rpc_plan<T: facet::Facet<'static>>() -> &'static roam_types::RpcPlan {
     roam_types::RpcPlan::for_type::<T>()
 }

@@ -223,10 +223,9 @@ pub unsafe fn bind_channels_callee_return(
                     if let Ok(mut ps) = channel_poke.into_struct()
                         && let Ok(mut core_field) = ps.field_by_name("core")
                         && let Ok(slot) = core_field.get_mut::<CoreSlot>()
+                        && let Some(core) = &slot.inner
                     {
-                        if let Some(core) = &slot.inner {
-                            core.set_binding(ChannelBinding::Sink(sink));
-                        }
+                        core.set_binding(ChannelBinding::Sink(sink));
                     }
                 }
                 // r[impl rpc.channel.binding.callee-return.tx]
@@ -239,10 +238,9 @@ pub unsafe fn bind_channels_callee_return(
                     if let Ok(mut ps) = channel_poke.into_struct()
                         && let Ok(mut core_field) = ps.field_by_name("core")
                         && let Ok(slot) = core_field.get_mut::<CoreSlot>()
+                        && let Some(core) = &slot.inner
                     {
-                        if let Some(core) = &slot.inner {
-                            core.set_binding(ChannelBinding::Receiver(receiver));
-                        }
+                        core.set_binding(ChannelBinding::Receiver(receiver));
                     }
                 }
             },
