@@ -59,7 +59,7 @@ impl Caller for DriverCaller {
         &self,
         call: RequestCall<'a>,
     ) -> Result<SelfRef<RequestResponse<'static>>, RoamError> {
-        let req_id = self.shared.request_ids.lock().next();
+        let req_id = self.shared.request_ids.lock().alloc();
         let (tx, rx) = moire::sync::oneshot::channel("driver.response");
         self.shared.pending_responses.lock().insert(req_id, tx);
 

@@ -11,6 +11,7 @@ use facet_core::PtrConst;
 #[cfg(not(target_arch = "wasm32"))]
 use tokio::sync::{Semaphore, mpsc};
 
+#[cfg(not(target_arch = "wasm32"))]
 use crate::{ChannelClose, ChannelItem, ChannelReset, Metadata, Payload, SelfRef};
 
 // r[impl rpc.channel.pair]
