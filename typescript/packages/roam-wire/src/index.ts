@@ -50,15 +50,11 @@ export type {
   MessageClose,
   MessageReset,
   MessageCredit,
-  HelloV4,
-  HelloV5,
-  HelloV6,
 } from "./types.ts";
 
 export {
   MessageDiscriminant,
   MetadataValueDiscriminant,
-  ParityDiscriminant,
   HelloDiscriminant,
   MetadataFlags,
   parityOdd,
@@ -66,9 +62,6 @@ export {
   connectionSettings,
   helloV7,
   helloYourself,
-  helloV4,
-  helloV5,
-  helloV6,
   metadataString,
   metadataBytes,
   metadataU64,
@@ -104,10 +97,6 @@ export {
   MessagePayloadSchema,
   MessageSchema,
   wireSchemaRegistry,
-  getHelloSchema,
-  getMetadataValueSchema,
-  getMetadataEntrySchema,
-  getMessageSchema,
 } from "./schemas.ts";
 
 export {

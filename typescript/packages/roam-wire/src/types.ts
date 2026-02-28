@@ -223,10 +223,6 @@ export const MetadataValueDiscriminant = {
   U64: 2,
 } as const;
 
-export const ParityDiscriminant = {
-  Odd: 0,
-  Even: 1,
-} as const;
 
 export const HelloDiscriminant = {
   V7: 7,
@@ -482,28 +478,3 @@ export function messageCredit(channelId: bigint, bytes: number, connId: bigint =
   };
 }
 
-// Legacy aliases kept to avoid churn in imports.
-export type HelloV4 = never;
-export type HelloV5 = never;
-export type HelloV6 = never;
-
-export function helloV4(_maxPayloadSize: number, _initialChannelCredit: number): never {
-  throw new Error("HelloV4 is not supported in the v7 TypeScript runtime");
-}
-
-export function helloV5(
-  _maxPayloadSize: number,
-  _initialChannelCredit: number,
-  _maxConcurrentRequests: number,
-): never {
-  throw new Error("HelloV5 is not supported in the v7 TypeScript runtime");
-}
-
-export function helloV6(
-  _maxPayloadSize: number,
-  _initialChannelCredit: number,
-  _maxConcurrentRequests: number,
-  _metadata: Metadata = [],
-): never {
-  throw new Error("HelloV6 is not supported in the v7 TypeScript runtime");
-}

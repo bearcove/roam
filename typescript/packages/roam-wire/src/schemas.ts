@@ -24,28 +24,4 @@ export {
   wireSchemaRegistry,
 } from "./schemas.generated.ts";
 
-import {
-  HelloSchema,
-  MetadataValueSchema,
-  MetadataEntrySchema,
-  MessageSchema,
-  wireSchemaRegistry,
-} from "./schemas.generated.ts";
-
-export function getHelloSchema(): Schema {
-  return HelloSchema;
-}
-
-export function getMetadataValueSchema(): Schema {
-  return MetadataValueSchema;
-}
-
-export function getMetadataEntrySchema(): Schema {
-  return MetadataEntrySchema;
-}
-
-export function getMessageSchema(): Schema {
-  return MessageSchema;
-}
-
 export { type Schema, type SchemaRegistry };

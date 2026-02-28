@@ -68,8 +68,6 @@ export {
 // Wire types, schemas, and codec
 export type {
   Hello,
-  HelloV4,
-  HelloV5,
   MetadataValue,
   MetadataValueString,
   MetadataValueBytes,
@@ -98,8 +96,6 @@ export {
   // Metadata flags
   MetadataFlags,
   // Wire factory functions
-  helloV4,
-  helloV5,
   metadataString,
   metadataBytes,
   metadataU64,
