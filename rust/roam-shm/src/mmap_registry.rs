@@ -54,7 +54,7 @@ impl MmapAllocation {
     ///
     /// # Safety
     /// The caller must ensure no other thread is reading this range concurrently.
-    pub unsafe fn payload_mut(&self, len: usize) -> &mut [u8] {
+    pub unsafe fn payload_mut(&mut self, len: usize) -> &mut [u8] {
         let region = self.region.region();
         let ptr = unsafe { region.as_ptr().add(self.map_offset as usize) };
         unsafe { std::slice::from_raw_parts_mut(ptr, len) }

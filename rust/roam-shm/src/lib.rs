@@ -637,7 +637,7 @@ impl WriteSlot for ShmWriteSlot {
             }
             ShmWriteSlotInner::MmapRef { alloc, payload_len } => {
                 let alloc = alloc
-                    .as_ref()
+                    .as_mut()
                     .expect("mmap alloc must be present while write slot is alive");
                 // SAFETY: We just allocated this range and no one else is reading it.
                 unsafe { alloc.payload_mut(*payload_len) }
