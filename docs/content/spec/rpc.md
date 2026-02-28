@@ -436,8 +436,10 @@ metadata.push((
 >
 > `channel<T>()` returns a `(Tx<T>, Rx<T>)` pair that share a single
 > channel core. Both handles hold an `Arc` reference to the core. The
-> core contains a `OnceLock<ChannelBinding>` where `ChannelBinding` is
-> either a `Sink` or a `Receiver` — never both.
+> core contains a `Mutex<Option<ChannelBinding>>` where `ChannelBinding`
+> is either a `Sink` or a `Receiver` — never both. The `Mutex` is
+> needed because `Rx::recv` takes the receiver out of the core on
+> first call.
 
 > r[rpc.channel.pair.binding-propagation]
 >
