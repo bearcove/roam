@@ -9,11 +9,13 @@
 
 import {
   type Hello,
+  type Message,
   type MetadataEntry,
-  helloV5,
-  helloV6,
+  helloV7,
+  parityEven,
+  parityOdd,
   messageHello,
-  messageGoodbye,
+  messageProtocolError,
   messageRequest,
   messageResponse,
   messageAccept,
@@ -77,6 +79,10 @@ export class ConnectionError extends Error {
   static closed(): ConnectionError {
     return new ConnectionError("closed", "connection closed");
   }
+}
+
+function msgTag(msg: Message): Message["payload"]["tag"] {
+  return msg.payload.tag;
 }
 
 /** Trait for dispatching RPC requests to a service. */
@@ -221,7 +227,7 @@ export class Connection<T extends MessageTransport = MessageTransport> {
    */
   async goodbye(ruleId: string): Promise<ConnectionError> {
     try {
-      await this.io.send(encodeMessage(messageGoodbye(ruleId)));
+      await this.io.send(encodeMessage(messageProtocolError(ruleId)));
     } catch {
       // Ignore send errors when closing
     }
@@ -303,9 +309,9 @@ export class Connection<T extends MessageTransport = MessageTransport> {
 
           // Parse message using wire codec
           const result = decodeMessage(data);
-          const msg = result.value;
+          const msg = result.value as any;
 
-          if (msg.tag === "Goodbye") {
+          if (msgTag(msg) === "ConnectionClose" || msgTag(msg) === "ProtocolError") {
             // Reject all pending requests
             const error = ConnectionError.closed();
             for (const [, pending] of this.pendingRequests) {
@@ -317,34 +323,38 @@ export class Connection<T extends MessageTransport = MessageTransport> {
           }
 
           // Handle channel messages
-          if (msg.tag === "Data") {
+          if (msgTag(msg) === "ChannelMessage" && msg.payload.value.body.tag === "Item") {
             try {
-              this.channelRegistry.routeData(msg.channelId, msg.payload);
+              this.channelRegistry.routeData(
+                msg.payload.value.id,
+                msg.payload.value.body.value.item,
+              );
             } catch {
               // Ignore channel errors - connection still valid
             }
             continue;
           }
 
-          if (msg.tag === "Close") {
-            if (this.channelRegistry.contains(msg.channelId)) {
-              this.channelRegistry.close(msg.channelId);
+          if (msgTag(msg) === "ChannelMessage" && msg.payload.value.body.tag === "Close") {
+            if (this.channelRegistry.contains(msg.payload.value.id)) {
+              this.channelRegistry.close(msg.payload.value.id);
             }
             continue;
           }
 
-          if (msg.tag === "Credit") {
+          if (msgTag(msg) === "ChannelMessage" && msg.payload.value.body.tag === "GrantCredit") {
             // Flow control, currently ignored
             continue;
           }
 
-          if (msg.tag === "Response") {
+          if (msgTag(msg) === "RequestMessage" && msg.payload.value.body.tag === "Response") {
             // Route response to the correct pending request
-            const pending = this.pendingRequests.get(msg.requestId);
+            const requestId = msg.payload.value.id;
+            const pending = this.pendingRequests.get(requestId);
             if (pending) {
               clearTimeout(pending.timer);
-              this.pendingRequests.delete(msg.requestId);
-              pending.resolve(msg.payload);
+              this.pendingRequests.delete(requestId);
+              pending.resolve(msg.payload.value.body.value.ret);
             }
             // Ignore responses for unknown request IDs (already timed out?)
             continue;
@@ -573,157 +583,112 @@ export class Connection<T extends MessageTransport = MessageTransport> {
   ): Promise<void> | undefined {
     // Parse message using wire codec
     const result = decodeMessage(payload);
-    const msg = result.value;
+    const msg = result.value as any;
+    const tag = msgTag(msg);
 
-    if (msg.tag === "Hello") {
+    if (tag === "Hello") {
       return undefined; // Duplicate Hello after exchange - ignore
     }
 
-    // r[impl message.connect.initiate] - Handle Connect requests for virtual connections.
-    if (msg.tag === "Connect") {
-      // r[impl core.conn.accept-required] - Accept or reject the connection request.
+    if (tag === "ConnectionOpen") {
+      const connId = msg.connection_id;
       if (this._acceptConnections) {
-        // r[impl core.conn.id-allocation] - Allocate a new connection ID.
-        const connId = this.nextConnId++;
         this.virtualConnections.add(connId);
-        // r[impl message.accept.response] - Send Accept with new conn_id.
-        const acceptMsg = messageAccept(msg.requestId, connId, []);
+        const acceptMsg = messageAccept(
+          connId,
+          msg.payload.value.connection_settings,
+          [],
+        );
         this.io.send(encodeMessage(acceptMsg));
       } else {
-        // r[impl message.reject.response] - Reject since not listening.
-        const rejectMsg = messageReject(msg.requestId, "not listening", []);
+        const rejectMsg = messageReject(connId, []);
         this.io.send(encodeMessage(rejectMsg));
       }
       return undefined;
     }
 
-    // Accept and Reject are responses to our Connect requests - ignore in server mode
-    if (msg.tag === "Accept" || msg.tag === "Reject") {
+    if (tag === "ConnectionAccept" || tag === "ConnectionReject") {
       return undefined;
     }
 
-    if (msg.tag === "Goodbye") {
-      // r[impl message.goodbye.connection-zero] - Goodbye on conn 0 closes entire link.
-      if (msg.connId === 0n) {
+    if (tag === "ConnectionClose" || tag === "ProtocolError") {
+      if (tag === "ProtocolError" || msg.connection_id === 0n) {
         throw ConnectionError.closed();
       }
-      // r[impl core.conn.lifecycle] - Close virtual connection if it exists.
-      // r[impl core.conn.independence] - Ignore Goodbye on unknown connection.
-      if (this.virtualConnections.has(msg.connId)) {
-        this.virtualConnections.delete(msg.connId);
+      if (this.virtualConnections.has(msg.connection_id)) {
+        this.virtualConnections.delete(msg.connection_id);
       }
-      // Ignore Goodbye on unknown connection IDs
       return undefined;
     }
 
-    if (msg.tag === "Request") {
-      // r[impl flow.call.payload-limit] - Validate payload size
-      const payloadViolation = this.validatePayloadSize(msg.payload.length);
-      if (payloadViolation) {
-        throw ConnectionError.protocol({
-          ruleId: payloadViolation,
-          context: "payload exceeds max size",
-        });
-      }
-
-      // Dispatch with channeling support - return the promise, don't await it!
-      // This allows the handler to run concurrently while we continue receiving messages.
-      return dispatcher.dispatch(
-        msg.methodId,
-        msg.payload,
-        msg.requestId,
-        this.channelRegistry,
-        taskSender,
-      );
-    }
-
-    // Handle other message types (Data, Close, etc.) synchronously
-    if (msg.tag === "Response") {
-      return undefined;
-    }
-
-    if (msg.tag === "Data") {
-      if (msg.channelId === 0n) {
-        // Can't send goodbye synchronously - throw protocol error
-        throw ConnectionError.protocol({
-          ruleId: "channeling.id.zero-reserved",
-          context: "channel ID 0 is reserved",
-        });
-      }
-      try {
-        this.channelRegistry.routeData(msg.channelId, msg.payload);
-      } catch (e) {
-        if (e instanceof ChannelError) {
-          if (e.kind === "unknown") {
-            throw ConnectionError.protocol({
-              ruleId: "channeling.unknown",
-              context: "unknown channel ID",
-            });
-          }
-          if (e.kind === "dataAfterClose") {
-            throw ConnectionError.protocol({
-              ruleId: "channeling.data-after-close",
-              context: "data after close",
-            });
-          }
+    if (tag === "RequestMessage") {
+      const request = msg.payload.value;
+      if (request.body.tag === "Call") {
+        const payloadViolation = this.validatePayloadSize(request.body.value.args.length);
+        if (payloadViolation) {
+          throw ConnectionError.protocol({
+            ruleId: payloadViolation,
+            context: "payload exceeds max size",
+          });
         }
-        throw e;
+        return dispatcher.dispatch(
+          request.body.value.method_id,
+          request.body.value.args,
+          request.id,
+          this.channelRegistry,
+          taskSender,
+        );
       }
       return undefined;
     }
 
-    if (msg.tag === "Close") {
-      if (msg.channelId === 0n) {
+    if (tag === "ChannelMessage") {
+      const channelId = msg.payload.value.id;
+      const body = msg.payload.value.body;
+      if (channelId === 0n) {
         throw ConnectionError.protocol({
           ruleId: "channeling.id.zero-reserved",
           context: "channel ID 0 is reserved",
         });
       }
-      if (!this.channelRegistry.contains(msg.channelId)) {
+
+      if (body.tag === "Item") {
+        try {
+          this.channelRegistry.routeData(channelId, body.value.item);
+        } catch (e) {
+          if (e instanceof ChannelError) {
+            if (e.kind === "unknown") {
+              throw ConnectionError.protocol({
+                ruleId: "channeling.unknown",
+                context: "unknown channel ID",
+              });
+            }
+            if (e.kind === "dataAfterClose") {
+              throw ConnectionError.protocol({
+                ruleId: "channeling.data-after-close",
+                context: "data after close",
+              });
+            }
+          }
+          throw e;
+        }
+        return undefined;
+      }
+
+      if (!this.channelRegistry.contains(channelId)) {
         throw ConnectionError.protocol({
           ruleId: "channeling.unknown",
           context: "unknown channel ID",
         });
       }
-      this.channelRegistry.close(msg.channelId);
-      return undefined;
-    }
 
-    if (msg.tag === "Reset") {
-      if (msg.channelId === 0n) {
-        throw ConnectionError.protocol({
-          ruleId: "channeling.id.zero-reserved",
-          context: "channel ID 0 is reserved",
-        });
-      }
-      if (!this.channelRegistry.contains(msg.channelId)) {
-        throw ConnectionError.protocol({
-          ruleId: "channeling.unknown",
-          context: "unknown channel ID",
-        });
-      }
-      // TODO: Signal error to Rx<T> instead of clean close
-      this.channelRegistry.close(msg.channelId);
-      return undefined;
-    }
-
-    if (msg.tag === "Credit") {
-      if (msg.channelId === 0n) {
-        throw ConnectionError.protocol({
-          ruleId: "channeling.id.zero-reserved",
-          context: "channel ID 0 is reserved",
-        });
-      }
-      if (!this.channelRegistry.contains(msg.channelId)) {
-        throw ConnectionError.protocol({
-          ruleId: "channeling.unknown",
-          context: "unknown channel ID",
-        });
+      if (body.tag === "Close" || body.tag === "Reset") {
+        this.channelRegistry.close(channelId);
       }
       return undefined;
     }
 
-    return undefined; // Unknown message type - ignore
+    return undefined;
   }
 
   /**
@@ -770,53 +735,60 @@ export class Connection<T extends MessageTransport = MessageTransport> {
   private async handleMessage(payload: Uint8Array, dispatcher: ServiceDispatcher): Promise<void> {
     // Parse message using wire codec
     const result = decodeMessage(payload);
-    const msg = result.value;
+    const msg = result.value as any;
 
-    if (msg.tag === "Hello") {
+    const tag = msgTag(msg);
+
+    if (tag === "Hello") {
       // Duplicate Hello after exchange - ignore
       return;
     }
 
-    if (msg.tag === "Goodbye") {
+    if (tag === "ConnectionClose" || tag === "ProtocolError") {
       // Peer sent Goodbye, connection closing
       throw ConnectionError.closed();
     }
 
-    if (msg.tag === "Request") {
+    if (tag === "RequestMessage" && msg.payload.value.body.tag === "Call") {
+      const request = msg.payload.value;
       // r[impl flow.call.payload-limit] - enforce negotiated max payload size
-      const payloadViolation = this.validatePayloadSize(msg.payload.length);
+      const payloadViolation = this.validatePayloadSize(request.body.value.args.length);
       if (payloadViolation) {
         throw await this.goodbye(payloadViolation);
       }
 
       // Dispatch to service
-      const responsePayload = await dispatcher.dispatchRpc(msg.methodId, msg.payload);
+      const responsePayload = await dispatcher.dispatchRpc(
+        request.body.value.method_id,
+        request.body.value.args,
+      );
 
       // r[impl core.call] - Callee sends Response for caller's Request.
       // r[impl core.call.request-id] - Response has same request_id.
       // r[impl call.complete] - Send Response with matching request_id.
       // r[impl call.lifecycle.single-response] - Exactly one Response per Request.
-      await this.io.send(encodeMessage(messageResponse(msg.requestId, responsePayload)));
+      await this.io.send(encodeMessage(messageResponse(request.id, responsePayload)));
 
       // Flush any outgoing channel data that handlers may have queued
       await this.flushOutgoing();
       return;
     }
 
-    if (msg.tag === "Response") {
+    if (tag === "RequestMessage" && msg.payload.value.body.tag === "Response") {
       // Server doesn't expect Response in basic mode - skip
       return;
     }
 
-    if (msg.tag === "Data") {
+    if (tag === "ChannelMessage" && msg.payload.value.body.tag === "Item") {
+      const channelId = msg.payload.value.id;
       // r[impl channeling.id.zero-reserved] - Channel ID 0 is reserved.
-      if (msg.channelId === 0n) {
+      if (channelId === 0n) {
         throw await this.goodbye("channeling.id.zero-reserved");
       }
 
       // r[impl channeling.data] - Route Data to registered channel.
       try {
-        this.channelRegistry.routeData(msg.channelId, msg.payload);
+        this.channelRegistry.routeData(channelId, msg.payload.value.body.value.item);
       } catch (e) {
         if (e instanceof ChannelError) {
           if (e.kind === "unknown") {
@@ -833,45 +805,48 @@ export class Connection<T extends MessageTransport = MessageTransport> {
       return;
     }
 
-    if (msg.tag === "Close") {
+    if (tag === "ChannelMessage" && msg.payload.value.body.tag === "Close") {
+      const channelId = msg.payload.value.id;
       // r[impl channeling.id.zero-reserved] - Channel ID 0 is reserved.
-      if (msg.channelId === 0n) {
+      if (channelId === 0n) {
         throw await this.goodbye("channeling.id.zero-reserved");
       }
 
       // r[impl channeling.close] - Close the channel.
-      if (!this.channelRegistry.contains(msg.channelId)) {
+      if (!this.channelRegistry.contains(channelId)) {
         throw await this.goodbye("channeling.unknown");
       }
-      this.channelRegistry.close(msg.channelId);
+      this.channelRegistry.close(channelId);
       return;
     }
 
-    if (msg.tag === "Reset") {
+    if (tag === "ChannelMessage" && msg.payload.value.body.tag === "Reset") {
+      const channelId = msg.payload.value.id;
       // r[impl channeling.id.zero-reserved] - Channel ID 0 is reserved.
-      if (msg.channelId === 0n) {
+      if (channelId === 0n) {
         throw await this.goodbye("channeling.id.zero-reserved");
       }
 
       // r[impl channeling.reset] - Forcefully terminate channel.
       // For now, treat same as Close.
       // TODO: Signal error to Rx<T> instead of clean close.
-      if (!this.channelRegistry.contains(msg.channelId)) {
+      if (!this.channelRegistry.contains(channelId)) {
         throw await this.goodbye("channeling.unknown");
       }
-      this.channelRegistry.close(msg.channelId);
+      this.channelRegistry.close(channelId);
       return;
     }
 
-    if (msg.tag === "Credit") {
+    if (tag === "ChannelMessage" && msg.payload.value.body.tag === "GrantCredit") {
+      const channelId = msg.payload.value.id;
       // r[impl channeling.id.zero-reserved] - Channel ID 0 is reserved.
-      if (msg.channelId === 0n) {
+      if (channelId === 0n) {
         throw await this.goodbye("channeling.id.zero-reserved");
       }
 
       // TODO: Implement flow control.
       // For now, validate channel exists but ignore credit.
-      if (!this.channelRegistry.contains(msg.channelId)) {
+      if (!this.channelRegistry.contains(channelId)) {
         throw await this.goodbye("channeling.unknown");
       }
       return;
@@ -898,22 +873,30 @@ export async function helloExchangeInitiator<T extends MessageTransport>(
   ourHello: Hello,
   options: HelloExchangeOptions = {},
 ): Promise<Connection<T>> {
+  const hello: Hello = {
+    ...ourHello,
+    connection_settings: {
+      ...ourHello.connection_settings,
+      parity: parityOdd(),
+    },
+  };
+
   // Send our Hello immediately
-  await io.send(encodeMessage(messageHello(ourHello)));
+  await io.send(encodeMessage(messageHello(hello)));
 
   // Wait for peer Hello
-  const peerHello = await waitForPeerHello(io, ourHello);
+  const peerHello = await waitForPeerHello(io, hello);
 
   const negotiated: Negotiated = {
-    maxPayloadSize: Math.min(ourHello.maxPayloadSize, peerHello.maxPayloadSize),
-    initialCredit: Math.min(ourHello.initialChannelCredit, peerHello.initialChannelCredit),
+    maxPayloadSize: 1024 * 1024,
+    initialCredit: 64 * 1024,
     maxConcurrentRequests: Math.min(
-      ourHello.tag === "V5" || ourHello.tag === "V6" ? ourHello.maxConcurrentRequests : 0xffffffff,
-      peerHello.tag === "V5" || peerHello.tag === "V6" ? peerHello.maxConcurrentRequests : 0xffffffff,
+      hello.connection_settings.max_concurrent_requests,
+      peerHello.connection_settings.max_concurrent_requests,
     ),
   };
 
-  return new Connection(io, Role.Initiator, negotiated, ourHello, options.acceptConnections);
+  return new Connection(io, Role.Initiator, negotiated, hello, options.acceptConnections);
 }
 
 /**
@@ -927,22 +910,30 @@ export async function helloExchangeAcceptor<T extends MessageTransport>(
   ourHello: Hello,
   options: HelloExchangeOptions = {},
 ): Promise<Connection<T>> {
+  const hello: Hello = {
+    ...ourHello,
+    connection_settings: {
+      ...ourHello.connection_settings,
+      parity: parityEven(),
+    },
+  };
+
   // Wait for peer Hello
-  const peerHello = await waitForPeerHello(io, ourHello);
+  const peerHello = await waitForPeerHello(io, hello);
 
   const negotiated: Negotiated = {
-    maxPayloadSize: Math.min(ourHello.maxPayloadSize, peerHello.maxPayloadSize),
-    initialCredit: Math.min(ourHello.initialChannelCredit, peerHello.initialChannelCredit),
+    maxPayloadSize: 1024 * 1024,
+    initialCredit: 64 * 1024,
     maxConcurrentRequests: Math.min(
-      ourHello.tag === "V5" || ourHello.tag === "V6" ? ourHello.maxConcurrentRequests : 0xffffffff,
-      peerHello.tag === "V5" || peerHello.tag === "V6" ? peerHello.maxConcurrentRequests : 0xffffffff,
+      hello.connection_settings.max_concurrent_requests,
+      peerHello.connection_settings.max_concurrent_requests,
     ),
   };
 
   // Send our Hello
-  await io.send(encodeMessage(messageHello(ourHello)));
+  await io.send(encodeMessage(messageHello(hello)));
 
-  return new Connection(io, Role.Acceptor, negotiated, ourHello, options.acceptConnections);
+  return new Connection(io, Role.Acceptor, negotiated, hello, options.acceptConnections);
 }
 
 async function waitForPeerHello<T extends MessageTransport>(
@@ -956,8 +947,8 @@ async function waitForPeerHello<T extends MessageTransport>(
     } catch {
       // r[impl message.hello.unknown-version] - Reject unknown Hello versions.
       const raw = io.lastDecoded;
-      if (raw.length >= 2 && raw[0] === 0x00 && raw[1] > 0x05) {
-        await io.send(encodeMessage(messageGoodbye("message.hello.unknown-version")));
+      if (raw.length >= 2 && raw[1] > 0x07) {
+        await io.send(encodeMessage(messageProtocolError("message.hello.unknown-version")));
         io.close();
         throw ConnectionError.protocol({
           ruleId: "message.hello.unknown-version",
@@ -977,23 +968,14 @@ async function waitForPeerHello<T extends MessageTransport>(
     try {
       result = decodeMessage(payload);
     } catch {
-      // Check if this is an unknown Hello variant: [Message::Hello=0][Hello::unknown=1+]
-      if (payload.length >= 2 && payload[0] === 0x00 && payload[1] > 0x04) {
-        await io.send(encodeMessage(messageGoodbye("message.hello.unknown-version")));
-        io.close();
-        throw ConnectionError.protocol({
-          ruleId: "message.hello.unknown-version",
-          context: "unknown Hello variant",
-        });
-      }
       throw ConnectionError.io("failed to decode message");
     }
-    const msg = result.value;
+    const msg = result.value as any;
 
-    if (msg.tag === "Hello") {
+    if (msgTag(msg) === "Hello") {
       // r[impl message.hello.unknown-version] - reject unknown Hello versions
-      if (msg.value.tag !== "V4" && msg.value.tag !== "V5" && msg.value.tag !== "V6") {
-        await io.send(encodeMessage(messageGoodbye("message.hello.unknown-version")));
+      if (msg.payload.value.version !== 7) {
+        await io.send(encodeMessage(messageProtocolError("message.hello.unknown-version")));
         io.close();
         throw ConnectionError.protocol({
           ruleId: "message.hello.unknown-version",
@@ -1001,11 +983,11 @@ async function waitForPeerHello<T extends MessageTransport>(
         });
       }
 
-      return msg.value;
+      return msg.payload.value;
     }
 
     // Received non-Hello before Hello exchange completed
-    await io.send(encodeMessage(messageGoodbye("message.hello.ordering")));
+    await io.send(encodeMessage(messageProtocolError("message.hello.ordering")));
     io.close();
     throw ConnectionError.protocol({
       ruleId: "message.hello.ordering",
@@ -1014,9 +996,9 @@ async function waitForPeerHello<T extends MessageTransport>(
   }
 }
 
-/** Default Hello message (V6). */
+/** Default Hello message (V7). */
 export function defaultHello(): Hello {
-  return helloV6(1024 * 1024, 64 * 1024, 64);
+  return helloV7(parityOdd(), 64);
 }
 
 /**

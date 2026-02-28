@@ -2,7 +2,11 @@
 // r[impl core.error.roam-error] - RoamError wraps call results
 // r[impl call.error.protocol] - Protocol errors use discriminants 1-3
 
-import { decodeVarintNumber, type DecodeResult } from "@bearcove/roam-postcard";
+import {
+  decodeRpcWireResult,
+  type DecodeResult,
+  type RoamErrorPayload,
+} from "@bearcove/roam-postcard";
 
 /** RAPACE error discriminants */
 export const RpcErrorCode = {
@@ -75,64 +79,11 @@ export class RpcError extends Error {
  * @throws RpcError if the response is an error
  */
 export function decodeRpcResult(buf: Uint8Array, offset: number): number {
-  if (buf.length === 0) {
-    throw new Error(`decodeRpcResult: empty buffer (length=0), cannot decode Result discriminant`);
+  const decoded = decodeRpcWireResult(buf, offset);
+  if (decoded.value.tag === "Ok") {
+    return decoded.next - decoded.value.value.length;
   }
-
-  // Decode outer Result discriminant: 0 = Ok, 1 = Err
-  const outerResult = decodeVarintNumber(buf, offset);
-
-  if (outerResult.value === 0) {
-    // Ok - return offset to success payload
-    return outerResult.next;
-  }
-
-  if (outerResult.value !== 1) {
-    // Invalid Result discriminant - provide context
-    throw new Error(
-      `decodeRpcResult: invalid outer Result discriminant: ${outerResult.value} ` +
-        `(expected 0=Ok or 1=Err) at offset ${offset}\n` +
-        `  Buffer (${buf.length} bytes): ${hexDump(buf, offset, 32)}`,
-    );
-  }
-
-  // Err - decode the RoamError discriminant
-  const errorDiscrim = decodeVarintNumber(buf, outerResult.next);
-  const errorCode = errorDiscrim.value;
-
-  // Validate RoamError discriminant
-  if (errorCode < 0 || errorCode > 3) {
-    throw new Error(
-      `decodeRpcResult: invalid RoamError discriminant: ${errorCode} ` +
-        `(expected 0=USER, 1=UNKNOWN_METHOD, 2=INVALID_PAYLOAD, 3=CANCELLED) ` +
-        `at offset ${outerResult.next}\n` +
-        `  Buffer (${buf.length} bytes): ${hexDump(buf, outerResult.next, 32)}`,
-    );
-  }
-
-  if (errorCode === RpcErrorCode.USER) {
-    // User error - payload follows
-    const payload = buf.slice(errorDiscrim.next);
-    throw new RpcError(errorCode, payload);
-  }
-
-  // Protocol error - no additional payload
-  throw new RpcError(errorCode as RpcErrorCode);
-}
-
-/** Helper to create a hex dump of buffer bytes for error messages */
-function hexDump(buf: Uint8Array, offset: number, length: number): string {
-  const start = Math.max(0, offset);
-  const end = Math.min(buf.length, start + length);
-  const bytes: string[] = [];
-  for (let i = start; i < end; i++) {
-    if (i === offset) {
-      bytes.push(`[${buf[i].toString(16).padStart(2, "0")}]`);
-    } else {
-      bytes.push(buf[i].toString(16).padStart(2, "0"));
-    }
-  }
-  return bytes.join(" ");
+  throw toRpcError(decoded.value.value);
 }
 
 /**
@@ -172,47 +123,26 @@ export type RpcResult =
  * @returns RpcResult indicating success (with offset to payload) or failure (with RpcError)
  */
 export function tryDecodeRpcResult(buf: Uint8Array, offset: number = 0): RpcResult {
-  if (buf.length === 0) {
-    return {
-      ok: false,
-      error: new RpcError(RpcErrorCode.INVALID_PAYLOAD),
-    };
+  try {
+    const decoded = decodeRpcWireResult(buf, offset);
+    if (decoded.value.tag === "Ok") {
+      return { ok: true, offset: decoded.next - decoded.value.value.length };
+    }
+    return { ok: false, error: toRpcError(decoded.value.value) };
+  } catch {
+    return { ok: false, error: new RpcError(RpcErrorCode.INVALID_PAYLOAD) };
   }
+}
 
-  // Decode outer Result discriminant: 0 = Ok, 1 = Err
-  const outerResult = decodeVarintNumber(buf, offset);
-
-  if (outerResult.value === 0) {
-    // Ok - return offset to success payload
-    return { ok: true, offset: outerResult.next };
+function toRpcError(err: RoamErrorPayload): RpcError {
+  switch (err.tag) {
+    case "User":
+      return new RpcError(RpcErrorCode.USER, err.value);
+    case "UnknownMethod":
+      return new RpcError(RpcErrorCode.UNKNOWN_METHOD);
+    case "InvalidPayload":
+      return new RpcError(RpcErrorCode.INVALID_PAYLOAD);
+    case "Cancelled":
+      return new RpcError(RpcErrorCode.CANCELLED);
   }
-
-  if (outerResult.value !== 1) {
-    // Invalid Result discriminant
-    return {
-      ok: false,
-      error: new RpcError(RpcErrorCode.INVALID_PAYLOAD),
-    };
-  }
-
-  // Err - decode the RoamError discriminant
-  const errorDiscrim = decodeVarintNumber(buf, outerResult.next);
-  const errorCode = errorDiscrim.value;
-
-  // Validate RoamError discriminant
-  if (errorCode < 0 || errorCode > 3) {
-    return {
-      ok: false,
-      error: new RpcError(RpcErrorCode.INVALID_PAYLOAD),
-    };
-  }
-
-  if (errorCode === RpcErrorCode.USER) {
-    // User error - payload follows
-    const payload = buf.slice(errorDiscrim.next);
-    return { ok: false, error: new RpcError(errorCode, payload) };
-  }
-
-  // Protocol error - no additional payload
-  return { ok: false, error: new RpcError(errorCode as RpcErrorCode) };
 }

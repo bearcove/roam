@@ -472,6 +472,44 @@ describe("streaming types (tx/rx)", () => {
 });
 
 // ============================================================================
+// Trailing Bytes Tests
+// ============================================================================
+
+describe("trailing bytes schema", () => {
+  it("encodes trailing bytes without outer length prefix", () => {
+    const schema: Schema = {
+      kind: "struct",
+      fields: {
+        id: { kind: "u8" },
+        payload: { kind: "bytes", trailing: true },
+      },
+    };
+
+    const value = { id: 7, payload: new Uint8Array([2, 0xab, 0xcd]) };
+    const encoded = encodeWithSchema(value, schema);
+    expect(Array.from(encoded)).toEqual([7, 2, 0xab, 0xcd]);
+  });
+
+  it("decodes trailing bytes as remaining input", () => {
+    const schema: Schema = {
+      kind: "struct",
+      fields: {
+        id: { kind: "u8" },
+        payload: { kind: "bytes", trailing: true },
+      },
+    };
+
+    const encoded = new Uint8Array([7, 2, 0xab, 0xcd]);
+    const decoded = decodeWithSchema(encoded, 0, schema);
+    expect(decoded.next).toBe(encoded.length);
+    expect(decoded.value).toEqual({
+      id: 7,
+      payload: new Uint8Array([2, 0xab, 0xcd]),
+    });
+  });
+});
+
+// ============================================================================
 // Edge Cases
 // ============================================================================
 
