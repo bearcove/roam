@@ -205,10 +205,10 @@ fn main() -> Result<(), String> {
         .build()
         .map_err(|e| format!("failed to create tokio runtime: {e}"))?;
 
-    rt.block_on(run_server())
+    rt.block_on(connect_and_serve())
 }
 
-async fn run_server() -> Result<(), String> {
+async fn connect_and_serve() -> Result<(), String> {
     let addr = std::env::var("PEER_ADDR").map_err(|_| "PEER_ADDR env var not set".to_string())?;
     info!("connecting to {addr}");
 
