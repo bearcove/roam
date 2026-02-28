@@ -147,6 +147,19 @@ public struct OpaquePayloadV7: Sendable, Equatable {
     fileprivate static func decode(from data: Data, offset: inout Int) throws -> Self {
         .init(Array(try decodeBytesV7(from: data, offset: &offset)))
     }
+
+    /// Encode without a length prefix — for trailing fields only.
+    fileprivate func encodeTrailing() -> [UInt8] {
+        bytes
+    }
+
+    /// Decode by consuming all remaining bytes — for trailing fields only.
+    fileprivate static func decodeTrailing(from data: Data, offset: inout Int) -> Self {
+        let start = data.startIndex + offset
+        let remaining = Array(data[start...])
+        offset = data.count
+        return .init(remaining)
+    }
 }
 
 public enum MessagePayloadV7: Sendable, Equatable {
@@ -363,24 +376,23 @@ public enum RequestBodyV7: Sendable, Equatable {
 
 public struct RequestCallV7: Sendable, Equatable {
     public var methodId: UInt64
-    public var args: OpaquePayloadV7
     public var channels: [UInt64]
     public var metadata: MetadataV7
+    public var args: OpaquePayloadV7
 
     fileprivate func encode() -> [UInt8] {
         var out = encodeVarint(methodId)
-        out += args.encode()
         out += encodeVarint(UInt64(channels.count))
         for channel in channels {
             out += encodeVarint(channel)
         }
         out += encodeMetadataV7(metadata)
+        out += args.encodeTrailing()
         return out
     }
 
     fileprivate static func decode(from data: Data, offset: inout Int) throws -> Self {
         let methodId = try decodeVarint(from: data, offset: &offset)
-        let args = try OpaquePayloadV7.decode(from: data, offset: &offset)
         let channelCount = try decodeVarint(from: data, offset: &offset)
         var channels: [UInt64] = []
         channels.reserveCapacity(Int(channelCount))
@@ -388,27 +400,27 @@ public struct RequestCallV7: Sendable, Equatable {
             channels.append(try decodeVarint(from: data, offset: &offset))
         }
         let metadata = try decodeMetadataV7(from: data, offset: &offset)
-        return .init(methodId: methodId, args: args, channels: channels, metadata: metadata)
+        let args = OpaquePayloadV7.decodeTrailing(from: data, offset: &offset)
+        return .init(methodId: methodId, channels: channels, metadata: metadata, args: args)
     }
 }
 
 public struct RequestResponseV7: Sendable, Equatable {
-    public var ret: OpaquePayloadV7
     public var channels: [UInt64]
     public var metadata: MetadataV7
+    public var ret: OpaquePayloadV7
 
     fileprivate func encode() -> [UInt8] {
-        var out = ret.encode()
-        out += encodeVarint(UInt64(channels.count))
+        var out = encodeVarint(UInt64(channels.count))
         for channel in channels {
             out += encodeVarint(channel)
         }
         out += encodeMetadataV7(metadata)
+        out += ret.encodeTrailing()
         return out
     }
 
     fileprivate static func decode(from data: Data, offset: inout Int) throws -> Self {
-        let ret = try OpaquePayloadV7.decode(from: data, offset: &offset)
         let channelCount = try decodeVarint(from: data, offset: &offset)
         var channels: [UInt64] = []
         channels.reserveCapacity(Int(channelCount))
@@ -416,7 +428,8 @@ public struct RequestResponseV7: Sendable, Equatable {
             channels.append(try decodeVarint(from: data, offset: &offset))
         }
         let metadata = try decodeMetadataV7(from: data, offset: &offset)
-        return .init(ret: ret, channels: channels, metadata: metadata)
+        let ret = OpaquePayloadV7.decodeTrailing(from: data, offset: &offset)
+        return .init(channels: channels, metadata: metadata, ret: ret)
     }
 }
 
@@ -488,11 +501,11 @@ public struct ChannelItemV7: Sendable, Equatable {
     public var item: OpaquePayloadV7
 
     fileprivate func encode() -> [UInt8] {
-        item.encode()
+        item.encodeTrailing()
     }
 
     fileprivate static func decode(from data: Data, offset: inout Int) throws -> Self {
-        .init(item: try OpaquePayloadV7.decode(from: data, offset: &offset))
+        .init(item: OpaquePayloadV7.decodeTrailing(from: data, offset: &offset))
     }
 }
 
@@ -613,7 +626,7 @@ public extension MessageV7 {
             payload: .requestMessage(
                 .init(
                     id: requestId,
-                    body: .call(.init(methodId: methodId, args: .init(payload), channels: channels, metadata: metadata))
+                    body: .call(.init(methodId: methodId, channels: channels, metadata: metadata, args: .init(payload)))
                 ))
         )
     }
@@ -630,7 +643,7 @@ public extension MessageV7 {
             payload: .requestMessage(
                 .init(
                     id: requestId,
-                    body: .response(.init(ret: .init(payload), channels: channels, metadata: metadata))
+                    body: .response(.init(channels: channels, metadata: metadata, ret: .init(payload)))
                 ))
         )
     }
