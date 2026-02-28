@@ -24,17 +24,15 @@ use crate::rpc_plan::{ChannelKind, RpcPlan};
 /// This abstraction lets the macro-generated dispatcher and client code bind
 /// channels without depending on concrete driver types.
 pub trait ChannelBinder: Send + Sync {
-    /// Create an outbound channel (Tx on our side).
+    /// Allocate a channel ID and create a sink for sending items.
     ///
-    /// Allocates a new channel ID and returns a sink for sending items.
-    /// `initial_credit` is the const generic `N` from `Tx<T, N>`.
-    /// Used by the **client** when building `RequestCall.channels`.
+    /// `initial_credit` is the const generic `N` from `Tx<T, N>` or `Rx<T, N>`.
+    /// Used by the **client** when it needs to send on a channel.
     fn create_tx(&self, initial_credit: u32) -> (ChannelId, Arc<dyn ChannelSink>);
 
-    /// Create an inbound channel (Rx on our side).
+    /// Allocate a channel ID, register it for routing, and return a receiver.
     ///
-    /// Allocates a new channel ID, registers it for routing, and returns
-    /// a receiver. Used by the **client** when building `RequestCall.channels`.
+    /// Used by the **client** when it needs to receive on a channel.
     fn create_rx(&self) -> (ChannelId, mpsc::Receiver<IncomingChannelMessage>);
 
     /// Create a sink for a known channel ID (server side).
@@ -124,8 +122,9 @@ pub unsafe fn bind_channels_server(
 /// Tx/Rx field via `Poke::at_path_mut`, allocates a channel ID, binds the
 /// field, and collects the IDs for `RequestCall.channels`.
 ///
-/// - Tx fields: client allocates ID + sink (client sends to server)
-/// - Rx fields: client allocates ID + receiver (client receives from server)
+/// Args are in arg position, so the **handler** holds them:
+/// - Tx fields: handler sends → client receives (allocate ID + receiver)
+/// - Rx fields: handler receives ← client sends (allocate ID + sink)
 ///
 /// # Safety
 ///

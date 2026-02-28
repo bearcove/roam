@@ -137,7 +137,10 @@ impl ReceiverSlot {
     }
 }
 
-/// Caller-side sender handle (`caller -> callee`).
+/// Sender handle: "I send". The holder of a `Tx<T>` sends items of type `T`.
+///
+/// In arg position the handler holds it (handler sends → caller).
+/// In return position the caller holds it (caller sends → handler).
 ///
 /// Wire encoding is always unit (`()`), with channel IDs carried exclusively
 /// in `Message::{Request,Response}.channels`.
@@ -232,7 +235,10 @@ impl std::fmt::Display for TxError {
 
 impl std::error::Error for TxError {}
 
-/// Caller-side receiver handle (`callee -> caller`).
+/// Receiver handle: "I receive". The holder of an `Rx<T>` receives items of type `T`.
+///
+/// In arg position the handler holds it (handler receives ← caller).
+/// In return position the caller holds it (caller receives ← handler).
 ///
 /// Wire encoding is always unit (`()`), with channel IDs carried exclusively
 /// in `Message::{Request,Response}.channels`.

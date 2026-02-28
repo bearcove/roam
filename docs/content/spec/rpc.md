@@ -188,10 +188,13 @@ let result = caller.add(3, 5).await?;
 
 > r[rpc.channel.direction]
 >
-> Service definitions are written from the handler's perspective:
+> `Tx<T, N>` means "I send" and `Rx<T, N>` means "I receive", where "I" is
+> whoever holds the handle. Position determines who holds it:
 >
->   * `Tx<T, N>` — data flows from handler to caller (the handler sends)
->   * `Rx<T, N>` — data flows from caller to handler (the caller sends)
+>   * In arg position (handler holds): `Tx<T>` = handler sends → caller,
+>     `Rx<T>` = handler receives ← caller.
+>   * In return position (caller holds): `Tx<T>` = caller sends → handler,
+>     `Rx<T>` = caller receives ← handler.
 
 > r[rpc.channel.placement]
 >
