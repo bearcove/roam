@@ -2178,8 +2178,10 @@ dependencies = [
 name = "spec-tests"
 version = "3.0.0"
 dependencies = [
- "facet 0.43.2 (git+https://github.com/facet-rs/facet?branch=main)",
- "facet-postcard",
+ "moire",
+ "roam",
+ "roam-core",
+ "roam-stream",
  "roam-types",
  "spec-proto",
  "tokio",
