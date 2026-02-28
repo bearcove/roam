@@ -72,11 +72,53 @@ impl PipelineClient {
 The handler starts a background processor, creates a channel pair, keeps
 `tx` to pull work from, and returns `rx` via `call.ok(rx)`.
 
-The caller receives `Rx<Job>` in the response. But `Rx` means the handler
-receives — so the caller sends. The caller gets back a bound `Tx<Job>`
-(extracted from the response's channel bindings) and uses it to feed jobs
-to the handler.
+The caller receives `Rx<Job>` in the response. `Rx` means "I receive" —
+and in return position, it's the *caller* who holds it, so the caller
+receives. The handler keeps the paired `Tx<Job>` and sends jobs through it.
+Direction: handler→caller.
+
+Contrast with `sum`: `Rx<i32>` in arg position — the *handler* holds it,
+so the handler receives. Direction: caller→handler.
+
+Same type, opposite direction. `Rx` always means "I receive" and `Tx`
+always means "I send". Position determines who "I" is.
 
 `Rx<Job>` is in return position. Per the spec, the **callee** allocates the
-channel ID. The direction is the same as in arg position: the caller sends,
-the handler receives. Position only affects who allocates the ID.
+channel ID. Position affects both who allocates the ID and the data direction.
+
+## `generate` — Tx in arg position
+
+```rust
+#[roam::service]
+trait Generator {
+    async fn generate(&self, count: u32, output: Tx<i32>);
+}
+```
+
+The handler holds `Tx<i32>`. `Tx` = "I send". Handler sends items to caller.
+Direction: handler→caller.
+
+The caller creates `(tx, rx) = channel()`, passes `tx` to the call, keeps
+`rx` to receive items.
+
+## `open_log` — Tx in return position
+
+```rust
+#[roam::service]
+trait Logger {
+    async fn open_log(&self, name: String) -> Tx<LogEntry>;
+}
+```
+
+The caller holds `Tx<LogEntry>`. `Tx` = "I send". Caller sends log entries
+to handler. Direction: caller→handler.
+
+The handler creates the channel pair, keeps `rx` to consume entries, returns
+`tx` via `call.ok(tx)`.
+
+## Summary
+
+|          | arg position (handler holds) | return position (caller holds) |
+|----------|------------------------------|--------------------------------|
+| `Rx<T>`  | handler receives ←caller     | caller receives ←handler       |
+| `Tx<T>`  | handler sends →caller        | caller sends →handler          |
