@@ -207,6 +207,26 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+fn fmt_typescript(path: &std::path::Path, text: String) -> String {
+    use dprint_plugin_typescript::configuration::ConfigurationBuilder;
+    use dprint_plugin_typescript::{FormatTextOptions, format_text};
+    let config = ConfigurationBuilder::new().build();
+    match format_text(FormatTextOptions {
+        path,
+        extension: None,
+        text: text.clone(),
+        config: &config,
+        external_formatter: None,
+    }) {
+        Ok(Some(formatted)) => formatted,
+        Ok(None) => text,
+        Err(e) => {
+            eprintln!("warning: dprint failed to format {}: {e}", path.display());
+            text
+        }
+    }
+}
+
 fn codegen_typescript(workspace_root: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
     let out_dir = workspace_root.join("typescript").join("generated");
     std::fs::create_dir_all(&out_dir)?;
@@ -216,7 +236,7 @@ fn codegen_typescript(workspace_root: &std::path::Path) -> Result<(), Box<dyn st
         let ts = roam_codegen::targets::typescript::generate_service(&service);
         let filename = format!("{}.ts", service.service_name.to_lowercase());
         let out_path = out_dir.join(&filename);
-        std::fs::write(&out_path, ts)?;
+        std::fs::write(&out_path, fmt_typescript(&out_path, ts))?;
         println!("Wrote {}", out_path.display());
     }
 
@@ -336,7 +356,7 @@ fn codegen_typescript_wire_schemas(
     out.push_str("  [\"Message\", MessageSchema],\n");
     out.push_str("]);\n");
 
-    std::fs::write(&out_path, out)?;
+    std::fs::write(&out_path, fmt_typescript(&out_path, out))?;
     println!("Wrote {}", out_path.display());
     Ok(())
 }

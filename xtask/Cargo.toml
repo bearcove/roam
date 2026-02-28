@@ -17,3 +17,4 @@ xshell = "0.2"
 roam-codegen = { path = "../rust/roam-codegen" }
 roam-types = { path = "../rust/roam-types" }
 spec-proto = { path = "../spec/spec-proto" }
+dprint-plugin-typescript = "0.95"

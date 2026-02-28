@@ -5,83 +5,65 @@ import type { Schema, SchemaRegistry } from "@bearcove/roam-postcard";
 
 export const ParitySchema: Schema = {
   kind: "enum",
-  variants: [
-    { name: "Odd", fields: null },
-    { name: "Even", fields: null },
-  ],
+  variants: [{ name: "Odd", fields: null }, { name: "Even", fields: null }],
 };
 
 export const ConnectionSettingsSchema: Schema = {
   kind: "struct",
   fields: {
-    parity: {
-      kind: "enum",
-      variants: [
-        { name: "Odd", fields: null },
-        { name: "Even", fields: null },
-      ],
-    },
-    max_concurrent_requests: { kind: "u32" },
+    "parity": { kind: "enum", variants: [{ name: "Odd", fields: null }, { name: "Even", fields: null }] },
+    "max_concurrent_requests": { kind: "u32" },
   },
 };
 
 export const MetadataValueSchema: Schema = {
   kind: "enum",
-  variants: [
-    { name: "String", fields: { kind: "string" } },
-    { name: "Bytes", fields: { kind: "bytes" } },
-    { name: "U64", fields: { kind: "u64" } },
-  ],
+  variants: [{ name: "String", fields: { kind: "string" } }, { name: "Bytes", fields: { kind: "bytes" } }, {
+    name: "U64",
+    fields: { kind: "u64" },
+  }],
 };
 
 export const MetadataEntrySchema: Schema = {
   kind: "struct",
   fields: {
-    key: { kind: "string" },
-    value: {
+    "key": { kind: "string" },
+    "value": {
       kind: "enum",
-      variants: [
-        { name: "String", fields: { kind: "string" } },
-        { name: "Bytes", fields: { kind: "bytes" } },
-        { name: "U64", fields: { kind: "u64" } },
-      ],
+      variants: [{ name: "String", fields: { kind: "string" } }, { name: "Bytes", fields: { kind: "bytes" } }, {
+        name: "U64",
+        fields: { kind: "u64" },
+      }],
     },
-    flags: { kind: "struct", fields: { "0": { kind: "u64" } } },
+    "flags": { kind: "struct", fields: { "0": { kind: "u64" } } },
   },
 };
 
 export const HelloSchema: Schema = {
   kind: "struct",
   fields: {
-    version: { kind: "u32" },
-    connection_settings: {
+    "version": { kind: "u32" },
+    "connection_settings": {
       kind: "struct",
       fields: {
-        parity: {
-          kind: "enum",
-          variants: [
-            { name: "Odd", fields: null },
-            { name: "Even", fields: null },
-          ],
-        },
-        max_concurrent_requests: { kind: "u32" },
+        "parity": { kind: "enum", variants: [{ name: "Odd", fields: null }, { name: "Even", fields: null }] },
+        "max_concurrent_requests": { kind: "u32" },
       },
     },
-    metadata: {
+    "metadata": {
       kind: "vec",
       element: {
         kind: "struct",
         fields: {
-          key: { kind: "string" },
-          value: {
+          "key": { kind: "string" },
+          "value": {
             kind: "enum",
-            variants: [
-              { name: "String", fields: { kind: "string" } },
-              { name: "Bytes", fields: { kind: "bytes" } },
-              { name: "U64", fields: { kind: "u64" } },
-            ],
+            variants: [{ name: "String", fields: { kind: "string" } }, { name: "Bytes", fields: { kind: "bytes" } }, {
+              name: "U64",
+              fields: { kind: "u64" },
+            }],
           },
-          flags: { kind: "struct", fields: { "0": { kind: "u64" } } },
+          "flags": { kind: "struct", fields: { "0": { kind: "u64" } } },
         },
       },
     },
@@ -91,76 +73,59 @@ export const HelloSchema: Schema = {
 export const HelloYourselfSchema: Schema = {
   kind: "struct",
   fields: {
-    connection_settings: {
+    "connection_settings": {
       kind: "struct",
       fields: {
-        parity: {
-          kind: "enum",
-          variants: [
-            { name: "Odd", fields: null },
-            { name: "Even", fields: null },
-          ],
-        },
-        max_concurrent_requests: { kind: "u32" },
+        "parity": { kind: "enum", variants: [{ name: "Odd", fields: null }, { name: "Even", fields: null }] },
+        "max_concurrent_requests": { kind: "u32" },
       },
     },
-    metadata: {
+    "metadata": {
       kind: "vec",
       element: {
         kind: "struct",
         fields: {
-          key: { kind: "string" },
-          value: {
+          "key": { kind: "string" },
+          "value": {
             kind: "enum",
-            variants: [
-              { name: "String", fields: { kind: "string" } },
-              { name: "Bytes", fields: { kind: "bytes" } },
-              { name: "U64", fields: { kind: "u64" } },
-            ],
+            variants: [{ name: "String", fields: { kind: "string" } }, { name: "Bytes", fields: { kind: "bytes" } }, {
+              name: "U64",
+              fields: { kind: "u64" },
+            }],
           },
-          flags: { kind: "struct", fields: { "0": { kind: "u64" } } },
+          "flags": { kind: "struct", fields: { "0": { kind: "u64" } } },
         },
       },
     },
   },
 };
 
-export const ProtocolErrorSchema: Schema = {
-  kind: "struct",
-  fields: { description: { kind: "string" } },
-};
+export const ProtocolErrorSchema: Schema = { kind: "struct", fields: { "description": { kind: "string" } } };
 
 export const ConnectionOpenSchema: Schema = {
   kind: "struct",
   fields: {
-    connection_settings: {
+    "connection_settings": {
       kind: "struct",
       fields: {
-        parity: {
-          kind: "enum",
-          variants: [
-            { name: "Odd", fields: null },
-            { name: "Even", fields: null },
-          ],
-        },
-        max_concurrent_requests: { kind: "u32" },
+        "parity": { kind: "enum", variants: [{ name: "Odd", fields: null }, { name: "Even", fields: null }] },
+        "max_concurrent_requests": { kind: "u32" },
       },
     },
-    metadata: {
+    "metadata": {
       kind: "vec",
       element: {
         kind: "struct",
         fields: {
-          key: { kind: "string" },
-          value: {
+          "key": { kind: "string" },
+          "value": {
             kind: "enum",
-            variants: [
-              { name: "String", fields: { kind: "string" } },
-              { name: "Bytes", fields: { kind: "bytes" } },
-              { name: "U64", fields: { kind: "u64" } },
-            ],
+            variants: [{ name: "String", fields: { kind: "string" } }, { name: "Bytes", fields: { kind: "bytes" } }, {
+              name: "U64",
+              fields: { kind: "u64" },
+            }],
           },
-          flags: { kind: "struct", fields: { "0": { kind: "u64" } } },
+          "flags": { kind: "struct", fields: { "0": { kind: "u64" } } },
         },
       },
     },
@@ -170,34 +135,27 @@ export const ConnectionOpenSchema: Schema = {
 export const ConnectionAcceptSchema: Schema = {
   kind: "struct",
   fields: {
-    connection_settings: {
+    "connection_settings": {
       kind: "struct",
       fields: {
-        parity: {
-          kind: "enum",
-          variants: [
-            { name: "Odd", fields: null },
-            { name: "Even", fields: null },
-          ],
-        },
-        max_concurrent_requests: { kind: "u32" },
+        "parity": { kind: "enum", variants: [{ name: "Odd", fields: null }, { name: "Even", fields: null }] },
+        "max_concurrent_requests": { kind: "u32" },
       },
     },
-    metadata: {
+    "metadata": {
       kind: "vec",
       element: {
         kind: "struct",
         fields: {
-          key: { kind: "string" },
-          value: {
+          "key": { kind: "string" },
+          "value": {
             kind: "enum",
-            variants: [
-              { name: "String", fields: { kind: "string" } },
-              { name: "Bytes", fields: { kind: "bytes" } },
-              { name: "U64", fields: { kind: "u64" } },
-            ],
+            variants: [{ name: "String", fields: { kind: "string" } }, { name: "Bytes", fields: { kind: "bytes" } }, {
+              name: "U64",
+              fields: { kind: "u64" },
+            }],
           },
-          flags: { kind: "struct", fields: { "0": { kind: "u64" } } },
+          "flags": { kind: "struct", fields: { "0": { kind: "u64" } } },
         },
       },
     },
@@ -207,21 +165,20 @@ export const ConnectionAcceptSchema: Schema = {
 export const ConnectionRejectSchema: Schema = {
   kind: "struct",
   fields: {
-    metadata: {
+    "metadata": {
       kind: "vec",
       element: {
         kind: "struct",
         fields: {
-          key: { kind: "string" },
-          value: {
+          "key": { kind: "string" },
+          "value": {
             kind: "enum",
-            variants: [
-              { name: "String", fields: { kind: "string" } },
-              { name: "Bytes", fields: { kind: "bytes" } },
-              { name: "U64", fields: { kind: "u64" } },
-            ],
+            variants: [{ name: "String", fields: { kind: "string" } }, { name: "Bytes", fields: { kind: "bytes" } }, {
+              name: "U64",
+              fields: { kind: "u64" },
+            }],
           },
-          flags: { kind: "struct", fields: { "0": { kind: "u64" } } },
+          "flags": { kind: "struct", fields: { "0": { kind: "u64" } } },
         },
       },
     },
@@ -231,21 +188,20 @@ export const ConnectionRejectSchema: Schema = {
 export const ConnectionCloseSchema: Schema = {
   kind: "struct",
   fields: {
-    metadata: {
+    "metadata": {
       kind: "vec",
       element: {
         kind: "struct",
         fields: {
-          key: { kind: "string" },
-          value: {
+          "key": { kind: "string" },
+          "value": {
             kind: "enum",
-            variants: [
-              { name: "String", fields: { kind: "string" } },
-              { name: "Bytes", fields: { kind: "bytes" } },
-              { name: "U64", fields: { kind: "u64" } },
-            ],
+            variants: [{ name: "String", fields: { kind: "string" } }, { name: "Bytes", fields: { kind: "bytes" } }, {
+              name: "U64",
+              fields: { kind: "u64" },
+            }],
           },
-          flags: { kind: "struct", fields: { "0": { kind: "u64" } } },
+          "flags": { kind: "struct", fields: { "0": { kind: "u64" } } },
         },
       },
     },
@@ -254,319 +210,287 @@ export const ConnectionCloseSchema: Schema = {
 
 export const RequestBodySchema: Schema = {
   kind: "enum",
-  variants: [
-    {
-      name: "Call",
+  variants: [{
+    name: "Call",
+    fields: {
+      kind: "struct",
       fields: {
-        kind: "struct",
-        fields: {
-          method_id: { kind: "u64" },
-          channels: { kind: "vec", element: { kind: "u64" } },
-          metadata: {
-            kind: "vec",
-            element: {
-              kind: "struct",
-              fields: {
-                key: { kind: "string" },
-                value: {
-                  kind: "enum",
-                  variants: [
-                    { name: "String", fields: { kind: "string" } },
-                    { name: "Bytes", fields: { kind: "bytes" } },
-                    { name: "U64", fields: { kind: "u64" } },
-                  ],
-                },
-                flags: { kind: "struct", fields: { "0": { kind: "u64" } } },
+        "method_id": { kind: "u64" },
+        "channels": { kind: "vec", element: { kind: "u64" } },
+        "metadata": {
+          kind: "vec",
+          element: {
+            kind: "struct",
+            fields: {
+              "key": { kind: "string" },
+              "value": {
+                kind: "enum",
+                variants: [
+                  { name: "String", fields: { kind: "string" } },
+                  { name: "Bytes", fields: { kind: "bytes" } },
+                  { name: "U64", fields: { kind: "u64" } },
+                ],
               },
+              "flags": { kind: "struct", fields: { "0": { kind: "u64" } } },
             },
           },
-          args: { kind: "bytes", trailing: true },
         },
+        "args": { kind: "bytes", trailing: true },
       },
     },
-    {
-      name: "Response",
+  }, {
+    name: "Response",
+    fields: {
+      kind: "struct",
       fields: {
-        kind: "struct",
-        fields: {
-          channels: { kind: "vec", element: { kind: "u64" } },
-          metadata: {
-            kind: "vec",
-            element: {
-              kind: "struct",
-              fields: {
-                key: { kind: "string" },
-                value: {
-                  kind: "enum",
-                  variants: [
-                    { name: "String", fields: { kind: "string" } },
-                    { name: "Bytes", fields: { kind: "bytes" } },
-                    { name: "U64", fields: { kind: "u64" } },
-                  ],
-                },
-                flags: { kind: "struct", fields: { "0": { kind: "u64" } } },
+        "channels": { kind: "vec", element: { kind: "u64" } },
+        "metadata": {
+          kind: "vec",
+          element: {
+            kind: "struct",
+            fields: {
+              "key": { kind: "string" },
+              "value": {
+                kind: "enum",
+                variants: [
+                  { name: "String", fields: { kind: "string" } },
+                  { name: "Bytes", fields: { kind: "bytes" } },
+                  { name: "U64", fields: { kind: "u64" } },
+                ],
               },
+              "flags": { kind: "struct", fields: { "0": { kind: "u64" } } },
             },
           },
-          ret: { kind: "bytes", trailing: true },
         },
+        "ret": { kind: "bytes", trailing: true },
       },
     },
-    {
-      name: "Cancel",
+  }, {
+    name: "Cancel",
+    fields: {
+      kind: "struct",
       fields: {
-        kind: "struct",
-        fields: {
-          metadata: {
-            kind: "vec",
-            element: {
-              kind: "struct",
-              fields: {
-                key: { kind: "string" },
-                value: {
-                  kind: "enum",
-                  variants: [
-                    { name: "String", fields: { kind: "string" } },
-                    { name: "Bytes", fields: { kind: "bytes" } },
-                    { name: "U64", fields: { kind: "u64" } },
-                  ],
-                },
-                flags: { kind: "struct", fields: { "0": { kind: "u64" } } },
+        "metadata": {
+          kind: "vec",
+          element: {
+            kind: "struct",
+            fields: {
+              "key": { kind: "string" },
+              "value": {
+                kind: "enum",
+                variants: [
+                  { name: "String", fields: { kind: "string" } },
+                  { name: "Bytes", fields: { kind: "bytes" } },
+                  { name: "U64", fields: { kind: "u64" } },
+                ],
               },
+              "flags": { kind: "struct", fields: { "0": { kind: "u64" } } },
             },
           },
         },
       },
     },
-  ],
+  }],
 };
 
 export const RequestMessageSchema: Schema = {
   kind: "struct",
   fields: {
-    id: { kind: "u64" },
-    body: {
+    "id": { kind: "u64" },
+    "body": {
       kind: "enum",
-      variants: [
-        {
-          name: "Call",
+      variants: [{
+        name: "Call",
+        fields: {
+          kind: "struct",
           fields: {
-            kind: "struct",
-            fields: {
-              method_id: { kind: "u64" },
-              channels: { kind: "vec", element: { kind: "u64" } },
-              metadata: {
-                kind: "vec",
-                element: {
-                  kind: "struct",
-                  fields: {
-                    key: { kind: "string" },
-                    value: {
-                      kind: "enum",
-                      variants: [
-                        { name: "String", fields: { kind: "string" } },
-                        { name: "Bytes", fields: { kind: "bytes" } },
-                        { name: "U64", fields: { kind: "u64" } },
-                      ],
-                    },
-                    flags: { kind: "struct", fields: { "0": { kind: "u64" } } },
+            "method_id": { kind: "u64" },
+            "channels": { kind: "vec", element: { kind: "u64" } },
+            "metadata": {
+              kind: "vec",
+              element: {
+                kind: "struct",
+                fields: {
+                  "key": { kind: "string" },
+                  "value": {
+                    kind: "enum",
+                    variants: [{ name: "String", fields: { kind: "string" } }, {
+                      name: "Bytes",
+                      fields: { kind: "bytes" },
+                    }, { name: "U64", fields: { kind: "u64" } }],
                   },
+                  "flags": { kind: "struct", fields: { "0": { kind: "u64" } } },
                 },
               },
-              args: { kind: "bytes", trailing: true },
             },
+            "args": { kind: "bytes", trailing: true },
           },
         },
-        {
-          name: "Response",
+      }, {
+        name: "Response",
+        fields: {
+          kind: "struct",
           fields: {
-            kind: "struct",
-            fields: {
-              channels: { kind: "vec", element: { kind: "u64" } },
-              metadata: {
-                kind: "vec",
-                element: {
-                  kind: "struct",
-                  fields: {
-                    key: { kind: "string" },
-                    value: {
-                      kind: "enum",
-                      variants: [
-                        { name: "String", fields: { kind: "string" } },
-                        { name: "Bytes", fields: { kind: "bytes" } },
-                        { name: "U64", fields: { kind: "u64" } },
-                      ],
-                    },
-                    flags: { kind: "struct", fields: { "0": { kind: "u64" } } },
+            "channels": { kind: "vec", element: { kind: "u64" } },
+            "metadata": {
+              kind: "vec",
+              element: {
+                kind: "struct",
+                fields: {
+                  "key": { kind: "string" },
+                  "value": {
+                    kind: "enum",
+                    variants: [{ name: "String", fields: { kind: "string" } }, {
+                      name: "Bytes",
+                      fields: { kind: "bytes" },
+                    }, { name: "U64", fields: { kind: "u64" } }],
                   },
+                  "flags": { kind: "struct", fields: { "0": { kind: "u64" } } },
                 },
               },
-              ret: { kind: "bytes", trailing: true },
             },
+            "ret": { kind: "bytes", trailing: true },
           },
         },
-        {
-          name: "Cancel",
+      }, {
+        name: "Cancel",
+        fields: {
+          kind: "struct",
           fields: {
-            kind: "struct",
-            fields: {
-              metadata: {
-                kind: "vec",
-                element: {
-                  kind: "struct",
-                  fields: {
-                    key: { kind: "string" },
-                    value: {
-                      kind: "enum",
-                      variants: [
-                        { name: "String", fields: { kind: "string" } },
-                        { name: "Bytes", fields: { kind: "bytes" } },
-                        { name: "U64", fields: { kind: "u64" } },
-                      ],
-                    },
-                    flags: { kind: "struct", fields: { "0": { kind: "u64" } } },
+            "metadata": {
+              kind: "vec",
+              element: {
+                kind: "struct",
+                fields: {
+                  "key": { kind: "string" },
+                  "value": {
+                    kind: "enum",
+                    variants: [{ name: "String", fields: { kind: "string" } }, {
+                      name: "Bytes",
+                      fields: { kind: "bytes" },
+                    }, { name: "U64", fields: { kind: "u64" } }],
                   },
+                  "flags": { kind: "struct", fields: { "0": { kind: "u64" } } },
                 },
               },
             },
           },
         },
-      ],
+      }],
     },
   },
 };
 
 export const ChannelBodySchema: Schema = {
   kind: "enum",
-  variants: [
-    {
-      name: "Item",
-      fields: { kind: "struct", fields: { item: { kind: "bytes", trailing: true } } },
-    },
-    {
-      name: "Close",
+  variants: [{ name: "Item", fields: { kind: "struct", fields: { "item": { kind: "bytes", trailing: true } } } }, {
+    name: "Close",
+    fields: {
+      kind: "struct",
       fields: {
-        kind: "struct",
-        fields: {
-          metadata: {
-            kind: "vec",
-            element: {
-              kind: "struct",
-              fields: {
-                key: { kind: "string" },
-                value: {
-                  kind: "enum",
-                  variants: [
-                    { name: "String", fields: { kind: "string" } },
-                    { name: "Bytes", fields: { kind: "bytes" } },
-                    { name: "U64", fields: { kind: "u64" } },
-                  ],
-                },
-                flags: { kind: "struct", fields: { "0": { kind: "u64" } } },
+        "metadata": {
+          kind: "vec",
+          element: {
+            kind: "struct",
+            fields: {
+              "key": { kind: "string" },
+              "value": {
+                kind: "enum",
+                variants: [
+                  { name: "String", fields: { kind: "string" } },
+                  { name: "Bytes", fields: { kind: "bytes" } },
+                  { name: "U64", fields: { kind: "u64" } },
+                ],
               },
+              "flags": { kind: "struct", fields: { "0": { kind: "u64" } } },
             },
           },
         },
       },
     },
-    {
-      name: "Reset",
+  }, {
+    name: "Reset",
+    fields: {
+      kind: "struct",
       fields: {
-        kind: "struct",
-        fields: {
-          metadata: {
-            kind: "vec",
-            element: {
-              kind: "struct",
-              fields: {
-                key: { kind: "string" },
-                value: {
-                  kind: "enum",
-                  variants: [
-                    { name: "String", fields: { kind: "string" } },
-                    { name: "Bytes", fields: { kind: "bytes" } },
-                    { name: "U64", fields: { kind: "u64" } },
-                  ],
-                },
-                flags: { kind: "struct", fields: { "0": { kind: "u64" } } },
+        "metadata": {
+          kind: "vec",
+          element: {
+            kind: "struct",
+            fields: {
+              "key": { kind: "string" },
+              "value": {
+                kind: "enum",
+                variants: [
+                  { name: "String", fields: { kind: "string" } },
+                  { name: "Bytes", fields: { kind: "bytes" } },
+                  { name: "U64", fields: { kind: "u64" } },
+                ],
               },
+              "flags": { kind: "struct", fields: { "0": { kind: "u64" } } },
             },
           },
         },
       },
     },
-    { name: "GrantCredit", fields: { kind: "struct", fields: { additional: { kind: "u32" } } } },
-  ],
+  }, { name: "GrantCredit", fields: { kind: "struct", fields: { "additional": { kind: "u32" } } } }],
 };
 
 export const ChannelMessageSchema: Schema = {
   kind: "struct",
   fields: {
-    id: { kind: "u64" },
-    body: {
+    "id": { kind: "u64" },
+    "body": {
       kind: "enum",
-      variants: [
-        {
-          name: "Item",
-          fields: { kind: "struct", fields: { item: { kind: "bytes", trailing: true } } },
-        },
-        {
-          name: "Close",
+      variants: [{ name: "Item", fields: { kind: "struct", fields: { "item": { kind: "bytes", trailing: true } } } }, {
+        name: "Close",
+        fields: {
+          kind: "struct",
           fields: {
-            kind: "struct",
-            fields: {
-              metadata: {
-                kind: "vec",
-                element: {
-                  kind: "struct",
-                  fields: {
-                    key: { kind: "string" },
-                    value: {
-                      kind: "enum",
-                      variants: [
-                        { name: "String", fields: { kind: "string" } },
-                        { name: "Bytes", fields: { kind: "bytes" } },
-                        { name: "U64", fields: { kind: "u64" } },
-                      ],
-                    },
-                    flags: { kind: "struct", fields: { "0": { kind: "u64" } } },
+            "metadata": {
+              kind: "vec",
+              element: {
+                kind: "struct",
+                fields: {
+                  "key": { kind: "string" },
+                  "value": {
+                    kind: "enum",
+                    variants: [{ name: "String", fields: { kind: "string" } }, {
+                      name: "Bytes",
+                      fields: { kind: "bytes" },
+                    }, { name: "U64", fields: { kind: "u64" } }],
                   },
+                  "flags": { kind: "struct", fields: { "0": { kind: "u64" } } },
                 },
               },
             },
           },
         },
-        {
-          name: "Reset",
+      }, {
+        name: "Reset",
+        fields: {
+          kind: "struct",
           fields: {
-            kind: "struct",
-            fields: {
-              metadata: {
-                kind: "vec",
-                element: {
-                  kind: "struct",
-                  fields: {
-                    key: { kind: "string" },
-                    value: {
-                      kind: "enum",
-                      variants: [
-                        { name: "String", fields: { kind: "string" } },
-                        { name: "Bytes", fields: { kind: "bytes" } },
-                        { name: "U64", fields: { kind: "u64" } },
-                      ],
-                    },
-                    flags: { kind: "struct", fields: { "0": { kind: "u64" } } },
+            "metadata": {
+              kind: "vec",
+              element: {
+                kind: "struct",
+                fields: {
+                  "key": { kind: "string" },
+                  "value": {
+                    kind: "enum",
+                    variants: [{ name: "String", fields: { kind: "string" } }, {
+                      name: "Bytes",
+                      fields: { kind: "bytes" },
+                    }, { name: "U64", fields: { kind: "u64" } }],
                   },
+                  "flags": { kind: "struct", fields: { "0": { kind: "u64" } } },
                 },
               },
             },
           },
         },
-        {
-          name: "GrantCredit",
-          fields: { kind: "struct", fields: { additional: { kind: "u32" } } },
-        },
-      ],
+      }, { name: "GrantCredit", fields: { kind: "struct", fields: { "additional": { kind: "u32" } } } }],
     },
   },
 };
@@ -579,35 +503,28 @@ export const MessagePayloadSchema: Schema = {
       fields: {
         kind: "struct",
         fields: {
-          version: { kind: "u32" },
-          connection_settings: {
+          "version": { kind: "u32" },
+          "connection_settings": {
             kind: "struct",
             fields: {
-              parity: {
-                kind: "enum",
-                variants: [
-                  { name: "Odd", fields: null },
-                  { name: "Even", fields: null },
-                ],
-              },
-              max_concurrent_requests: { kind: "u32" },
+              "parity": { kind: "enum", variants: [{ name: "Odd", fields: null }, { name: "Even", fields: null }] },
+              "max_concurrent_requests": { kind: "u32" },
             },
           },
-          metadata: {
+          "metadata": {
             kind: "vec",
             element: {
               kind: "struct",
               fields: {
-                key: { kind: "string" },
-                value: {
+                "key": { kind: "string" },
+                "value": {
                   kind: "enum",
-                  variants: [
-                    { name: "String", fields: { kind: "string" } },
-                    { name: "Bytes", fields: { kind: "bytes" } },
-                    { name: "U64", fields: { kind: "u64" } },
-                  ],
+                  variants: [{ name: "String", fields: { kind: "string" } }, {
+                    name: "Bytes",
+                    fields: { kind: "bytes" },
+                  }, { name: "U64", fields: { kind: "u64" } }],
                 },
-                flags: { kind: "struct", fields: { "0": { kind: "u64" } } },
+                "flags": { kind: "struct", fields: { "0": { kind: "u64" } } },
               },
             },
           },
@@ -619,77 +536,60 @@ export const MessagePayloadSchema: Schema = {
       fields: {
         kind: "struct",
         fields: {
-          connection_settings: {
+          "connection_settings": {
             kind: "struct",
             fields: {
-              parity: {
-                kind: "enum",
-                variants: [
-                  { name: "Odd", fields: null },
-                  { name: "Even", fields: null },
-                ],
-              },
-              max_concurrent_requests: { kind: "u32" },
+              "parity": { kind: "enum", variants: [{ name: "Odd", fields: null }, { name: "Even", fields: null }] },
+              "max_concurrent_requests": { kind: "u32" },
             },
           },
-          metadata: {
+          "metadata": {
             kind: "vec",
             element: {
               kind: "struct",
               fields: {
-                key: { kind: "string" },
-                value: {
+                "key": { kind: "string" },
+                "value": {
                   kind: "enum",
-                  variants: [
-                    { name: "String", fields: { kind: "string" } },
-                    { name: "Bytes", fields: { kind: "bytes" } },
-                    { name: "U64", fields: { kind: "u64" } },
-                  ],
+                  variants: [{ name: "String", fields: { kind: "string" } }, {
+                    name: "Bytes",
+                    fields: { kind: "bytes" },
+                  }, { name: "U64", fields: { kind: "u64" } }],
                 },
-                flags: { kind: "struct", fields: { "0": { kind: "u64" } } },
+                "flags": { kind: "struct", fields: { "0": { kind: "u64" } } },
               },
             },
           },
         },
       },
     },
-    {
-      name: "ProtocolError",
-      fields: { kind: "struct", fields: { description: { kind: "string" } } },
-    },
+    { name: "ProtocolError", fields: { kind: "struct", fields: { "description": { kind: "string" } } } },
     {
       name: "ConnectionOpen",
       fields: {
         kind: "struct",
         fields: {
-          connection_settings: {
+          "connection_settings": {
             kind: "struct",
             fields: {
-              parity: {
-                kind: "enum",
-                variants: [
-                  { name: "Odd", fields: null },
-                  { name: "Even", fields: null },
-                ],
-              },
-              max_concurrent_requests: { kind: "u32" },
+              "parity": { kind: "enum", variants: [{ name: "Odd", fields: null }, { name: "Even", fields: null }] },
+              "max_concurrent_requests": { kind: "u32" },
             },
           },
-          metadata: {
+          "metadata": {
             kind: "vec",
             element: {
               kind: "struct",
               fields: {
-                key: { kind: "string" },
-                value: {
+                "key": { kind: "string" },
+                "value": {
                   kind: "enum",
-                  variants: [
-                    { name: "String", fields: { kind: "string" } },
-                    { name: "Bytes", fields: { kind: "bytes" } },
-                    { name: "U64", fields: { kind: "u64" } },
-                  ],
+                  variants: [{ name: "String", fields: { kind: "string" } }, {
+                    name: "Bytes",
+                    fields: { kind: "bytes" },
+                  }, { name: "U64", fields: { kind: "u64" } }],
                 },
-                flags: { kind: "struct", fields: { "0": { kind: "u64" } } },
+                "flags": { kind: "struct", fields: { "0": { kind: "u64" } } },
               },
             },
           },
@@ -701,34 +601,27 @@ export const MessagePayloadSchema: Schema = {
       fields: {
         kind: "struct",
         fields: {
-          connection_settings: {
+          "connection_settings": {
             kind: "struct",
             fields: {
-              parity: {
-                kind: "enum",
-                variants: [
-                  { name: "Odd", fields: null },
-                  { name: "Even", fields: null },
-                ],
-              },
-              max_concurrent_requests: { kind: "u32" },
+              "parity": { kind: "enum", variants: [{ name: "Odd", fields: null }, { name: "Even", fields: null }] },
+              "max_concurrent_requests": { kind: "u32" },
             },
           },
-          metadata: {
+          "metadata": {
             kind: "vec",
             element: {
               kind: "struct",
               fields: {
-                key: { kind: "string" },
-                value: {
+                "key": { kind: "string" },
+                "value": {
                   kind: "enum",
-                  variants: [
-                    { name: "String", fields: { kind: "string" } },
-                    { name: "Bytes", fields: { kind: "bytes" } },
-                    { name: "U64", fields: { kind: "u64" } },
-                  ],
+                  variants: [{ name: "String", fields: { kind: "string" } }, {
+                    name: "Bytes",
+                    fields: { kind: "bytes" },
+                  }, { name: "U64", fields: { kind: "u64" } }],
                 },
-                flags: { kind: "struct", fields: { "0": { kind: "u64" } } },
+                "flags": { kind: "struct", fields: { "0": { kind: "u64" } } },
               },
             },
           },
@@ -740,21 +633,20 @@ export const MessagePayloadSchema: Schema = {
       fields: {
         kind: "struct",
         fields: {
-          metadata: {
+          "metadata": {
             kind: "vec",
             element: {
               kind: "struct",
               fields: {
-                key: { kind: "string" },
-                value: {
+                "key": { kind: "string" },
+                "value": {
                   kind: "enum",
-                  variants: [
-                    { name: "String", fields: { kind: "string" } },
-                    { name: "Bytes", fields: { kind: "bytes" } },
-                    { name: "U64", fields: { kind: "u64" } },
-                  ],
+                  variants: [{ name: "String", fields: { kind: "string" } }, {
+                    name: "Bytes",
+                    fields: { kind: "bytes" },
+                  }, { name: "U64", fields: { kind: "u64" } }],
                 },
-                flags: { kind: "struct", fields: { "0": { kind: "u64" } } },
+                "flags": { kind: "struct", fields: { "0": { kind: "u64" } } },
               },
             },
           },
@@ -766,21 +658,20 @@ export const MessagePayloadSchema: Schema = {
       fields: {
         kind: "struct",
         fields: {
-          metadata: {
+          "metadata": {
             kind: "vec",
             element: {
               kind: "struct",
               fields: {
-                key: { kind: "string" },
-                value: {
+                "key": { kind: "string" },
+                "value": {
                   kind: "enum",
-                  variants: [
-                    { name: "String", fields: { kind: "string" } },
-                    { name: "Bytes", fields: { kind: "bytes" } },
-                    { name: "U64", fields: { kind: "u64" } },
-                  ],
+                  variants: [{ name: "String", fields: { kind: "string" } }, {
+                    name: "Bytes",
+                    fields: { kind: "bytes" },
+                  }, { name: "U64", fields: { kind: "u64" } }],
                 },
-                flags: { kind: "struct", fields: { "0": { kind: "u64" } } },
+                "flags": { kind: "struct", fields: { "0": { kind: "u64" } } },
               },
             },
           },
@@ -792,94 +683,87 @@ export const MessagePayloadSchema: Schema = {
       fields: {
         kind: "struct",
         fields: {
-          id: { kind: "u64" },
-          body: {
+          "id": { kind: "u64" },
+          "body": {
             kind: "enum",
-            variants: [
-              {
-                name: "Call",
+            variants: [{
+              name: "Call",
+              fields: {
+                kind: "struct",
                 fields: {
-                  kind: "struct",
-                  fields: {
-                    method_id: { kind: "u64" },
-                    channels: { kind: "vec", element: { kind: "u64" } },
-                    metadata: {
-                      kind: "vec",
-                      element: {
-                        kind: "struct",
-                        fields: {
-                          key: { kind: "string" },
-                          value: {
-                            kind: "enum",
-                            variants: [
-                              { name: "String", fields: { kind: "string" } },
-                              { name: "Bytes", fields: { kind: "bytes" } },
-                              { name: "U64", fields: { kind: "u64" } },
-                            ],
-                          },
-                          flags: { kind: "struct", fields: { "0": { kind: "u64" } } },
+                  "method_id": { kind: "u64" },
+                  "channels": { kind: "vec", element: { kind: "u64" } },
+                  "metadata": {
+                    kind: "vec",
+                    element: {
+                      kind: "struct",
+                      fields: {
+                        "key": { kind: "string" },
+                        "value": {
+                          kind: "enum",
+                          variants: [{ name: "String", fields: { kind: "string" } }, {
+                            name: "Bytes",
+                            fields: { kind: "bytes" },
+                          }, { name: "U64", fields: { kind: "u64" } }],
                         },
+                        "flags": { kind: "struct", fields: { "0": { kind: "u64" } } },
                       },
                     },
-                    args: { kind: "bytes", trailing: true },
                   },
+                  "args": { kind: "bytes", trailing: true },
                 },
               },
-              {
-                name: "Response",
+            }, {
+              name: "Response",
+              fields: {
+                kind: "struct",
                 fields: {
-                  kind: "struct",
-                  fields: {
-                    channels: { kind: "vec", element: { kind: "u64" } },
-                    metadata: {
-                      kind: "vec",
-                      element: {
-                        kind: "struct",
-                        fields: {
-                          key: { kind: "string" },
-                          value: {
-                            kind: "enum",
-                            variants: [
-                              { name: "String", fields: { kind: "string" } },
-                              { name: "Bytes", fields: { kind: "bytes" } },
-                              { name: "U64", fields: { kind: "u64" } },
-                            ],
-                          },
-                          flags: { kind: "struct", fields: { "0": { kind: "u64" } } },
+                  "channels": { kind: "vec", element: { kind: "u64" } },
+                  "metadata": {
+                    kind: "vec",
+                    element: {
+                      kind: "struct",
+                      fields: {
+                        "key": { kind: "string" },
+                        "value": {
+                          kind: "enum",
+                          variants: [{ name: "String", fields: { kind: "string" } }, {
+                            name: "Bytes",
+                            fields: { kind: "bytes" },
+                          }, { name: "U64", fields: { kind: "u64" } }],
                         },
+                        "flags": { kind: "struct", fields: { "0": { kind: "u64" } } },
                       },
                     },
-                    ret: { kind: "bytes", trailing: true },
                   },
+                  "ret": { kind: "bytes", trailing: true },
                 },
               },
-              {
-                name: "Cancel",
+            }, {
+              name: "Cancel",
+              fields: {
+                kind: "struct",
                 fields: {
-                  kind: "struct",
-                  fields: {
-                    metadata: {
-                      kind: "vec",
-                      element: {
-                        kind: "struct",
-                        fields: {
-                          key: { kind: "string" },
-                          value: {
-                            kind: "enum",
-                            variants: [
-                              { name: "String", fields: { kind: "string" } },
-                              { name: "Bytes", fields: { kind: "bytes" } },
-                              { name: "U64", fields: { kind: "u64" } },
-                            ],
-                          },
-                          flags: { kind: "struct", fields: { "0": { kind: "u64" } } },
+                  "metadata": {
+                    kind: "vec",
+                    element: {
+                      kind: "struct",
+                      fields: {
+                        "key": { kind: "string" },
+                        "value": {
+                          kind: "enum",
+                          variants: [{ name: "String", fields: { kind: "string" } }, {
+                            name: "Bytes",
+                            fields: { kind: "bytes" },
+                          }, { name: "U64", fields: { kind: "u64" } }],
                         },
+                        "flags": { kind: "struct", fields: { "0": { kind: "u64" } } },
                       },
                     },
                   },
                 },
               },
-            ],
+            }],
           },
         },
       },
@@ -889,71 +773,61 @@ export const MessagePayloadSchema: Schema = {
       fields: {
         kind: "struct",
         fields: {
-          id: { kind: "u64" },
-          body: {
+          "id": { kind: "u64" },
+          "body": {
             kind: "enum",
-            variants: [
-              {
-                name: "Item",
-                fields: { kind: "struct", fields: { item: { kind: "bytes", trailing: true } } },
-              },
-              {
-                name: "Close",
+            variants: [{
+              name: "Item",
+              fields: { kind: "struct", fields: { "item": { kind: "bytes", trailing: true } } },
+            }, {
+              name: "Close",
+              fields: {
+                kind: "struct",
                 fields: {
-                  kind: "struct",
-                  fields: {
-                    metadata: {
-                      kind: "vec",
-                      element: {
-                        kind: "struct",
-                        fields: {
-                          key: { kind: "string" },
-                          value: {
-                            kind: "enum",
-                            variants: [
-                              { name: "String", fields: { kind: "string" } },
-                              { name: "Bytes", fields: { kind: "bytes" } },
-                              { name: "U64", fields: { kind: "u64" } },
-                            ],
-                          },
-                          flags: { kind: "struct", fields: { "0": { kind: "u64" } } },
+                  "metadata": {
+                    kind: "vec",
+                    element: {
+                      kind: "struct",
+                      fields: {
+                        "key": { kind: "string" },
+                        "value": {
+                          kind: "enum",
+                          variants: [{ name: "String", fields: { kind: "string" } }, {
+                            name: "Bytes",
+                            fields: { kind: "bytes" },
+                          }, { name: "U64", fields: { kind: "u64" } }],
                         },
+                        "flags": { kind: "struct", fields: { "0": { kind: "u64" } } },
                       },
                     },
                   },
                 },
               },
-              {
-                name: "Reset",
+            }, {
+              name: "Reset",
+              fields: {
+                kind: "struct",
                 fields: {
-                  kind: "struct",
-                  fields: {
-                    metadata: {
-                      kind: "vec",
-                      element: {
-                        kind: "struct",
-                        fields: {
-                          key: { kind: "string" },
-                          value: {
-                            kind: "enum",
-                            variants: [
-                              { name: "String", fields: { kind: "string" } },
-                              { name: "Bytes", fields: { kind: "bytes" } },
-                              { name: "U64", fields: { kind: "u64" } },
-                            ],
-                          },
-                          flags: { kind: "struct", fields: { "0": { kind: "u64" } } },
+                  "metadata": {
+                    kind: "vec",
+                    element: {
+                      kind: "struct",
+                      fields: {
+                        "key": { kind: "string" },
+                        "value": {
+                          kind: "enum",
+                          variants: [{ name: "String", fields: { kind: "string" } }, {
+                            name: "Bytes",
+                            fields: { kind: "bytes" },
+                          }, { name: "U64", fields: { kind: "u64" } }],
                         },
+                        "flags": { kind: "struct", fields: { "0": { kind: "u64" } } },
                       },
                     },
                   },
                 },
               },
-              {
-                name: "GrantCredit",
-                fields: { kind: "struct", fields: { additional: { kind: "u32" } } },
-              },
-            ],
+            }, { name: "GrantCredit", fields: { kind: "struct", fields: { "additional": { kind: "u32" } } } }],
           },
         },
       },
@@ -964,8 +838,8 @@ export const MessagePayloadSchema: Schema = {
 export const MessageSchema: Schema = {
   kind: "struct",
   fields: {
-    connection_id: { kind: "u64" },
-    payload: {
+    "connection_id": { kind: "u64" },
+    "payload": {
       kind: "enum",
       variants: [
         {
@@ -973,35 +847,28 @@ export const MessageSchema: Schema = {
           fields: {
             kind: "struct",
             fields: {
-              version: { kind: "u32" },
-              connection_settings: {
+              "version": { kind: "u32" },
+              "connection_settings": {
                 kind: "struct",
                 fields: {
-                  parity: {
-                    kind: "enum",
-                    variants: [
-                      { name: "Odd", fields: null },
-                      { name: "Even", fields: null },
-                    ],
-                  },
-                  max_concurrent_requests: { kind: "u32" },
+                  "parity": { kind: "enum", variants: [{ name: "Odd", fields: null }, { name: "Even", fields: null }] },
+                  "max_concurrent_requests": { kind: "u32" },
                 },
               },
-              metadata: {
+              "metadata": {
                 kind: "vec",
                 element: {
                   kind: "struct",
                   fields: {
-                    key: { kind: "string" },
-                    value: {
+                    "key": { kind: "string" },
+                    "value": {
                       kind: "enum",
-                      variants: [
-                        { name: "String", fields: { kind: "string" } },
-                        { name: "Bytes", fields: { kind: "bytes" } },
-                        { name: "U64", fields: { kind: "u64" } },
-                      ],
+                      variants: [{ name: "String", fields: { kind: "string" } }, {
+                        name: "Bytes",
+                        fields: { kind: "bytes" },
+                      }, { name: "U64", fields: { kind: "u64" } }],
                     },
-                    flags: { kind: "struct", fields: { "0": { kind: "u64" } } },
+                    "flags": { kind: "struct", fields: { "0": { kind: "u64" } } },
                   },
                 },
               },
@@ -1013,77 +880,60 @@ export const MessageSchema: Schema = {
           fields: {
             kind: "struct",
             fields: {
-              connection_settings: {
+              "connection_settings": {
                 kind: "struct",
                 fields: {
-                  parity: {
-                    kind: "enum",
-                    variants: [
-                      { name: "Odd", fields: null },
-                      { name: "Even", fields: null },
-                    ],
-                  },
-                  max_concurrent_requests: { kind: "u32" },
+                  "parity": { kind: "enum", variants: [{ name: "Odd", fields: null }, { name: "Even", fields: null }] },
+                  "max_concurrent_requests": { kind: "u32" },
                 },
               },
-              metadata: {
+              "metadata": {
                 kind: "vec",
                 element: {
                   kind: "struct",
                   fields: {
-                    key: { kind: "string" },
-                    value: {
+                    "key": { kind: "string" },
+                    "value": {
                       kind: "enum",
-                      variants: [
-                        { name: "String", fields: { kind: "string" } },
-                        { name: "Bytes", fields: { kind: "bytes" } },
-                        { name: "U64", fields: { kind: "u64" } },
-                      ],
+                      variants: [{ name: "String", fields: { kind: "string" } }, {
+                        name: "Bytes",
+                        fields: { kind: "bytes" },
+                      }, { name: "U64", fields: { kind: "u64" } }],
                     },
-                    flags: { kind: "struct", fields: { "0": { kind: "u64" } } },
+                    "flags": { kind: "struct", fields: { "0": { kind: "u64" } } },
                   },
                 },
               },
             },
           },
         },
-        {
-          name: "ProtocolError",
-          fields: { kind: "struct", fields: { description: { kind: "string" } } },
-        },
+        { name: "ProtocolError", fields: { kind: "struct", fields: { "description": { kind: "string" } } } },
         {
           name: "ConnectionOpen",
           fields: {
             kind: "struct",
             fields: {
-              connection_settings: {
+              "connection_settings": {
                 kind: "struct",
                 fields: {
-                  parity: {
-                    kind: "enum",
-                    variants: [
-                      { name: "Odd", fields: null },
-                      { name: "Even", fields: null },
-                    ],
-                  },
-                  max_concurrent_requests: { kind: "u32" },
+                  "parity": { kind: "enum", variants: [{ name: "Odd", fields: null }, { name: "Even", fields: null }] },
+                  "max_concurrent_requests": { kind: "u32" },
                 },
               },
-              metadata: {
+              "metadata": {
                 kind: "vec",
                 element: {
                   kind: "struct",
                   fields: {
-                    key: { kind: "string" },
-                    value: {
+                    "key": { kind: "string" },
+                    "value": {
                       kind: "enum",
-                      variants: [
-                        { name: "String", fields: { kind: "string" } },
-                        { name: "Bytes", fields: { kind: "bytes" } },
-                        { name: "U64", fields: { kind: "u64" } },
-                      ],
+                      variants: [{ name: "String", fields: { kind: "string" } }, {
+                        name: "Bytes",
+                        fields: { kind: "bytes" },
+                      }, { name: "U64", fields: { kind: "u64" } }],
                     },
-                    flags: { kind: "struct", fields: { "0": { kind: "u64" } } },
+                    "flags": { kind: "struct", fields: { "0": { kind: "u64" } } },
                   },
                 },
               },
@@ -1095,34 +945,27 @@ export const MessageSchema: Schema = {
           fields: {
             kind: "struct",
             fields: {
-              connection_settings: {
+              "connection_settings": {
                 kind: "struct",
                 fields: {
-                  parity: {
-                    kind: "enum",
-                    variants: [
-                      { name: "Odd", fields: null },
-                      { name: "Even", fields: null },
-                    ],
-                  },
-                  max_concurrent_requests: { kind: "u32" },
+                  "parity": { kind: "enum", variants: [{ name: "Odd", fields: null }, { name: "Even", fields: null }] },
+                  "max_concurrent_requests": { kind: "u32" },
                 },
               },
-              metadata: {
+              "metadata": {
                 kind: "vec",
                 element: {
                   kind: "struct",
                   fields: {
-                    key: { kind: "string" },
-                    value: {
+                    "key": { kind: "string" },
+                    "value": {
                       kind: "enum",
-                      variants: [
-                        { name: "String", fields: { kind: "string" } },
-                        { name: "Bytes", fields: { kind: "bytes" } },
-                        { name: "U64", fields: { kind: "u64" } },
-                      ],
+                      variants: [{ name: "String", fields: { kind: "string" } }, {
+                        name: "Bytes",
+                        fields: { kind: "bytes" },
+                      }, { name: "U64", fields: { kind: "u64" } }],
                     },
-                    flags: { kind: "struct", fields: { "0": { kind: "u64" } } },
+                    "flags": { kind: "struct", fields: { "0": { kind: "u64" } } },
                   },
                 },
               },
@@ -1134,21 +977,20 @@ export const MessageSchema: Schema = {
           fields: {
             kind: "struct",
             fields: {
-              metadata: {
+              "metadata": {
                 kind: "vec",
                 element: {
                   kind: "struct",
                   fields: {
-                    key: { kind: "string" },
-                    value: {
+                    "key": { kind: "string" },
+                    "value": {
                       kind: "enum",
-                      variants: [
-                        { name: "String", fields: { kind: "string" } },
-                        { name: "Bytes", fields: { kind: "bytes" } },
-                        { name: "U64", fields: { kind: "u64" } },
-                      ],
+                      variants: [{ name: "String", fields: { kind: "string" } }, {
+                        name: "Bytes",
+                        fields: { kind: "bytes" },
+                      }, { name: "U64", fields: { kind: "u64" } }],
                     },
-                    flags: { kind: "struct", fields: { "0": { kind: "u64" } } },
+                    "flags": { kind: "struct", fields: { "0": { kind: "u64" } } },
                   },
                 },
               },
@@ -1160,21 +1002,20 @@ export const MessageSchema: Schema = {
           fields: {
             kind: "struct",
             fields: {
-              metadata: {
+              "metadata": {
                 kind: "vec",
                 element: {
                   kind: "struct",
                   fields: {
-                    key: { kind: "string" },
-                    value: {
+                    "key": { kind: "string" },
+                    "value": {
                       kind: "enum",
-                      variants: [
-                        { name: "String", fields: { kind: "string" } },
-                        { name: "Bytes", fields: { kind: "bytes" } },
-                        { name: "U64", fields: { kind: "u64" } },
-                      ],
+                      variants: [{ name: "String", fields: { kind: "string" } }, {
+                        name: "Bytes",
+                        fields: { kind: "bytes" },
+                      }, { name: "U64", fields: { kind: "u64" } }],
                     },
-                    flags: { kind: "struct", fields: { "0": { kind: "u64" } } },
+                    "flags": { kind: "struct", fields: { "0": { kind: "u64" } } },
                   },
                 },
               },
@@ -1186,94 +1027,87 @@ export const MessageSchema: Schema = {
           fields: {
             kind: "struct",
             fields: {
-              id: { kind: "u64" },
-              body: {
+              "id": { kind: "u64" },
+              "body": {
                 kind: "enum",
-                variants: [
-                  {
-                    name: "Call",
+                variants: [{
+                  name: "Call",
+                  fields: {
+                    kind: "struct",
                     fields: {
-                      kind: "struct",
-                      fields: {
-                        method_id: { kind: "u64" },
-                        channels: { kind: "vec", element: { kind: "u64" } },
-                        metadata: {
-                          kind: "vec",
-                          element: {
-                            kind: "struct",
-                            fields: {
-                              key: { kind: "string" },
-                              value: {
-                                kind: "enum",
-                                variants: [
-                                  { name: "String", fields: { kind: "string" } },
-                                  { name: "Bytes", fields: { kind: "bytes" } },
-                                  { name: "U64", fields: { kind: "u64" } },
-                                ],
-                              },
-                              flags: { kind: "struct", fields: { "0": { kind: "u64" } } },
+                      "method_id": { kind: "u64" },
+                      "channels": { kind: "vec", element: { kind: "u64" } },
+                      "metadata": {
+                        kind: "vec",
+                        element: {
+                          kind: "struct",
+                          fields: {
+                            "key": { kind: "string" },
+                            "value": {
+                              kind: "enum",
+                              variants: [{ name: "String", fields: { kind: "string" } }, {
+                                name: "Bytes",
+                                fields: { kind: "bytes" },
+                              }, { name: "U64", fields: { kind: "u64" } }],
                             },
+                            "flags": { kind: "struct", fields: { "0": { kind: "u64" } } },
                           },
                         },
-                        args: { kind: "bytes", trailing: true },
                       },
+                      "args": { kind: "bytes", trailing: true },
                     },
                   },
-                  {
-                    name: "Response",
+                }, {
+                  name: "Response",
+                  fields: {
+                    kind: "struct",
                     fields: {
-                      kind: "struct",
-                      fields: {
-                        channels: { kind: "vec", element: { kind: "u64" } },
-                        metadata: {
-                          kind: "vec",
-                          element: {
-                            kind: "struct",
-                            fields: {
-                              key: { kind: "string" },
-                              value: {
-                                kind: "enum",
-                                variants: [
-                                  { name: "String", fields: { kind: "string" } },
-                                  { name: "Bytes", fields: { kind: "bytes" } },
-                                  { name: "U64", fields: { kind: "u64" } },
-                                ],
-                              },
-                              flags: { kind: "struct", fields: { "0": { kind: "u64" } } },
+                      "channels": { kind: "vec", element: { kind: "u64" } },
+                      "metadata": {
+                        kind: "vec",
+                        element: {
+                          kind: "struct",
+                          fields: {
+                            "key": { kind: "string" },
+                            "value": {
+                              kind: "enum",
+                              variants: [{ name: "String", fields: { kind: "string" } }, {
+                                name: "Bytes",
+                                fields: { kind: "bytes" },
+                              }, { name: "U64", fields: { kind: "u64" } }],
                             },
+                            "flags": { kind: "struct", fields: { "0": { kind: "u64" } } },
                           },
                         },
-                        ret: { kind: "bytes", trailing: true },
                       },
+                      "ret": { kind: "bytes", trailing: true },
                     },
                   },
-                  {
-                    name: "Cancel",
+                }, {
+                  name: "Cancel",
+                  fields: {
+                    kind: "struct",
                     fields: {
-                      kind: "struct",
-                      fields: {
-                        metadata: {
-                          kind: "vec",
-                          element: {
-                            kind: "struct",
-                            fields: {
-                              key: { kind: "string" },
-                              value: {
-                                kind: "enum",
-                                variants: [
-                                  { name: "String", fields: { kind: "string" } },
-                                  { name: "Bytes", fields: { kind: "bytes" } },
-                                  { name: "U64", fields: { kind: "u64" } },
-                                ],
-                              },
-                              flags: { kind: "struct", fields: { "0": { kind: "u64" } } },
+                      "metadata": {
+                        kind: "vec",
+                        element: {
+                          kind: "struct",
+                          fields: {
+                            "key": { kind: "string" },
+                            "value": {
+                              kind: "enum",
+                              variants: [{ name: "String", fields: { kind: "string" } }, {
+                                name: "Bytes",
+                                fields: { kind: "bytes" },
+                              }, { name: "U64", fields: { kind: "u64" } }],
                             },
+                            "flags": { kind: "struct", fields: { "0": { kind: "u64" } } },
                           },
                         },
                       },
                     },
                   },
-                ],
+                }],
               },
             },
           },
@@ -1283,71 +1117,61 @@ export const MessageSchema: Schema = {
           fields: {
             kind: "struct",
             fields: {
-              id: { kind: "u64" },
-              body: {
+              "id": { kind: "u64" },
+              "body": {
                 kind: "enum",
-                variants: [
-                  {
-                    name: "Item",
-                    fields: { kind: "struct", fields: { item: { kind: "bytes", trailing: true } } },
-                  },
-                  {
-                    name: "Close",
+                variants: [{
+                  name: "Item",
+                  fields: { kind: "struct", fields: { "item": { kind: "bytes", trailing: true } } },
+                }, {
+                  name: "Close",
+                  fields: {
+                    kind: "struct",
                     fields: {
-                      kind: "struct",
-                      fields: {
-                        metadata: {
-                          kind: "vec",
-                          element: {
-                            kind: "struct",
-                            fields: {
-                              key: { kind: "string" },
-                              value: {
-                                kind: "enum",
-                                variants: [
-                                  { name: "String", fields: { kind: "string" } },
-                                  { name: "Bytes", fields: { kind: "bytes" } },
-                                  { name: "U64", fields: { kind: "u64" } },
-                                ],
-                              },
-                              flags: { kind: "struct", fields: { "0": { kind: "u64" } } },
+                      "metadata": {
+                        kind: "vec",
+                        element: {
+                          kind: "struct",
+                          fields: {
+                            "key": { kind: "string" },
+                            "value": {
+                              kind: "enum",
+                              variants: [{ name: "String", fields: { kind: "string" } }, {
+                                name: "Bytes",
+                                fields: { kind: "bytes" },
+                              }, { name: "U64", fields: { kind: "u64" } }],
                             },
+                            "flags": { kind: "struct", fields: { "0": { kind: "u64" } } },
                           },
                         },
                       },
                     },
                   },
-                  {
-                    name: "Reset",
+                }, {
+                  name: "Reset",
+                  fields: {
+                    kind: "struct",
                     fields: {
-                      kind: "struct",
-                      fields: {
-                        metadata: {
-                          kind: "vec",
-                          element: {
-                            kind: "struct",
-                            fields: {
-                              key: { kind: "string" },
-                              value: {
-                                kind: "enum",
-                                variants: [
-                                  { name: "String", fields: { kind: "string" } },
-                                  { name: "Bytes", fields: { kind: "bytes" } },
-                                  { name: "U64", fields: { kind: "u64" } },
-                                ],
-                              },
-                              flags: { kind: "struct", fields: { "0": { kind: "u64" } } },
+                      "metadata": {
+                        kind: "vec",
+                        element: {
+                          kind: "struct",
+                          fields: {
+                            "key": { kind: "string" },
+                            "value": {
+                              kind: "enum",
+                              variants: [{ name: "String", fields: { kind: "string" } }, {
+                                name: "Bytes",
+                                fields: { kind: "bytes" },
+                              }, { name: "U64", fields: { kind: "u64" } }],
                             },
+                            "flags": { kind: "struct", fields: { "0": { kind: "u64" } } },
                           },
                         },
                       },
                     },
                   },
-                  {
-                    name: "GrantCredit",
-                    fields: { kind: "struct", fields: { additional: { kind: "u32" } } },
-                  },
-                ],
+                }, { name: "GrantCredit", fields: { kind: "struct", fields: { "additional": { kind: "u32" } } } }],
               },
             },
           },
