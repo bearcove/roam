@@ -393,6 +393,40 @@ public final class ShmGuestRuntime: @unchecked Sendable {
 
     // r[impl shm.guest.attach]
     // r[impl shm.guest.attach-failure]
+    /// Attach to an SHM segment, discovering var slot classes from the segment itself.
+    public static func attach(ticket: ShmBootstrapTicket) throws -> ShmGuestRuntime {
+        let region: ShmRegion
+        if ticket.shmFd >= 0 {
+            region = try ShmRegion.attach(fd: ticket.shmFd, pathHint: ticket.hubPath)
+        } else {
+            region = try ShmRegion.attach(path: ticket.hubPath)
+        }
+        let classes = try discoverClasses(from: region)
+        return try attach(region: region, ticket: ticket, classes: classes)
+    }
+
+    private static func discoverClasses(from region: ShmRegion) throws -> [ShmVarSlotClass] {
+        let view = try ShmSegmentView(region: region)
+        let header = view.header
+        let numClasses = Int(header.numVarSlotClasses)
+        guard numClasses > 0 else {
+            throw ShmGuestAttachError.missingVarSlotClasses
+        }
+        var classes: [ShmVarSlotClass] = []
+        for i in 0..<numClasses {
+            // SizeClassHeader layout: slot_size: u32 at offset 0, slot_count: u32 at offset 4, rest padding
+            let offset = Int(header.varSlotPoolOffset) + i * 64
+            let rawBuf = try region.mutableBytes(at: offset, count: 8)
+            let bytes = Array(rawBuf)
+            let slotSize = readU32LE(bytes, 0)
+            let slotCount = readU32LE(bytes, 4)
+            classes.append(ShmVarSlotClass(slotSize: slotSize, count: slotCount))
+        }
+        return classes
+    }
+
+    // r[impl shm.guest.attach]
+    // r[impl shm.guest.attach-failure]
     private static func attach(
         region: ShmRegion,
         ticket: ShmBootstrapTicket?,

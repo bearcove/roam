@@ -77,6 +77,10 @@ public final class ShmGuestTransport: MessageTransport, @unchecked Sendable {
         ShmGuestTransport(runtime: try ShmGuestRuntime.attach(ticket: ticket, classes: classes))
     }
 
+    public static func attach(ticket: ShmBootstrapTicket) throws -> ShmGuestTransport {
+        ShmGuestTransport(runtime: try ShmGuestRuntime.attach(ticket: ticket))
+    }
+
     public static func attach(path: String, classes: [ShmVarSlotClass]) throws -> ShmGuestTransport {
         ShmGuestTransport(runtime: try ShmGuestRuntime.attach(path: path, classes: classes))
     }
