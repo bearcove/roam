@@ -178,3 +178,45 @@ impl<T: 'static> core::ops::Deref for SelfRef<T> {
 
 // No `into_inner()` — T may borrow from backing. Use Deref instead.
 // No `DerefMut` — mutating T could invalidate borrowed references.
+
+/// Pattern-match on a field of a `SelfRef<T>`, projecting to `SelfRef<VariantInner>`
+/// in each arm body.
+///
+/// Uses `Deref` to peek at the discriminant without consuming, then `.map()` to
+/// project into the taken arm. The `unreachable!()` in each map closure is genuinely
+/// unreachable because the `matches!` guard ensures only the correct variant reaches it.
+///
+/// Variants not listed are silently consumed and dropped.
+///
+/// # Example
+///
+/// ```ignore
+/// selfref_match!(msg, payload {
+///     MessagePayload::RequestMessage(r) => { /* r: SelfRef<RequestMessage> */ }
+///     MessagePayload::ChannelMessage(c) => { /* c: SelfRef<ChannelMessage> */ }
+/// })
+/// ```
+#[macro_export]
+macro_rules! selfref_match {
+    (
+        $selfref:expr, $field:ident {
+            $( $first:ident $(:: $rest:ident)* ($binding:tt) => $body:block )*
+        }
+    ) => {{
+        let __sref = $selfref;
+        $(
+            if ::core::matches!(&__sref.$field, $first$(::$rest)*(_)) {
+                #[allow(unused_variables)]
+                let $binding = __sref.map(|__v| match __v.$field {
+                    $first$(::$rest)*(__inner) => __inner,
+                    _ => unreachable!(),
+                });
+                $body
+            } else
+        )*
+        {
+            // Unlisted variant — consume and drop.
+            let _ = __sref;
+        }
+    }};
+}

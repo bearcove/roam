@@ -2,10 +2,10 @@ use std::{collections::BTreeMap, pin::Pin, sync::Arc};
 
 use moire::sync::mpsc;
 use roam_types::{
-    ChannelMessage, Conduit, ConduitRx, ConduitTx, ConduitTxPermit, ConnectionClose, ConnectionId,
-    ConnectionOpen, ConnectionSettings, IdAllocator, MaybeSend, MaybeSync, Message, MessageFamily,
-    MessagePayload, Metadata, Parity, RequestBody, RequestId, RequestMessage, RequestResponse,
-    SelfRef, SessionRole,
+    ChannelMessage, Conduit, ConduitRx, ConduitTx, ConduitTxPermit, ConnectionAccept,
+    ConnectionClose, ConnectionId, ConnectionOpen, ConnectionReject, ConnectionSettings,
+    IdAllocator, MaybeSend, MaybeSync, Message, MessageFamily, MessagePayload, Metadata, Parity,
+    RequestBody, RequestId, RequestMessage, RequestResponse, SelfRef, SessionRole,
 };
 
 mod builders;
@@ -499,71 +499,50 @@ where
 
     async fn handle_message(&mut self, msg: SelfRef<Message<'static>>) {
         let conn_id = msg.connection_id;
-
-        // Check what kind of payload this is before looking up the connection.
-        let is_connection_open = matches!(&msg.payload, MessagePayload::ConnectionOpen(_));
-        let is_connection_accept = matches!(&msg.payload, MessagePayload::ConnectionAccept(_));
-        let is_connection_reject = matches!(&msg.payload, MessagePayload::ConnectionReject(_));
-        let is_connection_close = matches!(&msg.payload, MessagePayload::ConnectionClose(_));
-
-        // --- Connection control messages ---
-
-        if is_connection_open {
-            self.handle_inbound_open(conn_id, msg).await;
-            return;
-        }
-
-        if is_connection_accept {
-            self.handle_inbound_accept(conn_id, msg);
-            return;
-        }
-
-        if is_connection_reject {
-            self.handle_inbound_reject(conn_id, msg);
-            return;
-        }
-
-        // r[impl connection.close.semantics]
-        if is_connection_close {
-            // Remove the connection — dropping conn_tx causes the Driver's rx
-            // to return None, which exits its run loop. All in-flight handlers
-            // are dropped, triggering DriverReplySink::drop → Cancelled responses.
-            self.conns.remove(&conn_id);
-            return;
-        }
-
-        // --- Data messages on active connections ---
-
-        let conn_tx = match self.conns.get(&conn_id) {
-            Some(ConnectionSlot::Active(state)) => state.conn_tx.clone(),
-            _ => {
-                // Unknown connection or pending — drop the message.
-                return;
+        roam_types::selfref_match!(msg, payload {
+            // r[impl connection.close.semantics]
+            MessagePayload::ConnectionClose(_) => {
+                // Remove the connection — dropping conn_tx causes the Driver's rx
+                // to return None, which exits its run loop. All in-flight handlers
+                // are dropped, triggering DriverReplySink::drop → Cancelled responses.
+                self.conns.remove(&conn_id);
             }
-        };
-
-        let conn_msg = msg.map(|m| match m.payload {
-            MessagePayload::RequestMessage(r) => ConnectionMessage::Request(r),
-            MessagePayload::ChannelMessage(c) => ConnectionMessage::Channel(c),
-            _ => {
-                // Control messages were handled above.
-                unreachable!("control messages handled above");
+            MessagePayload::ConnectionOpen(open) => {
+                self.handle_inbound_open(conn_id, open).await;
             }
-        });
-
-        if conn_tx.send(conn_msg).await.is_err() {
-            // Driver dropped — connection is done
-            self.conns.remove(&conn_id);
-        }
+            MessagePayload::ConnectionAccept(accept) => {
+                self.handle_inbound_accept(conn_id, accept);
+            }
+            MessagePayload::ConnectionReject(reject) => {
+                self.handle_inbound_reject(conn_id, reject);
+            }
+            MessagePayload::RequestMessage(r) => {
+                let conn_tx = match self.conns.get(&conn_id) {
+                    Some(ConnectionSlot::Active(state)) => state.conn_tx.clone(),
+                    _ => return,
+                };
+                if conn_tx.send(r.map(ConnectionMessage::Request)).await.is_err() {
+                    self.conns.remove(&conn_id);
+                }
+            }
+            MessagePayload::ChannelMessage(c) => {
+                let conn_tx = match self.conns.get(&conn_id) {
+                    Some(ConnectionSlot::Active(state)) => state.conn_tx.clone(),
+                    _ => return,
+                };
+                if conn_tx.send(c.map(ConnectionMessage::Channel)).await.is_err() {
+                    self.conns.remove(&conn_id);
+                }
+            }
+            // Hello, HelloYourself, ProtocolError: not valid post-handshake, drop.
+        })
     }
 
-    async fn handle_inbound_open(&mut self, conn_id: ConnectionId, msg: SelfRef<Message<'static>>) {
-        // Extract the ConnectionOpen payload.
-        let open = msg.map(|m| match m.payload {
-            MessagePayload::ConnectionOpen(o) => o,
-            _ => unreachable!(),
-        });
-
+    async fn handle_inbound_open(
+        &mut self,
+        conn_id: ConnectionId,
+        open: SelfRef<ConnectionOpen<'static>>,
+    ) {
         // Validate: connection ID must match peer's parity (opposite of ours).
         let peer_parity = self.parity.other();
         if !conn_id.has_parity(peer_parity) {
@@ -651,15 +630,14 @@ where
         }
     }
 
-    fn handle_inbound_accept(&mut self, conn_id: ConnectionId, msg: SelfRef<Message<'static>>) {
+    fn handle_inbound_accept(
+        &mut self,
+        conn_id: ConnectionId,
+        accept: SelfRef<ConnectionAccept<'static>>,
+    ) {
         let slot = self.conns.remove(&conn_id);
         match slot {
             Some(ConnectionSlot::PendingOutbound(mut pending)) => {
-                let accept = msg.map(|m| match m.payload {
-                    MessagePayload::ConnectionAccept(a) => a,
-                    _ => unreachable!(),
-                });
-
                 let handle = self.make_connection_handle(
                     conn_id,
                     pending.local_settings.clone(),
@@ -680,15 +658,14 @@ where
         }
     }
 
-    fn handle_inbound_reject(&mut self, conn_id: ConnectionId, msg: SelfRef<Message<'static>>) {
+    fn handle_inbound_reject(
+        &mut self,
+        conn_id: ConnectionId,
+        reject: SelfRef<ConnectionReject<'static>>,
+    ) {
         let slot = self.conns.remove(&conn_id);
         match slot {
             Some(ConnectionSlot::PendingOutbound(mut pending)) => {
-                let reject = msg.map(|m| match m.payload {
-                    MessagePayload::ConnectionReject(r) => r,
-                    _ => unreachable!(),
-                });
-
                 if let Some(tx) = pending.result_tx.take() {
                     let _ = tx.send(Err(SessionError::Rejected(reject.metadata.to_vec())));
                 }

@@ -1,6 +1,4 @@
-use crate::{
-    MaybeSend, MaybeSync, Metadata, RequestCall, RequestResponse, RoamError, SelfRef, TxError,
-};
+use crate::{MaybeSend, MaybeSync, Metadata, RequestCall, RequestResponse, RoamError, SelfRef};
 
 // As a recap, a service defined like so:
 //

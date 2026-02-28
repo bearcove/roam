@@ -9,12 +9,15 @@
 
 import {
   type Hello,
+  type HelloYourself,
   type Message,
   type MetadataEntry,
   helloV7,
+  helloYourself,
   parityEven,
   parityOdd,
   messageHello,
+  messageHelloYourself,
   messageProtocolError,
   messageRequest,
   messageResponse,
@@ -884,15 +887,15 @@ export async function helloExchangeInitiator<T extends MessageTransport>(
   // Send our Hello immediately
   await io.send(encodeMessage(messageHello(hello)));
 
-  // Wait for peer Hello
-  const peerHello = await waitForPeerHello(io, hello);
+  // Wait for peer HelloYourself
+  const peerHelloYourself = await waitForPeerHelloYourself(io);
 
   const negotiated: Negotiated = {
     maxPayloadSize: 1024 * 1024,
     initialCredit: 64 * 1024,
     maxConcurrentRequests: Math.min(
       hello.connection_settings.max_concurrent_requests,
-      peerHello.connection_settings.max_concurrent_requests,
+      peerHelloYourself.connection_settings.max_concurrent_requests,
     ),
   };
 
@@ -919,7 +922,7 @@ export async function helloExchangeAcceptor<T extends MessageTransport>(
   };
 
   // Wait for peer Hello
-  const peerHello = await waitForPeerHello(io, hello);
+  const peerHello = await waitForPeerHello(io);
 
   const negotiated: Negotiated = {
     maxPayloadSize: 1024 * 1024,
@@ -930,16 +933,14 @@ export async function helloExchangeAcceptor<T extends MessageTransport>(
     ),
   };
 
-  // Send our Hello
-  await io.send(encodeMessage(messageHello(hello)));
+  // Send HelloYourself
+  const hy = helloYourself(parityEven(), hello.connection_settings.max_concurrent_requests);
+  await io.send(encodeMessage(messageHelloYourself(hy)));
 
   return new Connection(io, Role.Acceptor, negotiated, hello, options.acceptConnections);
 }
 
-async function waitForPeerHello<T extends MessageTransport>(
-  io: T,
-  _ourHello: Hello,
-): Promise<Hello> {
+async function waitForPeerHello<T extends MessageTransport>(io: T): Promise<Hello> {
   while (true) {
     let payload: Uint8Array | null;
     try {
@@ -992,6 +993,43 @@ async function waitForPeerHello<T extends MessageTransport>(
     throw ConnectionError.protocol({
       ruleId: "message.hello.ordering",
       context: "received non-Hello before Hello exchange",
+    });
+  }
+}
+
+async function waitForPeerHelloYourself<T extends MessageTransport>(
+  io: T,
+): Promise<HelloYourself> {
+  while (true) {
+    let payload: Uint8Array | null;
+    try {
+      payload = await io.recvTimeout(5000);
+    } catch {
+      throw ConnectionError.io("failed to receive peer HelloYourself");
+    }
+
+    if (!payload) {
+      throw ConnectionError.closed();
+    }
+
+    let result;
+    try {
+      result = decodeMessage(payload);
+    } catch {
+      throw ConnectionError.io("failed to decode message");
+    }
+    const msg = result.value as any;
+
+    if (msgTag(msg) === "HelloYourself") {
+      return msg.payload.value;
+    }
+
+    // Received unexpected message before HelloYourself
+    await io.send(encodeMessage(messageProtocolError("message.hello.ordering")));
+    io.close();
+    throw ConnectionError.protocol({
+      ruleId: "message.hello.ordering",
+      context: "received non-HelloYourself before Hello exchange",
     });
   }
 }
