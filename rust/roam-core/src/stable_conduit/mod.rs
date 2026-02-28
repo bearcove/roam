@@ -379,7 +379,7 @@ async fn recv_handshake<
 
 fn fresh_key() -> Result<ResumeKey, StableConduitError> {
     let mut key = ResumeKey([0u8; 16]);
-    getrandom::getrandom(&mut key.0)
+    getrandom::fill(&mut key.0)
         .map_err(|e| StableConduitError::Setup(format!("failed to generate resume key: {e}")))?;
     Ok(key)
 }

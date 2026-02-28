@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use facet::Facet;
 use facet_core::PtrConst;
+#[cfg(not(target_arch = "wasm32"))]
 use tokio::sync::{Semaphore, mpsc};
 
 use crate::{
@@ -24,6 +25,7 @@ pub fn channel<T, const N: usize>() -> (Tx<T, N>, Rx<T, N>) {
 ///
 /// The contract is strict: successful completion means the item has gone
 /// through the conduit to the link commit boundary.
+#[cfg(not(target_arch = "wasm32"))]
 pub trait ChannelSink: Send + Sync + 'static {
     fn send_payload<'payload>(
         &self,
@@ -43,11 +45,13 @@ pub trait ChannelSink: Send + Sync + 'static {
 /// Each `send_payload` acquires one permit from the semaphore, blocking if
 /// credit is zero. The semaphore is shared with the driver so that incoming
 /// `GrantCredit` messages can add permits via [`CreditSink::credit`].
+#[cfg(not(target_arch = "wasm32"))]
 pub struct CreditSink<S: ChannelSink> {
     inner: S,
     credit: Arc<Semaphore>,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl<S: ChannelSink> CreditSink<S> {
     // r[impl rpc.flow-control.credit.initial]
     // r[impl rpc.flow-control.credit.initial.zero]
@@ -66,6 +70,7 @@ impl<S: ChannelSink> CreditSink<S> {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl<S: ChannelSink> ChannelSink for CreditSink<S> {
     fn send_payload<'payload>(
         &self,
@@ -93,6 +98,7 @@ impl<S: ChannelSink> ChannelSink for CreditSink<S> {
 }
 
 /// Message delivered to an `Rx` by the driver.
+#[cfg(not(target_arch = "wasm32"))]
 pub enum IncomingChannelMessage {
     Item(SelfRef<ChannelItem<'static>>),
     Close(SelfRef<ChannelClose<'static>>),
@@ -104,12 +110,16 @@ pub enum IncomingChannelMessage {
 #[derive(Facet)]
 #[facet(opaque)]
 pub(crate) struct SinkSlot {
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) inner: Option<Arc<dyn ChannelSink>>,
 }
 
 impl SinkSlot {
     pub(crate) fn empty() -> Self {
-        Self { inner: None }
+        Self {
+            #[cfg(not(target_arch = "wasm32"))]
+            inner: None,
+        }
     }
 }
 
@@ -117,12 +127,16 @@ impl SinkSlot {
 #[derive(Facet)]
 #[facet(opaque)]
 pub(crate) struct ReceiverSlot {
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) inner: Option<mpsc::Receiver<IncomingChannelMessage>>,
 }
 
 impl ReceiverSlot {
     pub(crate) fn empty() -> Self {
-        Self { inner: None }
+        Self {
+            #[cfg(not(target_arch = "wasm32"))]
+            inner: None,
+        }
     }
 }
 
@@ -150,9 +164,13 @@ impl<T, const N: usize> Tx<T, N> {
     }
 
     pub fn is_bound(&self) -> bool {
-        self.sink.inner.is_some()
+        #[cfg(not(target_arch = "wasm32"))]
+        return self.sink.inner.is_some();
+        #[cfg(target_arch = "wasm32")]
+        return false;
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     pub async fn send<'value>(&self, value: T) -> Result<(), TxError>
     where
         T: Facet<'value>,
@@ -168,12 +186,14 @@ impl<T, const N: usize> Tx<T, N> {
     }
 
     // r[impl rpc.channel.lifecycle]
+    #[cfg(not(target_arch = "wasm32"))]
     pub async fn close<'value>(&self, metadata: Metadata<'value>) -> Result<(), TxError> {
         let sink = self.sink.inner.as_ref().ok_or(TxError::Unbound)?;
         sink.close_channel(metadata).await
     }
 
     #[doc(hidden)]
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn bind(&mut self, sink: Arc<dyn ChannelSink>) {
         self.sink.inner = Some(sink);
     }
@@ -236,9 +256,13 @@ impl<T, const N: usize> Rx<T, N> {
     }
 
     pub fn is_bound(&self) -> bool {
-        self.receiver.inner.is_some()
+        #[cfg(not(target_arch = "wasm32"))]
+        return self.receiver.inner.is_some();
+        #[cfg(target_arch = "wasm32")]
+        return false;
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     pub async fn recv(&mut self) -> Result<Option<SelfRef<T>>, RxError>
     where
         T: Facet<'static>,
@@ -266,6 +290,7 @@ impl<T, const N: usize> Rx<T, N> {
     }
 
     #[doc(hidden)]
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn bind(&mut self, receiver: mpsc::Receiver<IncomingChannelMessage>) {
         self.receiver.inner = Some(receiver);
     }

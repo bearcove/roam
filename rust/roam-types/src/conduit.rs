@@ -5,7 +5,7 @@ use std::future::Future;
 use facet::Facet;
 use facet_core::Shape;
 
-use crate::{RpcPlan, SelfRef};
+use crate::{MaybeSend, RpcPlan, SelfRef};
 
 /// Maps a lifetime to a concrete message type.
 ///
@@ -53,7 +53,7 @@ pub trait Conduit {
 // r[impl conduit.permit]
 pub trait ConduitTx {
     type Msg: MsgFamily;
-    type Permit<'a>: for<'m> ConduitTxPermit<Msg = Self::Msg> + Send
+    type Permit<'a>: for<'m> ConduitTxPermit<Msg = Self::Msg> + MaybeSend
     where
         Self: 'a;
 
@@ -64,7 +64,7 @@ pub trait ConduitTx {
     /// - Flow control from the peer
     ///
     /// Dropping the permit without sending releases the reservation.
-    fn reserve(&self) -> impl Future<Output = std::io::Result<Self::Permit<'_>>> + Send + '_;
+    fn reserve(&self) -> impl Future<Output = std::io::Result<Self::Permit<'_>>> + MaybeSend + '_;
 
     /// Graceful close of the outbound direction.
     async fn close(self) -> std::io::Result<()>
@@ -77,7 +77,7 @@ pub trait ConduitTx {
 // r[impl zerocopy.framing.conduit]
 pub trait ConduitTxPermit {
     type Msg: MsgFamily;
-    type Error: std::error::Error + Send + Sync + 'static;
+    type Error: std::error::Error + MaybeSend + 'static;
 
     fn send(self, item: <Self::Msg as MsgFamily>::Msg<'_>) -> Result<(), Self::Error>;
 }
@@ -88,7 +88,7 @@ pub trait ConduitTxPermit {
 /// Uses a precomputed `TypePlanCore` for fast plan-driven deserialization.
 pub trait ConduitRx {
     type Msg: MsgFamily;
-    type Error: std::error::Error + Send + Sync + 'static;
+    type Error: std::error::Error + MaybeSend + 'static;
 
     /// Receive and decode the next message.
     ///

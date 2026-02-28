@@ -3,9 +3,9 @@ use std::{collections::BTreeMap, pin::Pin, sync::Arc};
 use moire::sync::mpsc;
 use roam_types::{
     ChannelMessage, Conduit, ConduitRx, ConduitTx, ConduitTxPermit, ConnectionClose, ConnectionId,
-    ConnectionOpen, ConnectionSettings, IdAllocator, Message, MessageFamily, MessagePayload,
-    Metadata, Parity, RequestBody, RequestId, RequestMessage, RequestResponse, SelfRef,
-    SessionRole,
+    ConnectionOpen, ConnectionSettings, IdAllocator, MaybeSend, MaybeSync, Message, MessageFamily,
+    MessagePayload, Metadata, Parity, RequestBody, RequestId, RequestMessage, RequestResponse,
+    SelfRef, SessionRole,
 };
 
 mod builders;
@@ -784,9 +784,17 @@ impl SessionCore {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 type BoxFuture<'a, T> = Pin<Box<dyn std::future::Future<Output = T> + Send + 'a>>;
+#[cfg(target_arch = "wasm32")]
+type BoxFuture<'a, T> = Pin<Box<dyn std::future::Future<Output = T> + 'a>>;
 
+#[cfg(not(target_arch = "wasm32"))]
 pub trait DynConduitTx: Send + Sync {
+    fn send_msg<'a>(&'a self, msg: Message<'a>) -> BoxFuture<'a, std::io::Result<()>>;
+}
+#[cfg(target_arch = "wasm32")]
+pub trait DynConduitTx {
     fn send_msg<'a>(&'a self, msg: Message<'a>) -> BoxFuture<'a, std::io::Result<()>>;
 }
 
@@ -794,13 +802,15 @@ pub trait DynConduitTx: Send + Sync {
 // r[impl zerocopy.framing.pipeline.outgoing]
 impl<T> DynConduitTx for T
 where
-    T: ConduitTx<Msg = MessageFamily> + Send + Sync,
-    for<'p> <T as ConduitTx>::Permit<'p>: Send,
+    T: ConduitTx<Msg = MessageFamily> + MaybeSend + MaybeSync,
+    for<'p> <T as ConduitTx>::Permit<'p>: MaybeSend,
 {
     fn send_msg<'a>(&'a self, msg: Message<'a>) -> BoxFuture<'a, std::io::Result<()>> {
         Box::pin(async move {
             let permit = self.reserve().await?;
-            permit.send(msg).map_err(std::io::Error::other)
+            permit
+                .send(msg)
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
         })
     }
 }

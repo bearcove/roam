@@ -1,4 +1,6 @@
-use crate::{Metadata, RequestCall, RequestResponse, RoamError, SelfRef, TxError};
+use crate::{
+    MaybeSend, MaybeSync, Metadata, RequestCall, RequestResponse, RoamError, SelfRef, TxError,
+};
 
 // As a recap, a service defined like so:
 //
@@ -68,17 +70,17 @@ use crate::{Metadata, RequestCall, RequestResponse, RoamError, SelfRef, TxError}
 ///
 /// - `T`: The success value type of the response.
 /// - `E`: The error value type of the response.
-pub trait Call<T, E>: Send {
+pub trait Call<T, E>: MaybeSend {
     /// Send a [`Result`] back to the caller, consuming this `Call`.
-    fn reply(self, result: Result<T, E>) -> impl std::future::Future<Output = ()> + Send;
+    fn reply(self, result: Result<T, E>) -> impl std::future::Future<Output = ()> + MaybeSend;
 
     /// Send a successful response back to the caller, consuming this `Call`.
     ///
     /// Equivalent to `self.reply(Ok(value)).await`.
-    fn ok(self, value: T) -> impl std::future::Future<Output = ()> + Send
+    fn ok(self, value: T) -> impl std::future::Future<Output = ()> + MaybeSend
     where
         Self: Sized,
-        T: Send,
+        T: MaybeSend,
     {
         self.reply(Ok(value))
     }
@@ -86,10 +88,10 @@ pub trait Call<T, E>: Send {
     /// Send an error response back to the caller, consuming this `Call`.
     ///
     /// Equivalent to `self.reply(Err(error)).await`.
-    fn err(self, error: E) -> impl std::future::Future<Output = ()> + Send
+    fn err(self, error: E) -> impl std::future::Future<Output = ()> + MaybeSend
     where
         Self: Sized,
-        E: Send,
+        E: MaybeSend,
     {
         self.reply(Err(error))
     }
@@ -104,7 +106,7 @@ pub trait Call<T, E>: Send {
 ///
 /// If the `ReplySink` is dropped without `send_reply` being called, the caller
 /// will automatically receive a [`crate::RoamError::Cancelled`] error.
-pub trait ReplySink: Send + Sync + 'static {
+pub trait ReplySink: MaybeSend + MaybeSync + 'static {
     /// Send the response, consuming the sink. Any error that happens during send_reply
     /// must set a flag in the driver for it to reply with an error.
     ///
@@ -115,16 +117,16 @@ pub trait ReplySink: Send + Sync + 'static {
     fn send_reply(
         self,
         response: RequestResponse<'_>,
-    ) -> impl std::future::Future<Output = ()> + Send;
+    ) -> impl std::future::Future<Output = ()> + MaybeSend;
 
     /// Send an error response back to the caller, consuming the sink.
     ///
     /// This is a convenience method used by generated dispatchers when
     /// deserialization fails or the method ID is unknown.
-    fn send_error<E: for<'a> facet::Facet<'a> + Send>(
+    fn send_error<E: for<'a> facet::Facet<'a> + MaybeSend>(
         self,
         error: RoamError<E>,
-    ) -> impl std::future::Future<Output = ()> + Send
+    ) -> impl std::future::Future<Output = ()> + MaybeSend
     where
         Self: Sized,
     {
@@ -147,6 +149,7 @@ pub trait ReplySink: Send + Sync + 'static {
     ///
     /// Returns `None` by default. The driver's `ReplySink` implementation
     /// overrides this to provide actual channel binding.
+    #[cfg(not(target_arch = "wasm32"))]
     fn channel_binder(&self) -> Option<&dyn crate::ChannelBinder> {
         None
     }
@@ -165,7 +168,7 @@ pub trait ReplySink: Send + Sync + 'static {
 /// Generated clients hold a `C: Caller` and use it to send calls. The caller
 /// serializes the outgoing [`RequestCall`] (with borrowed args), registers a
 /// pending response slot, and awaits the response from the peer.
-pub trait Caller: Clone + Send + Sync + 'static {
+pub trait Caller: Clone + MaybeSend + MaybeSync + 'static {
     /// Send a call and wait for the response.
     #[allow(async_fn_in_trait)]
     async fn call<'a>(
@@ -177,18 +180,19 @@ pub trait Caller: Clone + Send + Sync + 'static {
     ///
     /// Returns `None` by default. The driver's `Caller` implementation
     /// overrides this to provide actual channel binding.
+    #[cfg(not(target_arch = "wasm32"))]
     fn channel_binder(&self) -> Option<&dyn crate::ChannelBinder> {
         None
     }
 }
 
-pub trait Handler<R: ReplySink>: Send + Sync + 'static {
+pub trait Handler<R: ReplySink>: MaybeSend + MaybeSync + 'static {
     /// Dispatch an incoming call to the appropriate method implementation.
     fn handle(
         &self,
         call: SelfRef<crate::RequestCall<'static>>,
         reply: R,
-    ) -> impl std::future::Future<Output = ()> + Send + '_;
+    ) -> impl std::future::Future<Output = ()> + MaybeSend + '_;
 }
 
 /// A decoded response value paired with its response metadata.
@@ -227,8 +231,8 @@ impl<R: ReplySink> SinkCall<R> {
 
 impl<T, E, R> Call<T, E> for SinkCall<R>
 where
-    T: for<'a> facet::Facet<'a> + Send,
-    E: for<'a> facet::Facet<'a> + Send,
+    T: for<'a> facet::Facet<'a> + MaybeSend,
+    E: for<'a> facet::Facet<'a> + MaybeSend,
     R: ReplySink,
 {
     async fn reply(self, result: Result<T, E>) {

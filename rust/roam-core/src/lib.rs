@@ -11,22 +11,28 @@
 mod bare_conduit;
 pub use bare_conduit::*;
 
+#[cfg(not(target_arch = "wasm32"))]
 mod stable_conduit;
-use roam_types::{Backing, SelfRef};
+#[cfg(not(target_arch = "wasm32"))]
 pub use stable_conduit::*;
 
+#[cfg(not(target_arch = "wasm32"))]
 mod memory_link;
+#[cfg(not(target_arch = "wasm32"))]
 pub use memory_link::*;
 
 mod session;
 pub use session::*;
 
+#[cfg(not(target_arch = "wasm32"))]
 mod driver;
+#[cfg(not(target_arch = "wasm32"))]
 pub use driver::*;
 
 use facet_format::{FormatDeserializer, MetaSource};
 use facet_postcard::PostcardParser;
 use facet_reflect::Partial;
+use roam_types::{Backing, SelfRef};
 
 /// Return a process-global cached `&'static RpcPlan` for type `T`.
 /// [FIXME] requiring 'static here is wrong

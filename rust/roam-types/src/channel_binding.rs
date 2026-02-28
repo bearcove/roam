@@ -1,3 +1,4 @@
+#![cfg(not(target_arch = "wasm32"))]
 //! Channel binding infrastructure for connecting Tx/Rx handles to the driver.
 //!
 //! The [`ChannelBinder`] trait is implemented by the session driver and provides

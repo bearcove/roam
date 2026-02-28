@@ -19,7 +19,12 @@ facet-core.workspace = true
 facet-path.workspace = true
 smallvec.workspace = true
 structstruck.workspace = true
-tokio.workspace = true
 facet-postcard.workspace = true
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+tokio.workspace = true
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+futures-channel = "0.3"
 
 [dev-dependencies]

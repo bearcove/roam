@@ -88,7 +88,7 @@ static_assertions = "1.1.0"
 ulid = "1"
 
 smallvec = "1.15.1"
-getrandom = "0.2.16"
+getrandom = { version = "0.3", features = ["wasm_js"] }
 zerocopy = { version = "0.8", features = ["derive"] }
 
 # Benchmarking
@@ -115,10 +115,10 @@ tokio-stream = "0.1"
 # facet-value = { path = "../facet/facet-value" }
 # facet-testhelpers = { path = "../facet/facet-testhelpers" }
 
-# # Uncomment to develop moire
-# [patch."https://github.com/bearcove/moire"]
-# moire = { path = "../moire/crates/moire" }
-# moire-types = { path = "../moire/crates/moire-types" }
+# Uncomment to develop moire
+[patch."https://github.com/bearcove/moire"]
+moire = { path = "../moire/crates/moire" }
+moire-types = { path = "../moire/crates/moire-types" }
 
 [profile.release]
 debug = 1
