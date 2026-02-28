@@ -7,21 +7,11 @@
 
 use std::time::Duration;
 
-use facet::Facet;
-use roam_types::{ChannelId, Hello, Message, MetadataValue, Payload, RequestId};
 use std::convert::Infallible;
 
+use roam_types::{ChannelId, Hello, Message, MetadataValue, Payload, RequestId, RoamError};
 use spec_tests::harness::{accept_subject, our_hello, run_async};
 use spec_tests::testbed::method_id;
-
-#[derive(Debug, Clone, PartialEq, Eq, Facet)]
-#[repr(u8)]
-enum RoamError<E> {
-    User(E) = 0,
-    UnknownMethod = 1,
-    InvalidPayload = 2,
-    Cancelled = 3,
-}
 
 fn metadata_empty() -> Vec<(String, MetadataValue, u64)> {
     Vec::new()

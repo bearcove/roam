@@ -3,6 +3,7 @@ resolver = "2"
 members = [
   "xtask",
   "spec/spec-proto",
+  "spec/spec-tests",
   "rust/roam-types",
   "rust/roam-core",
   "rust/roam-hash",
@@ -15,6 +16,7 @@ members = [
   "rust/roam-macros",
   "rust/roam",
   "rust/roam-bench",
+  "rust/subject-rust",
   "rust-legacy/roam-schema",
   "rust/roam-codegen",
   "rust/wasm-browser-tests",

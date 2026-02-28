@@ -39,9 +39,6 @@ tokio = { workspace = true, features = [
   "macros",
 ] }
 
-[dev-dependencies]
-roam-hash = { path = "../../rust/roam-hash" }
-roam-schema = { path = "../../rust/roam-schema" }
 
 [[bin]]
 name = "tcp-echo-server"

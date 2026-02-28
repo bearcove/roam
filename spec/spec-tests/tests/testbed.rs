@@ -1,76 +1,13 @@
+use std::convert::Infallible;
 use std::time::Duration;
 
-use facet::Facet;
-use roam_hash::method_id_from_detail;
-use roam_schema::{ArgDetail, MethodDetail};
-use roam_types::{Hello, Message, MetadataValue, MethodId, Payload, RequestId};
+use roam_types::{Hello, Message, MetadataValue, Payload, RequestId, RoamError};
 use spec_proto::MathError;
 use spec_tests::harness::{accept_subject, our_hello, run_async};
 use spec_tests::testbed::method_id;
 
-fn compute_divide_method_id() -> u64 {
-    let detail = MethodDetail {
-        service_name: "Testbed".into(),
-        method_name: "divide".into(),
-        args: vec![
-            ArgDetail {
-                name: "dividend".into(),
-                ty: <i64 as Facet>::SHAPE,
-            },
-            ArgDetail {
-                name: "divisor".into(),
-                ty: <i64 as Facet>::SHAPE,
-            },
-        ],
-        return_type: <Result<i64, MathError> as Facet>::SHAPE,
-        doc: None,
-    };
-    method_id_from_detail(&detail)
-}
-
-/// Wire-level RoamError with user error type E.
-#[derive(Debug, Clone, PartialEq, Eq, Facet)]
-#[repr(u8)]
-enum RoamErrorWithUser<E> {
-    User(E) = 0,
-    UnknownMethod = 1,
-    InvalidPayload = 2,
-    Cancelled = 3,
-}
-
-use std::convert::Infallible;
-
-#[derive(Debug, Clone, PartialEq, Eq, Facet)]
-#[repr(u8)]
-enum RoamError<E> {
-    User(E) = 0,
-    UnknownMethod = 1,
-    InvalidPayload = 2,
-    Cancelled = 3,
-}
-
-fn compute_method_id(method_name: &str) -> u64 {
-    let detail = MethodDetail {
-        service_name: "Testbed".into(),
-        method_name: String::from(method_name).into(),
-        args: vec![ArgDetail {
-            name: "message".into(),
-            ty: <String as Facet>::SHAPE,
-        }],
-        return_type: <String as Facet>::SHAPE,
-        doc: None,
-    };
-    method_id_from_detail(&detail)
-}
-
 fn metadata_empty() -> Vec<(String, MetadataValue, u64)> {
     Vec::new()
-}
-
-/// Verify hardcoded IDs match computed IDs.
-fn ensure_expected_ids() {
-    assert_eq!(compute_method_id("echo"), method_id::echo().0);
-    assert_eq!(compute_method_id("reverse"), method_id::reverse().0);
 }
 
 // r[verify call.initiate] - Call initiated by sending Request message
@@ -84,8 +21,6 @@ fn ensure_expected_ids() {
 // r[verify transport.message.binary] - Binary transport (TCP stream)
 #[test]
 fn rpc_echo_roundtrip() {
-    ensure_expected_ids();
-
     run_async(async {
         let (mut io, mut child) = accept_subject().await?;
 
@@ -173,13 +108,12 @@ fn rpc_user_error_roundtrip() {
             .map_err(|e| e.to_string())?;
 
         // Call divide(10, 0) - should return Err(MathError::DivisionByZero)
-        let divide_method_id = compute_divide_method_id();
         let req_payload =
             facet_postcard::to_vec(&(10i64, 0i64)).map_err(|e| format!("postcard args: {e}"))?;
         let req = Message::Request {
             conn_id: roam_types::ConnectionId::ROOT,
             request_id: RequestId(100),
-            method_id: MethodId(divide_method_id),
+            method_id: method_id::divide(),
             metadata: metadata_empty(),
             channels: vec![],
             payload: Payload(req_payload),
@@ -208,14 +142,14 @@ fn rpc_user_error_roundtrip() {
         };
 
         // The response should be Result<i64, RoamError<MathError>> = Err(User(DivisionByZero))
-        let decoded: Result<i64, RoamErrorWithUser<MathError>> =
+        let decoded: Result<i64, RoamError<MathError>> =
             facet_postcard::from_slice(&payload.0).map_err(|e| format!("postcard resp: {e}"))?;
 
         match decoded {
             Ok(v) => {
                 return Err(format!("expected Err(User(DivisionByZero)), got Ok({v})"));
             }
-            Err(RoamErrorWithUser::User(MathError::DivisionByZero)) => {
+            Err(RoamError::User(MathError::DivisionByZero)) => {
                 // Success! The user error was properly roundtripped.
             }
             Err(other) => {
@@ -236,8 +170,6 @@ fn rpc_user_error_roundtrip() {
 // r[verify call.error.protocol] - UnknownMethod is a protocol-level error (discriminant 1)
 #[test]
 fn rpc_unknown_method_returns_unknownmethod_error() {
-    ensure_expected_ids();
-
     run_async(async {
         let (mut io, mut child) = accept_subject().await?;
 
@@ -303,8 +235,6 @@ fn rpc_unknown_method_returns_unknownmethod_error() {
 // r[verify call.error.invalid-payload] - Malformed payload returns InvalidPayload error
 #[test]
 fn rpc_invalid_payload_returns_invalidpayload_error() {
-    ensure_expected_ids();
-
     run_async(async {
         let (mut io, mut child) = accept_subject().await?;
 
@@ -371,8 +301,6 @@ fn rpc_invalid_payload_returns_invalidpayload_error() {
 // r[verify core.call.request-id] - Request IDs correlate requests to responses
 #[test]
 fn rpc_pipelining_multiple_requests() {
-    ensure_expected_ids();
-
     run_async(async {
         let (mut io, mut child) = accept_subject().await?;
 
