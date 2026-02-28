@@ -3,10 +3,7 @@
 export {
   RpcError,
   RpcErrorCode,
-  decodeRpcResult,
   decodeUserError,
-  tryDecodeRpcResult,
-  type RpcResult,
 } from "./rpc_error.ts";
 
 export type {

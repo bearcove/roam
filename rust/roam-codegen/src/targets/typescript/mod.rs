@@ -137,7 +137,7 @@ fn generate_imports(service: &ServiceDescriptor, w: &mut CodeWriter<&mut String>
     // Core runtime imports (non-postcard)
     cw_writeln!(
         w,
-        "import {{ encodeResultOk, encodeResultErr, encodeInvalidPayload, encodeWithSchema, decodeWithSchema, helloExchangeInitiator, defaultHello, CallBuilder }} from \"@bearcove/roam-core\";"
+        "import {{ encodeWithSchema, decodeWithSchema, helloExchangeInitiator, defaultHello, CallBuilder }} from \"@bearcove/roam-core\";"
     )
     .unwrap();
 

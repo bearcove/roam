@@ -382,14 +382,4 @@ export {
 
 export { encodeWithSchema, decodeWithSchema } from "./schema_codec.ts";
 
-// Result/RoamError wire wrapper helpers
-export {
-  type RoamErrorPayload,
-  type RpcWireResult,
-  RoamErrorPayloadSchema,
-  RpcWireResultSchema,
-  rpcWireSchemaRegistry,
-  encodeResultOk,
-  encodeResultErr,
-  decodeRpcWireResult,
-} from "./result.ts";
+export { type RoamErrorPayload } from "./result.ts";

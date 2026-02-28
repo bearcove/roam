@@ -58,23 +58,11 @@ export {
 // Schema-driven encoding/decoding
 export { encodeWithSchema, decodeWithSchema } from "@bearcove/roam-postcard";
 
-// Result encoding (for server-side responses)
-import { encodeResultOk, encodeResultErr } from "../../roam-postcard/src/result.ts";
-import {
-  encodeUnknownMethod,
-  encodeInvalidPayload,
-  ROAM_ERROR,
-} from "../../roam-postcard/src/roam_error.ts";
-export { encodeResultOk, encodeResultErr, encodeUnknownMethod, encodeInvalidPayload, ROAM_ERROR };
-
 // RPC error types (for client-side error handling)
 export {
   RpcError,
   RpcErrorCode,
-  decodeRpcResult,
   decodeUserError,
-  tryDecodeRpcResult,
-  type RpcResult,
 } from "@bearcove/roam-wire";
 
 // Wire types, schemas, and codec
@@ -254,7 +242,8 @@ export class RpcDispatcher<H> {
     const methodHandler = this.methodHandlers.get(methodId);
     if (!methodHandler) {
       // r[impl call.error.unknown-method]
-      return encodeResultErr(encodeUnknownMethod());
+      // Err(RoamError::UnknownMethod) = [0x01=Err, 0x01=UnknownMethod]
+      return new Uint8Array([0x01, 0x01]);
     }
 
     // Method handlers are responsible for their own error handling:

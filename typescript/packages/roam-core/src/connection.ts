@@ -41,8 +41,8 @@ import type { Caller, CallerRequest } from "./caller.ts";
 import { MiddlewareCaller } from "./caller.ts";
 import type { ClientMiddleware } from "./middleware.ts";
 import { clientMetadataToEntries } from "./metadata.ts";
-import { encodeWithSchema, decodeWithSchema } from "@bearcove/roam-postcard";
-import { tryDecodeRpcResult } from "@bearcove/roam-wire";
+import { encodeWithSchema, decodeWithSchema, decodeVarintNumber } from "@bearcove/roam-postcard";
+import { RpcError, RpcErrorCode } from "@bearcove/roam-wire";
 
 // Note: Role is exported from streaming/index.ts in roam-core's main export
 
@@ -1097,13 +1097,21 @@ export class ConnectionCaller<T extends MessageTransport = MessageTransport> imp
     await this.conn.flushOutgoing();
 
     // Wait for response and decode
+    // Wire format: [disc=0 Ok | disc=1 Err][payload...]
     const responsePayload = await responsePromise;
-    const rpcResult = tryDecodeRpcResult(responsePayload);
-    if (rpcResult.ok) {
-      const decoded = decodeWithSchema(responsePayload, rpcResult.offset, request.schema.returns);
-      return decoded.value;
+    const disc = responsePayload[0];
+    if (disc === 0) {
+      return decodeWithSchema(responsePayload, 1, request.schema.returns).value;
+    } else if (disc === 1) {
+      // RoamError<E>: [variant_varint][...payload]
+      const errVariant = decodeVarintNumber(responsePayload, 1);
+      if (errVariant.value === RpcErrorCode.USER) {
+        throw new RpcError(RpcErrorCode.USER, responsePayload.slice(errVariant.next));
+      } else {
+        throw new RpcError(errVariant.value as RpcErrorCode);
+      }
     } else {
-      throw rpcResult.error;
+      throw new Error(`unexpected result discriminant: ${disc}`);
     }
   }
 

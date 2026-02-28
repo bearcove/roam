@@ -28,8 +28,6 @@ import {
   type Tx,
   type Rx,
   channel,
-  encodeResultErr,
-  encodeUnknownMethod,
   ConnectionError,
 } from "@bearcove/roam-core";
 
@@ -180,10 +178,11 @@ class TestbedChannelingDispatcher implements ChannelingDispatcher {
     const handler = this.handlers.get(methodId);
     if (!handler) {
       // Unknown method - send error response
+      // Err(RoamError::UnknownMethod) = [0x01=Err, 0x01=UnknownMethod]
       taskSender({
         kind: "response",
         requestId,
-        payload: encodeResultErr(encodeUnknownMethod()),
+        payload: new Uint8Array([0x01, 0x01]),
       });
       return;
     }

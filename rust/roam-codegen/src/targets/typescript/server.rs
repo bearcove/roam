@@ -130,13 +130,13 @@ pub fn generate_channel_handlers(service: &ServiceDescriptor) -> String {
         } else {
             let encode_expr = generate_encode_expr(method.return_shape, "result");
             out.push_str(&format!(
-                "      taskSender({{ kind: 'response', requestId, payload: encodeResultOk({encode_expr}) }});\n"
+                "      taskSender({{ kind: 'response', requestId, payload: pc.concat(pc.encodeU8(0), {encode_expr}) }});\n"
             ));
         }
 
         out.push_str("    } catch (e) {\n");
         out.push_str(
-            "      taskSender({ kind: 'response', requestId, payload: encodeResultErr(encodeInvalidPayload()) });\n",
+            "      taskSender({ kind: 'response', requestId, payload: pc.concat(pc.encodeU8(1), pc.encodeVarint(2n)) });\n",
         );
         out.push_str("    }\n");
         out.push_str("  }],\n");
