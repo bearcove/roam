@@ -27,12 +27,8 @@ import {
 } from "./types.ts";
 import { HelloSchema, RequestBodySchema, MessageSchema } from "./schemas.ts";
 import {
-  encodeMetadataValue,
-  decodeMetadataValue,
   encodeMessage,
   decodeMessage,
-  encodeMessages,
-  decodeMessages,
 } from "./codec.ts";
 import { encodeU32 } from "@bearcove/roam-postcard";
 
@@ -97,14 +93,6 @@ describe("factory helpers", () => {
 });
 
 describe("schema-driven codec", () => {
-  it("roundtrips metadata value", () => {
-    const value = metadataBytes(new Uint8Array([0xde, 0xad]));
-    const encoded = encodeMetadataValue(value);
-    const decoded = decodeMetadataValue(encoded);
-    expect(decoded.next).toBe(encoded.length);
-    expect(decoded.value).toEqual(value);
-  });
-
   it("roundtrips message with nested request body", () => {
     const metadata = [
       metadataEntry("trace-id", metadataString("abc123"), MetadataFlags.NONE),
@@ -122,16 +110,19 @@ describe("schema-driven codec", () => {
     expect(decoded.value).toEqual(message);
   });
 
-  it("roundtrips message streams", () => {
+  it("roundtrips multiple messages individually", () => {
     const messages: Message[] = [
       messageHello(helloV7(parityOdd(), 64)),
       messageGoodbye(2n, []),
       messageData(3n, new Uint8Array([0x4d]), 2n),
     ];
 
-    const encoded = encodeMessages(messages);
-    const decoded = decodeMessages(encoded);
-    expect(decoded).toEqual(messages);
+    for (const message of messages) {
+      const encoded = encodeMessage(message);
+      const decoded = decodeMessage(encoded);
+      expect(decoded.next).toBe(encoded.length);
+      expect(decoded.value).toEqual(message);
+    }
   });
 });
 

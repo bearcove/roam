@@ -80,14 +80,6 @@ export {
 } from "./types.ts";
 
 export {
-  encodeHello,
-  decodeHello,
-  encodeMetadataValue,
-  decodeMetadataValue,
-  encodeMetadataEntry,
-  decodeMetadataEntry,
   encodeMessage,
   decodeMessage,
-  encodeMessages,
-  decodeMessages,
 } from "./codec.ts";

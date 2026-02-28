@@ -108,16 +108,8 @@ export {
   messageReset,
   messageCredit,
   // Wire codec
-  encodeHello,
-  decodeHello,
-  encodeMetadataValue,
-  decodeMetadataValue,
-  encodeMetadataEntry,
-  decodeMetadataEntry,
   encodeMessage,
   decodeMessage,
-  encodeMessages,
-  decodeMessages,
 } from "@bearcove/roam-wire";
 
 // Channel types
