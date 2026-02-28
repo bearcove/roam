@@ -308,7 +308,7 @@ pub fn create_mmap_control_pair_connected() -> io::Result<(MmapControlSender, Mm
     ))
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(loom)))]
 mod tests {
     use super::*;
 
