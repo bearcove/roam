@@ -32,9 +32,3 @@ status-level = "pass"
 
 # Slow test warning threshold
 slow-timeout = { period = "2s", terminate-after = 2 }
-
-[[profile.default.overrides]]
-# TypeScript TCP conformance tests can exceed the strict 4s default budget on
-# smaller CI runners when several cases spin up Node processes concurrently.
-filter = 'test(lang_typescript_transport_tcp::)'
-slow-timeout = { period = "8s", terminate-after = 3 }

@@ -26,7 +26,7 @@ use spec_proto::{
     TestbedDispatcher, TestbedServer,
 };
 use std::process::Stdio;
-use tokio::io::AsyncReadExt;
+use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, BufReader};
 use tokio::net::TcpListener;
 use tokio::process::{Child, Command};
 use tokio::sync::oneshot;
@@ -147,8 +147,8 @@ pub fn subject_cmd_for_language(language: SubjectLanguage) -> String {
             }
             "./target/release/subject-rust".to_string()
         }
-        SubjectLanguage::Swift => "sh swift/subject/subject-swift.sh".to_string(),
-        SubjectLanguage::TypeScript => "sh typescript/subject/subject-ts.sh".to_string(),
+        SubjectLanguage::Swift => "./swift/subject/subject-swift.sh".to_string(),
+        SubjectLanguage::TypeScript => "./typescript/subject/subject-ts.sh".to_string(),
     }
 }
 
@@ -366,6 +366,25 @@ pub async fn spawn_subject(peer_addr: &str) -> Result<Child, String> {
     spawn_subject_cmd_with_env(&subject_cmd(), peer_addr, &[]).await
 }
 
+fn spawn_subject_log_pump<R>(reader: R, pid: u32, stream: &'static str)
+where
+    R: AsyncRead + Unpin + Send + 'static,
+{
+    tokio::spawn(async move {
+        let mut lines = BufReader::new(reader).lines();
+        loop {
+            match lines.next_line().await {
+                Ok(Some(line)) => eprintln!("[subject:{pid}:{stream}] {line}"),
+                Ok(None) => break,
+                Err(err) => {
+                    eprintln!("[subject:{pid}:{stream}] log read error: {err}");
+                    break;
+                }
+            }
+        }
+    });
+}
+
 async fn spawn_subject_cmd_with_env(
     cmd: &str,
     peer_addr: &str,
@@ -378,8 +397,8 @@ async fn spawn_subject_cmd_with_env(
         .arg(cmd)
         .env("PEER_ADDR", peer_addr)
         .stdin(Stdio::null())
-        .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit());
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
     for (k, v) in extra_env {
         command.env(k, v);
     }
@@ -387,6 +406,14 @@ async fn spawn_subject_cmd_with_env(
     let mut child = command
         .spawn()
         .map_err(|e| format!("failed to spawn subject: {e}"))?;
+    let pid = child.id().unwrap_or_default();
+
+    if let Some(stdout) = child.stdout.take() {
+        spawn_subject_log_pump(stdout, pid, "stdout");
+    }
+    if let Some(stderr) = child.stderr.take() {
+        spawn_subject_log_pump(stderr, pid, "stderr");
+    }
 
     // If it exits immediately, surface that early.
     tokio::time::sleep(Duration::from_millis(10)).await;
