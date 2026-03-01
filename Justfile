@@ -100,3 +100,71 @@ ws-ts *args:
 fuzz-shm-build:
     cargo afl build --manifest-path fuzz/roam-shm-afl/Cargo.toml --bin framing_peek
     cargo afl build --manifest-path fuzz/roam-shm-afl/Cargo.toml --bin shm_link_roundtrip
+
+fuzz-targets:
+    @echo "Available fuzz targets:"
+    @echo "  framing_peek         (fuzz/roam-shm-afl)"
+    @echo "  shm_link_roundtrip   (fuzz/roam-shm-afl)"
+    @echo "  protocol_decode      (fuzz/roam-afl)"
+    @echo "  testbed_mem_session  (fuzz/roam-afl)"
+    @echo ""
+    @echo "Use: just fuzz-build [target|all]"
+    @echo "Use: just fuzz-run [target|all] [seconds]"
+    @echo "Use: just fuzz [target|all] [seconds]"
+
+fuzz-build target="all":
+    @case "{{target}}" in \
+      all) \
+        cargo afl build --manifest-path fuzz/roam-shm-afl/Cargo.toml --bin framing_peek; \
+        cargo afl build --manifest-path fuzz/roam-shm-afl/Cargo.toml --bin shm_link_roundtrip; \
+        cargo afl build --manifest-path fuzz/roam-afl/Cargo.toml --bin protocol_decode; \
+        cargo afl build --manifest-path fuzz/roam-afl/Cargo.toml --bin testbed_mem_session; \
+        ;; \
+      framing_peek|shm_link_roundtrip) \
+        cargo afl build --manifest-path fuzz/roam-shm-afl/Cargo.toml --bin "{{target}}"; \
+        ;; \
+      protocol_decode|testbed_mem_session) \
+        cargo afl build --manifest-path fuzz/roam-afl/Cargo.toml --bin "{{target}}"; \
+        ;; \
+      *) \
+        echo "Unknown target: {{target}}" >&2; \
+        just fuzz-targets; \
+        exit 1; \
+        ;; \
+    esac
+
+fuzz-run target="all" seconds="60":
+    @mkdir -p \
+      fuzz/roam-shm-afl/out/framing_peek \
+      fuzz/roam-shm-afl/out/shm_link_roundtrip \
+      fuzz/roam-afl/out/protocol_decode \
+      fuzz/roam-afl/out/testbed_mem_session
+    @case "{{target}}" in \
+      all) \
+        timeout "{{seconds}}" cargo afl fuzz -i fuzz/roam-shm-afl/in/framing_peek -o fuzz/roam-shm-afl/out/framing_peek -- fuzz/roam-shm-afl/target/debug/framing_peek || true; \
+        timeout "{{seconds}}" cargo afl fuzz -i fuzz/roam-shm-afl/in/shm_link_roundtrip -o fuzz/roam-shm-afl/out/shm_link_roundtrip -- fuzz/roam-shm-afl/target/debug/shm_link_roundtrip || true; \
+        timeout "{{seconds}}" cargo afl fuzz -i fuzz/roam-afl/in/protocol_decode -o fuzz/roam-afl/out/protocol_decode -- fuzz/roam-afl/target/debug/protocol_decode || true; \
+        timeout "{{seconds}}" cargo afl fuzz -i fuzz/roam-afl/in/testbed_mem_session -o fuzz/roam-afl/out/testbed_mem_session -- fuzz/roam-afl/target/debug/testbed_mem_session || true; \
+        ;; \
+      framing_peek) \
+        timeout "{{seconds}}" cargo afl fuzz -i fuzz/roam-shm-afl/in/framing_peek -o fuzz/roam-shm-afl/out/framing_peek -- fuzz/roam-shm-afl/target/debug/framing_peek || true; \
+        ;; \
+      shm_link_roundtrip) \
+        timeout "{{seconds}}" cargo afl fuzz -i fuzz/roam-shm-afl/in/shm_link_roundtrip -o fuzz/roam-shm-afl/out/shm_link_roundtrip -- fuzz/roam-shm-afl/target/debug/shm_link_roundtrip || true; \
+        ;; \
+      protocol_decode) \
+        timeout "{{seconds}}" cargo afl fuzz -i fuzz/roam-afl/in/protocol_decode -o fuzz/roam-afl/out/protocol_decode -- fuzz/roam-afl/target/debug/protocol_decode || true; \
+        ;; \
+      testbed_mem_session) \
+        timeout "{{seconds}}" cargo afl fuzz -i fuzz/roam-afl/in/testbed_mem_session -o fuzz/roam-afl/out/testbed_mem_session -- fuzz/roam-afl/target/debug/testbed_mem_session || true; \
+        ;; \
+      *) \
+        echo "Unknown target: {{target}}" >&2; \
+        just fuzz-targets; \
+        exit 1; \
+        ;; \
+    esac
+
+fuzz target="all" seconds="60":
+    just fuzz-build "{{target}}"
+    just fuzz-run "{{target}}" "{{seconds}}"

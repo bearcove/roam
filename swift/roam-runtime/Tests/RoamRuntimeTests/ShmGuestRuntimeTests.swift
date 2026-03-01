@@ -127,6 +127,170 @@ private func isConnectionClosedTransportError(_ error: Error) -> Bool {
     return false
 }
 
+private func isConnectionClosedConnectionError(_ error: Error) -> Bool {
+    guard let connError = error as? ConnectionError else {
+        return false
+    }
+    if case .connectionClosed = connError {
+        return true
+    }
+    return false
+}
+
+private func isTimeoutConnectionError(_ error: Error) -> Bool {
+    guard let connError = error as? ConnectionError else {
+        return false
+    }
+    if case .timeout = connError {
+        return true
+    }
+    return false
+}
+
+private func isTransportConnectionError(_ error: Error) -> Bool {
+    guard let connError = error as? ConnectionError else {
+        return false
+    }
+    if case .transportError = connError {
+        return true
+    }
+    return false
+}
+
+private enum ShmHarnessError: Error {
+    case missingRingOffset(UInt8)
+    case timeout(String)
+    case unexpectedFrame(String)
+}
+
+private struct ShmNoopDispatcher: ServiceDispatcher {
+    func preregister(
+        methodId _: UInt64,
+        payload _: [UInt8],
+        channels _: [UInt64],
+        registry _: ChannelRegistry
+    ) async {}
+
+    func dispatch(
+        methodId _: UInt64,
+        payload _: [UInt8],
+        channels _: [UInt64],
+        requestId _: UInt64,
+        registry _: ChannelRegistry,
+        taskTx _: @escaping @Sendable (TaskMessage) -> Void
+    ) async {}
+}
+
+private func hostPeerBuffers(
+    fixture: SegmentFixture,
+    peerId: UInt8
+) throws -> (guestToHost: ShmBipBuffer, hostToGuest: ShmBipBuffer) {
+    guard let ringOffset = fixture.ringOffsets[peerId] else {
+        throw ShmHarnessError.missingRingOffset(peerId)
+    }
+    let guestToHost = try ShmBipBuffer.attach(region: fixture.region, headerOffset: ringOffset)
+    let hostToGuest = try ShmBipBuffer.attach(
+        region: fixture.region,
+        headerOffset: ringOffset + shmBipbufHeaderSize + Int(guestToHost.capacity)
+    )
+    return (guestToHost: guestToHost, hostToGuest: hostToGuest)
+}
+
+private func hostReadMessage(
+    from guestToHost: ShmBipBuffer,
+    timeoutMs: UInt64 = 1_000
+) async throws -> MessageV7? {
+    let start = ContinuousClock.now
+    let timeout = Duration.milliseconds(Int64(timeoutMs))
+    while ContinuousClock.now - start < timeout {
+        if let readable = guestToHost.tryRead() {
+            let bytes = Array(readable)
+            let decoded = try decodeShmFrame(bytes)
+            switch decoded {
+            case .inline(let header, let payload):
+                try guestToHost.release(header.totalLen)
+                return try MessageV7.decode(from: Data(payload))
+            case .slotRef(let header, _):
+                try guestToHost.release(header.totalLen)
+                throw ShmHarnessError.unexpectedFrame("host received slot-ref frame in test harness")
+            case .mmapRef(let header, _):
+                try guestToHost.release(header.totalLen)
+                throw ShmHarnessError.unexpectedFrame("host received mmap-ref frame in test harness")
+            }
+        }
+        try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+    return nil
+}
+
+private func hostSendMessage(
+    _ message: MessageV7,
+    to hostToGuest: ShmBipBuffer,
+    doorbell: ShmDoorbell,
+    timeoutMs: UInt64 = 1_000
+) async throws {
+    let frame = encodeShmInlineFrame(payload: message.encode())
+    let frameLen = UInt32(frame.count)
+    let start = ContinuousClock.now
+    let timeout = Duration.milliseconds(Int64(timeoutMs))
+    while ContinuousClock.now - start < timeout {
+        if let grant = try hostToGuest.tryGrant(frameLen) {
+            grant.copyBytes(from: frame)
+            try hostToGuest.commit(frameLen)
+            try doorbell.signal()
+            return
+        }
+        try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+    throw ShmHarnessError.timeout("host send timed out waiting for ring grant")
+}
+
+private func setHostGoodbye(_ fixture: SegmentFixture) throws {
+    var header = Array(try fixture.region.mutableBytes(at: 0, count: shmSegmentHeaderSize))
+    writeU32LE(1, to: &header, at: 68)
+    let headerBytes = try fixture.region.mutableBytes(at: 0, count: shmSegmentHeaderSize)
+    headerBytes.copyBytes(from: header)
+}
+
+private func establishShmInitiator(
+    path: String,
+    guestDoorbellFd: Int32,
+    hostDoorbell: ShmDoorbell,
+    guestToHost: ShmBipBuffer,
+    hostToGuest: ShmBipBuffer
+) async throws -> (ShmGuestTransport, ConnectionHandle, Driver) {
+    let transport = try ShmGuestTransport.attach(
+        ticket: ShmBootstrapTicket(peerId: 1, hubPath: path, doorbellFd: guestDoorbellFd)
+    )
+    let establishTask = Task {
+        try await establishShmGuest(
+            transport: transport,
+            dispatcher: ShmNoopDispatcher(),
+            role: .initiator
+        )
+    }
+
+    guard let hello = try await hostReadMessage(from: guestToHost) else {
+        throw ShmHarnessError.timeout("did not receive initiator hello")
+    }
+    guard case .hello = hello.payload else {
+        throw ShmHarnessError.unexpectedFrame("expected hello during handshake")
+    }
+
+    try await hostSendMessage(
+        .helloYourself(
+            HelloYourselfV7(
+                connectionSettings: ConnectionSettingsV7(parity: .even, maxConcurrentRequests: 64),
+                metadata: []
+            )),
+        to: hostToGuest,
+        doorbell: hostDoorbell
+    )
+
+    let (handle, driver) = try await establishTask.value
+    return (transport, handle, driver)
+}
+
 struct ShmVarSlotPoolTests {
     // r[verify shm.varslot]
     // r[verify shm.varslot.allocate]
@@ -710,6 +874,194 @@ struct ShmGuestRemapTests {
 
         #expect(try guest.waitForDoorbell(timeoutMs: 1000) == .signaled)
         #expect(guest.region.length == newSize)
+    }
+}
+
+struct ShmDriverRaceTests {
+    // r[verify transport.shm]
+    @Test func timedOutCallSendsCancelOverShm() async throws {
+        let path = tmpPath("driver-timeout-cancel.bin")
+        let pair = try makeDoorbellPair()
+        defer {
+            close(pair.host)
+            close(pair.guest)
+            try? FileManager.default.removeItem(atPath: path)
+        }
+
+        let fixture = try makeSegmentFixture(
+            path: path,
+            inlineThreshold: 1024,
+            maxPayloadSize: 1_000_000,
+            classes: [ShmVarSlotClass(slotSize: 4096, count: 8)],
+            reservedPeer: 1
+        )
+        let hostPeer = try hostPeerBuffers(fixture: fixture, peerId: 1)
+        let hostDoorbell = ShmDoorbell(fd: pair.host)
+        let (transport, handle, driver) = try await establishShmInitiator(
+            path: path,
+            guestDoorbellFd: pair.guest,
+            hostDoorbell: hostDoorbell,
+            guestToHost: hostPeer.guestToHost,
+            hostToGuest: hostPeer.hostToGuest
+        )
+
+        let driverTask = Task {
+            try await driver.run()
+        }
+        defer {
+            Task { try? await transport.close() }
+            driverTask.cancel()
+        }
+
+        let callTask = Task {
+            try await handle.callRaw(methodId: 42, payload: [1, 2, 3], timeout: 0.05)
+        }
+
+        guard let requestMessage = try await hostReadMessage(from: hostPeer.guestToHost) else {
+            throw ShmHarnessError.timeout("did not receive request call")
+        }
+        let requestId: UInt64
+        switch requestMessage.payload {
+        case .requestMessage(let request):
+            guard case .call = request.body else {
+                throw ShmHarnessError.unexpectedFrame("expected request call message")
+            }
+            requestId = request.id
+        default:
+            throw ShmHarnessError.unexpectedFrame("expected request message payload")
+        }
+
+        do {
+            _ = try await callTask.value
+            Issue.record("expected timeout")
+        } catch {
+            #expect(isTimeoutConnectionError(error))
+        }
+
+        guard let cancelMessage = try await hostReadMessage(from: hostPeer.guestToHost) else {
+            throw ShmHarnessError.timeout("did not receive cancel message after timeout")
+        }
+        switch cancelMessage.payload {
+        case .requestMessage(let request):
+            guard case .cancel = request.body else {
+                throw ShmHarnessError.unexpectedFrame("expected request cancel message")
+            }
+            #expect(request.id == requestId)
+        default:
+            throw ShmHarnessError.unexpectedFrame("expected request message payload for cancel")
+        }
+    }
+
+    // r[verify transport.shm]
+    @Test func pipelinedInFlightCallsFailFastWhenHostGoodbyeRaces() async throws {
+        let path = tmpPath("driver-pipeline-goodbye-race.bin")
+        let pair = try makeDoorbellPair()
+        defer {
+            close(pair.host)
+            close(pair.guest)
+            try? FileManager.default.removeItem(atPath: path)
+        }
+
+        let fixture = try makeSegmentFixture(
+            path: path,
+            inlineThreshold: 1024,
+            maxPayloadSize: 1_000_000,
+            classes: [ShmVarSlotClass(slotSize: 4096, count: 16)],
+            reservedPeer: 1
+        )
+        let hostPeer = try hostPeerBuffers(fixture: fixture, peerId: 1)
+        let hostDoorbell = ShmDoorbell(fd: pair.host)
+        let (transport, handle, driver) = try await establishShmInitiator(
+            path: path,
+            guestDoorbellFd: pair.guest,
+            hostDoorbell: hostDoorbell,
+            guestToHost: hostPeer.guestToHost,
+            hostToGuest: hostPeer.hostToGuest
+        )
+
+        let driverTask = Task {
+            try await driver.run()
+        }
+        defer {
+            Task { try? await transport.close() }
+            driverTask.cancel()
+        }
+
+        let callCount = 24
+        let calls = (0..<callCount).map { idx in
+            Task<Result<[UInt8], Error>, Never> {
+                do {
+                    let response = try await handle.callRaw(
+                        methodId: UInt64(100 + idx),
+                        payload: [UInt8(truncatingIfNeeded: idx)],
+                        timeout: 1.0
+                    )
+                    return .success(response)
+                } catch {
+                    return .failure(error)
+                }
+            }
+        }
+
+        var seenCalls = 0
+        let readStart = ContinuousClock.now
+        let readBudget = Duration.milliseconds(400)
+        while seenCalls < 6 && ContinuousClock.now - readStart < readBudget {
+            if let msg = try await hostReadMessage(from: hostPeer.guestToHost, timeoutMs: 25),
+               case .requestMessage(let request) = msg.payload,
+               case .call = request.body
+            {
+                seenCalls += 1
+            }
+        }
+        #expect(seenCalls >= 2)
+
+        try setHostGoodbye(fixture)
+        try hostDoorbell.signal()
+
+        var results: [Result<[UInt8], Error>] = []
+        results.reserveCapacity(calls.count)
+        for task in calls {
+            results.append(await task.value)
+        }
+
+        let successCount = results.reduce(0) { partial, result in
+            switch result {
+            case .success:
+                return partial + 1
+            case .failure:
+                return partial
+            }
+        }
+        let closedCount = results.reduce(0) { partial, result in
+            switch result {
+            case .success:
+                return partial
+            case .failure(let error):
+                return partial + (isConnectionClosedConnectionError(error) ? 1 : 0)
+            }
+        }
+        let timeoutCount = results.reduce(0) { partial, result in
+            switch result {
+            case .success:
+                return partial
+            case .failure(let error):
+                return partial + (isTimeoutConnectionError(error) ? 1 : 0)
+            }
+        }
+        let transportErrorCount = results.reduce(0) { partial, result in
+            switch result {
+            case .success:
+                return partial
+            case .failure(let error):
+                return partial + (isTransportConnectionError(error) ? 1 : 0)
+            }
+        }
+
+        #expect(successCount == 0)
+        #expect(timeoutCount == 0)
+        #expect(closedCount > 0)
+        #expect(closedCount + transportErrorCount == callCount)
     }
 }
 
