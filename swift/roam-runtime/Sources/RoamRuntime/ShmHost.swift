@@ -854,9 +854,7 @@ public final class ShmHostTransport: MessageTransport, @unchecked Sendable {
             }
 
             do {
-                let wait = try withHostLock(lock) {
-                    try runtime.waitForDoorbell(timeoutMs: 100)
-                }
+                let wait = try runtime.waitForDoorbell(timeoutMs: 100)
 
                 if let wait {
                     if wait == .peerDead {
