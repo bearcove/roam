@@ -243,8 +243,7 @@ fn codegen_typescript(workspace_root: &std::path::Path) -> Result<(), Box<dyn st
         let ts = roam_codegen::targets::typescript::generate_service(service);
         let filename = format!("{}.ts", service.service_name.to_lowercase());
         let out_path = out_dir.join(&filename);
-        std::fs::write(&out_path, fmt_typescript(&out_path, ts))?;
-        println!("Wrote {}", out_path.display());
+        write_if_changed(&out_path, fmt_typescript(&out_path, ts))?;
     }
 
     codegen_typescript_wire_schemas(workspace_root)?;
@@ -363,8 +362,7 @@ fn codegen_typescript_wire_schemas(
     out.push_str("  [\"Message\", MessageSchema],\n");
     out.push_str("]);\n");
 
-    std::fs::write(&out_path, fmt_typescript(&out_path, out))?;
-    println!("Wrote {}", out_path.display());
+    write_if_changed(&out_path, fmt_typescript(&out_path, out))?;
     Ok(())
 }
 
@@ -386,8 +384,7 @@ fn codegen_swift(
     if swift && !swift_client && !swift_server {
         let code = roam_codegen::targets::swift::generate_service(testbed);
         let out_path = out_dir.join("Testbed.swift");
-        std::fs::write(&out_path, code)?;
-        println!("Wrote {}", out_path.display());
+        write_if_changed(&out_path, code)?;
         return Ok(());
     }
 
@@ -397,8 +394,7 @@ fn codegen_swift(
             roam_codegen::targets::swift::SwiftBindings::Client,
         );
         let out_path = out_dir.join("TestbedClient.swift");
-        std::fs::write(&out_path, code)?;
-        println!("Wrote {}", out_path.display());
+        write_if_changed(&out_path, code)?;
     }
 
     if swift_server || (swift && !swift_client) {
@@ -407,8 +403,7 @@ fn codegen_swift(
             roam_codegen::targets::swift::SwiftBindings::Server,
         );
         let out_path = out_dir.join("TestbedServer.swift");
-        std::fs::write(&out_path, code)?;
-        println!("Wrote {}", out_path.display());
+        write_if_changed(&out_path, code)?;
     }
 
     Ok(())
@@ -462,8 +457,24 @@ fn codegen_swift_wire(workspace_root: &std::path::Path) -> Result<(), Box<dyn st
     ];
 
     let code = generate_wire_types(&types);
-    std::fs::write(&out_path, &code)?;
-    println!("Wrote {}", out_path.display());
+    write_if_changed(&out_path, &code)?;
+    Ok(())
+}
+
+/// Write `contents` to `path` only if the file doesn't already have those exact bytes.
+/// This preserves mtime when nothing changed, preventing unnecessary rebuilds in
+/// timestamp-based build systems (Swift Package Manager, make, etc.).
+fn write_if_changed(
+    path: &std::path::Path,
+    contents: impl AsRef<[u8]>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let contents = contents.as_ref();
+    if std::fs::read(path).ok().as_deref() == Some(contents) {
+        println!("Unchanged {}", path.display());
+        return Ok(());
+    }
+    std::fs::write(path, contents)?;
+    println!("Wrote {}", path.display());
     Ok(())
 }
 
