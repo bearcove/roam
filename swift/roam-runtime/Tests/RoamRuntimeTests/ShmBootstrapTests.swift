@@ -136,7 +136,8 @@ private func startBootstrapServer(
     responsePeerId: UInt32,
     responsePayload: String,
     sendDoorbellFd: Int32?,
-    sendShmFd: Int32?
+    sendShmFd: Int32?,
+    sendMmapControlFd: Int32?
 ) throws -> BootstrapServerHandle {
     let tmp = try XCTUnwrap(tempfile())
     let socketPath = tmp + "/control.sock"
@@ -175,6 +176,7 @@ private func startBootstrapServer(
         let payloadBytes = [UInt8](responsePayload.utf8)
         let doorbellFd = sendDoorbellFd ?? -1
         let shmFd = sendShmFd ?? -1
+        let mmapControlFd = sendMmapControlFd ?? -1
         let sendRc = payloadBytes.withUnsafeBufferPointer { buf in
             roam_shm_bootstrap_response_send_unix(
                 client,
@@ -184,7 +186,7 @@ private func startBootstrapServer(
                 UInt(buf.count),
                 doorbellFd,
                 shmFd,
-                -1
+                mmapControlFd
             )
         }
         guard sendRc == 0 else { return }
@@ -230,6 +232,9 @@ struct ShmBootstrapTests {
             let shmFile = open("/dev/null", O_RDONLY)
             #expect(shmFile >= 0)
             defer { close(shmFile) }
+            let mmapControlFile = open("/dev/null", O_RDONLY)
+            #expect(mmapControlFile >= 0)
+            defer { close(mmapControlFile) }
 
             let server = try startBootstrapServer(
                 expectedSid: sid,
@@ -237,7 +242,8 @@ struct ShmBootstrapTests {
                 responsePeerId: 1,
                 responsePayload: "/tmp/test.shm",
                 sendDoorbellFd: file,
-                sendShmFd: shmFile
+                sendShmFd: shmFile,
+                sendMmapControlFd: mmapControlFile
             )
             defer { server.thread.cancel() }
 
@@ -250,8 +256,11 @@ struct ShmBootstrapTests {
             #expect(flags != -1)
             let shmFlags = fcntl(ticket.shmFd, F_GETFD)
             #expect(shmFlags != -1)
+            let mmapFlags = fcntl(ticket.mmapControlFd, F_GETFD)
+            #expect(mmapFlags != -1)
             close(ticket.doorbellFd)
             close(ticket.shmFd)
+            close(ticket.mmapControlFd)
             server.done.wait()
         }
     }
@@ -266,7 +275,8 @@ struct ShmBootstrapTests {
             responsePeerId: 1,
             responsePayload: "/tmp/test.shm",
             sendDoorbellFd: nil,
-            sendShmFd: nil
+            sendShmFd: nil,
+            sendMmapControlFd: nil
         )
         defer { server.done.wait() }
 
@@ -292,7 +302,8 @@ struct ShmBootstrapTests {
             responsePeerId: 0,
             responsePayload: "sid mismatch",
             sendDoorbellFd: nil,
-            sendShmFd: nil
+            sendShmFd: nil,
+            sendMmapControlFd: nil
         )
         defer { server.done.wait() }
 

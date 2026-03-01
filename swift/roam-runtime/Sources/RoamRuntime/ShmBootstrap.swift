@@ -103,7 +103,7 @@ public func requestShmBootstrapTicket(controlSocketPath: String, sid: String) th
                 closeReceivedFds(recv)
                 throw ShmBootstrapError.protocolError("hub path not utf-8")
             }
-            guard recv.doorbellFd >= 0, recv.shmFd >= 0 else {
+            guard recv.doorbellFd >= 0, recv.shmFd >= 0, recv.mmapControlFd >= 0 else {
                 closeReceivedFds(recv)
                 throw ShmBootstrapError.missingFileDescriptor
             }

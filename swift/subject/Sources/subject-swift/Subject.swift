@@ -448,6 +448,139 @@ func runShmServer() async throws {
     try await driver.run()
 }
 
+/// SHM host mode: create the hub segment locally, serve one bootstrap request,
+/// then run as RPC acceptor over a host-side SHM transport.
+func runShmHostServer() async throws {
+    guard let controlSock = ProcessInfo.processInfo.environment["SHM_CONTROL_SOCK"] else {
+        log("SHM_CONTROL_SOCK not set")
+        throw SubjectError.missingEnv
+    }
+    guard let sid = ProcessInfo.processInfo.environment["SHM_SESSION_ID"] else {
+        log("SHM_SESSION_ID not set")
+        throw SubjectError.missingEnv
+    }
+
+    let hubPath = ProcessInfo.processInfo.environment["SHM_HUB_PATH"]
+        ?? "/tmp/roam-swift-subject-\(UUID().uuidString).shm"
+    let acceptConnections = ProcessInfo.processInfo.environment["ACCEPT_CONNECTIONS"] == "1"
+
+    let segment = try ShmHostSegment.create(
+        path: hubPath,
+        config: ShmHostSegmentConfig(
+            maxGuests: 1,
+            bipbufCapacity: 64 * 1024,
+            maxPayloadSize: 1024 * 1024,
+            inlineThreshold: 256,
+            heartbeatInterval: 0,
+            sizeClasses: [
+                ShmVarSlotClass(slotSize: 256, count: 64),
+                ShmVarSlotClass(slotSize: 1024, count: 32),
+                ShmVarSlotClass(slotSize: 4096, count: 16),
+                ShmVarSlotClass(slotSize: 16384, count: 8),
+                ShmVarSlotClass(slotSize: 65536, count: 4),
+                ShmVarSlotClass(slotSize: 262144, count: 2),
+            ]
+        )
+    )
+    let prepared = try segment.reservePeer()
+
+    let listenerFd = try makeUnixListener(path: controlSock)
+    defer {
+        close(listenerFd)
+        unlink(controlSock)
+    }
+
+    let clientFd = accept(listenerFd, nil, nil)
+    guard clientFd >= 0 else {
+        throw SubjectError.socketSetupFailed
+    }
+    defer { close(clientFd) }
+
+    let magic = try readExactly(fd: clientFd, count: 4)
+    guard magic == [UInt8]("RSH0".utf8) else {
+        throw SubjectError.invalidBootstrapRequest
+    }
+    let sidLenBytes = try readExactly(fd: clientFd, count: 2)
+    let sidLen = Int(UInt16(sidLenBytes[0]) | (UInt16(sidLenBytes[1]) << 8))
+    let sidBytes = try readExactly(fd: clientFd, count: sidLen)
+    guard let receivedSid = String(bytes: sidBytes, encoding: .utf8), receivedSid == sid else {
+        throw SubjectError.bootstrapSidMismatch
+    }
+
+    try prepared.sendBootstrapSuccess(controlFd: clientFd, hubPath: hubPath)
+
+    let transport = try prepared.intoTransport()
+    let handler = TestbedService()
+    let dispatcher = TestbedDispatcherAdapter(handler: handler)
+
+    let (_, driver) = try await establishAcceptor(
+        transport: transport,
+        dispatcher: dispatcher,
+        acceptConnections: acceptConnections
+    )
+    try await driver.run()
+}
+
+private func makeUnixListener(path: String) throws -> Int32 {
+    unlink(path)
+
+    let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+    guard fd >= 0 else {
+        throw SubjectError.socketSetupFailed
+    }
+
+    var addr = sockaddr_un()
+    addr.sun_family = sa_family_t(AF_UNIX)
+
+    let pathBytes = [UInt8](path.utf8)
+    let maxPathLen = MemoryLayout.size(ofValue: addr.sun_path)
+    guard pathBytes.count < maxPathLen else {
+        close(fd)
+        throw SubjectError.socketSetupFailed
+    }
+
+    withUnsafeMutablePointer(to: &addr.sun_path) { sunPathPtr in
+        let raw = UnsafeMutableRawPointer(sunPathPtr)
+        raw.initializeMemory(as: UInt8.self, repeating: 0, count: maxPathLen)
+        raw.copyMemory(from: pathBytes, byteCount: pathBytes.count)
+    }
+
+    let bindResult = withUnsafePointer(to: &addr) { ptr in
+        ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sockPtr in
+            bind(fd, sockPtr, socklen_t(MemoryLayout<sockaddr_un>.size))
+        }
+    }
+    guard bindResult == 0, listen(fd, 1) == 0 else {
+        close(fd)
+        throw SubjectError.socketSetupFailed
+    }
+
+    return fd
+}
+
+private func readExactly(fd: Int32, count: Int) throws -> [UInt8] {
+    if count == 0 { return [] }
+
+    var out = [UInt8](repeating: 0, count: count)
+    var offset = 0
+    while offset < count {
+        let n = out.withUnsafeMutableBytes { raw in
+            read(fd, raw.baseAddress!.advanced(by: offset), count - offset)
+        }
+        if n < 0 {
+            if errno == EINTR {
+                continue
+            }
+            throw SubjectError.socketSetupFailed
+        }
+        if n == 0 {
+            throw SubjectError.invalidBootstrapRequest
+        }
+        offset += n
+    }
+    return out
+}
+
 // MARK: - Errors
 
 enum SubjectError: Error {
@@ -455,6 +588,9 @@ enum SubjectError: Error {
     case invalidAddr
     case invalidResponse
     case unknownScenario
+    case socketSetupFailed
+    case invalidBootstrapRequest
+    case bootstrapSidMismatch
 }
 
 // MARK: - Main Entry Point
@@ -475,6 +611,8 @@ struct SubjectMain {
                 try await runShmClient()
             case "shm-server":
                 try await runShmServer()
+            case "shm-host-server":
+                try await runShmHostServer()
             default:
                 log("unknown SUBJECT_MODE: \(mode)")
                 exit(1)

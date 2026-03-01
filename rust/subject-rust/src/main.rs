@@ -280,10 +280,7 @@ async fn connect_and_serve_shm() -> Result<(), String> {
 
     use std::os::fd::IntoRawFd;
     let doorbell_fd = fds.doorbell_fd.into_raw_fd();
-    let mmap_rx_fd = fds
-        .mmap_control_fd
-        .ok_or_else(|| "missing mmap control fd in bootstrap success".to_string())?
-        .into_raw_fd();
+    let mmap_rx_fd = fds.mmap_control_fd.into_raw_fd();
 
     let link =
         unsafe { guest_link_from_raw(segment, peer_id, doorbell_fd, mmap_rx_fd, mmap_tx_fd, true) }

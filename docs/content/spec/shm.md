@@ -733,9 +733,9 @@ Each guest has two BipBuffers (bipartite circular buffers):
 >
 >   1. guest doorbell fd
 >   2. SHM segment file fd
->   3. optional mapping-control fd
+>   3. mapping-control fd
 >
-> Implementations MUST accept both 2-fd and 3-fd success cases.
+> Success responses MUST include exactly 3 file descriptors.
 
 > r[shm.bootstrap.error]
 >

@@ -109,7 +109,10 @@ impl fmt::Display for BootstrapError {
             BootstrapError::Io(err) => write!(f, "io error: {err}"),
             #[cfg(unix)]
             BootstrapError::InvalidFdCount(count) => {
-                write!(f, "invalid bootstrap fd count: {count} (expected 2 or 3)")
+                write!(
+                    f,
+                    "invalid bootstrap fd count: {count} (expected 3 on success, 0 on error)"
+                )
             }
         }
     }
@@ -231,7 +234,7 @@ pub fn decode_response(frame: &[u8]) -> Result<BootstrapResponseRef<'_>, Bootstr
 pub struct BootstrapSuccessFds {
     pub doorbell_fd: std::os::fd::RawFd,
     pub segment_fd: std::os::fd::RawFd,
-    pub mmap_control_fd: Option<std::os::fd::RawFd>,
+    pub mmap_control_fd: std::os::fd::RawFd,
 }
 
 #[cfg(unix)]
@@ -239,7 +242,7 @@ pub struct BootstrapSuccessFds {
 pub struct BootstrapSuccessOwnedFds {
     pub doorbell_fd: std::os::fd::OwnedFd,
     pub segment_fd: std::os::fd::OwnedFd,
-    pub mmap_control_fd: Option<std::os::fd::OwnedFd>,
+    pub mmap_control_fd: std::os::fd::OwnedFd,
 }
 
 #[cfg(unix)]
@@ -285,7 +288,7 @@ fn parse_fds(msghdr: &libc::msghdr) -> Vec<std::os::fd::RawFd> {
 }
 
 #[cfg(unix)]
-/// Send a bootstrap response and optional success FDs via `SCM_RIGHTS`.
+/// Send a bootstrap response and success FDs via `SCM_RIGHTS`.
 ///
 /// r[impl shm.bootstrap.success]
 /// r[impl shm.bootstrap.error]
@@ -313,13 +316,12 @@ pub fn send_response_unix(
     let mut control_buf = Vec::new();
     if status == BootstrapStatus::Success {
         let success_fds = success_fds.ok_or(BootstrapError::InvalidFdCount(0))?;
-        let mut fds = [success_fds.doorbell_fd, success_fds.segment_fd, -1];
-        let fd_count = if let Some(mmap_fd) = success_fds.mmap_control_fd {
-            fds[2] = mmap_fd;
-            3
-        } else {
-            2
-        };
+        let fds = [
+            success_fds.doorbell_fd,
+            success_fds.segment_fd,
+            success_fds.mmap_control_fd,
+        ];
+        let fd_count = fds.len();
         let data_len = fd_count * std::mem::size_of::<std::os::fd::RawFd>();
         let cmsg_space = unsafe { libc::CMSG_SPACE(data_len as u32) as usize };
         control_buf.resize(cmsg_space, 0);
@@ -348,7 +350,7 @@ pub fn send_response_unix(
             );
         }
     } else if success_fds.is_some() {
-        return Err(BootstrapError::InvalidFdCount(1));
+        return Err(BootstrapError::InvalidFdCount(3));
     }
 
     // SAFETY: msghdr points to live iov/control buffers.
@@ -407,7 +409,7 @@ fn ensure_socket_no_sigpipe(fd: std::os::fd::RawFd) -> Result<(), BootstrapError
 }
 
 #[cfg(unix)]
-/// Receive a bootstrap response and optional success FDs via `SCM_RIGHTS`.
+/// Receive a bootstrap response and success FDs via `SCM_RIGHTS`.
 ///
 /// r[impl shm.bootstrap.success]
 /// r[impl shm.bootstrap.error]
@@ -468,7 +470,7 @@ pub fn recv_response_unix(
 
     match response.status {
         BootstrapStatus::Success => {
-            if !(raw_fds.len() == 2 || raw_fds.len() == 3) {
+            if raw_fds.len() != 3 {
                 let fd_count = raw_fds.len();
                 close_raw_fds(raw_fds);
                 return Err(BootstrapError::InvalidFdCount(fd_count));
@@ -477,16 +479,14 @@ pub fn recv_response_unix(
             let mut iter = raw_fds.into_iter();
             let doorbell_raw = iter.next().expect("len checked");
             let segment_raw = iter.next().expect("len checked");
-            let mmap_raw = iter.next();
+            let mmap_raw = iter.next().expect("len checked");
 
             // SAFETY: FDs came from SCM_RIGHTS and are owned by receiver now.
             let doorbell_fd = unsafe { OwnedFd::from_raw_fd(doorbell_raw) };
             // SAFETY: FDs came from SCM_RIGHTS and are owned by receiver now.
             let segment_fd = unsafe { OwnedFd::from_raw_fd(segment_raw) };
-            let mmap_control_fd = mmap_raw.map(|fd| {
-                // SAFETY: FD came from SCM_RIGHTS and is owned by receiver now.
-                unsafe { OwnedFd::from_raw_fd(fd) }
-            });
+            // SAFETY: FD came from SCM_RIGHTS and is owned by receiver now.
+            let mmap_control_fd = unsafe { OwnedFd::from_raw_fd(mmap_raw) };
 
             Ok(ReceivedBootstrapResponse {
                 response,
@@ -499,8 +499,9 @@ pub fn recv_response_unix(
         }
         BootstrapStatus::Error => {
             if !raw_fds.is_empty() {
+                let fd_count = raw_fds.len();
                 close_raw_fds(raw_fds);
-                return Err(BootstrapError::InvalidFdCount(1));
+                return Err(BootstrapError::InvalidFdCount(fd_count));
             }
             Ok(ReceivedBootstrapResponse {
                 response,
@@ -583,7 +584,7 @@ mod tests {
         let send_fds = BootstrapSuccessFds {
             doorbell_fd: db_a.as_raw_fd(),
             segment_fd: seg_a.as_raw_fd(),
-            mmap_control_fd: Some(mm_a.as_raw_fd()),
+            mmap_control_fd: mm_a.as_raw_fd(),
         };
 
         send_response_unix(
@@ -602,7 +603,7 @@ mod tests {
         let fds = got.fds.expect("success must include fds");
         assert!(fds.doorbell_fd.as_raw_fd() >= 0);
         assert!(fds.segment_fd.as_raw_fd() >= 0);
-        assert!(fds.mmap_control_fd.is_some());
+        assert!(fds.mmap_control_fd.as_raw_fd() >= 0);
 
         // Keep originals alive through the test.
         drop((db_b, seg_b, mm_b));

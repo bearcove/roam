@@ -1,6 +1,8 @@
 use std::future::Future;
-use std::os::fd::AsRawFd;
+use std::io::Write as _;
+use std::os::fd::{AsRawFd, IntoRawFd};
 use std::os::unix::ffi::OsStrExt;
+use std::os::unix::net::UnixStream as StdUnixStream;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -11,7 +13,8 @@ use roam_core::{
 };
 use roam_shm::HostHub;
 use roam_shm::ShmLink;
-use roam_shm::bootstrap::decode_request;
+use roam_shm::bootstrap::{BootstrapStatus, decode_request, encode_request};
+use roam_shm::guest_link_from_raw;
 use roam_shm::segment::{Segment, SegmentConfig};
 use roam_shm::varslot::SizeClassConfig as RoamShmSizeClassConfig;
 use roam_stream::StreamLink;
@@ -98,6 +101,13 @@ fn subject_transport() -> SubjectTransport {
         "shm" => SubjectTransport::Shm,
         _ => SubjectTransport::Tcp,
     }
+}
+
+fn shm_subject_mode() -> String {
+    std::env::var("SPEC_SHM_SUBJECT_MODE")
+        .ok()
+        .unwrap_or_else(|| "shm-server".to_string())
+        .to_ascii_lowercase()
 }
 
 pub fn run_async<T>(f: impl Future<Output = T>) -> T {
@@ -488,6 +498,14 @@ async fn accept_subject_tcp() -> Result<(TestbedClient<DriverCaller>, Child), St
 }
 
 async fn accept_subject_shm() -> Result<(TestbedClient<DriverCaller>, Child), String> {
+    if shm_subject_mode() == "shm-host-server" {
+        return accept_subject_shm_subject_is_host().await;
+    }
+    accept_subject_shm_subject_is_guest().await
+}
+
+async fn accept_subject_shm_subject_is_guest()
+-> Result<(TestbedClient<DriverCaller>, Child), String> {
     let dir = tempfile::tempdir().map_err(|e| format!("tempdir: {e}"))?;
     let sid = sid_hex_32();
     let control_sock_path = dir.path().join("bootstrap.sock");
@@ -550,7 +568,7 @@ async fn accept_subject_shm() -> Result<(TestbedClient<DriverCaller>, Child), St
                 ));
             }
             prepared
-                .send_success_unix(stream.as_raw_fd(), &segment_for_task, true)
+                .send_success_unix(stream.as_raw_fd(), &segment_for_task)
                 .map_err(|e| format!("send bootstrap success: {e}"))?;
             Ok(prepared.host_peer)
         }
@@ -597,4 +615,115 @@ async fn accept_subject_shm() -> Result<(TestbedClient<DriverCaller>, Child), St
 
     keep_tempdir_alive(dir);
     Ok((TestbedClient::new(caller), child))
+}
+
+async fn accept_subject_shm_subject_is_host() -> Result<(TestbedClient<DriverCaller>, Child), String>
+{
+    let dir = tempfile::tempdir().map_err(|e| format!("tempdir: {e}"))?;
+    let sid = sid_hex_32();
+    let control_sock_path = dir.path().join("bootstrap.sock");
+    let shm_path = dir.path().join("subject.shm");
+    let control_sock = control_sock_path
+        .to_str()
+        .ok_or_else(|| format!("invalid socket path: {}", control_sock_path.display()))?
+        .to_string();
+    let shm_path_str = shm_path
+        .to_str()
+        .ok_or_else(|| format!("invalid shm path: {}", shm_path.display()))?
+        .to_string();
+
+    let mut child = spawn_subject_with_env(
+        "",
+        &[
+            ("SUBJECT_MODE", "shm-host-server"),
+            ("SHM_CONTROL_SOCK", &control_sock),
+            ("SHM_SESSION_ID", &sid),
+            ("SHM_HUB_PATH", &shm_path_str),
+        ],
+    )
+    .await?;
+
+    let setup_result: Result<TestbedClient<DriverCaller>, String> = async {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        let mut stream = loop {
+            match StdUnixStream::connect(&control_sock_path) {
+                Ok(stream) => break stream,
+                Err(e) => {
+                    if tokio::time::Instant::now() >= deadline {
+                        return Err(format!(
+                            "connect bootstrap socket {}: {e}",
+                            control_sock_path.display()
+                        ));
+                    }
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            }
+        };
+
+        let request = encode_request(sid.as_bytes()).map_err(|e| format!("encode request: {e}"))?;
+        stream
+            .write_all(&request)
+            .map_err(|e| format!("send bootstrap request: {e}"))?;
+
+        let received = shm_primitives::bootstrap::recv_response_unix(stream.as_raw_fd())
+            .map_err(|e| format!("recv bootstrap response: {e}"))?;
+        if received.response.status != BootstrapStatus::Success {
+            return Err(format!(
+                "bootstrap failed: status={:?}, payload={}",
+                received.response.status,
+                String::from_utf8_lossy(&received.response.payload)
+            ));
+        }
+
+        let fds = received
+            .fds
+            .ok_or_else(|| "missing bootstrap success fds".to_string())?;
+        let hub_path = std::str::from_utf8(&received.response.payload)
+            .map_err(|e| format!("bootstrap payload is not utf-8 path: {e}"))?;
+        let segment = Arc::new(
+            Segment::attach(std::path::Path::new(hub_path))
+                .map_err(|e| format!("attach segment at {hub_path}: {e}"))?,
+        );
+        let peer_id = shm_primitives::PeerId::new(received.response.peer_id as u8)
+            .ok_or_else(|| format!("invalid peer id {}", received.response.peer_id))?;
+
+        let doorbell_fd = fds.doorbell_fd.into_raw_fd();
+        let mmap_rx_owned = fds.mmap_control_fd;
+        let mmap_tx_owned = mmap_rx_owned
+            .try_clone()
+            .map_err(|e| format!("clone mmap control fd: {e}"))?;
+        let mmap_rx_fd = mmap_rx_owned.into_raw_fd();
+        let mmap_tx_fd = mmap_tx_owned.into_raw_fd();
+
+        let link = unsafe {
+            guest_link_from_raw(segment, peer_id, doorbell_fd, mmap_rx_fd, mmap_tx_fd, true)
+        }
+        .map_err(|e| format!("guest_link_from_raw: {e}"))?;
+        let conduit: BareConduit<MessageFamily, roam_shm::ShmLink> = BareConduit::new(link);
+
+        let (mut session, handle, _sh) = initiator(conduit)
+            .establish()
+            .await
+            .map_err(|e| format!("handshake: {e}"))?;
+
+        let mut driver = Driver::new(handle, NoopHandler, Parity::Odd);
+        let caller = driver.caller();
+
+        tokio::spawn(async move { session.run().await });
+        tokio::spawn(async move { driver.run().await });
+
+        Ok::<_, String>(TestbedClient::new(caller))
+    }
+    .await;
+
+    match setup_result {
+        Ok(client) => {
+            keep_tempdir_alive(dir);
+            Ok((client, child))
+        }
+        Err(e) => {
+            child.kill().await.ok();
+            Err(e)
+        }
+    }
 }

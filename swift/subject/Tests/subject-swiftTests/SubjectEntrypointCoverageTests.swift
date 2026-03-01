@@ -101,6 +101,24 @@ private actor AcceptedTransportBox {
     }
 }
 
+private struct NoopDispatcher: ServiceDispatcher {
+    func preregister(
+        methodId _: UInt64,
+        payload _: [UInt8],
+        channels _: [UInt64],
+        registry _: ChannelRegistry
+    ) async {}
+
+    func dispatch(
+        methodId _: UInt64,
+        payload _: [UInt8],
+        channels _: [UInt64],
+        requestId _: UInt64,
+        registry _: ChannelRegistry,
+        taskTx _: @escaping @Sendable (TaskMessage) -> Void
+    ) async {}
+}
+
 private struct TcpAcceptorHarness {
     let group: MultiThreadedEventLoopGroup
     let listener: Channel
@@ -322,7 +340,8 @@ private func startBootstrapServer(
     expectedSid: String,
     payloadPath: String,
     doorbellFd: Int32,
-    shmFd: Int32
+    shmFd: Int32,
+    mmapControlFd: Int32
 ) throws -> BootstrapServerHandle {
     let socketPath = "/tmp/subject-shm-bootstrap-\(UUID().uuidString.prefix(8)).sock"
     let listener = try makeUnixListener(path: socketPath)
@@ -357,7 +376,7 @@ private func startBootstrapServer(
                 UInt(buf.count),
                 doorbellFd,
                 shmFd,
-                -1
+                mmapControlFd
             )
         }
         _ = rc
@@ -561,6 +580,44 @@ struct SubjectEntrypointCoverageTests {
         }
     }
 
+    @Test func runShmHostServerRequiresControlSock() async {
+        await SubjectEnvGate.shared.withEnvironment([
+            ("SHM_CONTROL_SOCK", nil),
+            ("SHM_SESSION_ID", UUID().uuidString.lowercased()),
+        ]) {
+            do {
+                try await runShmHostServer()
+                Issue.record("expected missingEnv")
+            } catch let error as SubjectError {
+                guard case .missingEnv = error else {
+                    Issue.record("expected missingEnv, got \(error)")
+                    return
+                }
+            } catch {
+                Issue.record("expected SubjectError.missingEnv, got \(error)")
+            }
+        }
+    }
+
+    @Test func runShmHostServerRequiresSessionId() async {
+        await SubjectEnvGate.shared.withEnvironment([
+            ("SHM_CONTROL_SOCK", "/tmp/does-not-matter.sock"),
+            ("SHM_SESSION_ID", nil),
+        ]) {
+            do {
+                try await runShmHostServer()
+                Issue.record("expected missingEnv")
+            } catch let error as SubjectError {
+                guard case .missingEnv = error else {
+                    Issue.record("expected missingEnv, got \(error)")
+                    return
+                }
+            } catch {
+                Issue.record("expected SubjectError.missingEnv, got \(error)")
+            }
+        }
+    }
+
     @Test func runShmClientInvalidControlSocketFailsFast() async {
         await SubjectEnvGate.shared.withEnvironment([
             ("SHM_CONTROL_SOCK", "/tmp/roam-nonexistent-\(UUID().uuidString).sock"),
@@ -595,6 +652,63 @@ struct SubjectEntrypointCoverageTests {
                 Issue.record("expected transport/bootstrap error, got subject error: \(error)")
             } catch {
                 // Expected: bootstrap transport failure.
+            }
+        }
+    }
+
+    @Test func runShmHostServerEchoEndToEnd() async throws {
+        let controlSock = "/tmp/subject-shm-host-\(UUID().uuidString.prefix(8)).sock"
+        let hubPath = "/tmp/subject-shm-hub-\(UUID().uuidString).bin"
+        let sid = UUID().uuidString.lowercased()
+        defer {
+            unlink(controlSock)
+            try? FileManager.default.removeItem(atPath: hubPath)
+        }
+
+        try await SubjectEnvGate.shared.withEnvironment([
+            ("SHM_CONTROL_SOCK", controlSock),
+            ("SHM_SESSION_ID", sid),
+            ("SHM_HUB_PATH", hubPath),
+            ("ACCEPT_CONNECTIONS", "0"),
+        ]) {
+            let serverTask = Task {
+                try await runShmHostServer()
+            }
+
+            var ticket: ShmBootstrapTicket?
+            defer {
+                if let ticket {
+                    close(ticket.doorbellFd)
+                    if ticket.mmapControlFd >= 0 {
+                        close(ticket.mmapControlFd)
+                    }
+                }
+            }
+
+            ticket = try await withTimeout(milliseconds: 2_000) {
+                while !FileManager.default.fileExists(atPath: controlSock) {
+                    try await Task.sleep(nanoseconds: 5_000_000)
+                }
+                return try requestShmBootstrapTicket(controlSocketPath: controlSock, sid: sid)
+            }
+
+            let guestTransport = try ShmGuestTransport.attach(ticket: try #require(ticket))
+            let (handle, driver) = try await withTimeout(milliseconds: 2_000) {
+                try await establishInitiator(transport: guestTransport, dispatcher: NoopDispatcher())
+            }
+            let driverTask = Task {
+                try await driver.run()
+            }
+
+            let client = TestbedClient(connection: handle)
+            let echoed = try await client.echo(message: "swift-shm-host")
+            #expect(echoed == "swift-shm-host")
+
+            try await guestTransport.close()
+            _ = await driverTask.result
+            _ = try await withTimeout(milliseconds: 2_000) {
+                try await serverTask.value
+                return ()
             }
         }
     }

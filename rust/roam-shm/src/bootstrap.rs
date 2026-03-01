@@ -69,13 +69,11 @@ impl PreparedBootstrapPeer {
         &self,
         control_fd: std::os::fd::RawFd,
         segment: &Segment,
-        include_mmap_control: bool,
     ) -> Result<(), BootstrapError> {
-        let mmap_control_fd = include_mmap_control.then_some(self.guest_ticket.mmap_rx.as_raw_fd());
         let fds = shm_primitives::bootstrap::BootstrapSuccessFds {
             doorbell_fd: self.guest_ticket.doorbell.as_raw_fd(),
             segment_fd: segment.as_raw_fd(),
-            mmap_control_fd,
+            mmap_control_fd: self.guest_ticket.mmap_rx.as_raw_fd(),
         };
 
         shm_primitives::bootstrap::send_response_unix(

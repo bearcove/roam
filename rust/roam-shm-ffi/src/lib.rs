@@ -774,8 +774,8 @@ pub unsafe extern "C" fn roam_shm_bootstrap_response_decode(
 /// Send one bootstrap response on a Unix control socket.
 ///
 /// On success status (`0`), `doorbell_fd` and `segment_fd` are required and
-/// `mmap_control_fd` is optional (`-1` means absent). On error status (`1`),
-/// all fd parameters must be `-1`.
+/// `mmap_control_fd` is also required. On error status (`1`), all fd
+/// parameters must be `-1`.
 ///
 /// Returns 0 on success, -1 on error.
 ///
@@ -813,13 +813,13 @@ pub unsafe extern "C" fn roam_shm_bootstrap_response_send_unix(
         };
 
         let result = if status == BootstrapStatus::Success {
-            if doorbell_fd < 0 || segment_fd < 0 {
+            if doorbell_fd < 0 || segment_fd < 0 || mmap_control_fd < 0 {
                 return -1;
             }
             let fds = bootstrap::BootstrapSuccessFds {
                 doorbell_fd,
                 segment_fd,
-                mmap_control_fd: (mmap_control_fd >= 0).then_some(mmap_control_fd),
+                mmap_control_fd,
             };
             bootstrap::send_response_unix(control_fd, status, peer_id, payload, Some(&fds))
         } else {
@@ -851,7 +851,7 @@ pub unsafe extern "C" fn roam_shm_bootstrap_response_send_unix(
 /// Receive one bootstrap response on a Unix control socket.
 ///
 /// `payload_buf` receives the response payload bytes and returned fds become
-/// owned by the caller (`-1` means absent).
+/// owned by the caller (`-1` values are used for error responses).
 ///
 /// Returns:
 /// - 0: success
@@ -914,10 +914,7 @@ pub unsafe extern "C" fn roam_shm_bootstrap_response_recv_unix(
             unsafe {
                 *out_doorbell_fd = fds.doorbell_fd.into_raw_fd();
                 *out_segment_fd = fds.segment_fd.into_raw_fd();
-                *out_mmap_control_fd = fds
-                    .mmap_control_fd
-                    .map(IntoRawFd::into_raw_fd)
-                    .unwrap_or(-1);
+                *out_mmap_control_fd = fds.mmap_control_fd.into_raw_fd();
             }
         }
 
