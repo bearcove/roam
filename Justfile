@@ -154,24 +154,33 @@ fuzz-run target="all" seconds="60":
       fuzz/roam-shm-afl/out/shm_link_roundtrip \
       fuzz/roam-afl/out/protocol_decode \
       fuzz/roam-afl/out/testbed_mem_session
-    @case "{{target}}" in \
+    @run_fuzz() { \
+      timeout "$1" cargo afl fuzz -i "$2" -o "$3" -- "$4"; \
+      status=$?; \
+      case "$status" in \
+        0|124) ;; \
+        130|143) exit "$status" ;; \
+        *) exit "$status" ;; \
+      esac; \
+    }; \
+    case "{{target}}" in \
       all) \
-        timeout "{{seconds}}" cargo afl fuzz -i fuzz/roam-shm-afl/in/framing_peek -o fuzz/roam-shm-afl/out/framing_peek -- fuzz/roam-shm-afl/target/debug/framing_peek || true; \
-        timeout "{{seconds}}" cargo afl fuzz -i fuzz/roam-shm-afl/in/shm_link_roundtrip -o fuzz/roam-shm-afl/out/shm_link_roundtrip -- fuzz/roam-shm-afl/target/debug/shm_link_roundtrip || true; \
-        timeout "{{seconds}}" cargo afl fuzz -i fuzz/roam-afl/in/protocol_decode -o fuzz/roam-afl/out/protocol_decode -- fuzz/roam-afl/target/debug/protocol_decode || true; \
-        timeout "{{seconds}}" cargo afl fuzz -i fuzz/roam-afl/in/testbed_mem_session -o fuzz/roam-afl/out/testbed_mem_session -- fuzz/roam-afl/target/debug/testbed_mem_session || true; \
+        run_fuzz "{{seconds}}" fuzz/roam-shm-afl/in/framing_peek fuzz/roam-shm-afl/out/framing_peek fuzz/roam-shm-afl/target/debug/framing_peek; \
+        run_fuzz "{{seconds}}" fuzz/roam-shm-afl/in/shm_link_roundtrip fuzz/roam-shm-afl/out/shm_link_roundtrip fuzz/roam-shm-afl/target/debug/shm_link_roundtrip; \
+        run_fuzz "{{seconds}}" fuzz/roam-afl/in/protocol_decode fuzz/roam-afl/out/protocol_decode fuzz/roam-afl/target/debug/protocol_decode; \
+        run_fuzz "{{seconds}}" fuzz/roam-afl/in/testbed_mem_session fuzz/roam-afl/out/testbed_mem_session fuzz/roam-afl/target/debug/testbed_mem_session; \
         ;; \
       framing_peek) \
-        timeout "{{seconds}}" cargo afl fuzz -i fuzz/roam-shm-afl/in/framing_peek -o fuzz/roam-shm-afl/out/framing_peek -- fuzz/roam-shm-afl/target/debug/framing_peek || true; \
+        run_fuzz "{{seconds}}" fuzz/roam-shm-afl/in/framing_peek fuzz/roam-shm-afl/out/framing_peek fuzz/roam-shm-afl/target/debug/framing_peek; \
         ;; \
       shm_link_roundtrip) \
-        timeout "{{seconds}}" cargo afl fuzz -i fuzz/roam-shm-afl/in/shm_link_roundtrip -o fuzz/roam-shm-afl/out/shm_link_roundtrip -- fuzz/roam-shm-afl/target/debug/shm_link_roundtrip || true; \
+        run_fuzz "{{seconds}}" fuzz/roam-shm-afl/in/shm_link_roundtrip fuzz/roam-shm-afl/out/shm_link_roundtrip fuzz/roam-shm-afl/target/debug/shm_link_roundtrip; \
         ;; \
       protocol_decode) \
-        timeout "{{seconds}}" cargo afl fuzz -i fuzz/roam-afl/in/protocol_decode -o fuzz/roam-afl/out/protocol_decode -- fuzz/roam-afl/target/debug/protocol_decode || true; \
+        run_fuzz "{{seconds}}" fuzz/roam-afl/in/protocol_decode fuzz/roam-afl/out/protocol_decode fuzz/roam-afl/target/debug/protocol_decode; \
         ;; \
       testbed_mem_session) \
-        timeout "{{seconds}}" cargo afl fuzz -i fuzz/roam-afl/in/testbed_mem_session -o fuzz/roam-afl/out/testbed_mem_session -- fuzz/roam-afl/target/debug/testbed_mem_session || true; \
+        run_fuzz "{{seconds}}" fuzz/roam-afl/in/testbed_mem_session fuzz/roam-afl/out/testbed_mem_session fuzz/roam-afl/target/debug/testbed_mem_session; \
         ;; \
       *) \
         echo "Unknown target: {{target}}" >&2; \
