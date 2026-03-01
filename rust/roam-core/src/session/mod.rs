@@ -761,6 +761,170 @@ impl SessionCore {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use moire::sync::mpsc;
+    use roam_types::{
+        Backing, Conduit, ConnectionAccept, ConnectionReject, MessageFamily, SelfRef,
+    };
+
+    use super::*;
+
+    type TestConduit = crate::BareConduit<MessageFamily, crate::MemoryLink>;
+
+    fn make_session() -> Session<TestConduit> {
+        let (a, b) = crate::memory_link_pair(32);
+        // Keep the peer link alive so sess_core sends don't fail with broken pipe.
+        std::mem::forget(b);
+        let conduit = crate::BareConduit::new(a);
+        let (tx, rx) = conduit.split();
+        let (_open_tx, open_rx) = mpsc::channel::<OpenRequest>("session.open.test", 4);
+        let (_close_tx, close_rx) = mpsc::channel::<CloseRequest>("session.close.test", 4);
+        Session::pre_handshake(tx, rx, None, open_rx, close_rx)
+    }
+
+    fn accept_ref() -> SelfRef<ConnectionAccept<'static>> {
+        SelfRef::owning(
+            Backing::Boxed(Box::<[u8]>::default()),
+            ConnectionAccept {
+                connection_settings: ConnectionSettings {
+                    parity: Parity::Even,
+                    max_concurrent_requests: 64,
+                },
+                metadata: vec![],
+            },
+        )
+    }
+
+    fn reject_ref() -> SelfRef<ConnectionReject<'static>> {
+        SelfRef::owning(
+            Backing::Boxed(Box::<[u8]>::default()),
+            ConnectionReject { metadata: vec![] },
+        )
+    }
+
+    #[tokio::test]
+    async fn duplicate_connection_accept_is_ignored_after_first() {
+        let mut session = make_session();
+        let conn_id = ConnectionId(1);
+        let (result_tx, result_rx) = moire::sync::oneshot::channel("session.test.open_result");
+
+        session.conns.insert(
+            conn_id,
+            ConnectionSlot::PendingOutbound(PendingOutboundData {
+                local_settings: ConnectionSettings {
+                    parity: Parity::Odd,
+                    max_concurrent_requests: 64,
+                },
+                result_tx: Some(result_tx),
+            }),
+        );
+
+        session.handle_inbound_accept(conn_id, accept_ref());
+        let handle = result_rx
+            .await
+            .expect("pending outbound result should resolve")
+            .expect("accept should resolve as Ok");
+        assert_eq!(handle.connection_id(), conn_id);
+
+        session.handle_inbound_accept(conn_id, accept_ref());
+        assert!(
+            matches!(
+                session.conns.get(&conn_id),
+                Some(ConnectionSlot::Active(ConnectionState { id, .. })) if *id == conn_id
+            ),
+            "duplicate accept should keep existing active connection state"
+        );
+    }
+
+    #[tokio::test]
+    async fn duplicate_connection_reject_is_ignored_after_first() {
+        let mut session = make_session();
+        let conn_id = ConnectionId(1);
+        let (result_tx, result_rx) = moire::sync::oneshot::channel("session.test.open_result");
+
+        session.conns.insert(
+            conn_id,
+            ConnectionSlot::PendingOutbound(PendingOutboundData {
+                local_settings: ConnectionSettings {
+                    parity: Parity::Odd,
+                    max_concurrent_requests: 64,
+                },
+                result_tx: Some(result_tx),
+            }),
+        );
+
+        session.handle_inbound_reject(conn_id, reject_ref());
+        let result = result_rx
+            .await
+            .expect("pending outbound result should resolve");
+        assert!(
+            matches!(result, Err(SessionError::Rejected(_))),
+            "expected rejection, got: {result:?}"
+        );
+
+        session.handle_inbound_reject(conn_id, reject_ref());
+        assert!(
+            !session.conns.contains_key(&conn_id),
+            "duplicate reject should not recreate connection state"
+        );
+    }
+
+    #[test]
+    fn out_of_order_accept_or_reject_without_pending_is_ignored() {
+        let mut session = make_session();
+        let conn_id = ConnectionId(99);
+
+        session.handle_inbound_accept(conn_id, accept_ref());
+        session.handle_inbound_reject(conn_id, reject_ref());
+
+        assert!(
+            session.conns.is_empty(),
+            "out-of-order accept/reject should not mutate empty connection table"
+        );
+    }
+
+    #[tokio::test]
+    async fn close_request_clears_pending_outbound_open() {
+        let mut session = make_session();
+        let (open_result_tx, open_result_rx) = moire::sync::oneshot::channel("session.open.result");
+        let (close_result_tx, close_result_rx) =
+            moire::sync::oneshot::channel("session.close.result");
+
+        session.conns.insert(
+            ConnectionId(1),
+            ConnectionSlot::PendingOutbound(PendingOutboundData {
+                local_settings: ConnectionSettings {
+                    parity: Parity::Odd,
+                    max_concurrent_requests: 64,
+                },
+                result_tx: Some(open_result_tx),
+            }),
+        );
+
+        session
+            .handle_close_request(CloseRequest {
+                conn_id: ConnectionId(1),
+                metadata: vec![],
+                result_tx: close_result_tx,
+            })
+            .await;
+
+        let close_result = close_result_rx
+            .await
+            .expect("close result should be delivered");
+        assert!(
+            close_result.is_ok(),
+            "close should succeed for pending outbound connection"
+        );
+
+        assert!(
+            open_result_rx.await.is_err(),
+            "pending open result channel should be closed once the pending slot is removed"
+        );
+    }
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 type BoxFuture<'a, T> = Pin<Box<dyn std::future::Future<Output = T> + Send + 'a>>;
 #[cfg(target_arch = "wasm32")]

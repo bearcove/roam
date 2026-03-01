@@ -364,6 +364,78 @@ pub fn create_mmap_control_pair_connected() -> io::Result<(MmapControlSender, Mm
 #[cfg(all(test, not(loom)))]
 mod tests {
     use super::*;
+    use std::os::unix::io::AsRawFd;
+
+    fn send_raw_payload_without_fd(sock_fd: RawFd, payload: &[u8]) -> io::Result<()> {
+        let n = unsafe {
+            libc::send(
+                sock_fd,
+                payload.as_ptr().cast::<libc::c_void>(),
+                payload.len(),
+                0,
+            )
+        };
+        if n < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        if n as usize != payload.len() {
+            return Err(io::Error::new(
+                ErrorKind::WriteZero,
+                "short write while sending raw payload",
+            ));
+        }
+        Ok(())
+    }
+
+    fn send_two_fds_with_metadata(sock_fd: RawFd, fd_a: RawFd, fd_b: RawFd) -> io::Result<()> {
+        let payload = MmapAttachMessage {
+            map_id: 7,
+            map_generation: 3,
+            mapping_length: 1234,
+        }
+        .to_le_bytes();
+
+        let mut iov = libc::iovec {
+            iov_base: payload.as_ptr() as *mut libc::c_void,
+            iov_len: payload.len(),
+        };
+
+        let fds = [fd_a, fd_b];
+        let data_len = std::mem::size_of_val(&fds);
+        let cmsg_space = unsafe { libc::CMSG_SPACE(data_len as u32) as usize };
+        let mut control = vec![0u8; cmsg_space];
+
+        let mut msghdr: libc::msghdr = unsafe { std::mem::zeroed() };
+        msghdr.msg_iov = &mut iov;
+        msghdr.msg_iovlen = 1;
+        msghdr.msg_control = control.as_mut_ptr().cast();
+        msghdr.msg_controllen = control.len() as _;
+
+        let cmsg = unsafe { libc::CMSG_FIRSTHDR(&msghdr) };
+        if cmsg.is_null() {
+            return Err(io::Error::new(
+                ErrorKind::InvalidData,
+                "failed to build cmsg header for test",
+            ));
+        }
+
+        unsafe {
+            (*cmsg).cmsg_level = libc::SOL_SOCKET;
+            (*cmsg).cmsg_type = libc::SCM_RIGHTS;
+            (*cmsg).cmsg_len = libc::CMSG_LEN(data_len as u32) as _;
+            let data_ptr = libc::CMSG_DATA(cmsg).cast::<RawFd>();
+            std::ptr::copy_nonoverlapping(fds.as_ptr(), data_ptr, fds.len());
+        }
+
+        let n = sendmsg_no_sigpipe(sock_fd, &msghdr)?;
+        if n == 0 {
+            return Err(io::Error::new(
+                ErrorKind::WriteZero,
+                "sendmsg wrote zero bytes",
+            ));
+        }
+        Ok(())
+    }
 
     #[tokio::test]
     async fn roundtrip_fd_with_metadata() {
@@ -410,5 +482,90 @@ mod tests {
         let (_sender, handle) = create_mmap_control_pair().unwrap();
         let receiver = MmapControlReceiver::from_handle(handle).unwrap();
         assert!(receiver.try_recv().unwrap().is_none());
+    }
+
+    #[test]
+    fn recv_rejects_payload_without_fd_control_message() {
+        let (sender_fd, receiver_fd) = create_dgram_pair().expect("create pair");
+        let payload = MmapAttachMessage {
+            map_id: 1,
+            map_generation: 2,
+            mapping_length: 3,
+        }
+        .to_le_bytes();
+
+        send_raw_payload_without_fd(sender_fd.as_raw_fd(), &payload)
+            .expect("send payload without fd should succeed");
+
+        let err = recv_fd_with_metadata(receiver_fd.as_raw_fd())
+            .expect_err("recv should fail when SCM_RIGHTS is missing");
+        assert_eq!(
+            err.kind(),
+            ErrorKind::InvalidData,
+            "expected InvalidData for missing fd control message, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn recv_rejects_truncated_control_message() {
+        let (sender_fd, receiver_fd) = create_dgram_pair().expect("create pair");
+        let tmp_a = tempfile::NamedTempFile::new().expect("tmp file a");
+        let tmp_b = tempfile::NamedTempFile::new().expect("tmp file b");
+
+        send_two_fds_with_metadata(
+            sender_fd.as_raw_fd(),
+            tmp_a.as_file().as_raw_fd(),
+            tmp_b.as_file().as_raw_fd(),
+        )
+        .expect("send two-fd metadata message");
+
+        let err = recv_fd_with_metadata(receiver_fd.as_raw_fd())
+            .expect_err("receiver should reject truncated SCM_RIGHTS");
+        assert_eq!(
+            err.kind(),
+            ErrorKind::InvalidData,
+            "expected InvalidData for control truncation, got {err:?}"
+        );
+        assert!(
+            err.to_string().contains("truncated"),
+            "expected truncation error message, got {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn receiver_recovers_after_malformed_packet() {
+        let (sender, receiver) =
+            create_mmap_control_pair_connected().expect("create connected mmap control pair");
+
+        let malformed = MmapAttachMessage {
+            map_id: 11,
+            map_generation: 22,
+            mapping_length: 33,
+        }
+        .to_le_bytes();
+        send_raw_payload_without_fd(sender.as_raw_fd(), &malformed)
+            .expect("send malformed packet without fd");
+
+        let err = receiver
+            .recv()
+            .await
+            .expect_err("first malformed packet should fail");
+        assert_eq!(err.kind(), ErrorKind::InvalidData);
+
+        let tmp = tempfile::NamedTempFile::new().expect("temp file");
+        let good = MmapAttachMessage {
+            map_id: 42,
+            map_generation: 7,
+            mapping_length: 4096,
+        };
+        sender
+            .send(tmp.as_file().as_raw_fd(), &good)
+            .expect("send valid packet after malformed");
+
+        let (_fd, msg) = receiver
+            .recv()
+            .await
+            .expect("receiver should recover and accept valid packet");
+        assert_eq!(msg, good);
     }
 }

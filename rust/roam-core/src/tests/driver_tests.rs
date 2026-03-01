@@ -975,3 +975,64 @@ async fn buffered_close_before_registration_keeps_channel_terminal() {
         "channel should be terminal after buffered close"
     );
 }
+
+#[tokio::test]
+async fn unsolicited_response_id_is_ignored_and_does_not_break_calls() {
+    let (client_conduit, server_conduit) = message_conduit_pair();
+
+    let server_task = moire::task::spawn(
+        async move {
+            let (mut server_session, server_handle, _sh) = acceptor(server_conduit)
+                .establish()
+                .await
+                .expect("server handshake failed");
+            let server_sender = server_handle.sender.clone();
+            let mut server_driver = Driver::new(server_handle, EchoHandler, Parity::Even);
+            moire::task::spawn(async move { server_session.run().await }.named("server_session"));
+            moire::task::spawn(async move { server_driver.run().await }.named("server_driver"));
+            server_sender
+        }
+        .named("server_setup"),
+    );
+
+    let (mut client_session, client_handle, _sh) = initiator(client_conduit)
+        .establish()
+        .await
+        .expect("client handshake failed");
+    let mut client_driver = Driver::new(client_handle, (), Parity::Odd);
+    let caller = client_driver.caller();
+    moire::task::spawn(async move { client_session.run().await }.named("client_session"));
+    moire::task::spawn(async move { client_driver.run().await }.named("client_driver"));
+
+    let server_sender = server_task.await.expect("server setup failed");
+
+    server_sender
+        .send(crate::session::ConnectionMessage::Request(RequestMessage {
+            id: roam_types::RequestId(9999),
+            body: RequestBody::Response(RequestResponse {
+                ret: Payload::outgoing(&123_u32),
+                channels: vec![],
+                metadata: Default::default(),
+            }),
+        }))
+        .await
+        .expect("send unsolicited response");
+
+    let args_value: u32 = 42;
+    let response = caller
+        .call(RequestCall {
+            method_id: MethodId(1),
+            args: Payload::outgoing(&args_value),
+            channels: vec![],
+            metadata: Default::default(),
+        })
+        .await
+        .expect("call should still succeed after unsolicited response");
+
+    let ret_bytes = match &response.ret {
+        Payload::Incoming(bytes) => *bytes,
+        _ => panic!("expected incoming payload"),
+    };
+    let result: u32 = facet_postcard::from_slice(ret_bytes).expect("deserialize response");
+    assert_eq!(result, 42);
+}
