@@ -216,7 +216,7 @@ func runServer() async throws {
     let handler = TestbedService()
     let dispatcher = TestbedDispatcherAdapter(handler: handler)
 
-    let (_, driver) = try await establishAcceptor(
+    let (_, driver) = try await establishInitiator(
         transport: transport,
         dispatcher: dispatcher,
         acceptConnections: acceptConnections
