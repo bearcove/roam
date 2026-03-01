@@ -245,6 +245,13 @@ jobs:
           SUBJECT_CMD: "sh swift/subject/subject-swift.sh"
           SPEC_TRANSPORT: "shm"
 
+      - name: Run binary payload subject test (Swift over SHM host-direction)
+        run: cargo nextest run -p spec-tests --test binary_payloads
+        env:
+          SUBJECT_CMD: "sh swift/subject/subject-swift.sh"
+          SPEC_TRANSPORT: "shm"
+          SPEC_SHM_SUBJECT_MODE: "shm-host-server"
+
   swift-linux:
     name: Conformance / Swift (Linux)
     runs-on: depot-ubuntu-24.04-16
