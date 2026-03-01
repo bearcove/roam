@@ -154,11 +154,12 @@ fuzz-run target="all" seconds="60":
       fuzz/roam-shm-afl/out/shm_link_roundtrip \
       fuzz/roam-afl/out/protocol_decode \
       fuzz/roam-afl/out/testbed_mem_session
-    @run_fuzz() { \
-      timeout "$1" cargo afl fuzz -i "$2" -o "$3" -- "$4"; \
+    @trap 'exit 130' INT TERM; \
+    run_fuzz() { \
+      cargo afl fuzz -V "$1" -i "$2" -o "$3" -- "$4"; \
       status=$?; \
       case "$status" in \
-        0|124) ;; \
+        0) ;; \
         130|143) exit "$status" ;; \
         *) exit "$status" ;; \
       esac; \
