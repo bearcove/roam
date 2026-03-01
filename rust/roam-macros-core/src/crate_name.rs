@@ -332,3 +332,91 @@ fn extract_crate_names(
 
     root_pkg.into_iter().chain(dep_pkgs).collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse_manifest(src: &str) -> CargoToml {
+        CargoToml::parse(src).expect("manifest parse")
+    }
+
+    #[test]
+    fn sanitize_crate_name_replaces_dashes() {
+        assert_eq!(sanitize_crate_name("roam-session"), "roam_session");
+        assert_eq!(sanitize_crate_name("already_clean"), "already_clean");
+    }
+
+    #[test]
+    fn extract_workspace_dependencies_maps_alias_to_package_name() {
+        let workspace = parse_manifest(
+            r#"
+            [workspace]
+            [workspace.dependencies]
+            foo = "1"
+            alias = { version = "1", package = "real-crate" }
+            "#,
+        );
+
+        let map = extract_workspace_dependencies(&workspace);
+        assert_eq!(map.get("foo").expect("foo dep"), "foo");
+        assert_eq!(map.get("alias").expect("alias dep"), "real-crate");
+    }
+
+    #[test]
+    fn get_package_name_and_workspace_detection_work() {
+        let manifest = parse_manifest(
+            r#"
+            [package]
+            name = "demo"
+            version = "0.1.0"
+
+            [dependencies]
+            v = "1"
+            w = { workspace = true }
+            d = { version = "1", package = "dep-real" }
+            "#,
+        );
+        let deps = manifest.dependencies.as_ref().expect("dependencies table");
+        let v = deps.get("v").expect("v");
+        let w = deps.get("w").expect("w");
+        let d = deps.get("d").expect("d");
+
+        assert!(get_package_name(v).is_none());
+        assert!(get_package_name(w).is_none());
+        assert_eq!(get_package_name(d), Some("dep-real"));
+        assert!(!is_workspace_dep(v));
+        assert!(is_workspace_dep(w));
+        assert!(!is_workspace_dep(d));
+    }
+
+    #[test]
+    fn extract_crate_names_resolves_regular_renamed_and_workspace_deps() {
+        let manifest = parse_manifest(
+            r#"
+            [package]
+            name = "demo"
+            version = "0.1.0"
+
+            [dependencies]
+            foo = "1"
+            renamed = { version = "1", package = "real-renamed" }
+            wsp = { workspace = true }
+            "#,
+        );
+
+        let mut workspace = BTreeMap::new();
+        workspace.insert("wsp".to_string(), "workspace-real".to_string());
+
+        let names = extract_crate_names(&manifest, workspace);
+        assert_eq!(names.get("foo"), Some(&FoundCrate::Name("foo".to_string())));
+        assert_eq!(
+            names.get("real-renamed"),
+            Some(&FoundCrate::Name("renamed".to_string()))
+        );
+        assert_eq!(
+            names.get("workspace-real"),
+            Some(&FoundCrate::Name("wsp".to_string()))
+        );
+    }
+}
