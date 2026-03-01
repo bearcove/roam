@@ -13,11 +13,14 @@ use std::sync::Mutex;
 use shm_primitives::MmapRegion;
 use shm_primitives::Region;
 use shm_primitives::bipbuf::{BIPBUF_HEADER_SIZE, BipBufHeader, BipBufRaw};
+use shm_primitives::bootstrap::{
+    self, BOOTSTRAP_REQUEST_HEADER_LEN, BOOTSTRAP_RESPONSE_HEADER_LEN, BootstrapStatus,
+};
 use shm_primitives::{SizeClassConfig, SlotRef, VarSlotPool};
 #[cfg(unix)]
 use std::io::ErrorKind;
 #[cfg(unix)]
-use std::os::fd::{FromRawFd, OwnedFd, RawFd};
+use std::os::fd::{FromRawFd, IntoRawFd, OwnedFd, RawFd};
 
 // ─── FFI types ──────────────────────────────────────────────────────────────
 
@@ -559,6 +562,389 @@ pub unsafe extern "C" fn roam_var_slot_pool_destroy(pool: *mut RoamVarSlotPool) 
     if !pool.is_null() {
         drop(unsafe { Box::from_raw(pool) });
     }
+}
+
+// ─── bootstrap wire FFI ────────────────────────────────────────────────────
+
+#[repr(C)]
+pub struct RoamShmBootstrapResponseInfo {
+    pub status: u8,
+    pub peer_id: u32,
+    pub payload_len: u16,
+}
+
+/// Encode a bootstrap request frame (`RSH0` + sid length + sid bytes).
+///
+/// Returns:
+/// - 0: success
+/// - -1: invalid arguments
+/// - -2: output buffer too small
+/// - -3: encoding failure
+///
+/// # Safety
+///
+/// - `sid_ptr` must point to `sid_len` readable bytes.
+/// - `out_buf` must point to `out_buf_len` writable bytes.
+/// - `out_written` must be non-null and writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn roam_shm_bootstrap_request_encode(
+    sid_ptr: *const u8,
+    sid_len: usize,
+    out_buf: *mut u8,
+    out_buf_len: usize,
+    out_written: *mut usize,
+) -> i32 {
+    if (sid_len > 0 && sid_ptr.is_null()) || out_buf.is_null() || out_written.is_null() {
+        return -1;
+    }
+
+    let sid = if sid_len == 0 {
+        &[][..]
+    } else {
+        // SAFETY: validated by caller contract and null checks above.
+        unsafe { std::slice::from_raw_parts(sid_ptr, sid_len) }
+    };
+    let frame = match bootstrap::encode_request(sid) {
+        Ok(frame) => frame,
+        Err(_) => return -3,
+    };
+
+    if frame.len() > out_buf_len {
+        return -2;
+    }
+
+    // SAFETY: output buffer is valid for frame.len() bytes.
+    unsafe {
+        std::ptr::copy_nonoverlapping(frame.as_ptr(), out_buf, frame.len());
+        *out_written = frame.len();
+    }
+    0
+}
+
+/// Decode a bootstrap request frame and expose SID location in the input buffer.
+///
+/// Returns:
+/// - 0: success
+/// - -1: invalid arguments
+/// - -2: malformed request frame
+///
+/// # Safety
+///
+/// - `buf_ptr` must point to `buf_len` readable bytes.
+/// - `out_sid_ptr` and `out_sid_len` must be non-null and writable.
+/// - `out_sid_ptr` points into `buf_ptr`; keep input alive while using it.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn roam_shm_bootstrap_request_decode(
+    buf_ptr: *const u8,
+    buf_len: usize,
+    out_sid_ptr: *mut *const u8,
+    out_sid_len: *mut u16,
+) -> i32 {
+    if (buf_len > 0 && buf_ptr.is_null()) || out_sid_ptr.is_null() || out_sid_len.is_null() {
+        return -1;
+    }
+
+    let frame = if buf_len == 0 {
+        &[][..]
+    } else {
+        // SAFETY: validated by caller contract and null checks above.
+        unsafe { std::slice::from_raw_parts(buf_ptr, buf_len) }
+    };
+    let req = match bootstrap::decode_request(frame) {
+        Ok(req) => req,
+        Err(_) => return -2,
+    };
+
+    if req.sid.len() > u16::MAX as usize {
+        return -2;
+    }
+
+    // SAFETY: output pointers are valid and writable.
+    unsafe {
+        *out_sid_ptr = req.sid.as_ptr();
+        *out_sid_len = req.sid.len() as u16;
+    }
+    0
+}
+
+/// Encode a bootstrap response frame (`RSP0` + status + peer + payload length + payload).
+///
+/// Returns:
+/// - 0: success
+/// - -1: invalid arguments
+/// - -2: output buffer too small
+/// - -3: malformed response fields
+///
+/// # Safety
+///
+/// - `payload_ptr` must point to `payload_len` readable bytes when `payload_len > 0`.
+/// - `out_buf` must point to `out_buf_len` writable bytes.
+/// - `out_written` must be non-null and writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn roam_shm_bootstrap_response_encode(
+    status: u8,
+    peer_id: u32,
+    payload_ptr: *const u8,
+    payload_len: usize,
+    out_buf: *mut u8,
+    out_buf_len: usize,
+    out_written: *mut usize,
+) -> i32 {
+    if (payload_len > 0 && payload_ptr.is_null()) || out_buf.is_null() || out_written.is_null() {
+        return -1;
+    }
+
+    let status = match BootstrapStatus::try_from(status) {
+        Ok(status) => status,
+        Err(_) => return -3,
+    };
+    let payload = if payload_len == 0 {
+        &[][..]
+    } else {
+        // SAFETY: validated by caller contract and null checks above.
+        unsafe { std::slice::from_raw_parts(payload_ptr, payload_len) }
+    };
+    let frame = match bootstrap::encode_response(status, peer_id, payload) {
+        Ok(frame) => frame,
+        Err(_) => return -3,
+    };
+
+    if frame.len() > out_buf_len {
+        return -2;
+    }
+
+    // SAFETY: output buffer is valid for frame.len() bytes.
+    unsafe {
+        std::ptr::copy_nonoverlapping(frame.as_ptr(), out_buf, frame.len());
+        *out_written = frame.len();
+    }
+    0
+}
+
+/// Decode a bootstrap response frame and expose payload location in the input buffer.
+///
+/// Returns:
+/// - 0: success
+/// - -1: invalid arguments
+/// - -2: malformed response frame
+///
+/// # Safety
+///
+/// - `buf_ptr` must point to `buf_len` readable bytes.
+/// - `out_info` and `out_payload_ptr` must be non-null and writable.
+/// - `out_payload_ptr` points into `buf_ptr`; keep input alive while using it.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn roam_shm_bootstrap_response_decode(
+    buf_ptr: *const u8,
+    buf_len: usize,
+    out_info: *mut RoamShmBootstrapResponseInfo,
+    out_payload_ptr: *mut *const u8,
+) -> i32 {
+    if (buf_len > 0 && buf_ptr.is_null()) || out_info.is_null() || out_payload_ptr.is_null() {
+        return -1;
+    }
+
+    let frame = if buf_len == 0 {
+        &[][..]
+    } else {
+        // SAFETY: validated by caller contract and null checks above.
+        unsafe { std::slice::from_raw_parts(buf_ptr, buf_len) }
+    };
+    let resp = match bootstrap::decode_response(frame) {
+        Ok(resp) => resp,
+        Err(_) => return -2,
+    };
+
+    if resp.payload.len() > u16::MAX as usize {
+        return -2;
+    }
+
+    // SAFETY: output pointers are valid and writable.
+    unsafe {
+        (*out_info).status = resp.status as u8;
+        (*out_info).peer_id = resp.peer_id;
+        (*out_info).payload_len = resp.payload.len() as u16;
+        *out_payload_ptr = resp.payload.as_ptr();
+    }
+    0
+}
+
+/// Send one bootstrap response on a Unix control socket.
+///
+/// On success status (`0`), `doorbell_fd` and `segment_fd` are required and
+/// `mmap_control_fd` is optional (`-1` means absent). On error status (`1`),
+/// all fd parameters must be `-1`.
+///
+/// Returns 0 on success, -1 on error.
+///
+/// # Safety
+///
+/// - `control_fd` must be a valid Unix-domain socket descriptor.
+/// - `payload_ptr` must be valid for `payload_len` bytes when `payload_len > 0`.
+/// - Any provided fds must stay valid through the send call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn roam_shm_bootstrap_response_send_unix(
+    control_fd: i32,
+    status: u8,
+    peer_id: u32,
+    payload_ptr: *const u8,
+    payload_len: usize,
+    doorbell_fd: i32,
+    segment_fd: i32,
+    mmap_control_fd: i32,
+) -> i32 {
+    #[cfg(unix)]
+    {
+        if control_fd < 0 || (payload_len > 0 && payload_ptr.is_null()) {
+            return -1;
+        }
+
+        let status = match BootstrapStatus::try_from(status) {
+            Ok(status) => status,
+            Err(_) => return -1,
+        };
+        let payload = if payload_len == 0 {
+            &[][..]
+        } else {
+            // SAFETY: validated by caller contract and null checks above.
+            unsafe { std::slice::from_raw_parts(payload_ptr, payload_len) }
+        };
+
+        let result = if status == BootstrapStatus::Success {
+            if doorbell_fd < 0 || segment_fd < 0 {
+                return -1;
+            }
+            let fds = bootstrap::BootstrapSuccessFds {
+                doorbell_fd,
+                segment_fd,
+                mmap_control_fd: (mmap_control_fd >= 0).then_some(mmap_control_fd),
+            };
+            bootstrap::send_response_unix(control_fd, status, peer_id, payload, Some(&fds))
+        } else {
+            if doorbell_fd >= 0 || segment_fd >= 0 || mmap_control_fd >= 0 {
+                return -1;
+            }
+            bootstrap::send_response_unix(control_fd, status, peer_id, payload, None)
+        };
+
+        if result.is_ok() { 0 } else { -1 }
+    }
+
+    #[cfg(not(unix))]
+    {
+        let _ = (
+            control_fd,
+            status,
+            peer_id,
+            payload_ptr,
+            payload_len,
+            doorbell_fd,
+            segment_fd,
+            mmap_control_fd,
+        );
+        -1
+    }
+}
+
+/// Receive one bootstrap response on a Unix control socket.
+///
+/// `payload_buf` receives the response payload bytes and returned fds become
+/// owned by the caller (`-1` means absent).
+///
+/// Returns:
+/// - 0: success
+/// - -1: invalid arguments / malformed frame / fd mismatch / io error
+/// - -2: payload buffer too small
+///
+/// # Safety
+///
+/// - `control_fd` must be a valid Unix-domain socket descriptor.
+/// - `payload_buf` must be writable for `payload_buf_len` bytes.
+/// - output pointers must be non-null and writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn roam_shm_bootstrap_response_recv_unix(
+    control_fd: i32,
+    payload_buf: *mut u8,
+    payload_buf_len: usize,
+    out_info: *mut RoamShmBootstrapResponseInfo,
+    out_doorbell_fd: *mut i32,
+    out_segment_fd: *mut i32,
+    out_mmap_control_fd: *mut i32,
+) -> i32 {
+    #[cfg(unix)]
+    {
+        if control_fd < 0
+            || payload_buf.is_null()
+            || out_info.is_null()
+            || out_doorbell_fd.is_null()
+            || out_segment_fd.is_null()
+            || out_mmap_control_fd.is_null()
+        {
+            return -1;
+        }
+
+        let received = match bootstrap::recv_response_unix(control_fd) {
+            Ok(received) => received,
+            Err(_) => return -1,
+        };
+
+        if received.response.payload.len() > payload_buf_len {
+            return -2;
+        }
+
+        // SAFETY: pointers validated above.
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                received.response.payload.as_ptr(),
+                payload_buf,
+                received.response.payload.len(),
+            );
+            (*out_info).status = received.response.status as u8;
+            (*out_info).peer_id = received.response.peer_id;
+            (*out_info).payload_len = received.response.payload.len() as u16;
+            *out_doorbell_fd = -1;
+            *out_segment_fd = -1;
+            *out_mmap_control_fd = -1;
+        }
+
+        if let Some(fds) = received.fds {
+            // SAFETY: pointers validated above.
+            unsafe {
+                *out_doorbell_fd = fds.doorbell_fd.into_raw_fd();
+                *out_segment_fd = fds.segment_fd.into_raw_fd();
+                *out_mmap_control_fd = fds
+                    .mmap_control_fd
+                    .map(IntoRawFd::into_raw_fd)
+                    .unwrap_or(-1);
+            }
+        }
+
+        0
+    }
+
+    #[cfg(not(unix))]
+    {
+        let _ = (
+            control_fd,
+            payload_buf,
+            payload_buf_len,
+            out_info,
+            out_doorbell_fd,
+            out_segment_fd,
+            out_mmap_control_fd,
+        );
+        -1
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn roam_shm_bootstrap_request_header_size() -> u32 {
+    BOOTSTRAP_REQUEST_HEADER_LEN as u32
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn roam_shm_bootstrap_response_header_size() -> u32 {
+    BOOTSTRAP_RESPONSE_HEADER_LEN as u32
 }
 
 // ─── mmap attachment FFI ────────────────────────────────────────────────────

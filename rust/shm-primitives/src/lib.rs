@@ -1,4 +1,5 @@
 pub mod bipbuf;
+pub mod bootstrap;
 mod loom_tests;
 pub mod peer;
 pub mod region;
