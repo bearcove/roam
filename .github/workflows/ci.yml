@@ -179,7 +179,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '25'
+          node-version: "25"
 
       - name: Install pnpm
         uses: pnpm/action-setup@v4
@@ -212,8 +212,7 @@ jobs:
 
       - name: Run TypeScript TCP subject matrix tests
         run: >
-          cargo nextest run -p spec-tests --test spec_matrix
-          -E 'test(lang_typescript_transport_tcp::)'
+          cargo nextest run -p spec-tests --test spec_matrix -E 'test(lang_typescript_transport_tcp::)'
 
   swift-conformance:
     name: Conformance / Swift
@@ -336,7 +335,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '25'
+          node-version: "25"
 
       - name: Install pnpm
         uses: pnpm/action-setup@v4
