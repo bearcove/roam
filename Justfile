@@ -123,8 +123,8 @@ fuzz-targets:
     @echo "  testbed_mem_session  (fuzz/roam-afl)"
     @echo ""
     @echo "Use: just fuzz-build [target|all]"
-    @echo "Use: just fuzz-run [target|all] [seconds]"
-    @echo "Use: just fuzz [target|all] [seconds]"
+    @echo "Use: just fuzz-run [target|all] [seconds?]"
+    @echo "Use: just fuzz [target|all] [seconds?]"
 
 fuzz-build target="all":
     @case "{{target}}" in \
@@ -147,7 +147,7 @@ fuzz-build target="all":
         ;; \
     esac
 
-fuzz-run target="all" seconds="60":
+fuzz-run target="all" seconds="":
     just fuzz-build "{{target}}"
     @mkdir -p \
       fuzz/roam-shm-afl/out/framing_peek \
@@ -156,7 +156,11 @@ fuzz-run target="all" seconds="60":
       fuzz/roam-afl/out/testbed_mem_session
     @trap 'exit 130' INT TERM; \
     run_fuzz() { \
-      cargo afl fuzz -V "$1" -i "$2" -o "$3" -- "$4"; \
+      if [ -n "$1" ]; then \
+        cargo afl fuzz -V "$1" -i "$2" -o "$3" -- "$4"; \
+      else \
+        cargo afl fuzz -i "$2" -o "$3" -- "$4"; \
+      fi; \
       status=$?; \
       case "$status" in \
         0) ;; \
@@ -190,26 +194,26 @@ fuzz-run target="all" seconds="60":
         ;; \
     esac
 
-fuzz target="all" seconds="60":
+fuzz target="all" seconds="":
     just fuzz-run "{{target}}" "{{seconds}}"
 
 fuzz-asan-build target="all":
     AFL_USE_ASAN=1 just fuzz-build "{{target}}"
 
-fuzz-asan-run target="all" seconds="60":
+fuzz-asan-run target="all" seconds="":
     AFL_USE_ASAN=1 ASAN_OPTIONS=abort_on_error=1:symbolize=1:detect_leaks=0 just fuzz-run "{{target}}" "{{seconds}}"
 
-fuzz-asan target="all" seconds="60":
+fuzz-asan target="all" seconds="":
     just fuzz-asan-build "{{target}}"
     just fuzz-asan-run "{{target}}" "{{seconds}}"
 
 fuzz-ubsan-build target="all":
     AFL_USE_UBSAN=1 just fuzz-build "{{target}}"
 
-fuzz-ubsan-run target="all" seconds="60":
+fuzz-ubsan-run target="all" seconds="":
     AFL_USE_UBSAN=1 UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 just fuzz-run "{{target}}" "{{seconds}}"
 
-fuzz-ubsan target="all" seconds="60":
+fuzz-ubsan target="all" seconds="":
     just fuzz-ubsan-build "{{target}}"
     just fuzz-ubsan-run "{{target}}" "{{seconds}}"
 
@@ -252,7 +256,7 @@ fuzz-sand-build target="all":
         ;; \
     esac
 
-fuzz-sand-run target="all" seconds="60":
+fuzz-sand-run target="all" seconds="":
     @run_one() { \
       t="$1"; \
       case "$t" in \
@@ -269,7 +273,11 @@ fuzz-sand-run target="all" seconds="60":
       bin_dir="fuzz/.sand/$t"; \
       mkdir -p "$out_dir"; \
       trap 'exit 130' INT TERM; \
-      cargo afl fuzz -V "{{seconds}}" -i "$in_dir" -o "$out_dir" -w "$bin_dir/asan" -w "$bin_dir/ubsan" -- "$bin_dir/native"; \
+      if [ -n "{{seconds}}" ]; then \
+        cargo afl fuzz -V "{{seconds}}" -i "$in_dir" -o "$out_dir" -w "$bin_dir/asan" -w "$bin_dir/ubsan" -- "$bin_dir/native"; \
+      else \
+        cargo afl fuzz -i "$in_dir" -o "$out_dir" -w "$bin_dir/asan" -w "$bin_dir/ubsan" -- "$bin_dir/native"; \
+      fi; \
       status=$?; \
       case "$status" in \
         0|130|143) ;; \
@@ -288,5 +296,5 @@ fuzz-sand-run target="all" seconds="60":
         ;; \
     esac
 
-fuzz-sand target="all" seconds="60":
+fuzz-sand target="all" seconds="":
     just fuzz-sand-run "{{target}}" "{{seconds}}"

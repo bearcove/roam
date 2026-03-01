@@ -2,6 +2,7 @@
 profile.json.gz
 target/
 .handoffs/
+fuzz/**/.sand
 fuzz/**/in/
 fuzz/**/out/
 fuzz/**/findings/
