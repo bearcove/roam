@@ -9,12 +9,20 @@ public struct ShmBootstrapTicket: Sendable {
     public let hubPath: String
     public let doorbellFd: Int32
     public let shmFd: Int32
+    public let mmapControlFd: Int32
 
-    public init(peerId: UInt8, hubPath: String, doorbellFd: Int32, shmFd: Int32 = -1) {
+    public init(
+        peerId: UInt8,
+        hubPath: String,
+        doorbellFd: Int32,
+        shmFd: Int32 = -1,
+        mmapControlFd: Int32 = -1
+    ) {
         self.peerId = peerId
         self.hubPath = hubPath
         self.doorbellFd = doorbellFd
         self.shmFd = shmFd
+        self.mmapControlFd = mmapControlFd
     }
 }
 
@@ -70,15 +78,17 @@ public func requestShmBootstrapTicket(controlSocketPath: String, sid: String) th
             }
 
             _ = try? writeFdAck(fd: fd)
-            let fds = try recvPassedFds(fd: fd, expected: 2)
+            let fds = try recvPassedFds(fd: fd, minExpected: 2, maxExpected: 3)
             let doorbellFd = fds[0]
             let shmFd = fds[1]
+            let mmapControlFd = fds.count >= 3 ? fds[2] : -1
             close(fd)
             return ShmBootstrapTicket(
                 peerId: response.peerId,
                 hubPath: hubPath,
                 doorbellFd: doorbellFd,
-                shmFd: shmFd
+                shmFd: shmFd,
+                mmapControlFd: mmapControlFd
             )
 
         case shmBootstrapStatusError:
@@ -209,12 +219,15 @@ private func readExactly(fd: Int32, count: Int) throws -> [UInt8] {
     return out
 }
 
-private func recvPassedFds(fd: Int32, expected: Int) throws -> [Int32] {
-    var out = [Int32](repeating: -1, count: max(expected, 1))
+private func recvPassedFds(fd: Int32, minExpected: Int, maxExpected: Int) throws -> [Int32] {
+    guard minExpected > 0, maxExpected >= minExpected else {
+        throw ShmBootstrapError.missingFileDescriptor
+    }
+    var out = [Int32](repeating: -1, count: max(maxExpected, 1))
     while true {
         let rc = roam_recv_fds(fd, &out, Int32(out.count))
         if rc > 0 {
-            if rc < expected {
+            if rc < minExpected {
                 throw ShmBootstrapError.missingFileDescriptor
             }
             return Array(out.prefix(Int(rc)))

@@ -10,8 +10,14 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 
 use roam_shm::varslot::{SizeClassConfig, SlotRef, VarSlotPool};
+#[cfg(unix)]
+use shm_primitives::MmapRegion;
 use shm_primitives::Region;
 use shm_primitives::bipbuf::{BIPBUF_HEADER_SIZE, BipBufHeader, BipBufRaw};
+#[cfg(unix)]
+use std::io::ErrorKind;
+#[cfg(unix)]
+use std::os::fd::{FromRawFd, OwnedFd, RawFd};
 
 // ─── FFI types ──────────────────────────────────────────────────────────────
 
@@ -42,6 +48,18 @@ pub struct RoamVarSlotPool {
     base_offset: usize,
     configs: Vec<SizeClassConfig>,
     states: SlotStateMap,
+}
+
+#[cfg(unix)]
+struct RoamMmapAttachment {
+    region: MmapRegion,
+}
+
+/// Guest-side mmap attachments resolved by (map_id, map_generation).
+#[cfg(unix)]
+pub struct RoamMmapAttachments {
+    control_fd: RawFd,
+    mappings: Mutex<HashMap<(u32, u32), RoamMmapAttachment>>,
 }
 
 // ─── BipBuf FFI ─────────────────────────────────────────────────────────────
@@ -540,6 +558,385 @@ pub unsafe extern "C" fn roam_var_slot_pool_calculate_size(
 pub unsafe extern "C" fn roam_var_slot_pool_destroy(pool: *mut RoamVarSlotPool) {
     if !pool.is_null() {
         drop(unsafe { Box::from_raw(pool) });
+    }
+}
+
+// ─── mmap attachment FFI ────────────────────────────────────────────────────
+
+#[cfg(unix)]
+#[derive(Clone, Copy)]
+#[repr(C)]
+struct RoamMmapAttachMessage {
+    map_id: u32,
+    map_generation: u32,
+    mapping_length: u64,
+}
+
+#[cfg(unix)]
+impl RoamMmapAttachMessage {
+    const LEN: usize = 16;
+
+    fn from_le_bytes(buf: [u8; Self::LEN]) -> Self {
+        Self {
+            map_id: u32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]),
+            map_generation: u32::from_le_bytes([buf[4], buf[5], buf[6], buf[7]]),
+            mapping_length: u64::from_le_bytes([
+                buf[8], buf[9], buf[10], buf[11], buf[12], buf[13], buf[14], buf[15],
+            ]),
+        }
+    }
+}
+
+#[cfg(unix)]
+fn set_nonblocking(fd: RawFd) -> i32 {
+    // SAFETY: fcntl is thread-safe for querying/modifying fd flags.
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+    if flags < 0 {
+        return -1;
+    }
+    // SAFETY: same as above.
+    if unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0 {
+        return -1;
+    }
+    0
+}
+
+#[cfg(unix)]
+fn recv_mmap_attach(fd: RawFd) -> std::io::Result<Option<(OwnedFd, RoamMmapAttachMessage)>> {
+    let mut payload = [0_u8; RoamMmapAttachMessage::LEN];
+    let mut iov = libc::iovec {
+        iov_base: payload.as_mut_ptr().cast(),
+        iov_len: payload.len(),
+    };
+
+    let cmsg_space = unsafe { libc::CMSG_SPACE(core::mem::size_of::<RawFd>() as u32) as usize };
+    let mut control = vec![0_u8; cmsg_space];
+
+    // SAFETY: zeroed msghdr is valid before field initialization.
+    let mut msghdr: libc::msghdr = unsafe { core::mem::zeroed() };
+    msghdr.msg_iov = &mut iov;
+    msghdr.msg_iovlen = 1;
+    msghdr.msg_control = control.as_mut_ptr().cast();
+    msghdr.msg_controllen = control.len() as _;
+
+    // SAFETY: msghdr points to valid buffers for recvmsg.
+    let n = unsafe { libc::recvmsg(fd, &mut msghdr, 0) };
+    if n == 0 {
+        return Ok(None);
+    }
+    if n < 0 {
+        let err = std::io::Error::last_os_error();
+        if err.kind() == ErrorKind::WouldBlock {
+            return Ok(None);
+        }
+        return Err(err);
+    }
+    if n < RoamMmapAttachMessage::LEN as isize {
+        return Err(std::io::Error::new(
+            ErrorKind::InvalidData,
+            "short mmap attach payload",
+        ));
+    }
+    if (msghdr.msg_flags & libc::MSG_CTRUNC) != 0 {
+        return Err(std::io::Error::new(
+            ErrorKind::InvalidData,
+            "truncated mmap attach control message",
+        ));
+    }
+
+    let mut received_fd: Option<RawFd> = None;
+    // SAFETY: control buffer ownership is local and valid for traversal.
+    unsafe {
+        let mut cmsg = libc::CMSG_FIRSTHDR(&msghdr);
+        while !cmsg.is_null() {
+            if (*cmsg).cmsg_level == libc::SOL_SOCKET && (*cmsg).cmsg_type == libc::SCM_RIGHTS {
+                let cmsg_len = (*cmsg).cmsg_len as usize;
+                let base_len = libc::CMSG_LEN(0) as usize;
+                if cmsg_len >= base_len + core::mem::size_of::<RawFd>() {
+                    let data_ptr = libc::CMSG_DATA(cmsg).cast::<RawFd>();
+                    received_fd = Some(*data_ptr);
+                    break;
+                }
+            }
+            cmsg = libc::CMSG_NXTHDR(&msghdr, cmsg);
+        }
+    }
+
+    let raw_fd = received_fd.ok_or_else(|| {
+        std::io::Error::new(
+            ErrorKind::InvalidData,
+            "missing mmap attach fd in control message",
+        )
+    })?;
+    // SAFETY: recvmsg gives ownership of the received fd to the receiver.
+    let owned_fd = unsafe { OwnedFd::from_raw_fd(raw_fd) };
+    Ok(Some((
+        owned_fd,
+        RoamMmapAttachMessage::from_le_bytes(payload),
+    )))
+}
+
+#[cfg(unix)]
+fn send_mmap_attach(
+    control_fd: RawFd,
+    mapping_fd: RawFd,
+    msg: RoamMmapAttachMessage,
+) -> std::io::Result<()> {
+    let mut payload = [0_u8; RoamMmapAttachMessage::LEN];
+    payload[0..4].copy_from_slice(&msg.map_id.to_le_bytes());
+    payload[4..8].copy_from_slice(&msg.map_generation.to_le_bytes());
+    payload[8..16].copy_from_slice(&msg.mapping_length.to_le_bytes());
+    let mut iov = libc::iovec {
+        iov_base: payload.as_ptr() as *mut libc::c_void,
+        iov_len: payload.len(),
+    };
+
+    let fds = [mapping_fd];
+    let cmsg_space = unsafe { libc::CMSG_SPACE(core::mem::size_of_val(&fds) as u32) as usize };
+    let mut control = vec![0_u8; cmsg_space];
+
+    // SAFETY: zeroed msghdr is valid before field initialization.
+    let mut msghdr: libc::msghdr = unsafe { core::mem::zeroed() };
+    msghdr.msg_iov = &mut iov;
+    msghdr.msg_iovlen = 1;
+    msghdr.msg_control = control.as_mut_ptr().cast();
+    msghdr.msg_controllen = control.len() as _;
+
+    // SAFETY: cmsg buffer belongs to this stack frame and is sized via CMSG_SPACE.
+    let cmsg = unsafe { libc::CMSG_FIRSTHDR(&msghdr) };
+    if cmsg.is_null() {
+        return Err(std::io::Error::new(
+            ErrorKind::InvalidData,
+            "failed to allocate SCM_RIGHTS header",
+        ));
+    }
+
+    unsafe {
+        (*cmsg).cmsg_level = libc::SOL_SOCKET;
+        (*cmsg).cmsg_type = libc::SCM_RIGHTS;
+        (*cmsg).cmsg_len = libc::CMSG_LEN(core::mem::size_of_val(&fds) as u32) as _;
+        let data_ptr = libc::CMSG_DATA(cmsg).cast::<RawFd>();
+        core::ptr::copy_nonoverlapping(fds.as_ptr(), data_ptr, 1);
+    }
+
+    // SAFETY: msghdr points to valid payload/control data.
+    let n = unsafe { libc::sendmsg(control_fd, &msghdr, 0) };
+    if n < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    if n == 0 {
+        return Err(std::io::Error::new(
+            ErrorKind::WriteZero,
+            "sendmsg wrote zero bytes for mmap attach",
+        ));
+    }
+    Ok(())
+}
+
+/// Send one mmap attach message (fd + map metadata) over a Unix control socket.
+///
+/// Returns 0 on success, -1 on error.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn roam_mmap_control_send(
+    control_fd: i32,
+    mapping_fd: i32,
+    map_id: u32,
+    map_generation: u32,
+    mapping_length: u64,
+) -> i32 {
+    #[cfg(unix)]
+    {
+        if control_fd < 0 || mapping_fd < 0 {
+            return -1;
+        }
+        let msg = RoamMmapAttachMessage {
+            map_id,
+            map_generation,
+            mapping_length,
+        };
+        return if send_mmap_attach(control_fd, mapping_fd, msg).is_ok() {
+            0
+        } else {
+            -1
+        };
+    }
+
+    #[cfg(not(unix))]
+    {
+        let _ = (
+            control_fd,
+            mapping_fd,
+            map_id,
+            map_generation,
+            mapping_length,
+        );
+        -1
+    }
+}
+
+/// Create a guest-side mmap attachment registry from a control socket fd.
+///
+/// Returns null on invalid fd or setup failure.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn roam_mmap_attachments_create(control_fd: i32) -> *mut RoamMmapAttachments {
+    #[cfg(unix)]
+    {
+        if control_fd < 0 {
+            return core::ptr::null_mut();
+        }
+        if set_nonblocking(control_fd) != 0 {
+            return core::ptr::null_mut();
+        }
+        return Box::into_raw(Box::new(RoamMmapAttachments {
+            control_fd,
+            mappings: Mutex::new(HashMap::new()),
+        }));
+    }
+
+    #[cfg(not(unix))]
+    {
+        let _ = control_fd;
+        core::ptr::null_mut()
+    }
+}
+
+/// Drain all pending mmap attach messages from the control socket.
+///
+/// Returns number of mappings attached, or -1 on error.
+///
+/// # Safety
+///
+/// `attachments` must be a valid pointer returned by `roam_mmap_attachments_create`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn roam_mmap_attachments_drain_control(
+    attachments: *mut RoamMmapAttachments,
+) -> i32 {
+    #[cfg(unix)]
+    {
+        if attachments.is_null() {
+            return -1;
+        }
+
+        let attachments = unsafe { &*attachments };
+        let mut attached_count = 0_i32;
+
+        loop {
+            let result = recv_mmap_attach(attachments.control_fd);
+            match result {
+                Ok(Some((fd, msg))) => {
+                    let mapping_len = msg.mapping_length as usize;
+                    let region = match MmapRegion::attach_fd(fd, mapping_len) {
+                        Ok(region) => region,
+                        Err(_) => return -1,
+                    };
+                    let mut mappings = match attachments.mappings.lock() {
+                        Ok(mappings) => mappings,
+                        Err(_) => return -1,
+                    };
+                    mappings.insert(
+                        (msg.map_id, msg.map_generation),
+                        RoamMmapAttachment { region },
+                    );
+                    attached_count += 1;
+                }
+                Ok(None) => break,
+                Err(_) => return -1,
+            }
+        }
+
+        return attached_count;
+    }
+
+    #[cfg(not(unix))]
+    {
+        let _ = attachments;
+        -1
+    }
+}
+
+/// Resolve an mmap-ref tuple to a direct payload pointer.
+///
+/// Return codes:
+/// - 0: success
+/// - -1: invalid arguments / internal error
+/// - -2: unknown mapping (map_id, map_generation not attached)
+/// - -3: offset+len overflow
+/// - -4: out of bounds for mapping length
+///
+/// # Safety
+///
+/// - `attachments` must be valid and created by `roam_mmap_attachments_create`.
+/// - `out_ptr` must be non-null and writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn roam_mmap_attachments_resolve_ptr(
+    attachments: *const RoamMmapAttachments,
+    map_id: u32,
+    map_generation: u32,
+    map_offset: u64,
+    payload_len: u32,
+    out_ptr: *mut *const u8,
+) -> i32 {
+    #[cfg(unix)]
+    {
+        if attachments.is_null() || out_ptr.is_null() {
+            return -1;
+        }
+
+        let attachments = unsafe { &*attachments };
+        let mappings = match attachments.mappings.lock() {
+            Ok(mappings) => mappings,
+            Err(_) => return -1,
+        };
+        let Some(mapping) = mappings.get(&(map_id, map_generation)) else {
+            return -2;
+        };
+
+        let start = map_offset as usize;
+        let Some(end) = start.checked_add(payload_len as usize) else {
+            return -3;
+        };
+        if end > mapping.region.len() {
+            return -4;
+        }
+
+        // SAFETY: bounds checked against mapping length above.
+        let ptr = unsafe { mapping.region.region().as_ptr().add(start) } as *const u8;
+        unsafe { *out_ptr = ptr };
+        return 0;
+    }
+
+    #[cfg(not(unix))]
+    {
+        let _ = (
+            attachments,
+            map_id,
+            map_generation,
+            map_offset,
+            payload_len,
+            out_ptr,
+        );
+        -1
+    }
+}
+
+/// Destroy mmap attachments and free all attached mapping resources.
+///
+/// # Safety
+///
+/// `attachments` must be null or a valid pointer returned by
+/// `roam_mmap_attachments_create`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn roam_mmap_attachments_destroy(attachments: *mut RoamMmapAttachments) {
+    #[cfg(unix)]
+    {
+        if !attachments.is_null() {
+            drop(unsafe { Box::from_raw(attachments) });
+        }
+    }
+
+    #[cfg(not(unix))]
+    {
+        let _ = attachments;
     }
 }
 

@@ -162,6 +162,20 @@ public func encodeShmSlotRefFrame(slotRef: ShmSlotRef) -> [UInt8] {
     return bytes
 }
 
+// r[impl shm.framing.mmap-ref]
+public func encodeShmMmapRefFrame(mmapRef: ShmMmapRef) -> [UInt8] {
+    var bytes = [UInt8](repeating: 0, count: shmMmapRefFrameSize)
+    let header = ShmFrameHeader(totalLen: UInt32(shmMmapRefFrameSize), flags: shmFlagMmapRef)
+    header.write(to: &bytes)
+
+    writeU32LE(mmapRef.mapId, to: &bytes, at: shmFrameHeaderSize)
+    writeU32LE(mmapRef.mapGeneration, to: &bytes, at: shmFrameHeaderSize + 4)
+    writeU64LE(mmapRef.mapOffset, to: &bytes, at: shmFrameHeaderSize + 8)
+    writeU32LE(mmapRef.payloadLen, to: &bytes, at: shmFrameHeaderSize + 16)
+    writeU32LE(0, to: &bytes, at: shmFrameHeaderSize + 20) // reserved
+    return bytes
+}
+
 // r[impl shm.framing]
 // r[impl shm.framing.flags]
 public func decodeShmFrame(_ frame: [UInt8]) throws -> ShmDecodedFrame {
@@ -241,6 +255,19 @@ private func writeU32LE(_ value: UInt32, to bytes: inout [UInt8], at index: Int)
     bytes[index + 1] = UInt8(truncatingIfNeeded: le >> 8)
     bytes[index + 2] = UInt8(truncatingIfNeeded: le >> 16)
     bytes[index + 3] = UInt8(truncatingIfNeeded: le >> 24)
+}
+
+@inline(__always)
+private func writeU64LE(_ value: UInt64, to bytes: inout [UInt8], at index: Int) {
+    let le = value.littleEndian
+    bytes[index] = UInt8(truncatingIfNeeded: le)
+    bytes[index + 1] = UInt8(truncatingIfNeeded: le >> 8)
+    bytes[index + 2] = UInt8(truncatingIfNeeded: le >> 16)
+    bytes[index + 3] = UInt8(truncatingIfNeeded: le >> 24)
+    bytes[index + 4] = UInt8(truncatingIfNeeded: le >> 32)
+    bytes[index + 5] = UInt8(truncatingIfNeeded: le >> 40)
+    bytes[index + 6] = UInt8(truncatingIfNeeded: le >> 48)
+    bytes[index + 7] = UInt8(truncatingIfNeeded: le >> 56)
 }
 
 @inline(__always)

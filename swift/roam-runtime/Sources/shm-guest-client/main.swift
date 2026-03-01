@@ -69,6 +69,7 @@ struct SpawnArgs {
     let hubPath: String
     let peerId: UInt8
     let doorbellFd: Int32
+    let mmapControlFd: Int32
     let scenario: String
     let classes: [ShmVarSlotClass]
     let iterations: Int?
@@ -83,6 +84,7 @@ private func parseArgs(_ args: [String]) -> SpawnArgs {
     var hubPath: String?
     var peerId: UInt8?
     var doorbellFd: Int32?
+    var mmapControlFd: Int32 = -1
     var scenario = "data-path"
     var classes: [ShmVarSlotClass] = []
     var iterations: Int?
@@ -97,6 +99,11 @@ private func parseArgs(_ args: [String]) -> SpawnArgs {
                 fail("invalid --doorbell-fd value")
             }
             doorbellFd = fd
+        } else if let value = arg.split(separator: "=", maxSplits: 1).last, arg.hasPrefix("--mmap-control-fd=") {
+            guard let fd = Int32(value) else {
+                fail("invalid --mmap-control-fd value")
+            }
+            mmapControlFd = fd
         } else if let value = arg.split(separator: "=", maxSplits: 1).last, arg.hasPrefix("--scenario=") {
             scenario = String(value)
         } else if let value = arg.split(separator: "=", maxSplits: 1).last, arg.hasPrefix("--size-class=") {
@@ -135,6 +142,7 @@ private func parseArgs(_ args: [String]) -> SpawnArgs {
         hubPath: hubPath,
         peerId: peerId,
         doorbellFd: doorbellFd,
+        mmapControlFd: mmapControlFd,
         scenario: scenario,
         classes: classes,
         iterations: iterations
@@ -146,7 +154,12 @@ struct ShmGuestClientMain {
     static func main() async {
         let args = parseArgs(Array(CommandLine.arguments.dropFirst()))
 
-        let ticket = ShmBootstrapTicket(peerId: args.peerId, hubPath: args.hubPath, doorbellFd: args.doorbellFd)
+        let ticket = ShmBootstrapTicket(
+            peerId: args.peerId,
+            hubPath: args.hubPath,
+            doorbellFd: args.doorbellFd,
+            mmapControlFd: args.mmapControlFd
+        )
         let guest: ShmGuestRuntime
 
         do {
@@ -226,6 +239,28 @@ struct ShmGuestClientMain {
     }
 
             fail("timed out waiting for remap receive scenario")
+
+        case "mmap-recv":
+    let deadline = Date().addingTimeInterval(5)
+    while Date() < deadline {
+        do {
+            if let frame = try guest.receive() {
+                let expected = (0..<512).map { UInt8(truncatingIfNeeded: $0) }
+                if frame.payload == expected {
+                    try guest.send(frame: ShmGuestFrame(payload: Array("mmap-recv-ok".utf8)))
+                    guest.detach()
+                    print("ok")
+                    exit(0)
+                }
+                fail("unexpected mmap payload")
+            }
+        } catch {
+            fail("mmap-recv scenario failed: \(error)")
+        }
+        usleep(10_000)
+    }
+
+            fail("timed out waiting for mmap-recv scenario")
 
         case "remap-send":
     let firstPayload = [UInt8](repeating: 0xCD, count: 3000)

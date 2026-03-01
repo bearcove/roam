@@ -2,6 +2,7 @@
 import Darwin
 import Foundation
 import Testing
+import CRoamShmFfi
 
 @testable import RoamRuntime
 
@@ -103,6 +104,14 @@ private func makeSegmentFixture(
 private func makeDoorbellPair() throws -> (host: Int32, guest: Int32) {
     var fds = [Int32](repeating: -1, count: 2)
     guard socketpair(AF_UNIX, SOCK_STREAM, 0, &fds) == 0 else {
+        throw POSIXError(.EIO)
+    }
+    return (fds[0], fds[1])
+}
+
+private func makeDgramPair() throws -> (host: Int32, guest: Int32) {
+    var fds = [Int32](repeating: -1, count: 2)
+    guard socketpair(AF_UNIX, SOCK_DGRAM, 0, &fds) == 0 else {
         throw POSIXError(.EIO)
     }
     return (fds[0], fds[1])
@@ -408,6 +417,76 @@ struct ShmDoorbellAndPayloadTests {
 
         try g2h.release(slotHeader.totalLen)
         try pool.free(handle)
+    }
+
+    // r[verify zerocopy.recv.shm.mmap]
+    @Test func mmapRefReceivePathResolvesAttachment() throws {
+        let path = tmpPath("guest-mmap-recv.bin")
+        let mmapPath = tmpPath("guest-mmap-payload.bin")
+        defer {
+            try? FileManager.default.removeItem(atPath: path)
+            try? FileManager.default.removeItem(atPath: mmapPath)
+        }
+
+        let fixture = try makeSegmentFixture(
+            path: path,
+            inlineThreshold: 64,
+            maxPayloadSize: 2048,
+            classes: [ShmVarSlotClass(slotSize: 64, count: 2)],
+            reservedPeer: 1
+        )
+
+        let doorbell = try makeDoorbellPair()
+        let control = try makeDgramPair()
+        defer {
+            close(doorbell.host)
+            close(doorbell.guest)
+            close(control.host)
+            close(control.guest)
+        }
+
+        let payload = (0..<512).map { UInt8(truncatingIfNeeded: $0) }
+        let mappingLen = 4096
+        let mmapFd = open(mmapPath, O_RDWR | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR)
+        guard mmapFd >= 0 else {
+            throw POSIXError(.EIO)
+        }
+        defer { close(mmapFd) }
+        #expect(ftruncate(mmapFd, off_t(mappingLen)) == 0)
+
+        var fileBytes = [UInt8](repeating: 0, count: mappingLen)
+        fileBytes.replaceSubrange(128..<(128 + payload.count), with: payload)
+        let wrote = fileBytes.withUnsafeBytes { raw in
+            pwrite(mmapFd, raw.baseAddress, raw.count, 0)
+        }
+        #expect(wrote == fileBytes.count)
+
+        let guest = try ShmGuestRuntime.attach(
+            ticket: ShmBootstrapTicket(
+                peerId: 1,
+                hubPath: path,
+                doorbellFd: doorbell.guest,
+                mmapControlFd: control.guest
+            ),
+            classes: fixture.classes
+        )
+
+        let sendRc = roam_mmap_control_send(control.host, mmapFd, 7, 1, UInt64(mappingLen))
+        #expect(sendRc == 0)
+
+        let ringOffset = try #require(fixture.ringOffsets[1])
+        let h2gOffset = ringOffset + shmBipbufHeaderSize + Int(fixture.bipbufCapacity)
+        let h2g = try ShmBipBuffer.attach(region: fixture.region, headerOffset: h2gOffset)
+
+        let frame = encodeShmMmapRefFrame(
+            mmapRef: ShmMmapRef(mapId: 7, mapGeneration: 1, mapOffset: 128, payloadLen: UInt32(payload.count))
+        )
+        let grant = try #require(try h2g.tryGrant(UInt32(frame.count)))
+        grant.copyBytes(from: frame)
+        try h2g.commit(UInt32(frame.count))
+
+        let recv = try #require(try guest.receive())
+        #expect(recv.payload == payload)
     }
 
     // r[verify shm.signal.doorbell]

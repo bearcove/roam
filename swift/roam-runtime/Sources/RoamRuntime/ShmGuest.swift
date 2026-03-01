@@ -347,6 +347,44 @@ public enum ShmGuestReceiveError: Error, Equatable {
     case payloadTooLarge
 }
 
+// r[impl shm.mmap.attach]
+// r[impl shm.mmap.bounds]
+// r[impl shm.mmap.aba]
+public final class ShmMmapAttachments: @unchecked Sendable {
+    private let raw: OpaquePointer
+
+    public init?(controlFd: Int32) {
+        guard controlFd >= 0, let raw = roam_mmap_attachments_create(controlFd) else {
+            return nil
+        }
+        self.raw = raw
+    }
+
+    deinit {
+        roam_mmap_attachments_destroy(raw)
+    }
+
+    public func drainControl() -> Bool {
+        roam_mmap_attachments_drain_control(raw) >= 0
+    }
+
+    public func resolve(mmapRef: ShmMmapRef) -> [UInt8]? {
+        var ptr: UnsafePointer<UInt8>?
+        let rc = roam_mmap_attachments_resolve_ptr(
+            raw,
+            mmapRef.mapId,
+            mmapRef.mapGeneration,
+            mmapRef.mapOffset,
+            mmapRef.payloadLen,
+            &ptr
+        )
+        guard rc == 0, let ptr else {
+            return nil
+        }
+        return Array(UnsafeBufferPointer(start: ptr, count: Int(mmapRef.payloadLen)))
+    }
+}
+
 // r[impl shm.guest.attach]
 // r[impl shm.guest.detach]
 // r[impl shm.host.goodbye]
@@ -361,6 +399,7 @@ public enum ShmGuestReceiveError: Error, Equatable {
 // r[impl zerocopy.send.shm]
 // r[impl zerocopy.recv.shm.inline]
 // r[impl zerocopy.recv.shm.slotref]
+// r[impl zerocopy.recv.shm.mmap]
 public final class ShmGuestRuntime: @unchecked Sendable {
     public let peerId: UInt8
     public private(set) var region: ShmRegion
@@ -370,6 +409,7 @@ public final class ShmGuestRuntime: @unchecked Sendable {
     private var hostToGuest: ShmBipBuffer
     private var slotPool: ShmVarSlotPool
     private let doorbell: ShmDoorbell?
+    private let mmapAttachments: ShmMmapAttachments?
     private var fatalError = false
 
     // r[impl shm.guest.attach]
@@ -480,6 +520,12 @@ public final class ShmGuestRuntime: @unchecked Sendable {
         let g2h = try ShmBipBuffer.attach(region: region, headerOffset: ringOffset)
         let h2g = try ShmBipBuffer.attach(region: region, headerOffset: ringOffset + shmBipbufHeaderSize + Int(g2h.capacity))
         let doorbell = ticket.map { ShmDoorbell(fd: $0.doorbellFd) }
+        let mmapAttachments: ShmMmapAttachments?
+        if let ticket, ticket.mmapControlFd >= 0 {
+            mmapAttachments = ShmMmapAttachments(controlFd: ticket.mmapControlFd)
+        } else {
+            mmapAttachments = nil
+        }
 
         return ShmGuestRuntime(
             peerId: chosenPeerId,
@@ -488,7 +534,8 @@ public final class ShmGuestRuntime: @unchecked Sendable {
             guestToHost: g2h,
             hostToGuest: h2g,
             slotPool: pool,
-            doorbell: doorbell
+            doorbell: doorbell,
+            mmapAttachments: mmapAttachments
         )
     }
 
@@ -499,7 +546,8 @@ public final class ShmGuestRuntime: @unchecked Sendable {
         guestToHost: ShmBipBuffer,
         hostToGuest: ShmBipBuffer,
         slotPool: ShmVarSlotPool,
-        doorbell: ShmDoorbell?
+        doorbell: ShmDoorbell?,
+        mmapAttachments: ShmMmapAttachments?
     ) {
         self.peerId = peerId
         self.region = region
@@ -508,6 +556,7 @@ public final class ShmGuestRuntime: @unchecked Sendable {
         self.hostToGuest = hostToGuest
         self.slotPool = slotPool
         self.doorbell = doorbell
+        self.mmapAttachments = mmapAttachments
     }
 
     // r[impl zerocopy.send.shm]
@@ -669,9 +718,20 @@ public final class ShmGuestRuntime: @unchecked Sendable {
             try doorbell?.signal()
 
             return ShmGuestFrame(payload: payload)
-        case .mmapRef:
-            fatalError = true
-            throw ShmGuestReceiveError.malformedFrame
+        case .mmapRef(let header, let mmapRef):
+            guard mmapRef.payloadLen <= self.header.maxPayloadSize else {
+                fatalError = true
+                throw ShmGuestReceiveError.payloadTooLarge
+            }
+            guard let mmapAttachments, mmapAttachments.drainControl(),
+                  let payload = mmapAttachments.resolve(mmapRef: mmapRef)
+            else {
+                fatalError = true
+                throw ShmGuestReceiveError.malformedFrame
+            }
+            try hostToGuest.release(header.totalLen)
+            try doorbell?.signal()
+            return ShmGuestFrame(payload: payload)
         }
     }
 
