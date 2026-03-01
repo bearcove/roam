@@ -721,6 +721,105 @@ struct ShmDoorbellAndPayloadTests {
         try g2h.release(header.totalLen)
     }
 
+    // r[verify zerocopy.recv.shm.mmap]
+    // r[verify shm.mmap.attach]
+    @Test func mmapRefReceiveFailsWhenAttachmentIsMissing() throws {
+        let path = tmpPath("guest-mmap-recv-missing-attachment.bin")
+        defer { try? FileManager.default.removeItem(atPath: path) }
+
+        let fixture = try makeSegmentFixture(
+            path: path,
+            inlineThreshold: 64,
+            maxPayloadSize: 2048,
+            classes: [ShmVarSlotClass(slotSize: 64, count: 2)],
+            reservedPeer: 1
+        )
+
+        let doorbell = try makeDoorbellPair()
+        let control = try makeDgramPair()
+        defer {
+            close(doorbell.host)
+            close(doorbell.guest)
+            close(control.host)
+            close(control.guest)
+        }
+
+        let guest = try ShmGuestRuntime.attach(
+            ticket: ShmBootstrapTicket(
+                peerId: 1,
+                hubPath: path,
+                doorbellFd: doorbell.guest,
+                mmapControlFd: control.guest
+            )
+        )
+
+        let ringOffset = try #require(fixture.ringOffsets[1])
+        let h2gOffset = ringOffset + shmBipbufHeaderSize + Int(fixture.bipbufCapacity)
+        let h2g = try ShmBipBuffer.attach(region: fixture.region, headerOffset: h2gOffset)
+
+        let frame = encodeShmMmapRefFrame(
+            mmapRef: ShmMmapRef(mapId: 77, mapGeneration: 1, mapOffset: 0, payloadLen: 512)
+        )
+        let grant = try #require(try h2g.tryGrant(UInt32(frame.count)))
+        grant.copyBytes(from: frame)
+        try h2g.commit(UInt32(frame.count))
+
+        do {
+            _ = try guest.receive()
+            Issue.record("expected malformedFrame when mmap attachment is missing")
+        } catch let error as ShmGuestReceiveError {
+            #expect(error == .malformedFrame)
+        }
+
+        #expect(guest.isHostGoodbye())
+        #expect(try guest.receive() == nil)
+    }
+
+    // r[verify zerocopy.send.shm]
+    // r[verify shm.mmap.attach]
+    @Test func mmapRefSendFailsFastWhenControlPeerIsClosed() throws {
+        let path = tmpPath("guest-mmap-send-broken-control.bin")
+        defer { try? FileManager.default.removeItem(atPath: path) }
+
+        let fixture = try makeSegmentFixture(
+            path: path,
+            inlineThreshold: 64,
+            maxPayloadSize: 16 * 1024,
+            classes: [ShmVarSlotClass(slotSize: 64, count: 2)],
+            reservedPeer: 1
+        )
+        _ = fixture
+
+        let doorbell = try makeDoorbellPair()
+        let control = try makeDgramPair()
+        defer {
+            close(doorbell.host)
+            close(doorbell.guest)
+            close(control.guest)
+        }
+
+        let guest = try ShmGuestRuntime.attach(
+            ticket: ShmBootstrapTicket(
+                peerId: 1,
+                hubPath: path,
+                doorbellFd: doorbell.guest,
+                mmapControlFd: control.guest
+            )
+        )
+
+        close(control.host)
+
+        let payload = (0..<5000).map { UInt8(truncatingIfNeeded: $0) }
+        let start = ContinuousClock.now
+        do {
+            try guest.send(frame: ShmGuestFrame(payload: payload))
+            Issue.record("expected mmapControlError with closed control peer")
+        } catch let error as ShmGuestSendError {
+            #expect(error == .mmapControlError)
+        }
+        #expect(ContinuousClock.now - start < Duration.milliseconds(250))
+    }
+
     // r[verify shm.signal.doorbell]
     // r[verify shm.signal.doorbell.signal]
     // r[verify shm.signal.doorbell.wait]
@@ -812,14 +911,77 @@ struct ShmGuestRemapTests {
         )
 
         close(pair.host)
+        let start = ContinuousClock.now
 
         do {
-            _ = try await transport.recv()
+            _ = try await withThrowingTaskGroup(of: MessageV7?.self) { group in
+                group.addTask {
+                    try await transport.recv()
+                }
+                group.addTask {
+                    try await Task.sleep(nanoseconds: 300_000_000)
+                    throw ShmHarnessError.timeout("recv did not fail after peer death")
+                }
+                let first = try await group.next()
+                group.cancelAll()
+                return first ?? nil
+            }
             Issue.record("expected connectionClosed")
         } catch {
             #expect(isConnectionClosedTransportError(error))
         }
+        #expect(ContinuousClock.now - start < Duration.milliseconds(300))
         _ = fixture
+    }
+
+    // r[verify transport.shm]
+    // r[verify shm.host.goodbye]
+    // r[verify shm.signal.doorbell]
+    @Test func hostGoodbyeWakeUnblocksRecvWithoutBusyLoop() async throws {
+        let path = tmpPath("transport-host-goodbye-wake.bin")
+        let pair = try makeDoorbellPair()
+        defer {
+            close(pair.host)
+            close(pair.guest)
+            try? FileManager.default.removeItem(atPath: path)
+        }
+
+        let fixture = try makeSegmentFixture(
+            path: path,
+            classes: [ShmVarSlotClass(slotSize: 256, count: 2)],
+            reservedPeer: 1
+        )
+        let transport = try ShmGuestTransport.attach(
+            ticket: ShmBootstrapTicket(peerId: 1, hubPath: path, doorbellFd: pair.guest)
+        )
+        defer { Task { try? await transport.close() } }
+
+        let hostDoorbell = ShmDoorbell(fd: pair.host)
+        let recvTask = Task<MessageV7?, Error> {
+            try await transport.recv()
+        }
+        defer { recvTask.cancel() }
+
+        try await Task.sleep(nanoseconds: 20_000_000)
+        try setHostGoodbye(fixture)
+        try hostDoorbell.signal()
+
+        let start = ContinuousClock.now
+        let result = try await withThrowingTaskGroup(of: MessageV7?.self) { group in
+            group.addTask {
+                try await recvTask.value
+            }
+            group.addTask {
+                try await Task.sleep(nanoseconds: 300_000_000)
+                throw ShmHarnessError.timeout("recv did not unblock after host goodbye wake")
+            }
+            let first = try await group.next()
+            group.cancelAll()
+            return first ?? nil
+        }
+
+        #expect(result == nil)
+        #expect(ContinuousClock.now - start < Duration.milliseconds(300))
     }
 
     @Test func remapOnCurrentSizeGrowth() throws {

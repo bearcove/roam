@@ -45,14 +45,20 @@ swift-subject-cov *args:
       SPEC_TRANSPORT=shm \
       SUBJECT_CMD="$(pwd)/swift/subject/.build/debug/subject-swift" \
       cargo nextest run -P coverage --test-threads=1 -p spec-tests {{ quote(args) }}
+    LLVM_PROFILE_FILE="$(pwd)/.coverage/swift-subject/subject-tests-%p%c.profraw" \
+      swift test --package-path swift/subject --no-parallel \
+        -Xswiftc -profile-generate \
+        -Xswiftc -profile-coverage-mapping
     LLVM_PROFILE_FILE="$(pwd)/.coverage/swift-subject/runtime-tests-%p%c.profraw" \
       swift test --package-path swift/roam-runtime --no-parallel \
         -Xswiftc -profile-generate \
         -Xswiftc -profile-coverage-mapping
     RUNTIME_TEST_BIN="$(swift build --package-path swift/roam-runtime --show-bin-path)/roam-runtimePackageTests.xctest/Contents/MacOS/roam-runtimePackageTests" && \
+      SUBJECT_TEST_BIN="$(swift build --package-path swift/subject --show-bin-path)/subject-swiftPackageTests.xctest/Contents/MacOS/subject-swiftPackageTests" && \
       xcrun llvm-profdata merge -sparse .coverage/swift-subject/*.profraw -o .coverage/swift-subject/subject.profdata && \
       xcrun llvm-cov report "$(pwd)/swift/subject/.build/debug/subject-swift" \
         -object "$RUNTIME_TEST_BIN" \
+        -object "$SUBJECT_TEST_BIN" \
         -instr-profile=.coverage/swift-subject/subject.profdata
 
 swift-subject-cov-tcp *args:
@@ -65,20 +71,28 @@ swift-subject-cov-tcp *args:
     LLVM_PROFILE_FILE="$(pwd)/.coverage/swift-subject/tcp-%p%c.profraw" \
       SUBJECT_CMD="$(pwd)/swift/subject/.build/debug/subject-swift" \
       cargo nextest run -P coverage --test-threads=1 -p spec-tests {{ quote(args) }}
+    LLVM_PROFILE_FILE="$(pwd)/.coverage/swift-subject/subject-tests-%p%c.profraw" \
+      swift test --package-path swift/subject --no-parallel \
+        -Xswiftc -profile-generate \
+        -Xswiftc -profile-coverage-mapping
     LLVM_PROFILE_FILE="$(pwd)/.coverage/swift-subject/runtime-tests-%p%c.profraw" \
       swift test --package-path swift/roam-runtime --no-parallel \
         -Xswiftc -profile-generate \
         -Xswiftc -profile-coverage-mapping
     RUNTIME_TEST_BIN="$(swift build --package-path swift/roam-runtime --show-bin-path)/roam-runtimePackageTests.xctest/Contents/MacOS/roam-runtimePackageTests" && \
+      SUBJECT_TEST_BIN="$(swift build --package-path swift/subject --show-bin-path)/subject-swiftPackageTests.xctest/Contents/MacOS/subject-swiftPackageTests" && \
       xcrun llvm-profdata merge -sparse .coverage/swift-subject/*.profraw -o .coverage/swift-subject/subject.profdata && \
       xcrun llvm-cov report "$(pwd)/swift/subject/.build/debug/subject-swift" \
         -object "$RUNTIME_TEST_BIN" \
+        -object "$SUBJECT_TEST_BIN" \
         -instr-profile=.coverage/swift-subject/subject.profdata
 
 swift-subject-cov-html:
     RUNTIME_TEST_BIN="$(swift build --package-path swift/roam-runtime --show-bin-path)/roam-runtimePackageTests.xctest/Contents/MacOS/roam-runtimePackageTests" && \
+      SUBJECT_TEST_BIN="$(swift build --package-path swift/subject --show-bin-path)/subject-swiftPackageTests.xctest/Contents/MacOS/subject-swiftPackageTests" && \
       xcrun llvm-cov show "$(pwd)/swift/subject/.build/debug/subject-swift" \
         -object "$RUNTIME_TEST_BIN" \
+        -object "$SUBJECT_TEST_BIN" \
         -instr-profile=.coverage/swift-subject/subject.profdata \
         -format=html -output-dir .coverage/swift-subject/html
 
