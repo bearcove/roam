@@ -179,12 +179,26 @@ impl DriverCaller {
         channel_id: ChannelId,
     ) -> tokio::sync::mpsc::Receiver<IncomingChannelMessage> {
         let (tx, rx) = tokio::sync::mpsc::channel(64);
+        let mut terminal_buffered = false;
         // Drain any buffered messages that arrived before registration.
         if let Some(buffered) = self.shared.channel_buffers.lock().remove(&channel_id) {
             for msg in buffered {
+                let is_terminal = matches!(
+                    msg,
+                    IncomingChannelMessage::Close(_) | IncomingChannelMessage::Reset(_)
+                );
                 let _ = tx.try_send(msg);
+                if is_terminal {
+                    terminal_buffered = true;
+                    break;
+                }
             }
         }
+        if terminal_buffered {
+            self.shared.channel_credits.lock().remove(&channel_id);
+            return rx;
+        }
+
         self.shared.channel_senders.lock().insert(channel_id, tx);
         rx
     }
