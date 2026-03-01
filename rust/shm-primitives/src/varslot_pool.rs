@@ -58,7 +58,7 @@ pub struct SizeClassConfig {
 
 /// Reference to an allocated slot — returned by [`VarSlotPool::allocate`].
 ///
-/// This is the value that goes into a [`crate::framing`] slot-ref entry.
+/// This is the value that goes into a `framing` slot-ref entry.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SlotRef {
     /// Index into the pool's class array.
