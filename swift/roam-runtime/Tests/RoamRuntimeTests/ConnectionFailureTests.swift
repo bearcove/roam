@@ -610,7 +610,7 @@ struct ConnectionFailureTests {
             try await driverTask.value
             Issue.record("expected protocol violation")
         } catch {
-            #expect(isProtocolViolation(error, rule: "channeling.id.zero-reserved"))
+            #expect(isProtocolViolation(error, rule: "rpc.channel.allocation"))
         }
     }
 
