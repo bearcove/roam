@@ -230,12 +230,11 @@ export function encodeWithSchema(
         registry,
       );
 
-    // Streaming types encode as channel IDs (u64)
+    // Streaming types encode as unit (zero bytes) - channel IDs are carried
+    // in the Request/Response `channels` field, not in the args payload.
     case "tx":
     case "rx":
-      // The value should have a channelId property
-      const channelId = (value as { channelId: bigint }).channelId;
-      return encodeU64(channelId);
+      return new Uint8Array(0);
 
     // Ref should have been resolved above
     case "ref":
@@ -436,12 +435,11 @@ function decodeWithSchemaImpl(
       case "enum":
         return decodeEnumWithSchemaImpl(buf, offset, resolved, registry, ctx);
 
-      // Streaming types decode as channel IDs (u64)
+      // Streaming types decode as unit (zero bytes) - channel IDs are carried
+      // in the Request/Response `channels` field, not in the args payload.
       case "tx":
-      case "rx": {
-        const result = decodeU64(buf, offset);
-        return { value: { channelId: result.value }, next: result.next };
-      }
+      case "rx":
+        return { value: {}, next: offset };
 
       // Ref should have been resolved above
       case "ref":

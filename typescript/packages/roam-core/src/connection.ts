@@ -716,16 +716,19 @@ export class Connection<T extends MessageTransport = MessageTransport> {
           return undefined;
         }
 
-        // Bind channel args: replace { channelId } placeholders with Tx/Rx handles
+        // Bind channel args using channel IDs from Request.channels (declaration order)
+        // r[impl call.request.channels.schema-driven] - Channel IDs from Request.channels, not payload.
+        const requestChannels = request.body.value.channels as bigint[];
+        let channelIdx = 0;
         const args: unknown[] = rawArgs.map((raw, i) => {
           const argSchema = method.args.elements[i];
           if (argSchema.kind === "tx") {
-            const { channelId } = raw as { channelId: bigint };
+            const channelId = requestChannels[channelIdx++];
             return createServerTx(channelId, taskSender, (v: unknown) =>
               encodeWithSchema(v, argSchema.element),
             );
           } else if (argSchema.kind === "rx") {
-            const { channelId } = raw as { channelId: bigint };
+            const channelId = requestChannels[channelIdx++];
             const receiver = this.channelRegistry.registerIncoming(channelId);
             return createServerRx(channelId, receiver, (b: Uint8Array) =>
               decodeWithSchema(b, 0, argSchema.element).value,
