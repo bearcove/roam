@@ -130,7 +130,7 @@ class TestbedService implements TestbedHandler {
       case "Number":
         return { tag: "Number", value: msg.value * 2n };
       case "Data":
-        return msg;
+        return { tag: "Data", value: msg.value.toReversed() };
     }
   }
 

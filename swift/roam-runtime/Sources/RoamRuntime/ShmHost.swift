@@ -793,6 +793,9 @@ public final class ShmHostTransport: MessageTransport, @unchecked Sendable {
         } catch let err as TransportError {
             throw err
         } catch let err as ShmHostSendError {
+            if ProcessInfo.processInfo.environment["ROAM_SHM_DEBUG"] == "1" {
+                fputs("[shm-host-transport] send error: \(err)\n", stderr)
+            }
             switch err {
             case .ringFull, .slotExhausted:
                 throw TransportError.wouldBlock
@@ -825,6 +828,9 @@ public final class ShmHostTransport: MessageTransport, @unchecked Sendable {
             } catch let err as TransportError {
                 throw err
             } catch {
+                if ProcessInfo.processInfo.environment["ROAM_SHM_DEBUG"] == "1" {
+                    fputs("[shm-host-transport] recv error: \(error)\n", stderr)
+                }
                 throw TransportError.transportIO("shm host receive failed: \(error)")
             }
 

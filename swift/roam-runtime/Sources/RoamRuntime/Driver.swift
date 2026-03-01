@@ -292,7 +292,7 @@ private actor DriverState {
 
     var pendingResponses: [UInt64: PendingCall] = [:]
     var inFlightRequests: Set<UInt64> = []
-    var inFlightResponseMetadata: [UInt64: [MetadataEntryV7]] = [:]
+    var inFlightResponseContext: [UInt64: InFlightResponseContext] = [:]
     private var finalizedRequests: [UInt64: FinalizedRequest] = [:]
     var isClosed = false
 
@@ -360,18 +360,33 @@ private actor DriverState {
         return true
     }
 
-    func addInFlight(_ requestId: UInt64, responseMetadata: [MetadataEntryV7]) -> Bool {
+    func addInFlight(
+        _ requestId: UInt64,
+        connectionId: UInt64,
+        responseMetadata: [MetadataEntryV7]
+    ) -> Bool {
         let inserted = inFlightRequests.insert(requestId).inserted
         if inserted {
-            inFlightResponseMetadata[requestId] = responseMetadata
+            inFlightResponseContext[requestId] = InFlightResponseContext(
+                connectionId: connectionId,
+                responseMetadata: responseMetadata
+            )
         }
         return inserted
     }
 
-    func removeInFlight(_ requestId: UInt64) -> (removed: Bool, responseMetadata: [MetadataEntryV7]) {
+    func removeInFlight(_ requestId: UInt64) -> (
+        removed: Bool,
+        connectionId: UInt64,
+        responseMetadata: [MetadataEntryV7]
+    ) {
         let removed = inFlightRequests.remove(requestId) != nil
-        let responseMetadata = inFlightResponseMetadata.removeValue(forKey: requestId) ?? []
-        return (removed, responseMetadata)
+        let context = inFlightResponseContext.removeValue(forKey: requestId)
+        return (
+            removed,
+            context?.connectionId ?? 0,
+            context?.responseMetadata ?? []
+        )
     }
 
     func failAllPending() -> [UInt64: PendingCall] {
@@ -379,7 +394,7 @@ private actor DriverState {
         let responses = pendingResponses
         pendingResponses.removeAll()
         inFlightRequests.removeAll()
-        inFlightResponseMetadata.removeAll()
+        inFlightResponseContext.removeAll()
         return responses
     }
 
@@ -620,7 +635,9 @@ public final class Driver: @unchecked Sendable {
                 checkedPayload = payload
             }
             wireMsg = .response(
-                connId: 0, requestId: requestId, metadata: responseContext.responseMetadata,
+                connId: responseContext.connectionId,
+                requestId: requestId,
+                metadata: responseContext.responseMetadata,
                 channels: [],
                 payload: checkedPayload)
         }
@@ -836,6 +853,7 @@ public final class Driver: @unchecked Sendable {
             switch request.body {
             case .call(let call):
                 try await handleRequest(
+                    connId: msg.connectionId,
                     requestId: request.id,
                     methodId: call.methodId,
                     metadata: call.metadata,
@@ -888,6 +906,7 @@ public final class Driver: @unchecked Sendable {
     /// r[impl session.connection-settings.hello] - Exceeding limit requires Goodbye.
     /// r[impl rpc.request.id-allocation] - Each request uses a unique ID.
     private func handleRequest(
+        connId: UInt64,
         requestId: UInt64,
         methodId: UInt64,
         metadata: [MetadataEntryV7],
@@ -896,6 +915,7 @@ public final class Driver: @unchecked Sendable {
     ) async throws {
         let inserted = await state.addInFlight(
             requestId,
+            connectionId: connId,
             responseMetadata: responseMetadataFromRequest(metadata)
         )
 
@@ -1238,3 +1258,7 @@ func makeDriverAndHandle(
 
     return (handle, driver)
 }
+    private struct InFlightResponseContext: Sendable {
+        let connectionId: UInt64
+        let responseMetadata: [MetadataEntryV7]
+    }

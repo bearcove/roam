@@ -211,7 +211,9 @@ func runServer() async throws {
     log("connected")
 
     // r[impl core.conn.accept-required] - Check if we should accept incoming virtual connections.
-    let acceptConnections = ProcessInfo.processInfo.environment["ACCEPT_CONNECTIONS"] == "1"
+    let acceptConnections = ProcessInfo.processInfo.environment["ACCEPT_CONNECTIONS"]
+        .map { $0 == "1" }
+        ?? true
 
     let handler = TestbedService()
     let dispatcher = TestbedDispatcherAdapter(handler: handler)

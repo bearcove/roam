@@ -135,12 +135,24 @@ spec_matrix_tests! {
     // r[verify transport.message.binary]
     lang_swift_transport_shm_direction_harness_to_subject_binary_payload_sizes_guest_mode => binary_payloads::run_subject_process_message_binary_payload_sizes(SWIFT_SHM_GUEST);
 
+    // r[verify call.initiate]
+    // r[verify call.complete]
+    // r[verify call.lifecycle.single-response]
+    // r[verify call.lifecycle.ordering]
+    lang_swift_transport_shm_direction_harness_to_subject_rpc_echo_roundtrip_guest_mode => testbed::run_rpc_echo_roundtrip(SWIFT_SHM_GUEST);
+
     // r[verify transport.message.binary]
     // r[verify shm.framing.threshold]
     lang_swift_transport_shm_direction_harness_to_subject_binary_payload_cutover_boundaries_guest_mode => binary_payloads::run_subject_process_message_binary_payload_shm_cutover_boundaries(SWIFT_SHM_GUEST);
 
     // r[verify transport.message.binary]
     lang_swift_transport_shm_direction_harness_to_subject_binary_payload_sizes_host_mode => binary_payloads::run_subject_process_message_binary_payload_sizes(SWIFT_SHM_HOST);
+
+    // r[verify call.initiate]
+    // r[verify call.complete]
+    // r[verify call.lifecycle.single-response]
+    // r[verify call.lifecycle.ordering]
+    lang_swift_transport_shm_direction_harness_to_subject_rpc_echo_roundtrip_host_mode => testbed::run_rpc_echo_roundtrip(SWIFT_SHM_HOST);
 
     // r[verify transport.message.binary]
     // r[verify shm.framing.threshold]
