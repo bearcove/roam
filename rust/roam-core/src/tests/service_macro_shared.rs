@@ -56,8 +56,8 @@ pub async fn run_adder_end_to_end<L>(
 
     let client = AdderClient::new(caller);
     let response = client.add(3, 5).await.expect("add call should succeed");
-    assert_eq!(response.ret, 8);
+    assert_eq!(response, 8);
 
     let response = client.add(100, -42).await.expect("add call should succeed");
-    assert_eq!(response.ret, 58);
+    assert_eq!(response, 58);
 }

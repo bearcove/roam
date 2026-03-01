@@ -25,8 +25,8 @@ pub fn run_channeling_sum_client_to_server(spec: SubjectSpec) {
         });
 
         let resp = client.sum(rx).await.map_err(|e| format!("sum: {e:?}"))?;
-        if resp.ret != 15 {
-            return Err(format!("expected sum 15, got {}", resp.ret));
+        if resp != 15 {
+            return Err(format!("expected sum 15, got {}", resp));
         }
 
         child.kill().await.ok();

@@ -817,4 +817,22 @@ mod tests {
         );
         assert!(ts.contains("method_descriptor :: < (String ,) , & ' static str >"));
     }
+
+    #[test]
+    fn borrowed_roam_cow_return_maps_to_selfref_static() {
+        let parsed = roam_macros_parse::parse_trait(&quote! {
+            trait TextSvc {
+                async fn normalize(&self, input: String) -> ::std::borrow::Cow<'roam, str>;
+            }
+        })
+        .unwrap();
+        let roam = quote! { ::roam };
+        let ts = crate::generate_service(&parsed, &roam).unwrap().to_string();
+        assert!(ts.contains(
+            "Result < :: roam :: SelfRef < :: std :: borrow :: Cow < ' static , str > > , :: roam :: RoamError >"
+        ));
+        assert!(ts.contains(
+            "method_descriptor :: < (String ,) , :: std :: borrow :: Cow < ' static , str > >"
+        ));
+    }
 }

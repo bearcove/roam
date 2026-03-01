@@ -140,7 +140,7 @@ async fn run_echo_tests(
     // Test: echo
     console_log!("Testing echo...");
     match client.echo("Hello from Rust Wasm!".into()).await {
-        Ok(result) if result.ret == "Hello from Rust Wasm!" => {
+        Ok(result) if result == "Hello from Rust Wasm!" => {
             results.push(TestResult {
                 name: "echo".into(),
                 passed: true,
@@ -153,7 +153,7 @@ async fn run_echo_tests(
                 passed: false,
                 error: Some(format!(
                     "expected 'Hello from Rust Wasm!', got '{}'",
-                    result.ret
+                    result
                 )),
             });
         }
@@ -170,7 +170,7 @@ async fn run_echo_tests(
     // Test: reverse
     console_log!("Testing reverse...");
     match client.reverse("Hello".into()).await {
-        Ok(result) if result.ret == "olleH" => {
+        Ok(result) if result == "olleH" => {
             results.push(TestResult {
                 name: "reverse".into(),
                 passed: true,
@@ -181,7 +181,7 @@ async fn run_echo_tests(
             results.push(TestResult {
                 name: "reverse".into(),
                 passed: false,
-                error: Some(format!("expected 'olleH', got '{}'", result.ret)),
+                error: Some(format!("expected 'olleH', got '{}'", result)),
             });
         }
         Err(e) => {
@@ -203,7 +203,7 @@ async fn run_complex_tests(
     console_log!("Testing echo_point...");
     let point = Point { x: 42, y: -17 };
     match client.echo_point(point.clone()).await {
-        Ok(result) if result.ret == point => {
+        Ok(result) if result == point => {
             results.push(TestResult {
                 name: "echo_point".into(),
                 passed: true,
@@ -214,7 +214,7 @@ async fn run_complex_tests(
             results.push(TestResult {
                 name: "echo_point".into(),
                 passed: false,
-                error: Some(format!("expected {point:?}, got {:?}", result.ret)),
+                error: Some(format!("expected {point:?}, got {:?}", result)),
             });
         }
         Err(e) => {
@@ -233,9 +233,9 @@ async fn run_complex_tests(
         .await
     {
         Ok(result)
-            if result.ret.name == "Alice"
-                && result.ret.age == 30
-                && result.ret.email.as_deref() == Some("alice@example.com") =>
+            if result.name == "Alice"
+                && result.age == 30
+                && result.email.as_deref() == Some("alice@example.com") =>
         {
             results.push(TestResult {
                 name: "create_person".into(),
@@ -247,7 +247,7 @@ async fn run_complex_tests(
             results.push(TestResult {
                 name: "create_person".into(),
                 passed: false,
-                error: Some(format!("unexpected person: {:?}", result.ret)),
+                error: Some(format!("unexpected person: {:?}", result)),
             });
         }
         Err(e) => {
@@ -267,7 +267,7 @@ async fn run_complex_tests(
         label: None,
     };
     match client.rectangle_area(rect).await {
-        Ok(result) if (result.ret - 50.0).abs() < 0.001 => {
+        Ok(result) if (result - 50.0).abs() < 0.001 => {
             results.push(TestResult {
                 name: "rectangle_area".into(),
                 passed: true,
@@ -278,7 +278,7 @@ async fn run_complex_tests(
             results.push(TestResult {
                 name: "rectangle_area".into(),
                 passed: false,
-                error: Some(format!("expected 50.0, got {}", result.ret)),
+                error: Some(format!("expected 50.0, got {}", result)),
             });
         }
         Err(e) => {
@@ -293,7 +293,7 @@ async fn run_complex_tests(
     // Test: parse_color
     console_log!("Testing parse_color...");
     match client.parse_color("red".into()).await {
-        Ok(result) if matches!(result.ret, Some(Color::Red)) => {
+        Ok(result) if matches!(result, Some(Color::Red)) => {
             results.push(TestResult {
                 name: "parse_color".into(),
                 passed: true,
@@ -304,7 +304,7 @@ async fn run_complex_tests(
             results.push(TestResult {
                 name: "parse_color".into(),
                 passed: false,
-                error: Some(format!("expected Some(Red), got {:?}", result.ret)),
+                error: Some(format!("expected Some(Red), got {:?}", result)),
             });
         }
         Err(e) => {
@@ -319,7 +319,7 @@ async fn run_complex_tests(
     // Test: shape_area (Circle)
     console_log!("Testing shape_area (Circle)...");
     match client.shape_area(Shape::Circle { radius: 2.0 }).await {
-        Ok(result) if (result.ret - std::f64::consts::PI * 4.0).abs() < 0.001 => {
+        Ok(result) if (result - std::f64::consts::PI * 4.0).abs() < 0.001 => {
             results.push(TestResult {
                 name: "shape_area_circle".into(),
                 passed: true,
@@ -333,7 +333,7 @@ async fn run_complex_tests(
                 error: Some(format!(
                     "expected {}, got {}",
                     std::f64::consts::PI * 4.0,
-                    result.ret
+                    result
                 )),
             });
         }
@@ -355,7 +355,7 @@ async fn run_complex_tests(
         })
         .await
     {
-        Ok(result) if (result.ret - 12.0).abs() < 0.001 => {
+        Ok(result) if (result - 12.0).abs() < 0.001 => {
             results.push(TestResult {
                 name: "shape_area_rectangle".into(),
                 passed: true,
@@ -366,7 +366,7 @@ async fn run_complex_tests(
             results.push(TestResult {
                 name: "shape_area_rectangle".into(),
                 passed: false,
-                error: Some(format!("expected 12.0, got {}", result.ret)),
+                error: Some(format!("expected 12.0, got {}", result)),
             });
         }
         Err(e) => {
@@ -382,10 +382,10 @@ async fn run_complex_tests(
     console_log!("Testing get_points...");
     match client.get_points(3).await {
         Ok(result)
-            if result.ret.len() == 3
-                && result.ret[0] == Point { x: 0, y: 0 }
-                && result.ret[1] == Point { x: 1, y: 2 }
-                && result.ret[2] == Point { x: 2, y: 4 } =>
+            if result.len() == 3
+                && result[0] == Point { x: 0, y: 0 }
+                && result[1] == Point { x: 1, y: 2 }
+                && result[2] == Point { x: 2, y: 4 } =>
         {
             results.push(TestResult {
                 name: "get_points".into(),
@@ -397,7 +397,7 @@ async fn run_complex_tests(
             results.push(TestResult {
                 name: "get_points".into(),
                 passed: false,
-                error: Some(format!("unexpected points: {:?}", result.ret)),
+                error: Some(format!("unexpected points: {:?}", result)),
             });
         }
         Err(e) => {
@@ -412,7 +412,7 @@ async fn run_complex_tests(
     // Test: swap_pair
     console_log!("Testing swap_pair...");
     match client.swap_pair((42, "hello".into())).await {
-        Ok(result) if result.ret.0 == "hello" && result.ret.1 == 42 => {
+        Ok(result) if result.0 == "hello" && result.1 == 42 => {
             results.push(TestResult {
                 name: "swap_pair".into(),
                 passed: true,
@@ -423,7 +423,7 @@ async fn run_complex_tests(
             results.push(TestResult {
                 name: "swap_pair".into(),
                 passed: false,
-                error: Some(format!("expected (\"hello\", 42), got {:?}", result.ret)),
+                error: Some(format!("expected (\"hello\", 42), got {:?}", result)),
             });
         }
         Err(e) => {
@@ -438,7 +438,7 @@ async fn run_complex_tests(
     // Test: process_message (Text)
     console_log!("Testing process_message (Text)...");
     match client.process_message(Message::Text("hello".into())).await {
-        Ok(result) if matches!(&result.ret, Message::Text(s) if s == "Processed: hello") => {
+        Ok(result) if matches!(&result, Message::Text(s) if s == "Processed: hello") => {
             results.push(TestResult {
                 name: "process_message_text".into(),
                 passed: true,
@@ -451,7 +451,7 @@ async fn run_complex_tests(
                 passed: false,
                 error: Some(format!(
                     "expected Text(\"Processed: hello\"), got {:?}",
-                    result.ret
+                    result
                 )),
             });
         }
@@ -467,7 +467,7 @@ async fn run_complex_tests(
     // Test: process_message (Number)
     console_log!("Testing process_message (Number)...");
     match client.process_message(Message::Number(21)).await {
-        Ok(result) if matches!(&result.ret, Message::Number(n) if *n == 42) => {
+        Ok(result) if matches!(&result, Message::Number(n) if *n == 42) => {
             results.push(TestResult {
                 name: "process_message_number".into(),
                 passed: true,
@@ -478,7 +478,7 @@ async fn run_complex_tests(
             results.push(TestResult {
                 name: "process_message_number".into(),
                 passed: false,
-                error: Some(format!("expected Number(42), got {:?}", result.ret)),
+                error: Some(format!("expected Number(42), got {:?}", result)),
             });
         }
         Err(e) => {
@@ -498,7 +498,7 @@ async fn run_fallible_tests(
     // Test: divide (success)
     console_log!("Testing divide (success)...");
     match client.divide(10, 2).await {
-        Ok(result) if result.ret == 5 => {
+        Ok(result) if result == 5 => {
             results.push(TestResult {
                 name: "divide_success".into(),
                 passed: true,
@@ -509,7 +509,7 @@ async fn run_fallible_tests(
             results.push(TestResult {
                 name: "divide_success".into(),
                 passed: false,
-                error: Some(format!("expected 5, got {:?}", result.ret)),
+                error: Some(format!("expected 5, got {:?}", result)),
             });
         }
         Err(e) => {
@@ -537,7 +537,7 @@ async fn run_fallible_tests(
                 passed: false,
                 error: Some(format!(
                     "expected DivisionByZero error, got Ok({:?})",
-                    result.ret
+                    result
                 )),
             });
         }
@@ -554,9 +554,9 @@ async fn run_fallible_tests(
     console_log!("Testing lookup (success)...");
     match client.lookup(1).await {
         Ok(result)
-            if result.ret.name == "Alice"
-                && result.ret.age == 30
-                && result.ret.email.as_deref() == Some("alice@example.com") =>
+            if result.name == "Alice"
+                && result.age == 30
+                && result.email.as_deref() == Some("alice@example.com") =>
         {
             results.push(TestResult {
                 name: "lookup_success".into(),
@@ -568,7 +568,7 @@ async fn run_fallible_tests(
             results.push(TestResult {
                 name: "lookup_success".into(),
                 passed: false,
-                error: Some(format!("unexpected person: {:?}", result.ret)),
+                error: Some(format!("unexpected person: {:?}", result)),
             });
         }
         Err(e) => {
@@ -594,7 +594,7 @@ async fn run_fallible_tests(
             results.push(TestResult {
                 name: "lookup_error".into(),
                 passed: false,
-                error: Some(format!("expected NotFound error, got Ok({:?})", result.ret)),
+                error: Some(format!("expected NotFound error, got Ok({:?})", result)),
             });
         }
         Err(e) => {

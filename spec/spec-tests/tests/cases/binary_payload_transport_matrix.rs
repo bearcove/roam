@@ -48,7 +48,7 @@ async fn run_for_transport(transport: RustTransport) -> Result<(), String> {
             .process_message(Message::Data(payload.clone()))
             .await
             .map_err(|e| format!("transport={transport:?} size={size}: {e:?}"))?;
-        let actual = match &resp.ret {
+        let actual = match &resp {
             Message::Data(actual) => actual,
             _ => {
                 return Err(format!(
@@ -76,7 +76,7 @@ async fn run_for_subject_transport(spec: SubjectSpec) -> Result<(), String> {
             .process_message(Message::Data(payload.clone()))
             .await
             .map_err(|e| format!("subject spec={spec:?} size={size}: {e:?}"))?;
-        let actual = match &resp.ret {
+        let actual = match &resp {
             Message::Data(actual) => actual,
             _ => {
                 child.kill().await.ok();

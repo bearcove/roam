@@ -54,7 +54,7 @@ pub fn run_subject_process_message_binary_payload_sizes(spec: SubjectSpec) {
                 .process_message(Message::Data(payload.clone()))
                 .await
                 .map_err(|e| format!("process_message size={size}: {e:?}"))?;
-            let actual = match &resp.ret {
+            let actual = match &resp {
                 Message::Data(actual) => actual,
                 _ => {
                     child.kill().await.ok();
@@ -94,7 +94,7 @@ pub fn run_subject_process_message_binary_payload_shm_cutover_boundaries(spec: S
             .await
             .map_err(|_| format!("process_message size={size}: timed out after 3s"))?
             .map_err(|e| format!("process_message size={size}: {e:?}"))?;
-            let actual = match &resp.ret {
+            let actual = match &resp {
                 Message::Data(actual) => actual,
                 _ => {
                     child.kill().await.ok();

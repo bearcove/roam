@@ -14,8 +14,8 @@ pub fn run_rpc_echo_roundtrip(spec: SubjectSpec) {
             .echo("hello".to_string())
             .await
             .map_err(|e| format!("echo: {e:?}"))?;
-        if resp.ret != "hello" {
-            return Err(format!("expected \"hello\", got {:?}", resp.ret));
+        if resp != "hello" {
+            return Err(format!("expected \"hello\", got {:?}", resp));
         }
         child.kill().await.ok();
         Ok::<_, String>(())
@@ -33,7 +33,7 @@ pub fn run_rpc_user_error_roundtrip(spec: SubjectSpec) {
             Ok(resp) => {
                 return Err(format!(
                     "expected Err(User(DivisionByZero)), got Ok({})",
-                    resp.ret
+                    resp
                 ));
             }
             Err(other) => {
@@ -60,13 +60,13 @@ pub fn run_rpc_pipelining_multiple_requests(spec: SubjectSpec) {
             client.echo("second".to_string()),
             client.echo("third".to_string()),
         );
-        if r1.map_err(|e| format!("{e:?}"))?.ret != "first" {
+        if r1.map_err(|e| format!("{e:?}"))? != "first" {
             return Err("pipelining: first response wrong".to_string());
         }
-        if r2.map_err(|e| format!("{e:?}"))?.ret != "second" {
+        if r2.map_err(|e| format!("{e:?}"))? != "second" {
             return Err("pipelining: second response wrong".to_string());
         }
-        if r3.map_err(|e| format!("{e:?}"))?.ret != "third" {
+        if r3.map_err(|e| format!("{e:?}"))? != "third" {
             return Err("pipelining: third response wrong".to_string());
         }
         child.kill().await.ok();
