@@ -30,6 +30,8 @@ use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, BufReader};
 use tokio::net::TcpListener;
 use tokio::process::{Child, Command};
 use tokio::sync::oneshot;
+
+const SUBJECT_WAIT_HEARTBEAT: Duration = Duration::from_millis(500);
 /// Spawn a task that catches panics and makes them loud.
 ///
 /// If the spawned future panics, the panic message is printed to stderr
@@ -390,6 +392,17 @@ async fn spawn_subject_cmd_with_env(
     peer_addr: &str,
     extra_env: &[(&str, &str)],
 ) -> Result<Child, String> {
+    let extra_env_desc = if extra_env.is_empty() {
+        "<none>".to_string()
+    } else {
+        extra_env
+            .iter()
+            .map(|(k, v)| format!("{k}={v}"))
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    eprintln!("[subject:spawn] cmd={cmd:?} peer_addr={peer_addr:?} extra_env={extra_env_desc}");
+
     let mut command = Command::new("sh");
     command
         .current_dir(workspace_root())
@@ -407,6 +420,7 @@ async fn spawn_subject_cmd_with_env(
         .spawn()
         .map_err(|e| format!("failed to spawn subject: {e}"))?;
     let pid = child.id().unwrap_or_default();
+    eprintln!("[subject:{pid}] spawned");
 
     if let Some(stdout) = child.stdout.take() {
         spawn_subject_log_pump(stdout, pid, "stdout");
@@ -418,6 +432,7 @@ async fn spawn_subject_cmd_with_env(
     // If it exits immediately, surface that early.
     tokio::time::sleep(Duration::from_millis(10)).await;
     if let Some(status) = child.try_wait().map_err(|e| e.to_string())? {
+        eprintln!("[subject:{pid}] exited immediately: {status}");
         return Err(format!("subject exited immediately with {status}"));
     }
 
@@ -577,23 +592,46 @@ async fn accept_subject_tcp(cmd: &str) -> Result<(TestbedClient<DriverCaller>, C
         .map_err(|e| format!("local_addr: {e}"))?;
 
     let mut child = spawn_subject_cmd_with_env(cmd, &addr.to_string(), &[]).await?;
+    let pid = child.id().unwrap_or_default();
+    let wait_started = tokio::time::Instant::now();
+    let wait_deadline = wait_started + Duration::from_secs(5);
+    let mut heartbeat = tokio::time::interval(SUBJECT_WAIT_HEARTBEAT);
+    heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    heartbeat.tick().await;
 
-    let (stream, _) = tokio::select! {
-        accepted = listener.accept() => {
-            accepted.map_err(|e| format!("accept: {e}"))?
-        }
-        status = child.wait() => {
-            let status = status.map_err(|e| format!("wait on subject process: {e}"))?;
-            return Err(format!("subject exited before connecting: {status}"));
-        }
-        _ = tokio::time::sleep(Duration::from_secs(5)) => {
-            if let Some(status) = child
-                .try_wait()
-                .map_err(|e| format!("try_wait on subject process: {e}"))?
-            {
+    let (stream, _) = loop {
+        tokio::select! {
+            accepted = listener.accept() => {
+                break accepted.map_err(|e| format!("accept: {e}"))?;
+            }
+            status = child.wait() => {
+                let status = status.map_err(|e| format!("wait on subject process: {e}"))?;
                 return Err(format!("subject exited before connecting: {status}"));
             }
-            return Err("subject did not connect within 5s".to_string());
+            _ = tokio::time::sleep_until(wait_deadline) => {
+                if let Some(status) = child
+                    .try_wait()
+                    .map_err(|e| format!("try_wait on subject process: {e}"))?
+                {
+                    return Err(format!("subject exited before connecting: {status}"));
+                }
+                return Err(format!(
+                    "subject did not connect within 5s (pid={pid}, addr={addr}, elapsed={:?})",
+                    wait_started.elapsed()
+                ));
+            }
+            _ = heartbeat.tick() => {
+                if let Some(status) = child
+                    .try_wait()
+                    .map_err(|e| format!("try_wait on subject process: {e}"))?
+                {
+                    return Err(format!("subject exited while waiting for tcp connect: {status}"));
+                }
+                eprintln!(
+                    "[subject:{pid}] waiting for tcp connect to {addr} (elapsed={:?})",
+                    wait_started.elapsed()
+                );
+            }
         }
     };
     stream.set_nodelay(true).unwrap();
@@ -705,22 +743,48 @@ async fn accept_subject_shm_subject_is_guest(
     .await?;
 
     let mut peer_rx = peer_rx;
-    let host_peer = tokio::select! {
-        peer = &mut peer_rx => {
-            peer.map_err(|_| "bootstrap task dropped".to_string())??
-        }
-        status = child.wait() => {
-            let status = status.map_err(|e| format!("wait on subject process: {e}"))?;
-            return Err(format!("subject exited before bootstrap request: {status}"));
-        }
-        _ = tokio::time::sleep(Duration::from_secs(5)) => {
-            if let Some(status) = child
-                .try_wait()
-                .map_err(|e| format!("try_wait on subject process: {e}"))?
-            {
+    let pid = child.id().unwrap_or_default();
+    let wait_started = tokio::time::Instant::now();
+    let wait_deadline = wait_started + Duration::from_secs(5);
+    let mut heartbeat = tokio::time::interval(SUBJECT_WAIT_HEARTBEAT);
+    heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    heartbeat.tick().await;
+
+    let host_peer = loop {
+        tokio::select! {
+            peer = &mut peer_rx => {
+                break peer.map_err(|_| "bootstrap task dropped".to_string())??;
+            }
+            status = child.wait() => {
+                let status = status.map_err(|e| format!("wait on subject process: {e}"))?;
                 return Err(format!("subject exited before bootstrap request: {status}"));
             }
-            return Err("timed out waiting for bootstrap request".to_string());
+            _ = tokio::time::sleep_until(wait_deadline) => {
+                if let Some(status) = child
+                    .try_wait()
+                    .map_err(|e| format!("try_wait on subject process: {e}"))?
+                {
+                    return Err(format!("subject exited before bootstrap request: {status}"));
+                }
+                return Err(format!(
+                    "timed out waiting for bootstrap request (pid={pid}, socket={}, elapsed={:?})",
+                    control_sock_path.display(),
+                    wait_started.elapsed()
+                ));
+            }
+            _ = heartbeat.tick() => {
+                if let Some(status) = child
+                    .try_wait()
+                    .map_err(|e| format!("try_wait on subject process: {e}"))?
+                {
+                    return Err(format!("subject exited while waiting for bootstrap request: {status}"));
+                }
+                eprintln!(
+                    "[subject:{pid}] waiting for bootstrap request on {} (elapsed={:?})",
+                    control_sock_path.display(),
+                    wait_started.elapsed()
+                );
+            }
         }
     };
 
@@ -771,9 +835,18 @@ async fn accept_subject_shm_subject_is_host(
         ],
     )
     .await?;
+    let pid = child.id().unwrap_or_default();
 
     let setup_result: Result<TestbedClient<DriverCaller>, String> = async {
+        eprintln!(
+            "[subject:{pid}] waiting for subject-host bootstrap socket {}",
+            control_sock_path.display()
+        );
         let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        let connect_started = tokio::time::Instant::now();
+        let mut heartbeat = tokio::time::interval(SUBJECT_WAIT_HEARTBEAT);
+        heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        heartbeat.tick().await;
         let mut stream = loop {
             if let Some(status) = child
                 .try_wait()
@@ -784,15 +857,39 @@ async fn accept_subject_shm_subject_is_host(
                 ));
             }
             match StdUnixStream::connect(&control_sock_path) {
-                Ok(stream) => break stream,
+                Ok(stream) => {
+                    eprintln!(
+                        "[subject:{pid}] connected to bootstrap socket {}",
+                        control_sock_path.display()
+                    );
+                    break stream
+                }
                 Err(e) => {
                     if tokio::time::Instant::now() >= deadline {
                         return Err(format!(
-                            "connect bootstrap socket {}: {e}",
-                            control_sock_path.display()
+                            "connect bootstrap socket {} failed after {:?}: {e}",
+                            control_sock_path.display(),
+                            connect_started.elapsed()
                         ));
                     }
-                    tokio::time::sleep(Duration::from_millis(10)).await;
+                    tokio::select! {
+                        _ = tokio::time::sleep(Duration::from_millis(10)) => {}
+                        _ = heartbeat.tick() => {
+                            if let Some(status) = child
+                                .try_wait()
+                                .map_err(|e| format!("try_wait on subject process: {e}"))?
+                            {
+                                return Err(format!(
+                                    "subject exited while waiting for bootstrap socket: {status}"
+                                ));
+                            }
+                            eprintln!(
+                                "[subject:{pid}] waiting for bootstrap socket {} (elapsed={:?}, latest_error={e})",
+                                control_sock_path.display(),
+                                connect_started.elapsed()
+                            );
+                        }
+                    }
                 }
             }
         };
@@ -801,9 +898,20 @@ async fn accept_subject_shm_subject_is_host(
         stream
             .write_all(&request)
             .map_err(|e| format!("send bootstrap request: {e}"))?;
+        eprintln!("[subject:{pid}] sent bootstrap request");
 
-        let received = shm_primitives::bootstrap::recv_response_unix(stream.as_raw_fd())
-            .map_err(|e| format!("recv bootstrap response: {e}"))?;
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .map_err(|e| format!("set bootstrap socket read timeout: {e}"))?;
+
+        let recv_fd = stream.as_raw_fd();
+        let received = tokio::task::spawn_blocking(move || {
+            shm_primitives::bootstrap::recv_response_unix(recv_fd)
+        })
+        .await
+        .map_err(|e| format!("bootstrap recv task join: {e}"))?
+        .map_err(|e| format!("recv bootstrap response: {e}"))?;
+        eprintln!("[subject:{pid}] received bootstrap response");
         if received.response.status != BootstrapStatus::Success {
             return Err(format!(
                 "bootstrap failed: status={:?}, payload={}",
