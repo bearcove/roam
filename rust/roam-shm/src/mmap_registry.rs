@@ -14,6 +14,7 @@ use std::collections::HashMap;
 use std::io;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::mpsc;
 
 use shm_primitives::{MmapAttachMessage, MmapRegion};
 
@@ -171,14 +172,14 @@ fn create_mmap_region(size: usize) -> io::Result<MmapRegion> {
 pub enum MmapChannelTx {
     #[cfg(unix)]
     Real(shm_primitives::MmapControlSender),
-    InProcess(tokio::sync::mpsc::UnboundedSender<(Arc<MmapRegion>, MmapAttachMessage)>),
+    InProcess(mpsc::Sender<(Arc<MmapRegion>, MmapAttachMessage)>),
 }
 
 /// Receiver half of the mmap control channel.
 pub enum MmapChannelRx {
     #[cfg(unix)]
     Real(shm_primitives::MmapControlReceiver),
-    InProcess(tokio::sync::mpsc::UnboundedReceiver<(Arc<MmapRegion>, MmapAttachMessage)>),
+    InProcess(mpsc::Receiver<(Arc<MmapRegion>, MmapAttachMessage)>),
 }
 
 impl MmapChannelTx {
@@ -258,8 +259,8 @@ impl MmapAttachments {
                         }
                         self.attach_in_process(&region, msg, key);
                     }
-                    Err(tokio::sync::mpsc::error::TryRecvError::Empty) => break,
-                    Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => break,
+                    Err(mpsc::TryRecvError::Empty) => break,
+                    Err(mpsc::TryRecvError::Disconnected) => break,
                 },
             }
         }
@@ -403,6 +404,6 @@ impl std::error::Error for MmapResolveError {}
 
 /// Create an in-process mmap channel pair for testing.
 pub fn create_in_process_mmap_channel() -> (MmapChannelTx, MmapChannelRx) {
-    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    let (tx, rx) = mpsc::channel();
     (MmapChannelTx::InProcess(tx), MmapChannelRx::InProcess(rx))
 }

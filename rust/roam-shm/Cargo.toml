@@ -17,7 +17,6 @@ unexpected_cfgs = { level = "warn", check-cfg = ['cfg(loom)'] }
 [dependencies]
 roam-types.workspace = true
 shm-primitives.workspace = true
-tokio = { workspace = true, features = ["sync", "rt"] }
 zerocopy = { workspace = true }
 tempfile = "3"
 facet-postcard.workspace = true
@@ -31,3 +30,4 @@ loom = { version = "0.7" }
 [dev-dependencies]
 tempfile = "3"
 facet-postcard.workspace = true
+tokio = { workspace = true, features = ["sync", "rt", "macros", "time"] }
