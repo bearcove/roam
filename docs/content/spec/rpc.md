@@ -6,6 +6,9 @@ weight = 12
 
 # RPC concepts
 
+If you're coming from roam v6 APIs, see the
+[v6 -> v7 migration guide](../v6-to-v7/).
+
 > r[rpc]
 >
 > The RPC layer sits on top of connections. It defines how requests are made,
@@ -21,8 +24,9 @@ weight = 12
 > r[rpc.service.methods]
 >
 > Each method in a service is an async function. Its arguments and return
-> type must implement `Facet`. The `#[roam::service]` macro adds a `&Context`
-> parameter in first position when generating the handler trait.
+> type must implement `Facet`. The `#[roam::service]` macro generates a
+> `{ServiceName}Server` handler trait whose methods receive
+> `call: impl roam::Call<Ok, Err>` plus decoded method arguments.
 
 > r[rpc.method-id]
 >
@@ -79,18 +83,21 @@ weight = 12
 > r[rpc.session-setup]
 >
 > When establishing a session, the user provides a handler for the root
-> connection. The session returns a typed caller for the root connection,
-> and a handle for accepting virtual connections.
+> connection and starts a driver for that connection. Generated clients are
+> then built from `driver.caller()`.
 
 In code, this looks like:
 
 ```rust
-let (caller, accept_handle) = session
-    .establish::<AdderClient>(my_adder_handler)
+let (mut session, handle, _session_handle) = roam_core::session::initiator(conduit)
+    .establish()
     .await?;
 
-// caller is an AdderClient
-let result = caller.add(3, 5).await?;
+let dispatcher = AdderDispatcher::new(my_adder_handler);
+let mut driver = roam_core::Driver::new(handle, dispatcher, roam_types::Parity::Odd);
+let client = AdderClient::new(driver.caller());
+let response = client.add(3, 5).await?;
+let result = response.ret;
 ```
 
 > r[rpc.virtual-connection.accept]
