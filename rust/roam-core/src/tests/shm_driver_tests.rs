@@ -40,12 +40,6 @@ impl Handler<DriverReplySink> for EchoHandler {
     }
 }
 
-struct NoopHandler;
-
-impl Handler<DriverReplySink> for NoopHandler {
-    async fn handle(&self, _call: SelfRef<RequestCall<'static>>, _reply: DriverReplySink) {}
-}
-
 #[tokio::test]
 async fn echo_call_across_shm_link() {
     let (client_conduit, server_conduit) = message_conduit_pair();
@@ -67,7 +61,7 @@ async fn echo_call_across_shm_link() {
         .establish()
         .await
         .expect("client handshake failed");
-    let mut client_driver = Driver::new(client_handle, NoopHandler, Parity::Odd);
+    let mut client_driver = Driver::new(client_handle, (), Parity::Odd);
     let caller = client_driver.caller();
     moire::task::spawn(async move { client_session.run().await }.named("client_session"));
     moire::task::spawn(async move { client_driver.run().await }.named("client_driver"));
@@ -134,7 +128,7 @@ async fn echo_blob_stress_over_shm_link() {
         .establish()
         .await
         .expect("client handshake failed");
-    let mut client_driver = Driver::new(client_handle, NoopHandler, Parity::Odd);
+    let mut client_driver = Driver::new(client_handle, (), Parity::Odd);
     let caller = client_driver.caller();
     moire::task::spawn(async move { client_session.run().await }.named("client_session"));
     moire::task::spawn(async move { client_driver.run().await }.named("client_driver"));

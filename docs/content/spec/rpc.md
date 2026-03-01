@@ -106,15 +106,35 @@ let result = response.ret;
 > r[rpc.virtual-connection.accept]
 >
 > When a virtual connection is opened by the counterpart, the accepting peer
-> receives the connection metadata, decides which handler to assign to it,
-> and receives a connection handle. A generated client for that connection is
-> created from the corresponding driver caller.
+> receives the connection metadata, decides whether to accept it, and receives
+> a connection handle in its acceptance callback. A generated client for that
+> connection is created from that connection's driver caller.
 
 > r[rpc.virtual-connection.open]
 >
-> A peer may open a virtual connection on an existing session, providing a
-> handler and receiving a connection handle, just like during session
-> establishment.
+> A peer may open a virtual connection on an existing session via
+> `SessionHandle::open_connection(...)`, receiving a connection handle when the
+> counterpart accepts it.
+
+In Rust v7, virtual connections are independent driver/caller contexts:
+
+```rust
+let vconn_handle = session_handle
+    .open_connection(
+        roam_types::ConnectionSettings {
+            parity: roam_types::Parity::Odd,
+            max_concurrent_requests: 64,
+        },
+        vec![],
+    )
+    .await?;
+
+let mut vconn_driver = roam_core::Driver::new(vconn_handle, vconn_dispatcher, roam_types::Parity::Odd);
+let vconn_client = MyServiceClient::new(vconn_driver.caller());
+```
+
+Inbound virtual connections are accepted only when `.on_connection(...)` is
+registered on the session builder; otherwise they are rejected.
 
 # Requests and responses
 

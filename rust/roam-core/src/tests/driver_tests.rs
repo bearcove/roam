@@ -41,13 +41,6 @@ impl Handler<DriverReplySink> for EchoHandler {
     }
 }
 
-/// A no-op handler — the client side doesn't expect incoming calls in this test.
-struct NoopHandler;
-
-impl Handler<DriverReplySink> for NoopHandler {
-    async fn handle(&self, _call: SelfRef<RequestCall<'static>>, _reply: DriverReplySink) {}
-}
-
 /// A handler that blocks forever until its task is cancelled.
 /// Tracks whether cancellation occurred via a drop guard.
 struct BlockingHandler {
@@ -105,7 +98,7 @@ async fn cancel_aborts_in_flight_handler() {
         .await
         .expect("client handshake failed");
     let client_sender = client_handle.sender.clone();
-    let mut client_driver = Driver::new(client_handle, NoopHandler, Parity::Odd);
+    let mut client_driver = Driver::new(client_handle, (), Parity::Odd);
     let caller = client_driver.caller();
     moire::task::spawn(async move { client_session.run().await }.named("client_session"));
     moire::task::spawn(async move { client_driver.run().await }.named("client_driver"));
@@ -229,7 +222,7 @@ async fn open_virtual_connection_and_call() {
                 .establish()
                 .await
                 .expect("server handshake failed");
-            let mut server_driver = Driver::new(server_handle, NoopHandler, Parity::Even);
+            let mut server_driver = Driver::new(server_handle, (), Parity::Even);
             moire::task::spawn(async move { server_session.run().await }.named("server_session"));
             moire::task::spawn(async move { server_driver.run().await }.named("server_driver"));
         }
@@ -257,7 +250,7 @@ async fn open_virtual_connection_and_call() {
         .expect("open virtual connection");
 
     // Set up a driver on the client side for the virtual connection.
-    let mut vconn_driver = Driver::new(vconn_handle, NoopHandler, Parity::Odd);
+    let mut vconn_driver = Driver::new(vconn_handle, (), Parity::Odd);
     let caller = vconn_driver.caller();
     moire::task::spawn(async move { vconn_driver.run().await }.named("vconn_client_driver"));
 
@@ -293,7 +286,7 @@ async fn reject_virtual_connection() {
                 .establish()
                 .await
                 .expect("server handshake failed");
-            let mut server_driver = Driver::new(server_handle, NoopHandler, Parity::Even);
+            let mut server_driver = Driver::new(server_handle, (), Parity::Even);
             moire::task::spawn(async move { server_session.run().await }.named("server_session"));
             moire::task::spawn(async move { server_driver.run().await }.named("server_driver"));
         }
@@ -378,7 +371,7 @@ async fn close_virtual_connection() {
                 .establish()
                 .await
                 .expect("server handshake failed");
-            let mut server_driver = Driver::new(server_handle, NoopHandler, Parity::Even);
+            let mut server_driver = Driver::new(server_handle, (), Parity::Even);
             moire::task::spawn(async move { server_session.run().await }.named("server_session"));
             moire::task::spawn(async move { server_driver.run().await }.named("server_driver"));
         }
@@ -409,7 +402,7 @@ async fn close_virtual_connection() {
     assert!(!conn_id.is_root(), "virtual connection should not be root");
 
     // Set up a driver on the client side.
-    let mut vconn_driver = Driver::new(vconn_handle, NoopHandler, Parity::Odd);
+    let mut vconn_driver = Driver::new(vconn_handle, (), Parity::Odd);
     let caller = vconn_driver.caller();
     moire::task::spawn(async move { vconn_driver.run().await }.named("vconn_client_driver"));
 
@@ -478,7 +471,7 @@ async fn echo_call_across_memory_link() {
         .establish()
         .await
         .expect("client handshake failed");
-    let mut client_driver = Driver::new(client_handle, NoopHandler, Parity::Odd);
+    let mut client_driver = Driver::new(client_handle, (), Parity::Odd);
     let caller = client_driver.caller();
     moire::task::spawn(async move { client_session.run().await }.named("client_session"));
     moire::task::spawn(async move { client_driver.run().await }.named("client_driver"));

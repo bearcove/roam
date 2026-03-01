@@ -142,3 +142,48 @@ Notes:
 6. Switch client construction from connection handles to `driver.caller()`.
 7. If needed, annotate channel credit explicitly with `Tx<T, N>` / `Rx<T, N>`.
 8. Update custom codegen scripts from `*_service_detail()` to `*_service_descriptor()`.
+
+## Virtual connections in v7 (Rust)
+
+v7 Rust exposes virtual connections directly on `SessionHandle`:
+
+```rust
+let (mut session, root_handle, session_handle) = roam_core::session::initiator(conduit)
+    .establish()
+    .await?;
+
+let mut root_driver = roam_core::Driver::new(root_handle, root_dispatcher, roam_types::Parity::Odd);
+let root_caller = root_driver.caller();
+```
+
+Open a new virtual connection from the existing session:
+
+```rust
+let vconn_handle = session_handle
+    .open_connection(
+        roam_types::ConnectionSettings {
+            parity: roam_types::Parity::Odd,
+            max_concurrent_requests: 64,
+        },
+        vec![],
+    )
+    .await?;
+
+// This virtual connection can use a different handler/dispatcher and caller
+// than the root connection.
+let mut vconn_driver = roam_core::Driver::new(vconn_handle, vconn_dispatcher, roam_types::Parity::Odd);
+let vconn_caller = vconn_driver.caller();
+```
+
+Accepting inbound virtual connections is opt-in on both `initiator(...)` and
+`acceptor(...)` builders:
+
+```rust
+let (mut session, root_handle, _session_handle) = roam_core::session::acceptor(conduit)
+    .on_connection(my_acceptor)
+    .establish()
+    .await?;
+```
+
+If `.on_connection(...)` is not configured, inbound virtual `ConnectionOpen`
+messages are rejected by default.

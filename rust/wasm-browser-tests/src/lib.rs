@@ -67,18 +67,6 @@ impl TestResults {
     }
 }
 
-struct NoopHandler;
-
-impl roam_types::Handler<roam_core::DriverReplySink> for NoopHandler {
-    fn handle(
-        &self,
-        _call: roam_types::SelfRef<roam_types::RequestCall<'static>>,
-        _reply: roam_core::DriverReplySink,
-    ) -> impl std::future::Future<Output = ()> + '_ {
-        async {}
-    }
-}
-
 /// Run all tests against a WebSocket server at the given URL.
 #[wasm_bindgen]
 pub async fn run_tests(ws_url: &str) -> TestResults {
@@ -117,7 +105,7 @@ pub async fn run_tests(ws_url: &str) -> TestResults {
 
     console_log!("Handshake complete.");
 
-    let mut driver = Driver::new(handle, NoopHandler, Parity::Odd);
+    let mut driver = Driver::new(handle, (), Parity::Odd);
     let caller = driver.caller();
 
     wasm_bindgen_futures::spawn_local(async move {

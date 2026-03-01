@@ -20,17 +20,6 @@ impl AdderServer for MyAdder {
     }
 }
 
-struct NoopHandler;
-
-impl roam_types::Handler<crate::DriverReplySink> for NoopHandler {
-    async fn handle(
-        &self,
-        _call: roam_types::SelfRef<roam_types::RequestCall<'static>>,
-        _reply: crate::DriverReplySink,
-    ) {
-    }
-}
-
 pub async fn run_adder_end_to_end<L>(
     message_conduit_pair: impl FnOnce() -> (MessageConduit<L>, MessageConduit<L>),
 ) where
@@ -58,7 +47,7 @@ pub async fn run_adder_end_to_end<L>(
         .establish()
         .await
         .expect("client handshake failed");
-    let mut client_driver = Driver::new(client_handle, NoopHandler, Parity::Odd);
+    let mut client_driver = Driver::new(client_handle, (), Parity::Odd);
     let caller = client_driver.caller();
     moire::task::spawn(async move { client_session.run().await }.named("client_session"));
     moire::task::spawn(async move { client_driver.run().await }.named("client_driver"));

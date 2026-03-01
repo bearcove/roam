@@ -396,3 +396,53 @@ has to forward calls somehow:
 Instead of manually forwarding calls back to the host, the HTTP server cell can
 simply open a virtual connection on its existing host session, matching the
 parity that the browser peer picked when connecting over WS.
+
+## Rust runtime API for virtual connections
+
+The Rust v7 runtime (`roam-core`) exposes virtual connections as first-class
+session operations:
+
+1. Create a session and keep `session.run()` running.
+2. Open outbound virtual connections via `SessionHandle::open_connection(...)`.
+3. Accept inbound virtual connections by registering `.on_connection(...)` on
+   the session builder.
+
+Example (open outbound):
+
+```rust
+let (mut session, root_handle, session_handle) = roam_core::session::initiator(conduit)
+    .establish()
+    .await?;
+
+let mut root_driver = roam_core::Driver::new(root_handle, root_dispatcher, roam_types::Parity::Odd);
+let root_caller = root_driver.caller();
+
+let vconn_handle = session_handle
+    .open_connection(
+        roam_types::ConnectionSettings {
+            parity: roam_types::Parity::Odd,
+            max_concurrent_requests: 64,
+        },
+        vec![],
+    )
+    .await?;
+
+let mut vconn_driver = roam_core::Driver::new(vconn_handle, vconn_dispatcher, roam_types::Parity::Odd);
+let vconn_caller = vconn_driver.caller();
+```
+
+Each `ConnectionHandle` gets its own driver state, request/channel ID allocators,
+and caller. This means a virtual connection can run a different dispatcher and
+caller context than the root connection.
+
+Example (accept inbound):
+
+```rust
+let (mut session, root_handle, _session_handle) = roam_core::session::acceptor(conduit)
+    .on_connection(my_connection_acceptor)
+    .establish()
+    .await?;
+```
+
+If `.on_connection(...)` is not configured, inbound `OpenConnection` messages
+are rejected.

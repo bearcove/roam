@@ -64,17 +64,6 @@ mod roam_bench {
         }
     }
 
-    pub struct NoopHandler;
-
-    impl roam_types::Handler<roam_core::DriverReplySink> for NoopHandler {
-        async fn handle(
-            &self,
-            _call: roam_types::SelfRef<roam_types::RequestCall<'static>>,
-            _reply: roam_core::DriverReplySink,
-        ) {
-        }
-    }
-
     pub async fn setup() -> BenchClient<roam_core::DriverCaller> {
         let (a, b) = memory_link_pair(64);
         let client_conduit: MessageConduit = BareConduit::new(a);
@@ -100,7 +89,7 @@ mod roam_bench {
             .establish()
             .await
             .expect("client handshake failed");
-        let mut client_driver = Driver::new(client_handle, NoopHandler, Parity::Odd);
+        let mut client_driver = Driver::new(client_handle, (), Parity::Odd);
         let caller = client_driver.caller();
         moire::task::spawn(async move { client_session.run().await }.named("client_session"));
         moire::task::spawn(async move { client_driver.run().await }.named("client_driver"));
@@ -169,7 +158,7 @@ mod roam_shm_bench {
     use roam_shm::varslot::SizeClassConfig;
     use roam_types::Parity;
 
-    use super::roam_bench::{BenchClient, BenchDispatcher, Handler, NoopHandler};
+    use super::roam_bench::{BenchClient, BenchDispatcher, Handler};
 
     type MessageConduit = BareConduit<roam_types::MessageFamily, ShmLink>;
 
@@ -208,7 +197,7 @@ mod roam_shm_bench {
             .establish()
             .await
             .expect("client handshake failed");
-        let mut client_driver = Driver::new(client_handle, NoopHandler, Parity::Odd);
+        let mut client_driver = Driver::new(client_handle, (), Parity::Odd);
         let caller = client_driver.caller();
         moire::task::spawn(async move { client_session.run().await }.named("client_session"));
         moire::task::spawn(async move { client_driver.run().await }.named("client_driver"));
@@ -277,7 +266,7 @@ mod roam_tcp_bench {
     use roam_types::Parity;
     use tokio::net::TcpListener;
 
-    use super::roam_bench::{BenchClient, BenchDispatcher, Handler, NoopHandler};
+    use super::roam_bench::{BenchClient, BenchDispatcher, Handler};
 
     type TcpStreamLink =
         StreamLink<tokio::net::tcp::OwnedReadHalf, tokio::net::tcp::OwnedWriteHalf>;
@@ -314,7 +303,7 @@ mod roam_tcp_bench {
             .establish()
             .await
             .expect("client handshake failed");
-        let mut client_driver = Driver::new(client_handle, NoopHandler, Parity::Odd);
+        let mut client_driver = Driver::new(client_handle, (), Parity::Odd);
         let caller = client_driver.caller();
         moire::task::spawn(async move { client_session.run().await }.named("client_session"));
         moire::task::spawn(async move { client_driver.run().await }.named("client_driver"));

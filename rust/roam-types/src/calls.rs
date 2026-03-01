@@ -193,6 +193,10 @@ pub trait Handler<R: ReplySink>: MaybeSend + MaybeSync + 'static {
     ) -> impl std::future::Future<Output = ()> + MaybeSend + '_;
 }
 
+impl<R: ReplySink> Handler<R> for () {
+    async fn handle(&self, _call: SelfRef<crate::RequestCall<'static>>, _reply: R) {}
+}
+
 /// A decoded response value paired with its response metadata.
 ///
 /// Returned by generated client methods. `Deref`s to `T` so existing
