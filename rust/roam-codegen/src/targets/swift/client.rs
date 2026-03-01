@@ -156,112 +156,13 @@ fn generate_client_method(
 
             // Make call
             let method_id = crate::method_id(method);
-            if ret_type == "Void" {
-                cw_writeln!(
-                    w,
-                    "let response = try await connection.call(methodId: {}, payload: payload, timeout: timeout)",
-                    hex_u64(method_id)
-                )
-                .unwrap();
-                cw_writeln!(w, "var {cursor_var} = 0").unwrap();
-                cw_writeln!(
-                    w,
-                    "try decodeRpcResult(from: response, offset: &{cursor_var})"
-                )
-                .unwrap();
-            } else {
-                cw_writeln!(
-                    w,
-                    "let response = try await connection.call(methodId: {}, payload: payload, timeout: timeout)",
-                    hex_u64(method_id)
-                )
-                .unwrap();
-
-                // Check if this method returns Result<T, E>
-                let is_fallible = matches!(
-                    classify_shape(method.return_shape),
-                    ShapeKind::Result { .. }
-                );
-
-                if is_fallible {
-                    // Fallible method: handle both success and user error
-                    let ShapeKind::Result { ok, err } = classify_shape(method.return_shape) else {
-                        unreachable!()
-                    };
-
-                    cw_writeln!(w, "var {cursor_var} = 0").unwrap();
-                    w.writeln("do {").unwrap();
-                    {
-                        let _indent = w.indent();
-                        cw_writeln!(
-                            w,
-                            "try decodeRpcResult(from: response, offset: &{cursor_var})"
-                        )
-                        .unwrap();
-                        // Decode success value (just T, not Result<T, E>)
-                        let decode_ok = generate_decode_stmt_from_with_cursor(
-                            ok,
-                            "value",
-                            "",
-                            "response",
-                            &cursor_var,
-                        );
-                        for line in decode_ok.lines() {
-                            w.writeln(line).unwrap();
-                        }
-                        w.writeln("return .success(value)").unwrap();
-                    }
-                    w.writeln("} catch let e as RpcCallError where e.isUserError {")
-                        .unwrap();
-                    {
-                        let _indent = w.indent();
-                        w.writeln("guard let errorPayload = e.payload else {")
-                            .unwrap();
-                        {
-                            let _indent = w.indent();
-                            cw_writeln!(
-                                w,
-                                "throw RoamError.decodeError(\"user error without payload\")"
-                            )
-                            .unwrap();
-                        }
-                        w.writeln("}").unwrap();
-                        cw_writeln!(w, "var {cursor_var} = 0").unwrap();
-                        // Decode error value (just E)
-                        let decode_err = generate_decode_stmt_from_with_cursor(
-                            err,
-                            "userError",
-                            "",
-                            "errorPayload",
-                            &cursor_var,
-                        );
-                        for line in decode_err.lines() {
-                            w.writeln(line).unwrap();
-                        }
-                        w.writeln("return .failure(userError)").unwrap();
-                    }
-                    w.writeln("}").unwrap();
-                } else {
-                    // Infallible method: just decode success
-                    cw_writeln!(w, "var {cursor_var} = 0").unwrap();
-                    cw_writeln!(
-                        w,
-                        "try decodeRpcResult(from: response, offset: &{cursor_var})"
-                    )
-                    .unwrap();
-                    let decode_stmt = generate_decode_stmt_from_with_cursor(
-                        method.return_shape,
-                        "result",
-                        "",
-                        "response",
-                        &cursor_var,
-                    );
-                    for line in decode_stmt.lines() {
-                        w.writeln(line).unwrap();
-                    }
-                    w.writeln("return result").unwrap();
-                }
-            }
+            cw_writeln!(
+                w,
+                "let response = try await connection.call(methodId: {}, payload: payload, timeout: timeout)",
+                hex_u64(method_id)
+            )
+            .unwrap();
+            generate_response_decode(w, method, &cursor_var, "response");
         }
     }
     w.writeln("}").unwrap();
@@ -346,105 +247,14 @@ fn generate_streaming_client_body(
     // Make the call
     let ret_type = swift_type_client_return(method.return_shape);
     let method_id = crate::method_id(method);
-    if ret_type == "Void" {
-        cw_writeln!(
-            w,
-            "let response = try await connection.call(methodId: {}, payload: payload, channels: channels, timeout: timeout)",
-            hex_u64(method_id)
-        )
-        .unwrap();
-        cw_writeln!(w, "var {cursor_var} = 0").unwrap();
-        cw_writeln!(
-            w,
-            "try decodeRpcResult(from: response, offset: &{cursor_var})"
-        )
-        .unwrap();
-    } else {
-        cw_writeln!(
-            w,
-            "let response = try await connection.call(methodId: {}, payload: payload, channels: channels, timeout: timeout)",
-            hex_u64(method_id)
-        )
-        .unwrap();
-
-        // Check if this method returns Result<T, E>
-        let is_fallible = matches!(
-            classify_shape(method.return_shape),
-            ShapeKind::Result { .. }
-        );
-
-        if is_fallible {
-            // Fallible method: handle both success and user error
-            let ShapeKind::Result { ok, err } = classify_shape(method.return_shape) else {
-                unreachable!()
-            };
-
-            cw_writeln!(w, "var {cursor_var} = 0").unwrap();
-            w.writeln("do {").unwrap();
-            {
-                let _indent = w.indent();
-                cw_writeln!(
-                    w,
-                    "try decodeRpcResult(from: response, offset: &{cursor_var})"
-                )
-                .unwrap();
-                let decode_ok =
-                    generate_decode_stmt_from_with_cursor(ok, "value", "", "response", cursor_var);
-                for line in decode_ok.lines() {
-                    w.writeln(line).unwrap();
-                }
-                w.writeln("return .success(value)").unwrap();
-            }
-            w.writeln("} catch let e as RpcCallError where e.isUserError {")
-                .unwrap();
-            {
-                let _indent = w.indent();
-                w.writeln("guard let errorPayload = e.payload else {")
-                    .unwrap();
-                {
-                    let _indent = w.indent();
-                    cw_writeln!(
-                        w,
-                        "throw RoamError.decodeError(\"user error without payload\")"
-                    )
-                    .unwrap();
-                }
-                w.writeln("}").unwrap();
-                cw_writeln!(w, "var {cursor_var} = 0").unwrap();
-                let decode_err = generate_decode_stmt_from_with_cursor(
-                    err,
-                    "userError",
-                    "",
-                    "errorPayload",
-                    cursor_var,
-                );
-                for line in decode_err.lines() {
-                    w.writeln(line).unwrap();
-                }
-                w.writeln("return .failure(userError)").unwrap();
-            }
-            w.writeln("}").unwrap();
-        } else {
-            // Infallible method: just decode success
-            cw_writeln!(w, "var {cursor_var} = 0").unwrap();
-            cw_writeln!(
-                w,
-                "try decodeRpcResult(from: response, offset: &{cursor_var})"
-            )
-            .unwrap();
-            let decode_stmt = generate_decode_stmt_from_with_cursor(
-                method.return_shape,
-                "result",
-                "",
-                "response",
-                cursor_var,
-            );
-            for line in decode_stmt.lines() {
-                w.writeln(line).unwrap();
-            }
-            w.writeln("return result").unwrap();
-        }
-    }
+    let _ = ret_type;
+    cw_writeln!(
+        w,
+        "let response = try await connection.call(methodId: {}, payload: payload, channels: channels, timeout: timeout)",
+        hex_u64(method_id)
+    )
+    .unwrap();
+    generate_response_decode(w, method, cursor_var, "response");
 }
 
 fn unique_decode_cursor_name(args: &[roam_types::ArgDescriptor]) -> String {
@@ -454,4 +264,118 @@ fn unique_decode_cursor_name(args: &[roam_types::ArgDescriptor]) -> String {
         candidate.push('_');
     }
     candidate
+}
+
+/// Generate code to decode the full wire response payload:
+/// `Result<T, RoamError<E>>`.
+fn generate_response_decode(
+    w: &mut CodeWriter<&mut String>,
+    method: &MethodDescriptor,
+    cursor_var: &str,
+    response_var: &str,
+) {
+    let ret_type = swift_type_client_return(method.return_shape);
+    let result_disc_var = format!("_{cursor_var}_resultDisc");
+    let error_code_var = format!("_{cursor_var}_errorCode");
+    let is_fallible = matches!(
+        classify_shape(method.return_shape),
+        ShapeKind::Result { .. }
+    );
+
+    cw_writeln!(w, "var {cursor_var} = 0").unwrap();
+    cw_writeln!(
+        w,
+        "let {result_disc_var} = try decodeVarint(from: {response_var}, offset: &{cursor_var})"
+    )
+    .unwrap();
+    cw_writeln!(w, "switch {result_disc_var} {{").unwrap();
+
+    w.writeln("case 0:").unwrap();
+    {
+        let _indent = w.indent();
+        if is_fallible {
+            let ShapeKind::Result { ok, .. } = classify_shape(method.return_shape) else {
+                unreachable!()
+            };
+            let decode_ok =
+                generate_decode_stmt_from_with_cursor(ok, "value", "", response_var, cursor_var);
+            for line in decode_ok.lines() {
+                w.writeln(line).unwrap();
+            }
+            w.writeln("return .success(value)").unwrap();
+        } else if ret_type == "Void" {
+            w.writeln("return").unwrap();
+        } else {
+            let decode_stmt = generate_decode_stmt_from_with_cursor(
+                method.return_shape,
+                "result",
+                "",
+                response_var,
+                cursor_var,
+            );
+            for line in decode_stmt.lines() {
+                w.writeln(line).unwrap();
+            }
+            w.writeln("return result").unwrap();
+        }
+    }
+
+    w.writeln("case 1:").unwrap();
+    {
+        let _indent = w.indent();
+        cw_writeln!(
+            w,
+            "let {error_code_var} = try decodeU8(from: {response_var}, offset: &{cursor_var})"
+        )
+        .unwrap();
+        cw_writeln!(w, "switch {error_code_var} {{").unwrap();
+
+        w.writeln("case 0:").unwrap();
+        {
+            let _indent = w.indent();
+            if is_fallible {
+                let ShapeKind::Result { err, .. } = classify_shape(method.return_shape) else {
+                    unreachable!()
+                };
+                let decode_err = generate_decode_stmt_from_with_cursor(
+                    err,
+                    "userError",
+                    "",
+                    response_var,
+                    cursor_var,
+                );
+                for line in decode_err.lines() {
+                    w.writeln(line).unwrap();
+                }
+                w.writeln("return .failure(userError)").unwrap();
+            } else {
+                w.writeln(
+                    "throw RoamError.decodeError(\"unexpected user error for infallible method\")",
+                )
+                .unwrap();
+            }
+        }
+        w.writeln("case 1:").unwrap();
+        w.writeln("    throw RoamError.unknownMethod").unwrap();
+        w.writeln("case 2:").unwrap();
+        w.writeln("    throw RoamError.decodeError(\"invalid payload\")")
+            .unwrap();
+        w.writeln("case 3:").unwrap();
+        w.writeln("    throw RoamError.cancelled").unwrap();
+        w.writeln("default:").unwrap();
+        cw_writeln!(
+            w,
+            "    throw RoamError.decodeError(\"invalid RoamError discriminant: \\({error_code_var})\")"
+        )
+        .unwrap();
+        w.writeln("}").unwrap();
+    }
+
+    w.writeln("default:").unwrap();
+    cw_writeln!(
+        w,
+        "    throw RoamError.decodeError(\"invalid Result discriminant: \\({result_disc_var})\")"
+    )
+    .unwrap();
+    w.writeln("}").unwrap();
 }

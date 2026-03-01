@@ -359,8 +359,10 @@ struct ServerAndDispatcherIntegrationTests {
         }
         #expect(response.0 == requestId)
         var offset = 0
-        try decodeRpcResult(from: Data(response.1), offset: &offset)
-        let echoed = try decodeString(from: Data(response.1), offset: &offset)
+        let payload = Data(response.1)
+        let resultDiscriminant = try decodeVarint(from: payload, offset: &offset)
+        #expect(resultDiscriminant == 0)
+        let echoed = try decodeString(from: payload, offset: &offset)
         #expect(echoed == "swift-subject")
     }
 

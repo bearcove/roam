@@ -136,37 +136,16 @@ struct WireV7PostcardNegativeTests {
     }
 
     // r[verify rpc.fallible.roam-error]
-    @Test func decodeRpcResultRejectsInvalidOuterDiscriminant() {
-        var offset = 0
-        do {
-            try decodeRpcResult(from: Data([2]), offset: &offset)
-            Issue.record("expected invalid outer Result discriminant error")
-        } catch let error as RoamError {
-            guard case .decodeError(let message) = error else {
-                Issue.record("expected RoamError.decodeError, got \(error)")
-                return
-            }
-            #expect(message.contains("invalid outer Result discriminant"))
-        } catch {
-            Issue.record("expected RoamError.decodeError, got \(error)")
-        }
+    @Test func rpcErrorCodeRejectsUnknownDiscriminant() {
+        #expect(RpcErrorCode(rawValue: 9) == nil)
     }
 
     // r[verify rpc.fallible.roam-error]
-    @Test func decodeRpcResultRejectsUnknownRoamErrorDiscriminant() {
-        var offset = 0
-        do {
-            try decodeRpcResult(from: Data([1, 9]), offset: &offset)
-            Issue.record("expected invalid RoamError discriminant error")
-        } catch let error as RoamError {
-            guard case .decodeError(let message) = error else {
-                Issue.record("expected RoamError.decodeError, got \(error)")
-                return
-            }
-            #expect(message.contains("invalid RoamError discriminant"))
-        } catch {
-            Issue.record("expected RoamError.decodeError, got \(error)")
-        }
+    @Test func rpcErrorCodeKnownDiscriminantsRoundTrip() {
+        #expect(RpcErrorCode(rawValue: 0) == .user)
+        #expect(RpcErrorCode(rawValue: 1) == .unknownMethod)
+        #expect(RpcErrorCode(rawValue: 2) == .invalidPayload)
+        #expect(RpcErrorCode(rawValue: 3) == .cancelled)
     }
 }
 #endif

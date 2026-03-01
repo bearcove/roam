@@ -162,9 +162,28 @@ public final class TestbedClient: TestbedCaller {
         let payload = Data(payloadBytes)
         let response = try await connection.call(methodId: 0x9aabc4ba61fd5df3, payload: payload, timeout: timeout)
         var cursor = 0
-        try decodeRpcResult(from: response, offset: &cursor)
-        let result = try decodeString(from: response, offset: &cursor)
-        return result
+        let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
+        switch _cursor_resultDisc {
+        case 0:
+            let result = try decodeString(from: response, offset: &cursor)
+            return result
+        case 1:
+            let _cursor_errorCode = try decodeU8(from: response, offset: &cursor)
+            switch _cursor_errorCode {
+            case 0:
+                throw RoamError.decodeError("unexpected user error for infallible method")
+            case 1:
+                throw RoamError.unknownMethod
+            case 2:
+                throw RoamError.decodeError("invalid payload")
+            case 3:
+                throw RoamError.cancelled
+            default:
+                throw RoamError.decodeError("invalid RoamError discriminant: \(_cursor_errorCode)")
+            }
+        default:
+            throw RoamError.decodeError("invalid Result discriminant: \(_cursor_resultDisc)")
+        }
     }
 
     public func reverse(message: String) async throws -> String {
@@ -173,9 +192,28 @@ public final class TestbedClient: TestbedCaller {
         let payload = Data(payloadBytes)
         let response = try await connection.call(methodId: 0xcba154600f640175, payload: payload, timeout: timeout)
         var cursor = 0
-        try decodeRpcResult(from: response, offset: &cursor)
-        let result = try decodeString(from: response, offset: &cursor)
-        return result
+        let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
+        switch _cursor_resultDisc {
+        case 0:
+            let result = try decodeString(from: response, offset: &cursor)
+            return result
+        case 1:
+            let _cursor_errorCode = try decodeU8(from: response, offset: &cursor)
+            switch _cursor_errorCode {
+            case 0:
+                throw RoamError.decodeError("unexpected user error for infallible method")
+            case 1:
+                throw RoamError.unknownMethod
+            case 2:
+                throw RoamError.decodeError("invalid payload")
+            case 3:
+                throw RoamError.cancelled
+            default:
+                throw RoamError.decodeError("invalid RoamError discriminant: \(_cursor_errorCode)")
+            }
+        default:
+            throw RoamError.decodeError("invalid Result discriminant: \(_cursor_resultDisc)")
+        }
     }
 
     public func divide(dividend: Int64, divisor: Int64) async throws -> Result<Int64, MathError> {
@@ -185,26 +223,37 @@ public final class TestbedClient: TestbedCaller {
         let payload = Data(payloadBytes)
         let response = try await connection.call(methodId: 0xc3964cbee4b1d590, payload: payload, timeout: timeout)
         var cursor = 0
-        do {
-            try decodeRpcResult(from: response, offset: &cursor)
+        let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
+        switch _cursor_resultDisc {
+        case 0:
             let value = try decodeI64(from: response, offset: &cursor)
             return .success(value)
-        } catch let e as RpcCallError where e.isUserError {
-            guard let errorPayload = e.payload else {
-                throw RoamError.decodeError("user error without payload")
-            }
-            var cursor = 0
-            let _userError_disc = try decodeVarint(from: errorPayload, offset: &cursor)
-            let userError: MathError
-            switch _userError_disc {
+        case 1:
+            let _cursor_errorCode = try decodeU8(from: response, offset: &cursor)
+            switch _cursor_errorCode {
             case 0:
-                userError = .divisionByZero
+                let _userError_disc = try decodeVarint(from: response, offset: &cursor)
+                let userError: MathError
+                switch _userError_disc {
+                case 0:
+                    userError = .divisionByZero
+                case 1:
+                    userError = .overflow
+                default:
+                    throw RoamError.decodeError("unknown enum variant")
+                }
+                return .failure(userError)
             case 1:
-                userError = .overflow
+                throw RoamError.unknownMethod
+            case 2:
+                throw RoamError.decodeError("invalid payload")
+            case 3:
+                throw RoamError.cancelled
             default:
-                throw RoamError.decodeError("unknown enum variant")
+                throw RoamError.decodeError("invalid RoamError discriminant: \(_cursor_errorCode)")
             }
-            return .failure(userError)
+        default:
+            throw RoamError.decodeError("invalid Result discriminant: \(_cursor_resultDisc)")
         }
     }
 
@@ -214,29 +263,40 @@ public final class TestbedClient: TestbedCaller {
         let payload = Data(payloadBytes)
         let response = try await connection.call(methodId: 0xe71a0faedd014e59, payload: payload, timeout: timeout)
         var cursor = 0
-        do {
-            try decodeRpcResult(from: response, offset: &cursor)
+        let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
+        switch _cursor_resultDisc {
+        case 0:
             let _value_name = try decodeString(from: response, offset: &cursor)
             let _value_age = try decodeU8(from: response, offset: &cursor)
             let _value_email = try decodeOption(from: response, offset: &cursor, decoder: { data, off in try decodeString(from: data, offset: &off) })
             let value = Person(name: _value_name, age: _value_age, email: _value_email)
             return .success(value)
-        } catch let e as RpcCallError where e.isUserError {
-            guard let errorPayload = e.payload else {
-                throw RoamError.decodeError("user error without payload")
-            }
-            var cursor = 0
-            let _userError_disc = try decodeVarint(from: errorPayload, offset: &cursor)
-            let userError: LookupError
-            switch _userError_disc {
+        case 1:
+            let _cursor_errorCode = try decodeU8(from: response, offset: &cursor)
+            switch _cursor_errorCode {
             case 0:
-                userError = .notFound
+                let _userError_disc = try decodeVarint(from: response, offset: &cursor)
+                let userError: LookupError
+                switch _userError_disc {
+                case 0:
+                    userError = .notFound
+                case 1:
+                    userError = .accessDenied
+                default:
+                    throw RoamError.decodeError("unknown enum variant")
+                }
+                return .failure(userError)
             case 1:
-                userError = .accessDenied
+                throw RoamError.unknownMethod
+            case 2:
+                throw RoamError.decodeError("invalid payload")
+            case 3:
+                throw RoamError.cancelled
             default:
-                throw RoamError.decodeError("unknown enum variant")
+                throw RoamError.decodeError("invalid RoamError discriminant: \(_cursor_errorCode)")
             }
-            return .failure(userError)
+        default:
+            throw RoamError.decodeError("invalid Result discriminant: \(_cursor_resultDisc)")
         }
     }
 
@@ -259,9 +319,28 @@ public final class TestbedClient: TestbedCaller {
 
         let response = try await connection.call(methodId: 0x855b3a25d97bfefd, payload: payload, channels: channels, timeout: timeout)
         var cursor = 0
-        try decodeRpcResult(from: response, offset: &cursor)
-        let result = try decodeI64(from: response, offset: &cursor)
-        return result
+        let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
+        switch _cursor_resultDisc {
+        case 0:
+            let result = try decodeI64(from: response, offset: &cursor)
+            return result
+        case 1:
+            let _cursor_errorCode = try decodeU8(from: response, offset: &cursor)
+            switch _cursor_errorCode {
+            case 0:
+                throw RoamError.decodeError("unexpected user error for infallible method")
+            case 1:
+                throw RoamError.unknownMethod
+            case 2:
+                throw RoamError.decodeError("invalid payload")
+            case 3:
+                throw RoamError.cancelled
+            default:
+                throw RoamError.decodeError("invalid RoamError discriminant: \(_cursor_errorCode)")
+            }
+        default:
+            throw RoamError.decodeError("invalid Result discriminant: \(_cursor_resultDisc)")
+        }
     }
 
     public func generate(count: UInt32, output: UnboundTx<Int32>) async throws {
@@ -284,7 +363,27 @@ public final class TestbedClient: TestbedCaller {
 
         let response = try await connection.call(methodId: 0x54d2273d8cdb9c38, payload: payload, channels: channels, timeout: timeout)
         var cursor = 0
-        try decodeRpcResult(from: response, offset: &cursor)
+        let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
+        switch _cursor_resultDisc {
+        case 0:
+            return
+        case 1:
+            let _cursor_errorCode = try decodeU8(from: response, offset: &cursor)
+            switch _cursor_errorCode {
+            case 0:
+                throw RoamError.decodeError("unexpected user error for infallible method")
+            case 1:
+                throw RoamError.unknownMethod
+            case 2:
+                throw RoamError.decodeError("invalid payload")
+            case 3:
+                throw RoamError.cancelled
+            default:
+                throw RoamError.decodeError("invalid RoamError discriminant: \(_cursor_errorCode)")
+            }
+        default:
+            throw RoamError.decodeError("invalid Result discriminant: \(_cursor_resultDisc)")
+        }
     }
 
     public func transform(input: UnboundRx<String>, output: UnboundTx<String>) async throws {
@@ -307,7 +406,27 @@ public final class TestbedClient: TestbedCaller {
 
         let response = try await connection.call(methodId: 0x5d9895604eb18b19, payload: payload, channels: channels, timeout: timeout)
         var cursor = 0
-        try decodeRpcResult(from: response, offset: &cursor)
+        let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
+        switch _cursor_resultDisc {
+        case 0:
+            return
+        case 1:
+            let _cursor_errorCode = try decodeU8(from: response, offset: &cursor)
+            switch _cursor_errorCode {
+            case 0:
+                throw RoamError.decodeError("unexpected user error for infallible method")
+            case 1:
+                throw RoamError.unknownMethod
+            case 2:
+                throw RoamError.decodeError("invalid payload")
+            case 3:
+                throw RoamError.cancelled
+            default:
+                throw RoamError.decodeError("invalid RoamError discriminant: \(_cursor_errorCode)")
+            }
+        default:
+            throw RoamError.decodeError("invalid Result discriminant: \(_cursor_resultDisc)")
+        }
     }
 
     public func echoPoint(point: Point) async throws -> Point {
@@ -316,11 +435,30 @@ public final class TestbedClient: TestbedCaller {
         let payload = Data(payloadBytes)
         let response = try await connection.call(methodId: 0x453fa9bf6932528c, payload: payload, timeout: timeout)
         var cursor = 0
-        try decodeRpcResult(from: response, offset: &cursor)
-        let _result_x = try decodeI32(from: response, offset: &cursor)
-        let _result_y = try decodeI32(from: response, offset: &cursor)
-        let result = Point(x: _result_x, y: _result_y)
-        return result
+        let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
+        switch _cursor_resultDisc {
+        case 0:
+            let _result_x = try decodeI32(from: response, offset: &cursor)
+            let _result_y = try decodeI32(from: response, offset: &cursor)
+            let result = Point(x: _result_x, y: _result_y)
+            return result
+        case 1:
+            let _cursor_errorCode = try decodeU8(from: response, offset: &cursor)
+            switch _cursor_errorCode {
+            case 0:
+                throw RoamError.decodeError("unexpected user error for infallible method")
+            case 1:
+                throw RoamError.unknownMethod
+            case 2:
+                throw RoamError.decodeError("invalid payload")
+            case 3:
+                throw RoamError.cancelled
+            default:
+                throw RoamError.decodeError("invalid RoamError discriminant: \(_cursor_errorCode)")
+            }
+        default:
+            throw RoamError.decodeError("invalid Result discriminant: \(_cursor_resultDisc)")
+        }
     }
 
     public func createPerson(name: String, age: UInt8, email: String?) async throws -> Person {
@@ -331,12 +469,31 @@ public final class TestbedClient: TestbedCaller {
         let payload = Data(payloadBytes)
         let response = try await connection.call(methodId: 0x3dd231f57b1bca21, payload: payload, timeout: timeout)
         var cursor = 0
-        try decodeRpcResult(from: response, offset: &cursor)
-        let _result_name = try decodeString(from: response, offset: &cursor)
-        let _result_age = try decodeU8(from: response, offset: &cursor)
-        let _result_email = try decodeOption(from: response, offset: &cursor, decoder: { data, off in try decodeString(from: data, offset: &off) })
-        let result = Person(name: _result_name, age: _result_age, email: _result_email)
-        return result
+        let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
+        switch _cursor_resultDisc {
+        case 0:
+            let _result_name = try decodeString(from: response, offset: &cursor)
+            let _result_age = try decodeU8(from: response, offset: &cursor)
+            let _result_email = try decodeOption(from: response, offset: &cursor, decoder: { data, off in try decodeString(from: data, offset: &off) })
+            let result = Person(name: _result_name, age: _result_age, email: _result_email)
+            return result
+        case 1:
+            let _cursor_errorCode = try decodeU8(from: response, offset: &cursor)
+            switch _cursor_errorCode {
+            case 0:
+                throw RoamError.decodeError("unexpected user error for infallible method")
+            case 1:
+                throw RoamError.unknownMethod
+            case 2:
+                throw RoamError.decodeError("invalid payload")
+            case 3:
+                throw RoamError.cancelled
+            default:
+                throw RoamError.decodeError("invalid RoamError discriminant: \(_cursor_errorCode)")
+            }
+        default:
+            throw RoamError.decodeError("invalid Result discriminant: \(_cursor_resultDisc)")
+        }
     }
 
     public func rectangleArea(rect: Rectangle) async throws -> Double {
@@ -345,9 +502,28 @@ public final class TestbedClient: TestbedCaller {
         let payload = Data(payloadBytes)
         let response = try await connection.call(methodId: 0xba75c48683f1d9e6, payload: payload, timeout: timeout)
         var cursor = 0
-        try decodeRpcResult(from: response, offset: &cursor)
-        let result = try decodeF64(from: response, offset: &cursor)
-        return result
+        let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
+        switch _cursor_resultDisc {
+        case 0:
+            let result = try decodeF64(from: response, offset: &cursor)
+            return result
+        case 1:
+            let _cursor_errorCode = try decodeU8(from: response, offset: &cursor)
+            switch _cursor_errorCode {
+            case 0:
+                throw RoamError.decodeError("unexpected user error for infallible method")
+            case 1:
+                throw RoamError.unknownMethod
+            case 2:
+                throw RoamError.decodeError("invalid payload")
+            case 3:
+                throw RoamError.cancelled
+            default:
+                throw RoamError.decodeError("invalid RoamError discriminant: \(_cursor_errorCode)")
+            }
+        default:
+            throw RoamError.decodeError("invalid Result discriminant: \(_cursor_resultDisc)")
+        }
     }
 
     public func parseColor(name: String) async throws -> Color? {
@@ -356,23 +532,42 @@ public final class TestbedClient: TestbedCaller {
         let payload = Data(payloadBytes)
         let response = try await connection.call(methodId: 0xe285f31c6dfffbfc, payload: payload, timeout: timeout)
         var cursor = 0
-        try decodeRpcResult(from: response, offset: &cursor)
-        let result = try decodeOption(from: response, offset: &cursor, decoder: { data, off in
-            let disc = try decodeVarint(from: data, offset: &off)
-            let result: Color
-            switch disc {
-            case 0:
-                result = .red
-            case 1:
-                result = .green
-            case 2:
-                result = .blue
-            default:
-                throw RoamError.decodeError("unknown enum variant")
-            }
+        let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
+        switch _cursor_resultDisc {
+        case 0:
+            let result = try decodeOption(from: response, offset: &cursor, decoder: { data, off in
+                let disc = try decodeVarint(from: data, offset: &off)
+                let result: Color
+                switch disc {
+                case 0:
+                    result = .red
+                case 1:
+                    result = .green
+                case 2:
+                    result = .blue
+                default:
+                    throw RoamError.decodeError("unknown enum variant")
+                }
+                return result
+            })
             return result
-        })
-        return result
+        case 1:
+            let _cursor_errorCode = try decodeU8(from: response, offset: &cursor)
+            switch _cursor_errorCode {
+            case 0:
+                throw RoamError.decodeError("unexpected user error for infallible method")
+            case 1:
+                throw RoamError.unknownMethod
+            case 2:
+                throw RoamError.decodeError("invalid payload")
+            case 3:
+                throw RoamError.cancelled
+            default:
+                throw RoamError.decodeError("invalid RoamError discriminant: \(_cursor_errorCode)")
+            }
+        default:
+            throw RoamError.decodeError("invalid Result discriminant: \(_cursor_resultDisc)")
+        }
     }
 
     public func shapeArea(shape: Shape) async throws -> Double {
@@ -390,9 +585,28 @@ public final class TestbedClient: TestbedCaller {
         let payload = Data(payloadBytes)
         let response = try await connection.call(methodId: 0x6e706354167c00c2, payload: payload, timeout: timeout)
         var cursor = 0
-        try decodeRpcResult(from: response, offset: &cursor)
-        let result = try decodeF64(from: response, offset: &cursor)
-        return result
+        let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
+        switch _cursor_resultDisc {
+        case 0:
+            let result = try decodeF64(from: response, offset: &cursor)
+            return result
+        case 1:
+            let _cursor_errorCode = try decodeU8(from: response, offset: &cursor)
+            switch _cursor_errorCode {
+            case 0:
+                throw RoamError.decodeError("unexpected user error for infallible method")
+            case 1:
+                throw RoamError.unknownMethod
+            case 2:
+                throw RoamError.decodeError("invalid payload")
+            case 3:
+                throw RoamError.cancelled
+            default:
+                throw RoamError.decodeError("invalid RoamError discriminant: \(_cursor_errorCode)")
+            }
+        default:
+            throw RoamError.decodeError("invalid Result discriminant: \(_cursor_resultDisc)")
+        }
     }
 
     public func createCanvas(name: String, shapes: [Shape], background: Color) async throws -> Canvas {
@@ -421,40 +635,59 @@ public final class TestbedClient: TestbedCaller {
         let payload = Data(payloadBytes)
         let response = try await connection.call(methodId: 0xa914982e7d3c7b55, payload: payload, timeout: timeout)
         var cursor = 0
-        try decodeRpcResult(from: response, offset: &cursor)
-        let _result_name = try decodeString(from: response, offset: &cursor)
-        let _result_shapes = try decodeVec(from: response, offset: &cursor, decoder: { data, off in
-            let disc = try decodeVarint(from: data, offset: &off)
-            let result: Shape
-            switch disc {
+        let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
+        switch _cursor_resultDisc {
+        case 0:
+            let _result_name = try decodeString(from: response, offset: &cursor)
+            let _result_shapes = try decodeVec(from: response, offset: &cursor, decoder: { data, off in
+                let disc = try decodeVarint(from: data, offset: &off)
+                let result: Shape
+                switch disc {
+                case 0:
+                    let _radius = try decodeF64(from: data, offset: &off)
+                    result = .circle(radius: _radius)
+                case 1:
+                    let _width = try decodeF64(from: data, offset: &off)
+                    let _height = try decodeF64(from: data, offset: &off)
+                    result = .rectangle(width: _width, height: _height)
+                case 2:
+                    result = .point
+                default:
+                    throw RoamError.decodeError("unknown enum variant")
+                }
+                return result
+            })
+            let __result_background_disc = try decodeVarint(from: response, offset: &cursor)
+            let _result_background: Color
+            switch __result_background_disc {
             case 0:
-                let _radius = try decodeF64(from: data, offset: &off)
-                result = .circle(radius: _radius)
+                _result_background = .red
             case 1:
-                let _width = try decodeF64(from: data, offset: &off)
-                let _height = try decodeF64(from: data, offset: &off)
-                result = .rectangle(width: _width, height: _height)
+                _result_background = .green
             case 2:
-                result = .point
+                _result_background = .blue
             default:
                 throw RoamError.decodeError("unknown enum variant")
             }
+            let result = Canvas(name: _result_name, shapes: _result_shapes, background: _result_background)
             return result
-        })
-        let __result_background_disc = try decodeVarint(from: response, offset: &cursor)
-        let _result_background: Color
-        switch __result_background_disc {
-        case 0:
-            _result_background = .red
         case 1:
-            _result_background = .green
-        case 2:
-            _result_background = .blue
+            let _cursor_errorCode = try decodeU8(from: response, offset: &cursor)
+            switch _cursor_errorCode {
+            case 0:
+                throw RoamError.decodeError("unexpected user error for infallible method")
+            case 1:
+                throw RoamError.unknownMethod
+            case 2:
+                throw RoamError.decodeError("invalid payload")
+            case 3:
+                throw RoamError.cancelled
+            default:
+                throw RoamError.decodeError("invalid RoamError discriminant: \(_cursor_errorCode)")
+            }
         default:
-            throw RoamError.decodeError("unknown enum variant")
+            throw RoamError.decodeError("invalid Result discriminant: \(_cursor_resultDisc)")
         }
-        let result = Canvas(name: _result_name, shapes: _result_shapes, background: _result_background)
-        return result
     }
 
     public func processMessage(msg: Message) async throws -> Message {
@@ -472,23 +705,42 @@ public final class TestbedClient: TestbedCaller {
         let payload = Data(payloadBytes)
         let response = try await connection.call(methodId: 0xed1dc0c625889d30, payload: payload, timeout: timeout)
         var cursor = 0
-        try decodeRpcResult(from: response, offset: &cursor)
-        let _result_disc = try decodeVarint(from: response, offset: &cursor)
-        let result: Message
-        switch _result_disc {
+        let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
+        switch _cursor_resultDisc {
         case 0:
-            let _result_val = try decodeString(from: response, offset: &cursor)
-            result = .text(_result_val)
+            let _result_disc = try decodeVarint(from: response, offset: &cursor)
+            let result: Message
+            switch _result_disc {
+            case 0:
+                let _result_val = try decodeString(from: response, offset: &cursor)
+                result = .text(_result_val)
+            case 1:
+                let _result_val = try decodeI64(from: response, offset: &cursor)
+                result = .number(_result_val)
+            case 2:
+                let _result_val = try decodeBytes(from: response, offset: &cursor)
+                result = .data(_result_val)
+            default:
+                throw RoamError.decodeError("unknown enum variant")
+            }
+            return result
         case 1:
-            let _result_val = try decodeI64(from: response, offset: &cursor)
-            result = .number(_result_val)
-        case 2:
-            let _result_val = try decodeBytes(from: response, offset: &cursor)
-            result = .data(_result_val)
+            let _cursor_errorCode = try decodeU8(from: response, offset: &cursor)
+            switch _cursor_errorCode {
+            case 0:
+                throw RoamError.decodeError("unexpected user error for infallible method")
+            case 1:
+                throw RoamError.unknownMethod
+            case 2:
+                throw RoamError.decodeError("invalid payload")
+            case 3:
+                throw RoamError.cancelled
+            default:
+                throw RoamError.decodeError("invalid RoamError discriminant: \(_cursor_errorCode)")
+            }
         default:
-            throw RoamError.decodeError("unknown enum variant")
+            throw RoamError.decodeError("invalid Result discriminant: \(_cursor_resultDisc)")
         }
-        return result
     }
 
     public func getPoints(count: UInt32) async throws -> [Point] {
@@ -497,13 +749,32 @@ public final class TestbedClient: TestbedCaller {
         let payload = Data(payloadBytes)
         let response = try await connection.call(methodId: 0x5c8707f5ae4ccbcc, payload: payload, timeout: timeout)
         var cursor = 0
-        try decodeRpcResult(from: response, offset: &cursor)
-        let result = try decodeVec(from: response, offset: &cursor, decoder: { data, off in
-            let _x = try decodeI32(from: data, offset: &off)
-            let _y = try decodeI32(from: data, offset: &off)
-            return Point(x: _x, y: _y)
-        })
-        return result
+        let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
+        switch _cursor_resultDisc {
+        case 0:
+            let result = try decodeVec(from: response, offset: &cursor, decoder: { data, off in
+                let _x = try decodeI32(from: data, offset: &off)
+                let _y = try decodeI32(from: data, offset: &off)
+                return Point(x: _x, y: _y)
+            })
+            return result
+        case 1:
+            let _cursor_errorCode = try decodeU8(from: response, offset: &cursor)
+            switch _cursor_errorCode {
+            case 0:
+                throw RoamError.decodeError("unexpected user error for infallible method")
+            case 1:
+                throw RoamError.unknownMethod
+            case 2:
+                throw RoamError.decodeError("invalid payload")
+            case 3:
+                throw RoamError.cancelled
+            default:
+                throw RoamError.decodeError("invalid RoamError discriminant: \(_cursor_errorCode)")
+            }
+        default:
+            throw RoamError.decodeError("invalid Result discriminant: \(_cursor_resultDisc)")
+        }
     }
 
     public func swapPair(pair: (Int32, String)) async throws -> (String, Int32) {
@@ -512,9 +783,28 @@ public final class TestbedClient: TestbedCaller {
         let payload = Data(payloadBytes)
         let response = try await connection.call(methodId: 0xacd19a29fe0d470c, payload: payload, timeout: timeout)
         var cursor = 0
-        try decodeRpcResult(from: response, offset: &cursor)
-        let result = try decodeTuple2(from: response, offset: &cursor, decoderA: { data, off in try decodeString(from: data, offset: &off) }, decoderB: { data, off in try decodeI32(from: data, offset: &off) })
-        return result
+        let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
+        switch _cursor_resultDisc {
+        case 0:
+            let result = try decodeTuple2(from: response, offset: &cursor, decoderA: { data, off in try decodeString(from: data, offset: &off) }, decoderB: { data, off in try decodeI32(from: data, offset: &off) })
+            return result
+        case 1:
+            let _cursor_errorCode = try decodeU8(from: response, offset: &cursor)
+            switch _cursor_errorCode {
+            case 0:
+                throw RoamError.decodeError("unexpected user error for infallible method")
+            case 1:
+                throw RoamError.unknownMethod
+            case 2:
+                throw RoamError.decodeError("invalid payload")
+            case 3:
+                throw RoamError.cancelled
+            default:
+                throw RoamError.decodeError("invalid RoamError discriminant: \(_cursor_errorCode)")
+            }
+        default:
+            throw RoamError.decodeError("invalid Result discriminant: \(_cursor_resultDisc)")
+        }
     }
 }
 

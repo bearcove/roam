@@ -141,10 +141,13 @@ private extension NSLock {
 private func rpcErrorCode(from payload: [UInt8]) -> RpcErrorCode? {
     var offset = 0
     do {
-        try decodeRpcResult(from: Data(payload), offset: &offset)
-        return nil
-    } catch let error as RpcCallError {
-        return error.code
+        let response = Data(payload)
+        let resultDiscriminant = try decodeVarint(from: response, offset: &offset)
+        guard resultDiscriminant == 1 else {
+            return nil
+        }
+        let rawCode = try decodeU8(from: response, offset: &offset)
+        return RpcErrorCode(rawValue: rawCode)
     } catch {
         return nil
     }

@@ -333,9 +333,9 @@ export function isRefSchema(schema: Schema): schema is RefSchema {
  * - `returns` is the schema for `T`
  * - `error` is null
  *
- * Note: The outer `Result<T, RoamError<E>>` wrapper is handled by `decodeRpcResult`.
- * After that call succeeds, you decode with `returns`. If it throws a USER error,
- * you decode the error payload with `error`.
+ * Note: The outer `Result<T, RoamError<E>>` wrapper is handled by each client's
+ * schema-aware response decode path. After an `Ok`, decode with `returns`; for
+ * `RoamError::User`, decode the user payload with `error`.
  */
 export interface MethodSchema {
   args: Schema[];
