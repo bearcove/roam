@@ -12,11 +12,35 @@ import CRoamShmFfi
 
 private actor SubjectEnvGate {
     static let shared = SubjectEnvGate()
+    private var busy = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    private func acquire() async {
+        if !busy {
+            busy = true
+            return
+        }
+        await withCheckedContinuation { cont in
+            waiters.append(cont)
+        }
+    }
+
+    private func release() {
+        if waiters.isEmpty {
+            busy = false
+            return
+        }
+        let waiter = waiters.removeFirst()
+        waiter.resume()
+    }
 
     func withEnvironment<T>(
         _ pairs: [(String, String?)],
         body: () async throws -> T
     ) async rethrows -> T {
+        await acquire()
+        defer { release() }
+
         var previous: [(String, String?)] = []
         previous.reserveCapacity(pairs.count)
         for (key, value) in pairs {
@@ -56,17 +80,39 @@ private func withTimeout<T: Sendable>(
     milliseconds: UInt64,
     operation: @escaping @Sendable () async throws -> T
 ) async throws -> T {
-    try await withThrowingTaskGroup(of: T.self) { group in
-        group.addTask {
-            try await operation()
+    try await withCheckedThrowingContinuation { continuation in
+        let operationTask = Task<Result<T, Error>, Never> {
+            do {
+                return .success(try await operation())
+            } catch {
+                return .failure(error)
+            }
         }
-        group.addTask {
-            try await Task.sleep(nanoseconds: milliseconds * 1_000_000)
-            throw EntrypointTestError.timeout("operation timed out after \(milliseconds)ms")
+
+        let timeoutTask = Task<Void, Never> {
+            do {
+                try await Task.sleep(nanoseconds: milliseconds * 1_000_000)
+            } catch {
+                return
+            }
+            operationTask.cancel()
+            continuation.resume(
+                throwing: EntrypointTestError.timeout(
+                    "operation timed out after \(milliseconds)ms"
+                )
+            )
         }
-        let result = try await group.next()!
-        group.cancelAll()
-        return result
+
+        Task<Void, Never> {
+            let result = await operationTask.value
+            timeoutTask.cancel()
+            switch result {
+            case .success(let value):
+                continuation.resume(returning: value)
+            case .failure(let error):
+                continuation.resume(throwing: error)
+            }
+        }
     }
 }
 
@@ -474,10 +520,6 @@ struct SubjectEntrypointCoverageTests {
 
     @Test func runClientEchoEndToEndOverTcpHarness() async throws {
         let harness = try await TcpAcceptorHarness.start()
-        defer {
-            Task { await harness.shutdown() }
-        }
-
         let serverTask = Task {
             let transport = await harness.waitForTransport()
             let dispatcher = TestbedDispatcherAdapter(handler: TestbedService())
@@ -486,6 +528,14 @@ struct SubjectEntrypointCoverageTests {
                 dispatcher: dispatcher
             )
             try await driver.run()
+        }
+
+        defer {
+            serverTask.cancel()
+            Task {
+                await harness.closeAcceptedTransport()
+                await harness.shutdown()
+            }
         }
 
         try await SubjectEnvGate.shared.withEnvironment([
@@ -497,6 +547,7 @@ struct SubjectEntrypointCoverageTests {
             }
         }
 
+        serverTask.cancel()
         await harness.closeAcceptedTransport()
         _ = try await withTimeout(milliseconds: 2_000) {
             try await serverTask.value
@@ -675,8 +726,15 @@ struct SubjectEntrypointCoverageTests {
                 try await runShmHostServer()
             }
 
+            var guestTransport: ShmGuestTransport?
+            var driverTask: Task<Void, Error>?
             var ticket: ShmBootstrapTicket?
             defer {
+                driverTask?.cancel()
+                serverTask.cancel()
+                if let guestTransport {
+                    Task { try? await guestTransport.close() }
+                }
                 if let ticket {
                     close(ticket.doorbellFd)
                     if ticket.mmapControlFd >= 0 {
@@ -692,11 +750,12 @@ struct SubjectEntrypointCoverageTests {
                 return try requestShmBootstrapTicket(controlSocketPath: controlSock, sid: sid)
             }
 
-            let guestTransport = try ShmGuestTransport.attach(ticket: try #require(ticket))
+            guestTransport = try ShmGuestTransport.attach(ticket: try #require(ticket))
+            let attachedTransport = try #require(guestTransport)
             let (handle, driver) = try await withTimeout(milliseconds: 2_000) {
-                try await establishInitiator(transport: guestTransport, dispatcher: NoopDispatcher())
+                try await establishInitiator(transport: attachedTransport, dispatcher: NoopDispatcher())
             }
-            let driverTask = Task {
+            driverTask = Task {
                 try await driver.run()
             }
 
@@ -704,8 +763,8 @@ struct SubjectEntrypointCoverageTests {
             let echoed = try await client.echo(message: "swift-shm-host")
             #expect(echoed == "swift-shm-host")
 
-            try await guestTransport.close()
-            _ = await driverTask.result
+            try await attachedTransport.close()
+            _ = await driverTask?.result
             _ = try await withTimeout(milliseconds: 2_000) {
                 try await serverTask.value
                 return ()
