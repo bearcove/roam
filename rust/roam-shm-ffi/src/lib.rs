@@ -736,6 +736,12 @@ fn send_mmap_attach(
 /// Send one mmap attach message (fd + map metadata) over a Unix control socket.
 ///
 /// Returns 0 on success, -1 on error.
+///
+/// # Safety
+///
+/// `control_fd` and `mapping_fd` must be valid, open Unix file descriptors.
+/// `control_fd` must refer to a Unix domain socket configured to pass
+/// `SCM_RIGHTS`, and ownership/lifetime of `mapping_fd` must outlive the send.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn roam_mmap_control_send(
     control_fd: i32,
@@ -754,11 +760,11 @@ pub unsafe extern "C" fn roam_mmap_control_send(
             map_generation,
             mapping_length,
         };
-        return if send_mmap_attach(control_fd, mapping_fd, msg).is_ok() {
+        if send_mmap_attach(control_fd, mapping_fd, msg).is_ok() {
             0
         } else {
             -1
-        };
+        }
     }
 
     #[cfg(not(unix))]
@@ -777,6 +783,11 @@ pub unsafe extern "C" fn roam_mmap_control_send(
 /// Create a guest-side mmap attachment registry from a control socket fd.
 ///
 /// Returns null on invalid fd or setup failure.
+///
+/// # Safety
+///
+/// `control_fd` must be a valid Unix domain socket file descriptor owned by the
+/// caller for at least as long as the returned attachments object lives.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn roam_mmap_attachments_create(control_fd: i32) -> *mut RoamMmapAttachments {
     #[cfg(unix)]
@@ -787,10 +798,10 @@ pub unsafe extern "C" fn roam_mmap_attachments_create(control_fd: i32) -> *mut R
         if set_nonblocking(control_fd) != 0 {
             return core::ptr::null_mut();
         }
-        return Box::into_raw(Box::new(RoamMmapAttachments {
+        Box::into_raw(Box::new(RoamMmapAttachments {
             control_fd,
             mappings: Mutex::new(HashMap::new()),
-        }));
+        }))
     }
 
     #[cfg(not(unix))]
@@ -844,7 +855,7 @@ pub unsafe extern "C" fn roam_mmap_attachments_drain_control(
             }
         }
 
-        return attached_count;
+        attached_count
     }
 
     #[cfg(not(unix))]
@@ -902,7 +913,7 @@ pub unsafe extern "C" fn roam_mmap_attachments_resolve_ptr(
         // SAFETY: bounds checked against mapping length above.
         let ptr = unsafe { mapping.region.region().as_ptr().add(start) } as *const u8;
         unsafe { *out_ptr = ptr };
-        return 0;
+        0
     }
 
     #[cfg(not(unix))]
