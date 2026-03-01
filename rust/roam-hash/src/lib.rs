@@ -423,4 +423,92 @@ mod tests {
     fn rejects_nested_channel_in_return_types() {
         let _ = method_descriptor::<(Tx<u8>,), NestedRet>("TestSvc", "nested", &["input"], None);
     }
+
+    #[test]
+    fn encode_varint_encodes_expected_boundaries() {
+        let mut out = Vec::new();
+        encode_varint_u64(0, &mut out);
+        assert_eq!(out, vec![0x00]);
+
+        out.clear();
+        encode_varint_u64(127, &mut out);
+        assert_eq!(out, vec![0x7F]);
+
+        out.clear();
+        encode_varint_u64(128, &mut out);
+        assert_eq!(out, vec![0x80, 0x01]);
+
+        out.clear();
+        encode_varint_u64(300, &mut out);
+        assert_eq!(out, vec![0xAC, 0x02]);
+    }
+
+    #[test]
+    fn method_id_is_stable_and_uses_kebab_case_names() {
+        let a = method_id::<(u32,), u64>("MyService", "DoThingFast");
+        let b = method_id::<(u32,), u64>("my-service", "do-thing-fast");
+        let c = method_id::<(u32,), u64>("MY_SERVICE", "DO_THING_FAST");
+        assert_eq!(a, b);
+        assert_eq!(b, c);
+    }
+
+    #[test]
+    fn method_id_changes_when_signature_changes() {
+        let a = method_id::<(u32,), u64>("svc", "m");
+        let b = method_id::<(u64,), u64>("svc", "m");
+        let c = method_id::<(u32,), u32>("svc", "m");
+        assert_ne!(a, b);
+        assert_ne!(a, c);
+    }
+
+    #[test]
+    fn method_descriptor_populates_args_and_doc() {
+        let descriptor = method_descriptor::<(u32, String), PlainRet>(
+            "Svc",
+            "do_it",
+            &["count", "name"],
+            Some("doc"),
+        );
+        assert_eq!(descriptor.service_name, "Svc");
+        assert_eq!(descriptor.method_name, "do_it");
+        assert_eq!(descriptor.args.len(), 2);
+        assert_eq!(descriptor.args[0].name, "count");
+        assert_eq!(descriptor.args[1].name, "name");
+        assert_eq!(descriptor.doc, Some("doc"));
+    }
+
+    #[test]
+    #[should_panic(expected = "arg_names length mismatch for Svc.bad")]
+    fn method_descriptor_panics_when_arg_names_length_mismatches_shape() {
+        let _ = method_descriptor::<(u32, u64), PlainRet>("Svc", "bad", &["only_one"], None);
+    }
+
+    #[test]
+    fn list_of_u8_uses_bytes_tag_while_other_lists_do_not() {
+        let mut vec_u8_sig = Vec::new();
+        encode_shape(<Vec<u8> as Facet>::SHAPE, &mut vec_u8_sig);
+        assert_eq!(vec_u8_sig, vec![sig::BYTES]);
+
+        let mut vec_u16_sig = Vec::new();
+        encode_shape(<Vec<u16> as Facet>::SHAPE, &mut vec_u16_sig);
+
+        assert_ne!(vec_u8_sig, vec_u16_sig);
+        assert_eq!(vec_u16_sig[0], sig::LIST);
+    }
+
+    #[test]
+    fn shape_contains_channel_handles_recursive_and_non_recursive_shapes() {
+        #[derive(Facet)]
+        struct Recursive {
+            next: Option<Box<Recursive>>,
+        }
+
+        #[derive(Facet)]
+        struct ChannelNested {
+            inner: Option<Result<Tx<u16>, u8>>,
+        }
+
+        assert!(!shape_contains_channel(Recursive::SHAPE));
+        assert!(shape_contains_channel(ChannelNested::SHAPE));
+    }
 }
