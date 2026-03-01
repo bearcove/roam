@@ -282,9 +282,9 @@ export class Connection<T extends MessageTransport = MessageTransport> {
    * Returns the rule ID if validation fails.
    */
   validateChannelId(channelId: bigint): string | null {
-    // r[impl channeling.id.zero-reserved] - Channel ID 0 is reserved.
+    // r[impl rpc.channel.allocation] - Channel ID 0 is reserved.
     if (channelId === 0n) {
-      return "channeling.id.zero-reserved";
+      return "rpc.channel.allocation";
     }
 
     // r[impl channeling.unknown] - Unknown channel IDs are connection errors.
@@ -748,7 +748,7 @@ export class Connection<T extends MessageTransport = MessageTransport> {
       const body = msg.payload.value.body;
       if (channelId === 0n) {
         throw ConnectionError.protocol({
-          ruleId: "channeling.id.zero-reserved",
+          ruleId: "rpc.channel.allocation",
           context: "channel ID 0 is reserved",
         });
       }
@@ -882,9 +882,9 @@ export class Connection<T extends MessageTransport = MessageTransport> {
 
     if (tag === "ChannelMessage" && msg.payload.value.body.tag === "Item") {
       const channelId = msg.payload.value.id;
-      // r[impl channeling.id.zero-reserved] - Channel ID 0 is reserved.
+      // r[impl rpc.channel.allocation] - Channel ID 0 is reserved.
       if (channelId === 0n) {
-        throw await this.goodbye("channeling.id.zero-reserved");
+        throw await this.goodbye("rpc.channel.allocation");
       }
 
       // r[impl channeling.data] - Route Data to registered channel.
@@ -908,9 +908,9 @@ export class Connection<T extends MessageTransport = MessageTransport> {
 
     if (tag === "ChannelMessage" && msg.payload.value.body.tag === "Close") {
       const channelId = msg.payload.value.id;
-      // r[impl channeling.id.zero-reserved] - Channel ID 0 is reserved.
+      // r[impl rpc.channel.allocation] - Channel ID 0 is reserved.
       if (channelId === 0n) {
-        throw await this.goodbye("channeling.id.zero-reserved");
+        throw await this.goodbye("rpc.channel.allocation");
       }
 
       // r[impl channeling.close] - Close the channel.
@@ -923,9 +923,9 @@ export class Connection<T extends MessageTransport = MessageTransport> {
 
     if (tag === "ChannelMessage" && msg.payload.value.body.tag === "Reset") {
       const channelId = msg.payload.value.id;
-      // r[impl channeling.id.zero-reserved] - Channel ID 0 is reserved.
+      // r[impl rpc.channel.allocation] - Channel ID 0 is reserved.
       if (channelId === 0n) {
-        throw await this.goodbye("channeling.id.zero-reserved");
+        throw await this.goodbye("rpc.channel.allocation");
       }
 
       // r[impl channeling.reset] - Forcefully terminate channel.
@@ -940,9 +940,9 @@ export class Connection<T extends MessageTransport = MessageTransport> {
 
     if (tag === "ChannelMessage" && msg.payload.value.body.tag === "GrantCredit") {
       const channelId = msg.payload.value.id;
-      // r[impl channeling.id.zero-reserved] - Channel ID 0 is reserved.
+      // r[impl rpc.channel.allocation] - Channel ID 0 is reserved.
       if (channelId === 0n) {
-        throw await this.goodbye("channeling.id.zero-reserved");
+        throw await this.goodbye("rpc.channel.allocation");
       }
 
       // TODO: Implement flow control.

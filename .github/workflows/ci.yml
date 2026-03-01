@@ -133,6 +133,31 @@ jobs:
         env:
           SUBJECT_CMD: "./target/debug/subject-rust"
 
+  generated-bindings:
+    name: Generated / Bindings Sync
+    runs-on: depot-ubuntu-24.04-4
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Regenerate TypeScript and Swift bindings
+        run: cargo xtask codegen --typescript --swift
+
+      - name: Check generated bindings are committed
+        run: |
+          DRIFT="$(git status --porcelain -- typescript/generated swift/subject/Sources/subject-swift)"
+          if [ -n "$DRIFT" ]; then
+            echo "Generated bindings are out of date. Run: cargo xtask codegen --typescript --swift"
+            echo "$DRIFT"
+            git --no-pager diff -- typescript/generated swift/subject/Sources/subject-swift || true
+            exit 1
+          fi
+
   typescript-conformance:
     name: Conformance / TypeScript
     runs-on: depot-ubuntu-24.04-4
