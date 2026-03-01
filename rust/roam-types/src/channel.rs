@@ -228,11 +228,10 @@ impl ReceiverSlot {
 
 /// Sender handle: "I send". The holder of a `Tx<T>` sends items of type `T`.
 ///
-/// In arg position the handler holds it (handler sends → caller).
-/// In return position the caller holds it (caller sends → handler).
+/// In method args, the handler holds it (handler sends → caller).
 ///
 /// Wire encoding is always unit (`()`), with channel IDs carried exclusively
-/// in `Message::{Request,Response}.channels`.
+/// in `Message::Request.channels`.
 // r[impl rpc.channel]
 // r[impl rpc.channel.direction]
 // r[impl rpc.channel.payload-encoding]
@@ -371,11 +370,10 @@ impl std::error::Error for TxError {}
 
 /// Receiver handle: "I receive". The holder of an `Rx<T>` receives items of type `T`.
 ///
-/// In arg position the handler holds it (handler receives ← caller).
-/// In return position the caller holds it (caller receives ← handler).
+/// In method args, the handler holds it (handler receives ← caller).
 ///
 /// Wire encoding is always unit (`()`), with channel IDs carried exclusively
-/// in `Message::{Request,Response}.channels`.
+/// in `Message::Request.channels`.
 #[derive(Facet)]
 #[facet(proxy = ())]
 pub struct Rx<T, const N: usize = 16> {

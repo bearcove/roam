@@ -9,6 +9,7 @@ use facet_core::{Def, Facet, ScalarType, Shape, StructKind, Type, UserType};
 use heck::ToKebabCase;
 use roam_types::{ArgDescriptor, MethodDescriptor, MethodId};
 use roam_types::{is_rx, is_tx};
+use std::collections::HashSet;
 
 /// Signature encoding tags for type serialization.
 mod sig {
@@ -310,6 +311,11 @@ pub fn method_descriptor<'a, 'r, A: Facet<'a>, R: Facet<'r>>(
     arg_names: &[&'static str],
     doc: Option<&'static str>,
 ) -> &'static MethodDescriptor {
+    assert!(
+        !shape_contains_channel(R::SHAPE),
+        "channels are not allowed in return types: {service_name}.{method_name}"
+    );
+
     let id = method_id::<A, R>(service_name, method_name);
 
     // Extract per-arg shapes from the tuple fields of A::SHAPE.
@@ -344,4 +350,77 @@ pub fn method_descriptor<'a, 'r, A: Facet<'a>, R: Facet<'r>>(
         return_shape: R::SHAPE,
         doc,
     }))
+}
+
+fn shape_contains_channel(shape: &'static Shape) -> bool {
+    fn visit(shape: &'static Shape, seen: &mut HashSet<usize>) -> bool {
+        if is_tx(shape) || is_rx(shape) {
+            return true;
+        }
+
+        let key = shape as *const Shape as usize;
+        if !seen.insert(key) {
+            return false;
+        }
+
+        if let Some(inner) = shape.inner
+            && visit(inner, seen)
+        {
+            return true;
+        }
+
+        if shape.type_params.iter().any(|t| visit(t.shape, seen)) {
+            return true;
+        }
+
+        match shape.def {
+            Def::List(list_def) => visit(list_def.t(), seen),
+            Def::Array(array_def) => visit(array_def.t(), seen),
+            Def::Slice(slice_def) => visit(slice_def.t(), seen),
+            Def::Map(map_def) => visit(map_def.k(), seen) || visit(map_def.v(), seen),
+            Def::Set(set_def) => visit(set_def.t(), seen),
+            Def::Option(opt_def) => visit(opt_def.t(), seen),
+            Def::Result(result_def) => visit(result_def.t(), seen) || visit(result_def.e(), seen),
+            Def::Pointer(ptr_def) => ptr_def.pointee.is_some_and(|p| visit(p, seen)),
+            _ => match shape.ty {
+                Type::User(UserType::Struct(s)) => s.fields.iter().any(|f| visit(f.shape(), seen)),
+                Type::User(UserType::Enum(e)) => e
+                    .variants
+                    .iter()
+                    .any(|v| v.data.fields.iter().any(|f| visit(f.shape(), seen))),
+                _ => false,
+            },
+        }
+    }
+
+    let mut seen = HashSet::new();
+    visit(shape, &mut seen)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use facet::Facet;
+    use roam_types::{Rx, Tx};
+
+    #[derive(Facet)]
+    struct PlainRet {
+        value: u64,
+    }
+
+    #[derive(Facet)]
+    struct NestedRet {
+        nested: Option<Result<Rx<u8>, u32>>,
+    }
+
+    #[test]
+    fn allows_non_channel_return_types() {
+        let _ = method_descriptor::<(), PlainRet>("TestSvc", "plain", &[], None);
+    }
+
+    #[test]
+    #[should_panic(expected = "channels are not allowed in return types: TestSvc.nested")]
+    fn rejects_nested_channel_in_return_types() {
+        let _ = method_descriptor::<(Tx<u8>,), NestedRet>("TestSvc", "nested", &["input"], None);
+    }
 }

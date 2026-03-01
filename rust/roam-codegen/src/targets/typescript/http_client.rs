@@ -53,9 +53,7 @@ pub fn generate_http_client(service: &ServiceDescriptor) -> String {
 
     for method in service.methods {
         let method_name = method.method_name.to_lower_camel_case();
-        let has_channels = method.args.iter().any(|a| is_tx(a.shape) || is_rx(a.shape))
-            || is_tx(method.return_shape)
-            || is_rx(method.return_shape);
+        let has_channels = method.args.iter().any(|a| is_tx(a.shape) || is_rx(a.shape));
 
         // Build args (skip channel types for signature, they'll throw at runtime)
         let args: Vec<String> = method
@@ -164,9 +162,7 @@ pub fn generate_http_client(service: &ServiceDescriptor) -> String {
     // Generate method implementations
     for method in service.methods {
         let method_name = method.method_name.to_lower_camel_case();
-        let has_channels = method.args.iter().any(|a| is_tx(a.shape) || is_rx(a.shape))
-            || is_tx(method.return_shape)
-            || is_rx(method.return_shape);
+        let has_channels = method.args.iter().any(|a| is_tx(a.shape) || is_rx(a.shape));
 
         // Build args (skip channel types)
         let args: Vec<String> = method

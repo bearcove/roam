@@ -10,7 +10,7 @@ use std::collections::HashSet;
 use facet_core::{ScalarType, Shape};
 use heck::ToLowerCamelCase;
 use roam_types::{
-    EnumInfo, ServiceDescriptor, ShapeKind, StructInfo, VariantKind, classify_shape,
+    EnumInfo, RpcPlan, ServiceDescriptor, ShapeKind, StructInfo, VariantKind, classify_shape,
     classify_variant, is_bytes, is_rx, is_tx,
 };
 
@@ -277,9 +277,8 @@ pub fn swift_type_client_arg(shape: &'static Shape) -> String {
 
 /// Convert Shape to Swift type string for client returns.
 pub fn swift_type_client_return(shape: &'static Shape) -> String {
+    assert_no_channels_in_return_shape(shape);
     match classify_shape(shape) {
-        ShapeKind::Tx { inner } => format!("UnboundTx<{}>", swift_type_base(inner)),
-        ShapeKind::Rx { inner } => format!("UnboundRx<{}>", swift_type_base(inner)),
         ShapeKind::Scalar(ScalarType::Unit) => "Void".into(),
         ShapeKind::Tuple { elements: [] } => "Void".into(),
         _ => swift_type_base(shape),
@@ -297,9 +296,8 @@ pub fn swift_type_server_arg(shape: &'static Shape) -> String {
 
 /// Convert Shape to Swift type string for server returns.
 pub fn swift_type_server_return(shape: &'static Shape) -> String {
+    assert_no_channels_in_return_shape(shape);
     match classify_shape(shape) {
-        ShapeKind::Tx { inner } => format!("Tx<{}>", swift_type_base(inner)),
-        ShapeKind::Rx { inner } => format!("Rx<{}>", swift_type_base(inner)),
         ShapeKind::Scalar(ScalarType::Unit) => "Void".into(),
         ShapeKind::Tuple { elements: [] } => "Void".into(),
         _ => swift_type_base(shape),
@@ -316,4 +314,11 @@ pub fn format_doc(doc: &str, indent: &str) -> String {
     doc.lines()
         .map(|line| format!("{indent}/// {line}\n"))
         .collect()
+}
+
+fn assert_no_channels_in_return_shape(shape: &'static Shape) {
+    assert!(
+        RpcPlan::for_shape(shape).channel_locations.is_empty(),
+        "channels are not allowed in return types"
+    );
 }

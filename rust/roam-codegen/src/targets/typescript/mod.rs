@@ -92,12 +92,11 @@ fn generate_imports(service: &ServiceDescriptor, w: &mut CodeWriter<&mut String>
     use crate::cw_writeln;
     use roam_types::{ShapeKind, classify_shape, is_rx, is_tx};
 
-    // Check if any method uses channels
-    let has_streaming = service.methods.iter().any(|m| {
-        m.args.iter().any(|a| is_tx(a.shape) || is_rx(a.shape))
-            || is_tx(m.return_shape)
-            || is_rx(m.return_shape)
-    });
+    // Check if any method uses channels in args.
+    let has_streaming = service
+        .methods
+        .iter()
+        .any(|m| m.args.iter().any(|a| is_tx(a.shape) || is_rx(a.shape)));
 
     // Check if any method returns Result<T, E> (fallible methods)
     let has_fallible = service

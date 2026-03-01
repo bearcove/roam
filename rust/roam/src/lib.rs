@@ -45,10 +45,7 @@ pub use roam_types::{
 
 // Channel binding is only available on non-wasm32 targets
 #[cfg(not(target_arch = "wasm32"))]
-pub use roam_types::{
-    bind_channels_callee_args, bind_channels_callee_return, bind_channels_caller_args,
-    bind_channels_caller_return,
-};
+pub use roam_types::{bind_channels_callee_args, bind_channels_caller_args};
 
 // Re-export the session module (generated code uses `roam::session::ServiceDescriptor`)
 pub mod session {

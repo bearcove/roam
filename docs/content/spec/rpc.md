@@ -193,13 +193,11 @@ let result = caller.add(3, 5).await?;
 >
 >   * In arg position (handler holds): `Tx<T>` = handler sends → caller,
 >     `Rx<T>` = handler receives ← caller.
->   * In return position (caller holds): `Tx<T>` = caller sends → handler,
->     `Rx<T>` = caller receives ← handler.
 
 > r[rpc.channel.placement]
 >
-> `Tx<T, N>` and `Rx<T, N>` may appear in both argument types and return
-> types of service methods. They MUST NOT appear in the error variant of a
+> `Tx<T, N>` and `Rx<T, N>` may appear in argument types of service methods.
+> They MUST NOT appear in method return types or in the error variant of a
 > `Result` return type.
 
 > r[rpc.channel.no-collections]
@@ -211,8 +209,7 @@ let result = caller.add(3, 5).await?;
 > r[rpc.channel.allocation]
 >
 > Channel IDs are allocated using the connection's parity. The caller
-> allocates IDs for channels that appear in the request arguments. The
-> callee allocates IDs for channels that appear in the response return type.
+> allocates IDs for channels that appear in the request arguments.
 
 > r[rpc.channel.lifecycle]
 >
@@ -407,9 +404,8 @@ metadata.push((
 
 > r[rpc.channel.discovery]
 >
-> Channel IDs in `Request.channels` and `Response.channels` MUST be listed
-> in the order produced by a schema-driven traversal of the argument types
-> (for requests) or return type (for responses). The traversal visits struct
+> Channel IDs in `Request.channels` MUST be listed in the order produced by a
+> schema-driven traversal of the argument types. The traversal visits struct
 > fields and active enum variant fields in declaration order. It does not
 > descend into collections, since channels MUST NOT appear there (see
 > `r[rpc.channel.no-collections]`). Channels inside an `Option` that is
@@ -425,10 +421,7 @@ metadata.push((
 >
 > On the callee side, implementations MUST use the channel IDs from
 > `Request.channels` as authoritative, patching them into deserialized
-> argument values before binding streams. On the caller side, implementations
-> MUST use the channel IDs from `Response.channels` to bind return-type
-> channel handles. This separation enables transparent proxying: a proxy
-> can forward `Request` and `Response` messages without parsing payloads.
+> argument values before binding streams.
 
 ## Channel pairs and shared state
 
@@ -492,51 +485,6 @@ metadata.push((
 > r[rpc.channel.binding.callee-args.tx]
 >
 > For a `Tx<T>` in arg position: the handler sends. The framework
-> calls `ChannelBinder::bind_tx` with the channel ID and stores the
-> sink directly in the `Tx`'s sink slot.
-
-## Callee-side binding (return)
-
-> r[rpc.channel.binding.callee-return]
->
-> When the callee returns a response containing channel handles, those
-> handles were created via `channel()` and are part of a pair. The
-> framework iterates the channel locations in the return type's `RpcPlan`,
-> allocates a channel ID for each, and binds the handle in the return
-> value. Channel IDs are collected into `Response.channels`.
-
-> r[rpc.channel.binding.callee-return.rx]
->
-> For an `Rx<T>` in return position: the caller will receive, so the
-> callee must send. The framework allocates a channel ID and creates
-> a sink. The sink is stored in the shared core so the callee's
-> paired `Tx<T>` can send through it.
-
-> r[rpc.channel.binding.callee-return.tx]
->
-> For a `Tx<T>` in return position: the caller will send, so the
-> callee must receive. The framework allocates a channel ID and creates
-> a receiver. The receiver is stored in the shared core so the callee's
-> paired `Rx<T>` can receive from it.
-
-## Caller-side binding (return)
-
-> r[rpc.channel.binding.caller-return]
->
-> When the caller receives a response containing channel handles, those
-> handles are standalone (deserialized from the response). The framework
-> iterates the channel locations in the return type's `RpcPlan` and binds
-> each handle directly using the channel IDs from `Response.channels`.
-
-> r[rpc.channel.binding.caller-return.rx]
->
-> For an `Rx<T>` in return position: the caller receives. The framework
-> calls `ChannelBinder::register_rx` with the channel ID and stores the
-> receiver directly in the `Rx`'s receiver slot.
-
-> r[rpc.channel.binding.caller-return.tx]
->
-> For a `Tx<T>` in return position: the caller sends. The framework
 > calls `ChannelBinder::bind_tx` with the channel ID and stores the
 > sink directly in the `Tx`'s sink slot.
 

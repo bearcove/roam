@@ -125,8 +125,7 @@ fn generate_client_method(
         .collect();
 
     let ret_type = swift_type_client_return(method.return_shape);
-    let has_streaming =
-        method.args.iter().any(|a| is_channel(a.shape)) || is_channel(method.return_shape);
+    let has_streaming = method.args.iter().any(|a| is_channel(a.shape));
 
     // Method signature
     if ret_type == "Void" {

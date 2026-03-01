@@ -9,7 +9,7 @@ use std::collections::HashSet;
 
 use facet_core::{ScalarType, Shape};
 use roam_types::{
-    EnumInfo, ServiceDescriptor, ShapeKind, StructInfo, VariantKind, classify_shape,
+    EnumInfo, RpcPlan, ServiceDescriptor, ShapeKind, StructInfo, VariantKind, classify_shape,
     classify_variant, is_bytes,
 };
 
@@ -315,11 +315,8 @@ pub fn ts_type_client_arg(shape: &'static Shape) -> String {
 /// Convert Shape to TypeScript type string for client returns.
 /// Schema is from server's perspective - no inversion needed.
 pub fn ts_type_client_return(shape: &'static Shape) -> String {
-    match classify_shape(shape) {
-        ShapeKind::Tx { inner } => format!("Tx<{}>", ts_type_client_return(inner)),
-        ShapeKind::Rx { inner } => format!("Rx<{}>", ts_type_client_return(inner)),
-        _ => ts_type_base_named(shape),
-    }
+    assert_no_channels_in_return_shape(shape);
+    ts_type_base_named(shape)
 }
 
 /// Convert Shape to TypeScript type string for server/handler arguments.
@@ -335,11 +332,8 @@ pub fn ts_type_server_arg(shape: &'static Shape) -> String {
 
 /// Schema is from server's perspective - no inversion needed.
 pub fn ts_type_server_return(shape: &'static Shape) -> String {
-    match classify_shape(shape) {
-        ShapeKind::Tx { inner } => format!("Tx<{}>", ts_type_server_return(inner)),
-        ShapeKind::Rx { inner } => format!("Rx<{}>", ts_type_server_return(inner)),
-        _ => ts_type_base_named(shape),
-    }
+    assert_no_channels_in_return_shape(shape);
+    ts_type_base_named(shape)
 }
 
 /// TypeScript type for user-facing type definitions.
@@ -379,4 +373,11 @@ pub fn is_fully_supported(shape: &'static Shape) -> bool {
         ShapeKind::Result { ok, err } => is_fully_supported(ok) && is_fully_supported(err),
         ShapeKind::Opaque => false,
     }
+}
+
+fn assert_no_channels_in_return_shape(shape: &'static Shape) {
+    assert!(
+        RpcPlan::for_shape(shape).channel_locations.is_empty(),
+        "channels are not allowed in return types"
+    );
 }

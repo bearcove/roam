@@ -70,16 +70,14 @@ pub fn roam_crate() -> TokenStream2 {
 /// can be called from tests with a fixed path like `::roam`.
 pub fn generate_service(parsed: &ServiceTrait, roam: &TokenStream2) -> Result<TokenStream2, Error> {
     // r[impl rpc.channel.placement]
-    // Validate: no channels in error types
+    // Validate: channels are only allowed in method args.
     for method in parsed.methods() {
         let return_type = method.return_type();
-        if let Some((_, err_ty)) = return_type.as_result()
-            && err_ty.contains_channel()
-        {
+        if return_type.contains_channel() {
             return Err(Error::new(
                 proc_macro2::Span::call_site(),
                 format!(
-                    "method `{}` has Channel (Tx/Rx) in error type - channels are not allowed in error types",
+                    "method `{}` has Channel (Tx/Rx) in return type - channels are only allowed in method arguments",
                     method.name()
                 ),
             ));
@@ -618,5 +616,19 @@ mod tests {
         assert_snapshot!(generate(quote! {
             trait Streamer { async fn count_up(&self, start: i32, output: Tx<i32>) -> i32; }
         }));
+    }
+
+    #[test]
+    fn rejects_channels_in_return_type() {
+        let parsed = roam_macros_parse::parse_trait(&quote! {
+            trait Streamer { async fn stream(&self) -> Rx<i32>; }
+        })
+        .unwrap();
+        let roam = quote! { ::roam };
+        let err = crate::generate_service(&parsed, &roam).unwrap_err();
+        assert_eq!(
+            err.message,
+            "method `stream` has Channel (Tx/Rx) in return type - channels are only allowed in method arguments"
+        );
     }
 }

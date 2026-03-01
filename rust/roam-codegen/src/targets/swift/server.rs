@@ -212,8 +212,7 @@ fn generate_preregister_channels(w: &mut CodeWriter<&mut String>, service: &Serv
 fn generate_channeling_dispatch_method(w: &mut CodeWriter<&mut String>, method: &MethodDescriptor) {
     let method_name = method.method_name.to_lower_camel_case();
     let dispatch_name = dispatch_helper_name(&method_name);
-    let has_channeling =
-        method.args.iter().any(|a| is_channel(a.shape)) || is_channel(method.return_shape);
+    let has_channeling = method.args.iter().any(|a| is_channel(a.shape));
 
     cw_writeln!(
         w,
