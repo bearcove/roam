@@ -430,3 +430,113 @@ pub fn parse_trait(tokens: &TokenStream2) -> Result<ServiceTrait, unsynn::Error>
     let mut iter = tokens.clone().to_token_iter();
     ServiceTrait::parse(&mut iter)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse(src: &str) -> ServiceTrait {
+        let ts: TokenStream2 = src.parse().expect("tokenstream parse");
+        parse_trait(&ts).expect("trait parse")
+    }
+
+    #[test]
+    fn parse_trait_exposes_docs_methods_and_args() {
+        let trait_def = parse(
+            r#"
+            #[doc = "Calculator service."]
+            pub trait Calculator {
+                #[doc = "Adds two numbers."]
+                async fn add(&self, a: i32, b: i32) -> Result<i64, String>;
+            }
+            "#,
+        );
+
+        assert_eq!(trait_def.name(), "Calculator");
+        assert_eq!(trait_def.doc(), Some("Calculator service.".to_string()));
+
+        let method = trait_def.methods().next().expect("method");
+        assert_eq!(method.name(), "add");
+        assert_eq!(method.doc(), Some("Adds two numbers.".to_string()));
+        assert_eq!(
+            method.args().map(|arg| arg.name()).collect::<Vec<_>>(),
+            vec!["a", "b"]
+        );
+
+        let ret = method.return_type();
+        let (ok, err) = method_ok_and_err_types(&ret);
+        assert!(ok.as_result().is_none());
+        assert!(err.is_some());
+    }
+
+    #[test]
+    fn return_type_defaults_to_unit_when_omitted() {
+        let trait_def = parse(
+            r#"
+            trait Svc {
+                async fn ping(&self);
+            }
+            "#,
+        );
+        let method = trait_def.methods().next().expect("method");
+        let ret = method.return_type();
+        match ret {
+            Type::Tuple(TypeTuple(group)) => assert!(group.content.is_empty()),
+            other => panic!(
+                "expected unit tuple return, got {}",
+                other.to_token_stream()
+            ),
+        }
+    }
+
+    #[test]
+    fn method_helpers_detect_generics_and_mut_receiver() {
+        let trait_def = parse(
+            r#"
+            trait Svc {
+                async fn bad<T>(&mut self, value: T) -> T;
+            }
+            "#,
+        );
+        let method = trait_def.methods().next().expect("method");
+        assert!(method.has_generics());
+        assert!(method.is_mut_receiver());
+    }
+
+    #[test]
+    fn type_helpers_detect_result_lifetime_and_channel_nesting() {
+        let trait_def = parse(
+            r#"
+            trait Svc {
+                async fn stream(&self, input: &'static str) -> Result<Option<Tx<Vec<u8>>>, Rx<u32>>;
+            }
+            "#,
+        );
+        let method = trait_def.methods().next().expect("method");
+        let arg = method.args().next().expect("arg");
+        assert!(arg.ty.has_lifetime());
+        assert!(!arg.ty.contains_channel());
+
+        let ret = method.return_type();
+        let (ok, err) = method_ok_and_err_types(&ret);
+        assert!(ok.contains_channel());
+        assert!(err.expect("result err type").contains_channel());
+    }
+
+    #[test]
+    fn type_path_last_segment_uses_trailing_segment() {
+        let trait_def = parse(
+            r#"
+            trait Svc {
+                async fn f(&self) -> std::result::Result<u8, u8>;
+            }
+            "#,
+        );
+        let method = trait_def.methods().next().expect("method");
+        let ret = method.return_type();
+        let Type::PathWithGenerics(path_with_generics) = ret else {
+            panic!("expected path with generics");
+        };
+        assert_eq!(path_with_generics.path.last_segment(), "Result");
+    }
+}
