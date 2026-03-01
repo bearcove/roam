@@ -14,6 +14,62 @@ weight = 15
 > know or care what those bytes contain. SHM provides the delivery
 > mechanism (BipBuffers, VarSlotPool, signaling).
 
+## Rust v7 API status
+
+For Rust users, the current v7 implementation in this repository is based on
+low-level composition:
+
+1. Create/attach the shared segment with `roam_shm::segment::Segment`.
+2. Manage guest slots with `reserve_peer` / `claim_peer` / `attach_peer`.
+3. Build one `ShmLink` per host-guest pair with `ShmLink::for_host` or `ShmLink::for_guest`.
+4. Run the normal roam runtime (`BareConduit` + session builder + `Driver`) on top of that link.
+
+The older monolithic host orchestration API (`ShmHost`, `bootstrap`,
+`MultiPeerHostDriver`) is not the primary v7 shape. Instead, v7 provides a thin
+Unix helper module (`roam_shm::host`) that wraps peer reservation/spawn tickets
+while keeping SHM as a transport primitive.
+
+Host-side sketch (Unix, one peer):
+
+```rust
+use std::sync::Arc;
+use roam_core::{BareConduit, Driver};
+use roam_core::session::acceptor;
+use roam_shm::{ShmLink, mmap_registry::{MmapChannelRx, MmapChannelTx}, segment::{Segment, SegmentConfig}, varslot::SizeClassConfig};
+use roam_types::Parity;
+use shm_primitives::{Doorbell, FileCleanup, MmapControlReceiver, create_mmap_control_pair};
+
+let classes = [SizeClassConfig { slot_size: 4096, slot_count: 16 }];
+let segment = Segment::create(path, SegmentConfig {
+    max_guests: 1,
+    bipbuf_capacity: 64 * 1024,
+    max_payload_size: 4096,
+    inline_threshold: 256,
+    heartbeat_interval: 0,
+    size_classes: &classes,
+}, FileCleanup::Manual)?;
+
+let peer_id = segment.reserve_peer().expect("no free peer slot");
+let (host_doorbell, guest_doorbell_handle) = Doorbell::create_pair()?;
+let (mmap_sender, mmap_receiver_handle) = create_mmap_control_pair()?;
+
+// pass peer_id + guest_doorbell_handle + mmap_receiver_handle + shm path to guest process...
+
+let mmap_rx = MmapControlReceiver::from_handle(mmap_receiver_handle)?;
+let link = ShmLink::for_host(
+    Arc::new(segment),
+    peer_id,
+    host_doorbell,
+    MmapChannelTx::Real(mmap_sender),
+    MmapChannelRx::Real(mmap_rx),
+);
+
+let conduit = BareConduit::new(link);
+let (mut session, root_handle, _session_handle) = acceptor(conduit).establish().await?;
+let mut driver = Driver::new(root_handle, my_dispatcher, Parity::Even);
+// run session.run() and driver.run()
+```
+
 > r[shm.architecture]
 >
 > This transport assumes:

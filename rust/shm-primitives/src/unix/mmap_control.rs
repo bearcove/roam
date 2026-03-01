@@ -54,6 +54,12 @@ impl MmapControlHandle {
         self.0.as_raw_fd()
     }
 
+    /// Consume this handle and return the owned raw fd.
+    pub fn into_raw_fd(self) -> RawFd {
+        use std::os::unix::io::IntoRawFd;
+        self.0.into_raw_fd()
+    }
+
     /// # Safety
     /// The caller must ensure the FD is valid and not owned by anything else.
     pub unsafe fn from_raw_fd(fd: RawFd) -> Self {
@@ -223,6 +229,17 @@ fn recv_fd_with_metadata(sock_fd: RawFd) -> io::Result<(OwnedFd, MmapAttachMessa
 }
 
 impl MmapControlSender {
+    /// Expose the sender fd for process-spawn handoff plumbing.
+    pub fn as_raw_fd(&self) -> RawFd {
+        self.fd.as_raw_fd()
+    }
+
+    /// Consume this sender and return the owned raw fd.
+    pub fn into_raw_fd(self) -> RawFd {
+        use std::os::unix::io::IntoRawFd;
+        self.fd.into_raw_fd()
+    }
+
     /// Send a file descriptor with metadata to the receiver.
     pub fn send(&self, fd: RawFd, msg: &MmapAttachMessage) -> io::Result<()> {
         send_fd_with_metadata(self.fd.as_raw_fd(), fd, msg)

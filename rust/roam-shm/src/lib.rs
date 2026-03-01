@@ -21,6 +21,8 @@ use crate::segment::Segment;
 use crate::varslot::{SizeClassConfig, SlotRef, VarSlotPool};
 
 pub mod framing;
+#[cfg(unix)]
+pub mod host;
 pub mod mmap_registry;
 pub mod peer_table;
 pub mod segment;

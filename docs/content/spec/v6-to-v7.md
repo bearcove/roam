@@ -187,3 +187,31 @@ let (mut session, root_handle, _session_handle) = roam_core::session::acceptor(c
 
 If `.on_connection(...)` is not configured, inbound virtual `ConnectionOpen`
 messages are rejected by default.
+
+## SHM hosting API migration notes
+
+If you were using older host orchestration symbols such as:
+
+- `roam_shm::ShmHost`
+- `roam_shm::bootstrap`
+- `roam_shm::driver`
+- `roam_shm::AddPeerOptions`
+- `roam_shm::MultiPeerHostDriver`
+
+those are not part of the current v7 `roam-shm` API in this repository.
+
+Current v7 `roam-shm` exposes lower-level building blocks instead:
+
+1. `roam_shm::segment::Segment` and `SegmentConfig` for segment lifecycle.
+2. `Segment::{reserve_peer, claim_peer, attach_peer, detach_peer, recover_crashed_peer}` for peer lifecycle.
+3. `roam_shm::ShmLink::{for_host, for_guest}` for one host-guest link.
+4. `roam_core::{BareConduit, session::{initiator,acceptor}, Driver}` for RPC/session runtime on top of that link.
+
+To reduce migration friction, v7 now also ships a thin Unix orchestration module:
+
+- `roam_shm::host::HostHub` and `HostHub::prepare_peer()`
+- `roam_shm::host::GuestSpawnTicket`
+- `roam_shm::host::{guest_link_from_raw, guest_link_from_ticket}`
+
+This is intentionally smaller than the old monolithic host API: SHM stays a
+transport, while orchestration helpers package only spawn/peer wiring.

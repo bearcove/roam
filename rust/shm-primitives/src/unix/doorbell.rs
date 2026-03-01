@@ -42,6 +42,12 @@ impl DoorbellHandle {
         self.0.as_raw_fd()
     }
 
+    /// Consume this handle and return the owned raw fd.
+    pub fn into_raw_fd(self) -> RawFd {
+        use std::os::unix::io::IntoRawFd;
+        self.0.into_raw_fd()
+    }
+
     /// Create from a raw file descriptor (in child process after spawn).
     ///
     /// # Safety
