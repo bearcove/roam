@@ -1,6 +1,6 @@
 import { test, expect } from "@playwright/test";
 import { spawn, type ChildProcess } from "node:child_process";
-import { setTimeout as sleep } from "node:timers/promises";
+import { createServer } from "node:net";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 
@@ -16,50 +16,48 @@ test.skip(!wasmPkgExists, "Wasm pkg not built - run wasm-pack build first");
 
 let wsServer: ChildProcess | null = null;
 let viteServer: ChildProcess | null = null;
+let wsPort = 0;
+let vitePort = 0;
 
-async function waitForPort(port: number, timeoutMs: number = 10000): Promise<void> {
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
-    try {
-      const response = await fetch(`http://localhost:${port}/`);
-      if (response.ok || response.status === 404) {
-        return; // Server is up
-      }
-    } catch {
-      // Connection refused, try again
-    }
-    await sleep(100);
-  }
-  throw new Error(`Timeout waiting for port ${port}`);
+function getFreePort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const srv = createServer();
+    srv.listen(0, () => {
+      const port = (srv.address() as { port: number }).port;
+      srv.close(() => resolve(port));
+    });
+    srv.on("error", reject);
+  });
 }
 
 test.beforeAll(async () => {
-  // Start Rust WebSocket Echo server
-  console.log("Starting Rust WebSocket server...");
+  wsPort = await getFreePort();
+  vitePort = await getFreePort();
+
+  // Start Rust WebSocket server
+  console.log(`Starting Rust WebSocket server on port ${wsPort}...`);
   wsServer = spawn("cargo", ["run", "-p", "peer-server", "--bin", "ws-peer-server"], {
     cwd: projectRoot,
-    env: { ...process.env, WS_PORT: "9001" },
+    env: { ...process.env, WS_PORT: String(wsPort) },
     stdio: ["ignore", "pipe", "pipe"],
   });
 
-  // Wait for server to print port
   await new Promise<void>((resolve, reject) => {
     const timeout = globalThis.setTimeout(
       () => reject(new Error("Timeout starting WS server")),
-      30000,
+      5000,
     );
 
     wsServer!.stdout!.on("data", (data: Buffer) => {
-      const line = data.toString().trim();
-      console.log(`[ws-server stdout] ${line}`);
-      if (line === "9001") {
+      process.stdout.write(data);
+      if (data.toString().trim() === String(wsPort)) {
         clearTimeout(timeout);
         resolve();
       }
     });
 
     wsServer!.stderr!.on("data", (data: Buffer) => {
-      console.log(`[ws-server stderr] ${data.toString().trim()}`);
+      process.stderr.write(data);
     });
 
     wsServer!.on("error", (err) => {
@@ -67,38 +65,56 @@ test.beforeAll(async () => {
       reject(err);
     });
 
-    wsServer!.on("exit", (code) => {
-      if (code !== null && code !== 0) {
-        clearTimeout(timeout);
-        reject(new Error(`WS server exited with code ${code}`));
-      }
+    wsServer!.on("exit", (code, signal) => {
+      clearTimeout(timeout);
+      reject(new Error(`WS server exited unexpectedly (code=${code}, signal=${signal})`));
     });
   });
 
-  console.log("Rust WebSocket server started on port 9001");
+  console.log(`Rust WebSocket server started on port ${wsPort}`);
 
   // Start Vite dev server for wasm browser test app
-  console.log("Starting Vite dev server for Wasm tests...");
-  viteServer = spawn("pnpm", ["exec", "vite", "--port", "3001"], {
+  console.log(`Starting Vite dev server for Wasm tests on port ${vitePort}...`);
+  viteServer = spawn("pnpm", ["exec", "vite", "--port", String(vitePort), "--host", "127.0.0.1"], {
     cwd: `${projectRoot}typescript/tests/browser-wasm`,
     stdio: ["ignore", "pipe", "pipe"],
   });
 
-  viteServer.stdout!.on("data", (data: Buffer) => {
-    console.log(`[vite stdout] ${data.toString().trim()}`);
+  await new Promise<void>((resolve, reject) => {
+    const timeout = globalThis.setTimeout(
+      () => reject(new Error("Timeout starting Vite server")),
+      10000,
+    );
+
+    viteServer!.stdout!.on("data", (data: Buffer) => {
+      // eslint-disable-next-line no-control-regex
+      const text = data.toString().replace(/\x1b\[[0-9;]*m/g, "");
+      console.log(`[vite stdout] ${text.trim()}`);
+      if (text.includes(`127.0.0.1:${vitePort}`)) {
+        clearTimeout(timeout);
+        resolve();
+      }
+    });
+
+    viteServer!.stderr!.on("data", (data: Buffer) => {
+      console.log(`[vite stderr] ${data.toString().trim()}`);
+    });
+
+    viteServer!.on("error", (err) => {
+      clearTimeout(timeout);
+      reject(err);
+    });
+
+    viteServer!.on("exit", (code, signal) => {
+      clearTimeout(timeout);
+      reject(new Error(`Vite exited unexpectedly (code=${code}, signal=${signal})`));
+    });
   });
 
-  viteServer.stderr!.on("data", (data: Buffer) => {
-    console.log(`[vite stderr] ${data.toString().trim()}`);
-  });
-
-  // Wait for Vite to be ready
-  await waitForPort(3001);
-  console.log("Vite dev server started on port 3001");
+  console.log(`Vite dev server started on port ${vitePort}`);
 });
 
 test.afterAll(async () => {
-  // Kill servers
   if (viteServer) {
     viteServer.kill("SIGTERM");
     viteServer = null;
@@ -110,23 +126,28 @@ test.afterAll(async () => {
 });
 
 test("Rust/Wasm client can connect to Rust WebSocket server and run tests", async ({ page }) => {
-  // Capture console messages
   page.on("console", (msg) => {
     console.log(`[browser ${msg.type()}] ${msg.text()}`);
   });
 
-  // Navigate to test page with WebSocket URL
-  await page.goto("http://localhost:3001/?ws=ws://localhost:9001");
+  page.on("pageerror", (err) => {
+    console.log(`[browser pageerror] ${err.message}`);
+  });
 
-  // Wait for tests to complete (timeout after 30s for wasm init + tests)
-  await page.waitForFunction(() => (window as any).testsComplete === true, { timeout: 30000 });
+  page.on("requestfailed", (req) => {
+    console.log(`[browser requestfailed] ${req.url()} - ${req.failure()?.errorText}`);
+  });
 
-  // Get test results
+  console.log(`Navigating to test page (vite=${vitePort}, ws=${wsPort})...`);
+  await page.goto(`http://127.0.0.1:${vitePort}/?ws=ws://127.0.0.1:${wsPort}`, { waitUntil: "networkidle" });
+  console.log("Navigation complete, waiting for testsComplete...");
+
+  await page.waitForFunction(() => (window as any).testsComplete === true, { timeout: 10000 });
+  console.log("testsComplete is true");
+
   const results = await page.evaluate(() => (window as any).testResults);
-
   console.log("Wasm test results:", results);
 
-  // Verify all tests passed
   expect(results).toBeInstanceOf(Array);
   expect(results.length).toBeGreaterThan(0);
 
