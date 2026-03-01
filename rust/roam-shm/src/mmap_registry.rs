@@ -408,3 +408,145 @@ pub fn create_in_process_mmap_channel() -> (MmapChannelTx, MmapChannelRx) {
     let (tx, rx) = mpsc::channel();
     (MmapChannelTx::InProcess(tx), MmapChannelRx::InProcess(rx))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::Ordering;
+
+    fn recv_in_process_message(rx: &mut MmapChannelRx) -> (Arc<MmapRegion>, MmapAttachMessage) {
+        match rx {
+            MmapChannelRx::InProcess(inner) => {
+                inner.try_recv().expect("expected mmap attach message")
+            }
+            #[cfg(unix)]
+            MmapChannelRx::Real(_) => panic!("expected in-process channel"),
+        }
+    }
+
+    #[test]
+    fn alloc_reuses_existing_slot_and_delivers_attach_once() {
+        let (tx, mut rx) = create_in_process_mmap_channel();
+        let mut registry = MmapRegistry::new(tx, 64);
+
+        let first = registry.alloc(8).expect("first alloc");
+        let (first_region, first_msg) = recv_in_process_message(&mut rx);
+        assert_eq!(first_msg.map_id, first.map_id);
+        assert_eq!(first_msg.map_generation, first.map_generation);
+        assert_eq!(first.map_offset, 0);
+
+        let second = registry.alloc(8).expect("second alloc in same slot");
+        assert_eq!(second.map_id, first.map_id);
+        assert_eq!(second.map_generation, first.map_generation);
+        assert_eq!(second.map_offset, 8);
+
+        match &mut rx {
+            MmapChannelRx::InProcess(inner) => {
+                assert!(
+                    matches!(inner.try_recv(), Err(mpsc::TryRecvError::Empty)),
+                    "slot reuse should not redeliver attach message"
+                );
+            }
+            #[cfg(unix)]
+            MmapChannelRx::Real(_) => panic!("expected in-process channel"),
+        }
+
+        assert_eq!(first_region.len(), first_msg.mapping_length as usize);
+    }
+
+    #[test]
+    fn alloc_creates_new_slot_when_existing_region_is_full() {
+        let (tx, mut rx) = create_in_process_mmap_channel();
+        let mut registry = MmapRegistry::new(tx, 16);
+
+        let first = registry.alloc(16).expect("first alloc fills region");
+        let (_, first_msg) = recv_in_process_message(&mut rx);
+        assert_eq!(first_msg.map_id, 0);
+
+        let second = registry
+            .alloc(1)
+            .expect("second alloc should create another slot");
+        let (_, second_msg) = recv_in_process_message(&mut rx);
+        assert_eq!(second_msg.map_id, 1);
+        assert_ne!(second.map_id, first.map_id);
+    }
+
+    #[test]
+    fn reclaim_drops_fully_consumed_slot_without_leases() {
+        let (tx, _rx) = create_in_process_mmap_channel();
+        let mut registry = MmapRegistry::new(tx, 8);
+
+        let alloc = registry.alloc(8).expect("alloc");
+        assert_eq!(registry.slots.len(), 1);
+
+        alloc.lease_counter.fetch_sub(1, Ordering::Release);
+        registry.try_reclaim();
+        assert!(
+            registry.slots.is_empty(),
+            "slot should be reclaimed once full and lease-free"
+        );
+    }
+
+    #[test]
+    fn payload_mut_roundtrip_and_attachment_resolve_success() {
+        let (tx, rx) = create_in_process_mmap_channel();
+        let mut registry = MmapRegistry::new(tx, 128);
+
+        let mut alloc = registry.alloc(16).expect("alloc");
+        let bytes = b"mmap-payload-data";
+        unsafe {
+            alloc.payload_mut(bytes.len()).copy_from_slice(bytes);
+        }
+
+        let mut attachments = MmapAttachments::new(rx);
+        attachments.drain_control();
+        let mapping = attachments
+            .resolve(
+                alloc.map_id,
+                alloc.map_generation,
+                alloc.map_offset,
+                bytes.len() as u32,
+            )
+            .expect("resolve attached mapping");
+
+        let region = mapping.region.region();
+        let got = unsafe {
+            std::slice::from_raw_parts(region.as_ptr().add(alloc.map_offset as usize), bytes.len())
+        };
+        assert_eq!(got, bytes);
+    }
+
+    #[test]
+    fn resolve_reports_unknown_out_of_bounds_and_overflow() {
+        let (_tx, rx) = create_in_process_mmap_channel();
+        let attachments = MmapAttachments::new(rx);
+
+        let err = match attachments.resolve(42, 0, 0, 1) {
+            Ok(_) => panic!("missing mapping should fail"),
+            Err(err) => err,
+        };
+        assert!(matches!(err, MmapResolveError::UnknownMapping { .. }));
+
+        let mapping = Arc::new(AttachedMapping {
+            region: create_mmap_region(8).expect("create mmap region"),
+            map_id: 7,
+            map_generation: 3,
+            mapping_length: 8,
+        });
+
+        let mut attachments = MmapAttachments::new(create_in_process_mmap_channel().1);
+        attachments.mappings.insert((7, 3), mapping);
+
+        let err = match attachments.resolve(7, 3, 7, 2) {
+            Ok(_) => panic!("resolve should reject out-of-bounds"),
+            Err(err) => err,
+        };
+        assert!(matches!(err, MmapResolveError::OutOfBounds { .. }));
+
+        let err = match attachments.resolve(7, 3, u64::MAX, 2) {
+            Ok(_) => panic!("resolve should reject overflow"),
+            Err(err) => err,
+        };
+        assert!(matches!(err, MmapResolveError::BoundsOverflow { .. }));
+    }
+}
