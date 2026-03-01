@@ -45,3 +45,7 @@ java/**/out/
 .claude/settings.json
 .tracey/
 *.sqlite*
+
+# Coverage artifacts
+.coverage/
+*.profraw
