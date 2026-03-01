@@ -1,4 +1,6 @@
-use afl::fuzz;
+use std::env;
+use std::fs;
+
 use roam_types::{Message, MessagePayload, Payload, RequestBody};
 
 fn can_serialize_after_decode(message: &Message<'_>) -> bool {
@@ -19,15 +21,16 @@ fn can_serialize_after_decode(message: &Message<'_>) -> bool {
 }
 
 fn main() {
-    fuzz!(|data: &[u8]| {
-        let Ok(message) =
-            roam::facet_postcard::from_slice_borrowed::<roam_types::Message<'_>>(data)
-        else {
-            return;
-        };
+    let mut args = env::args();
+    let _exe = args.next();
+    let path = args
+        .next()
+        .expect("usage: protocol_decode_repro <crash-file>");
+    let data = fs::read(path).expect("read input file");
 
-        if can_serialize_after_decode(&message) {
-            let _ = roam::facet_postcard::to_vec(&message);
-        }
-    });
+    let message = roam::facet_postcard::from_slice_borrowed::<roam_types::Message<'_>>(&data)
+        .expect("decode should succeed for crashing input");
+    if can_serialize_after_decode(&message) {
+        let _encoded = roam::facet_postcard::to_vec(&message).expect("re-encode should succeed");
+    }
 }
