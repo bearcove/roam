@@ -72,6 +72,7 @@ facet-json = { version = "0.44.0" }
 facet-value = { version = "0.44.0" }
 facet-testhelpers = { version = "0.44.0" }
 facet-cargo-toml = { version = "0.44.0" }
+facet-error = { version = "0.44.0" }
 
 # Futures utilities
 futures-util = "0.3"
