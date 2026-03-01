@@ -152,7 +152,7 @@ fn send_fd_with_metadata(sock_fd: RawFd, fd: RawFd, msg: &MmapAttachMessage) -> 
         std::ptr::copy_nonoverlapping(fds.as_ptr(), data_ptr, 1);
     }
 
-    let n = unsafe { libc::sendmsg(sock_fd, &msghdr, 0) };
+    let n = sendmsg_no_sigpipe(sock_fd, &msghdr)?;
     if n < 0 {
         return Err(io::Error::last_os_error());
     }
@@ -161,6 +161,42 @@ fn send_fd_with_metadata(sock_fd: RawFd, fd: RawFd, msg: &MmapAttachMessage) -> 
             ErrorKind::WriteZero,
             "sendmsg wrote 0 bytes",
         ));
+    }
+    Ok(())
+}
+
+fn sendmsg_no_sigpipe(fd: RawFd, msghdr: &libc::msghdr) -> io::Result<isize> {
+    #[cfg(target_vendor = "apple")]
+    ensure_socket_no_sigpipe(fd)?;
+
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    let flags = libc::MSG_NOSIGNAL;
+    #[cfg(not(any(target_os = "linux", target_os = "android")))]
+    let flags = 0;
+
+    // SAFETY: caller guarantees `msghdr` points to valid iov/cmsg buffers.
+    let n = unsafe { libc::sendmsg(fd, msghdr, flags) };
+    if n < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(n)
+}
+
+#[cfg(target_vendor = "apple")]
+fn ensure_socket_no_sigpipe(fd: RawFd) -> io::Result<()> {
+    let one: libc::c_int = 1;
+    // SAFETY: setsockopt reads `one` for the provided length.
+    let rc = unsafe {
+        libc::setsockopt(
+            fd,
+            libc::SOL_SOCKET,
+            libc::SO_NOSIGPIPE,
+            (&one as *const libc::c_int).cast(),
+            std::mem::size_of_val(&one) as libc::socklen_t,
+        )
+    };
+    if rc < 0 {
+        return Err(io::Error::last_os_error());
     }
     Ok(())
 }

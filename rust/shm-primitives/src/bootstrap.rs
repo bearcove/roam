@@ -352,7 +352,7 @@ pub fn send_response_unix(
     }
 
     // SAFETY: msghdr points to live iov/control buffers.
-    let n = unsafe { libc::sendmsg(control_fd, &msghdr, 0) };
+    let n = sendmsg_no_sigpipe(control_fd, &msghdr)?;
     if n < 0 {
         return Err(BootstrapError::Io(io::Error::last_os_error()));
     }
@@ -363,6 +363,46 @@ pub fn send_response_unix(
         )));
     }
 
+    Ok(())
+}
+
+#[cfg(unix)]
+fn sendmsg_no_sigpipe(
+    fd: std::os::fd::RawFd,
+    msghdr: &libc::msghdr,
+) -> Result<isize, BootstrapError> {
+    #[cfg(target_vendor = "apple")]
+    ensure_socket_no_sigpipe(fd)?;
+
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    let flags = libc::MSG_NOSIGNAL;
+    #[cfg(not(any(target_os = "linux", target_os = "android")))]
+    let flags = 0;
+
+    // SAFETY: caller guarantees `msghdr` points to valid iov/cmsg buffers.
+    let n = unsafe { libc::sendmsg(fd, msghdr, flags) };
+    if n < 0 {
+        return Err(BootstrapError::Io(io::Error::last_os_error()));
+    }
+    Ok(n)
+}
+
+#[cfg(all(unix, target_vendor = "apple"))]
+fn ensure_socket_no_sigpipe(fd: std::os::fd::RawFd) -> Result<(), BootstrapError> {
+    let one: libc::c_int = 1;
+    // SAFETY: setsockopt reads `one` for the provided length.
+    let rc = unsafe {
+        libc::setsockopt(
+            fd,
+            libc::SOL_SOCKET,
+            libc::SO_NOSIGPIPE,
+            (&one as *const libc::c_int).cast(),
+            std::mem::size_of_val(&one) as libc::socklen_t,
+        )
+    };
+    if rc < 0 {
+        return Err(BootstrapError::Io(io::Error::last_os_error()));
+    }
     Ok(())
 }
 

@@ -195,8 +195,11 @@ private func closeReceivedFds(_ recv: BootstrapRecv) {
 
 private func connectUnixSocket(fd: Int32, path: String) throws {
     let one: Int32 = 1
-    _ = withUnsafePointer(to: one) { ptr in
+    let setNoSigPipeRc = withUnsafePointer(to: one) { ptr in
         setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, ptr, socklen_t(MemoryLayout<Int32>.size))
+    }
+    if setNoSigPipeRc != 0 {
+        throw ShmBootstrapError.connectFailed(errno: errno)
     }
 
     var addr = sockaddr_un()
@@ -229,7 +232,7 @@ private func writeAll(fd: Int32, bytes: [UInt8]) throws {
     var offset = 0
     while offset < bytes.count {
         let written = bytes.withUnsafeBytes { rawBuf in
-            send(fd, rawBuf.baseAddress!.advanced(by: offset), bytes.count - offset, 0)
+            send(fd, rawBuf.baseAddress!.advanced(by: offset), bytes.count - offset, Int32(MSG_NOSIGNAL))
         }
         if written < 0 {
             if errno == EINTR {
