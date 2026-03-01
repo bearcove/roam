@@ -559,3 +559,166 @@ pub fn is_rx(shape: &facet_core::Shape) -> bool {
 pub fn is_channel(shape: &facet_core::Shape) -> bool {
     is_tx(shape) || is_rx(shape)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{Backing, ChannelClose, ChannelItem, ChannelReset, Metadata, SelfRef};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct CountingSink {
+        send_calls: AtomicUsize,
+        close_calls: AtomicUsize,
+        close_on_drop_calls: AtomicUsize,
+    }
+
+    impl CountingSink {
+        fn new() -> Self {
+            Self {
+                send_calls: AtomicUsize::new(0),
+                close_calls: AtomicUsize::new(0),
+                close_on_drop_calls: AtomicUsize::new(0),
+            }
+        }
+    }
+
+    impl ChannelSink for CountingSink {
+        fn send_payload<'payload>(
+            &self,
+            _payload: Payload<'payload>,
+        ) -> Pin<Box<dyn Future<Output = Result<(), TxError>> + Send + 'payload>> {
+            self.send_calls.fetch_add(1, Ordering::AcqRel);
+            Box::pin(async { Ok(()) })
+        }
+
+        fn close_channel(
+            &self,
+            _metadata: Metadata,
+        ) -> Pin<Box<dyn Future<Output = Result<(), TxError>> + Send + 'static>> {
+            self.close_calls.fetch_add(1, Ordering::AcqRel);
+            Box::pin(async { Ok(()) })
+        }
+
+        fn close_channel_on_drop(&self) {
+            self.close_on_drop_calls.fetch_add(1, Ordering::AcqRel);
+        }
+    }
+
+    #[tokio::test]
+    async fn tx_close_does_not_emit_drop_close_after_explicit_close() {
+        let sink_impl = Arc::new(CountingSink::new());
+        let sink: Arc<dyn ChannelSink> = sink_impl.clone();
+
+        let mut tx = Tx::<u32>::unbound();
+        tx.bind(sink);
+        tx.close(Metadata::default())
+            .await
+            .expect("close should succeed");
+        drop(tx);
+
+        assert_eq!(sink_impl.close_calls.load(Ordering::Acquire), 1);
+        assert_eq!(sink_impl.close_on_drop_calls.load(Ordering::Acquire), 0);
+    }
+
+    #[test]
+    fn tx_drop_emits_close_on_drop_for_bound_sink() {
+        let sink_impl = Arc::new(CountingSink::new());
+        let sink: Arc<dyn ChannelSink> = sink_impl.clone();
+
+        let mut tx = Tx::<u32>::unbound();
+        tx.bind(sink);
+        drop(tx);
+
+        assert_eq!(sink_impl.close_on_drop_calls.load(Ordering::Acquire), 1);
+    }
+
+    #[test]
+    fn tx_drop_emits_close_on_drop_for_paired_core_binding() {
+        let sink_impl = Arc::new(CountingSink::new());
+        let sink: Arc<dyn ChannelSink> = sink_impl.clone();
+
+        let (tx, _rx) = channel::<u32>();
+        let core = tx.core.inner.as_ref().expect("paired tx should have core");
+        core.set_binding(ChannelBinding::Sink(sink));
+        drop(tx);
+
+        assert_eq!(sink_impl.close_on_drop_calls.load(Ordering::Acquire), 1);
+    }
+
+    #[tokio::test]
+    async fn rx_recv_returns_unbound_when_not_bound() {
+        let mut rx = Rx::<u32>::unbound();
+        let err = match rx.recv().await {
+            Ok(_) => panic!("unbound rx should fail"),
+            Err(err) => err,
+        };
+        assert!(matches!(err, RxError::Unbound));
+    }
+
+    #[tokio::test]
+    async fn rx_recv_returns_none_on_close() {
+        let (tx, rx_inner) = mpsc::channel(1);
+        let mut rx = Rx::<u32>::unbound();
+        rx.bind(rx_inner);
+
+        let close = SelfRef::owning(
+            Backing::Boxed(Box::<[u8]>::default()),
+            ChannelClose {
+                metadata: Metadata::default(),
+            },
+        );
+        tx.send(IncomingChannelMessage::Close(close))
+            .await
+            .expect("send close");
+
+        assert!(rx.recv().await.expect("recv should succeed").is_none());
+    }
+
+    #[tokio::test]
+    async fn rx_recv_returns_reset_error() {
+        let (tx, rx_inner) = mpsc::channel(1);
+        let mut rx = Rx::<u32>::unbound();
+        rx.bind(rx_inner);
+
+        let reset = SelfRef::owning(
+            Backing::Boxed(Box::<[u8]>::default()),
+            ChannelReset {
+                metadata: Metadata::default(),
+            },
+        );
+        tx.send(IncomingChannelMessage::Reset(reset))
+            .await
+            .expect("send reset");
+
+        let err = match rx.recv().await {
+            Ok(_) => panic!("reset should be surfaced as error"),
+            Err(err) => err,
+        };
+        assert!(matches!(err, RxError::Reset));
+    }
+
+    #[tokio::test]
+    async fn rx_recv_rejects_outgoing_payload_variant_as_protocol_error() {
+        static VALUE: u32 = 42;
+
+        let (tx, rx_inner) = mpsc::channel(1);
+        let mut rx = Rx::<u32>::unbound();
+        rx.bind(rx_inner);
+
+        let item = SelfRef::owning(
+            Backing::Boxed(Box::<[u8]>::default()),
+            ChannelItem {
+                item: Payload::outgoing(&VALUE),
+            },
+        );
+        tx.send(IncomingChannelMessage::Item(item))
+            .await
+            .expect("send item");
+
+        let err = match rx.recv().await {
+            Ok(_) => panic!("outgoing payload should be protocol error"),
+            Err(err) => err,
+        };
+        assert!(matches!(err, RxError::Protocol(_)));
+    }
+}
