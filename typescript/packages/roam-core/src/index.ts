@@ -8,99 +8,14 @@ export {
   decodeUserError,
 } from "@bearcove/roam-wire";
 
-// Wire types, schemas, and codec
-export type {
-  Hello,
-  MetadataValue,
-  MetadataValueString,
-  MetadataValueBytes,
-  MetadataValueU64,
-  MetadataEntry,
-  Message,
-  MessageHello,
-  MessageConnect,
-  MessageAccept,
-  MessageReject,
-  MessageGoodbye,
-  MessageRequest,
-  MessageResponse,
-  MessageCancel,
-  MessageData,
-  MessageClose,
-  MessageReset,
-  MessageCredit,
-} from "@bearcove/roam-wire";
-
+// Channeling API required by generated clients/dispatchers.
 export {
-  // Metadata flags
-  MetadataFlags,
-  // Wire factory functions
-  metadataString,
-  metadataBytes,
-  metadataU64,
-  messageHello,
-  messageConnect,
-  messageAccept,
-  messageReject,
-  messageGoodbye,
-  messageRequest,
-  messageResponse,
-  messageCancel,
-  messageData,
-  messageClose,
-  messageReset,
-  messageCredit,
-  // Wire codec
-  encodeMessage,
-  decodeMessage,
-} from "@bearcove/roam-wire";
-
-// Channel types
-export {
-  type ChannelId,
-  Role,
-  ChannelError,
-  ChannelIdAllocator,
-  ChannelRegistry,
-  OutgoingSender,
-  ChannelReceiver,
   Tx,
   Rx,
   channel,
-  createServerTx,
-  createServerRx,
-  type OutgoingMessage,
-  type OutgoingPoll,
-  type TaskMessage,
-  type TaskSender,
-  type ChannelContext,
-  // Descriptor types
   type MethodDescriptor,
   type ServiceDescriptor,
   type RoamCall,
-  // Schema types and binding
-  type PrimitiveKind,
-  type TxSchema,
-  type RxSchema,
-  type VecSchema,
-  type OptionSchema,
-  type MapSchema,
-  type StructSchema,
-  type TupleSchema,
-  type EnumVariant,
-  type EnumSchema,
-  type RefSchema,
-  type Schema,
-  type SchemaRegistry,
-  // Schema helper functions
-  resolveSchema,
-  findVariantByDiscriminant,
-  findVariantByName,
-  getVariantDiscriminant,
-  getVariantFieldSchemas,
-  getVariantFieldNames,
-  isNewtypeVariant,
-  isRefSchema,
   bindChannels,
 } from "./channeling/index.ts";
 

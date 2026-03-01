@@ -2433,6 +2433,7 @@ name = "roam-shm-ffi"
 version = "3.0.0"
 dependencies = [
  "cbindgen",
+ "libc",
  "roam-shm",
  "shm-primitives",
 ]
