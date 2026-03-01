@@ -192,3 +192,23 @@ fuzz-run target="all" seconds="60":
 
 fuzz target="all" seconds="60":
     just fuzz-run "{{target}}" "{{seconds}}"
+
+fuzz-asan-build target="all":
+    AFL_USE_ASAN=1 just fuzz-build "{{target}}"
+
+fuzz-asan-run target="all" seconds="60":
+    AFL_USE_ASAN=1 ASAN_OPTIONS=abort_on_error=1:symbolize=1:detect_leaks=0 just fuzz-run "{{target}}" "{{seconds}}"
+
+fuzz-asan target="all" seconds="60":
+    just fuzz-asan-build "{{target}}"
+    just fuzz-asan-run "{{target}}" "{{seconds}}"
+
+fuzz-ubsan-build target="all":
+    AFL_USE_UBSAN=1 just fuzz-build "{{target}}"
+
+fuzz-ubsan-run target="all" seconds="60":
+    AFL_USE_UBSAN=1 UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 just fuzz-run "{{target}}" "{{seconds}}"
+
+fuzz-ubsan target="all" seconds="60":
+    just fuzz-ubsan-build "{{target}}"
+    just fuzz-ubsan-run "{{target}}" "{{seconds}}"

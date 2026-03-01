@@ -108,6 +108,12 @@ just fuzz testbed_mem_session 300
 
 # Run only (no build), useful for repeated local sessions
 just fuzz-run protocol_decode 300
+
+# Fuzz with ASAN
+just fuzz-asan shm_link_roundtrip 300
+
+# Fuzz with UBSAN
+just fuzz-ubsan protocol_decode 300
 ```
 
 Current targets:
