@@ -1,127 +1,131 @@
-#![cfg(all(unix, target_os = "macos"))]
-
-use std::env;
-use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
-use std::time::SystemTime;
-use std::time::{Duration, Instant};
-
-use facet_postcard::{from_slice_borrowed, to_vec};
-use roam_shm::framing::{OwnedFrame, read_frame, write_inline};
-use roam_shm::segment::{Segment, SegmentConfig};
-use roam_shm::varslot::SizeClassConfig;
-use roam_types::{
-    ConnectionId, Message, MessagePayload, MethodId, Payload, RequestBody, RequestCall, RequestId,
-    RequestMessage,
-};
-use shm_primitives::{FileCleanup, clear_cloexec};
-
-fn swift_runtime_package_path() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../swift/roam-runtime")
-        .canonicalize()
-        .expect("swift runtime package path")
-}
-
-fn swift_shm_guest_client_path() -> PathBuf {
-    let pkg = swift_runtime_package_path();
-    let candidates = [
-        pkg.join(".build/debug/shm-guest-client"),
-        pkg.join(".build/arm64-apple-macosx/debug/shm-guest-client"),
-        pkg.join(".build/x86_64-apple-macosx/debug/shm-guest-client"),
-    ];
-
-    for candidate in candidates {
-        if candidate.exists() {
-            return candidate;
-        }
-    }
-
-    panic!("shm-guest-client binary not found; build swift/roam-runtime target first");
-}
-
-fn make_socketpair() -> (i32, i32) {
-    let mut fds = [0i32; 2];
-    let rc = unsafe { libc::socketpair(libc::AF_UNIX, libc::SOCK_STREAM, 0, fds.as_mut_ptr()) };
-    assert_eq!(
-        rc,
-        0,
-        "socketpair failed: {}",
-        std::io::Error::last_os_error()
-    );
-    (fds[0], fds[1])
-}
-
-fn ring_doorbell(fd: i32) {
-    let one: [u8; 1] = [1];
-    let rc = unsafe { libc::send(fd, one.as_ptr().cast(), 1, libc::MSG_DONTWAIT) };
-    if rc < 0 {
-        let err = std::io::Error::last_os_error();
-        match err.raw_os_error() {
-            Some(code)
-                if code == libc::EAGAIN
-                    || code == libc::EWOULDBLOCK
-                    || code == libc::EPIPE
-                    || code == libc::ECONNRESET
-                    || code == libc::ENOTCONN => {}
-            _ => panic!("doorbell send failed: {err}"),
-        }
-    }
-}
-
-fn parse_args() -> (usize, usize) {
-    let mut iterations: usize = 10_000;
-    let mut payload_size: usize = 256;
-
-    for arg in env::args().skip(1) {
-        if let Some(v) = arg.strip_prefix("--iterations=") {
-            iterations = v.parse().expect("invalid --iterations");
-        } else if let Some(v) = arg.strip_prefix("--payload-size=") {
-            payload_size = v.parse().expect("invalid --payload-size");
-        }
-    }
-    (iterations, payload_size)
-}
-
-fn decode_message(bytes: &[u8]) -> Message<'_> {
-    if let Ok(msg) = from_slice_borrowed::<Message<'_>>(bytes) {
-        return msg;
-    }
-
-    for pad in 1..=3 {
-        if bytes.len() <= pad {
-            break;
-        }
-        let suffix = &bytes[bytes.len() - pad..];
-        if suffix.iter().all(|&b| b == 0) {
-            let trimmed = &bytes[..bytes.len() - pad];
-            if let Ok(msg) = from_slice_borrowed::<Message<'_>>(trimmed) {
-                return msg;
-            }
-        } else {
-            break;
-        }
-    }
-
-    panic!("failed to decode Message payload from frame")
-}
-
-fn percentile(mut values_us: Vec<u128>, pct: f64) -> u128 {
-    values_us.sort_unstable();
-    if values_us.is_empty() {
-        return 0;
-    }
-    let idx = ((values_us.len() - 1) as f64 * pct).round() as usize;
-    values_us[idx]
-}
-
+#[cfg(not(target_os = "macos"))]
 fn main() {
+    eprintln!("swift_rpc_bench is only supported on macOS");
+    std::process::exit(1);
+}
+
+#[cfg(target_os = "macos")]
+fn main() {
+    use std::path::Path;
+    use std::process::{Command, Stdio};
+    use std::time::SystemTime;
+    use std::time::{Duration, Instant};
+
+    use facet_postcard::{from_slice_borrowed, to_vec};
+    use roam_shm::framing::{OwnedFrame, read_frame, write_inline};
+    use roam_shm::segment::{Segment, SegmentConfig};
+    use roam_shm::varslot::SizeClassConfig;
+    use roam_types::{
+        ConnectionId, Message, MessagePayload, MethodId, Payload, RequestBody, RequestCall,
+        RequestId, RequestMessage,
+    };
+    use shm_primitives::{FileCleanup, clear_cloexec};
+
+    fn swift_runtime_package_path() -> std::path::PathBuf {
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../swift/roam-runtime")
+            .canonicalize()
+            .expect("swift runtime package path")
+    }
+
+    fn swift_shm_guest_client_path() -> std::path::PathBuf {
+        let pkg = swift_runtime_package_path();
+        let candidates = [
+            pkg.join(".build/debug/shm-guest-client"),
+            pkg.join(".build/arm64-apple-macosx/debug/shm-guest-client"),
+            pkg.join(".build/x86_64-apple-macosx/debug/shm-guest-client"),
+        ];
+
+        for candidate in candidates {
+            if candidate.exists() {
+                return candidate;
+            }
+        }
+
+        panic!("shm-guest-client binary not found; build swift/roam-runtime target first");
+    }
+
+    fn make_socketpair() -> (i32, i32) {
+        let mut fds = [0i32; 2];
+        let rc = unsafe { libc::socketpair(libc::AF_UNIX, libc::SOCK_STREAM, 0, fds.as_mut_ptr()) };
+        assert_eq!(
+            rc,
+            0,
+            "socketpair failed: {}",
+            std::io::Error::last_os_error()
+        );
+        (fds[0], fds[1])
+    }
+
+    fn ring_doorbell(fd: i32) {
+        let one: [u8; 1] = [1];
+        let rc = unsafe { libc::send(fd, one.as_ptr().cast(), 1, libc::MSG_DONTWAIT) };
+        if rc < 0 {
+            let err = std::io::Error::last_os_error();
+            match err.raw_os_error() {
+                Some(code)
+                    if code == libc::EAGAIN
+                        || code == libc::EWOULDBLOCK
+                        || code == libc::EPIPE
+                        || code == libc::ECONNRESET
+                        || code == libc::ENOTCONN => {}
+                _ => panic!("doorbell send failed: {err}"),
+            }
+        }
+    }
+
+    fn parse_args() -> (usize, usize) {
+        let mut iterations: usize = 10_000;
+        let mut payload_size: usize = 256;
+
+        for arg in std::env::args().skip(1) {
+            if let Some(v) = arg.strip_prefix("--iterations=") {
+                iterations = v.parse().expect("invalid --iterations");
+            } else if let Some(v) = arg.strip_prefix("--payload-size=") {
+                payload_size = v.parse().expect("invalid --payload-size");
+            }
+        }
+        (iterations, payload_size)
+    }
+
+    fn decode_message(bytes: &[u8]) -> Message<'_> {
+        if let Ok(msg) = from_slice_borrowed::<Message<'_>>(bytes) {
+            return msg;
+        }
+
+        for pad in 1..=3 {
+            if bytes.len() <= pad {
+                break;
+            }
+            let suffix = &bytes[bytes.len() - pad..];
+            if suffix.iter().all(|&b| b == 0) {
+                let trimmed = &bytes[..bytes.len() - pad];
+                if let Ok(msg) = from_slice_borrowed::<Message<'_>>(trimmed) {
+                    return msg;
+                }
+            } else {
+                break;
+            }
+        }
+
+        panic!("failed to decode Message payload from frame")
+    }
+
+    fn percentile(mut values_us: Vec<u128>, pct: f64) -> u128 {
+        values_us.sort_unstable();
+        if values_us.is_empty() {
+            return 0;
+        }
+        let idx = ((values_us.len() - 1) as f64 * pct).round() as usize;
+        values_us[idx]
+    }
+
     let (iterations, payload_size) = parse_args();
     let stamp = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
         .expect("system time before epoch")
         .as_nanos();
-    let shm_path = env::temp_dir().join(format!(
+    let shm_path = std::env::temp_dir().join(format!(
         "roam-swift-rpc-bench-{}-{}.shm",
         std::process::id(),
         stamp
