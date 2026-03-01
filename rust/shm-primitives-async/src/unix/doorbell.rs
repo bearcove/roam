@@ -379,6 +379,7 @@ pub fn clear_cloexec(fd: RawFd) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::io::AsRawFd;
 
     #[test]
     fn wait_returns_broken_pipe_when_peer_closed() {
@@ -416,5 +417,54 @@ mod tests {
         drop(b2);
         let drained = drain_fd(a2.as_raw_fd(), false, false).expect("drain without eof error");
         assert!(!drained, "expected no drained bytes on clean EOF");
+    }
+
+    #[tokio::test]
+    async fn handle_roundtrip_allows_bidirectional_signal_wait() {
+        let (host, handle) = Doorbell::create_pair().expect("create doorbell pair");
+        let guest = Doorbell::from_handle(handle).expect("reconstruct guest doorbell from handle");
+
+        assert_eq!(guest.signal_now(), SignalResult::Sent);
+        host.wait()
+            .await
+            .expect("host wait should receive guest signal");
+
+        assert_eq!(host.signal_now(), SignalResult::Sent);
+        guest
+            .wait()
+            .await
+            .expect("guest wait should receive host signal");
+    }
+
+    #[tokio::test]
+    async fn signal_now_reports_peer_dead_after_peer_closed() {
+        let (host, peer) = Doorbell::create_pair().expect("create doorbell pair");
+        drop(peer);
+        assert_eq!(host.signal_now(), SignalResult::PeerDead);
+    }
+
+    #[tokio::test]
+    async fn clear_cloexec_clears_fd_cloexec_flag() {
+        let (_host, handle) = Doorbell::create_pair().expect("create doorbell pair");
+        let fd = handle.as_raw_fd();
+
+        let set_ret = unsafe { libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC) };
+        assert_eq!(set_ret, 0, "setting FD_CLOEXEC should succeed");
+
+        clear_cloexec(fd).expect("clear_cloexec should succeed");
+
+        let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
+        assert!(flags >= 0, "F_GETFD should succeed");
+        assert_eq!(flags & libc::FD_CLOEXEC, 0, "FD_CLOEXEC should be cleared");
+    }
+
+    #[tokio::test]
+    async fn close_peer_fd_closes_descriptor_and_validate_fd_reports_error() {
+        let (_host, handle) = Doorbell::create_pair().expect("create doorbell pair");
+        let fd = handle.into_raw_fd();
+        validate_fd(fd).expect("fd should be valid before close");
+        close_peer_fd(fd);
+        let err = validate_fd(fd).expect_err("fd should be invalid after close_peer_fd");
+        assert_eq!(err.raw_os_error(), Some(libc::EBADF));
     }
 }
