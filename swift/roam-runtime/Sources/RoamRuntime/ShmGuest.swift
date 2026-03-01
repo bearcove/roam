@@ -2,6 +2,8 @@ import Foundation
 import CRoamShmFfi
 #if os(macOS)
 import Darwin
+#elseif os(Linux)
+import Glibc
 #endif
 
 // r[impl shm.peer-table.states]
@@ -176,7 +178,7 @@ public final class ShmVarSlotPool: @unchecked Sendable {
     }
 }
 
-#if os(macOS)
+#if os(macOS) || os(Linux)
 public enum ShmDoorbellWaitResult: Sendable, Equatable {
     case signaled
     case timeout
@@ -236,7 +238,7 @@ public final class ShmDoorbell: @unchecked Sendable {
         var buf = [UInt8](repeating: 0, count: 64)
         while true {
             let n = buf.withUnsafeMutableBytes { raw in
-                recv(fd, raw.baseAddress, raw.count, MSG_DONTWAIT)
+                recv(fd, raw.baseAddress, raw.count, Int32(MSG_DONTWAIT))
             }
             if n > 0 {
                 continue

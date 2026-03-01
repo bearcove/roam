@@ -1,7 +1,11 @@
 import Foundation
-#if os(macOS)
+#if os(macOS) || os(Linux)
 import CRoamShmFfi
+#if os(macOS)
 import Darwin
+#else
+import Glibc
+#endif
 #endif
 
 public struct ShmBootstrapTicket: Sendable {
@@ -42,7 +46,7 @@ public enum ShmBootstrapError: Error {
     case missingFileDescriptor
 }
 
-#if os(macOS)
+#if os(macOS) || os(Linux)
 private let shmBootstrapStatusOK: UInt8 = 0
 private let shmBootstrapStatusError: UInt8 = 1
 
@@ -55,7 +59,11 @@ public func requestShmBootstrapTicket(controlSocketPath: String, sid: String) th
         throw ShmBootstrapError.invalidSid
     }
 
+    #if os(Linux)
+    let fd = socket(AF_UNIX, Int32(SOCK_STREAM.rawValue), 0)
+    #else
     let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+    #endif
     guard fd >= 0 else {
         throw ShmBootstrapError.socketCreateFailed(errno: errno)
     }
@@ -194,6 +202,7 @@ private func closeReceivedFds(_ recv: BootstrapRecv) {
 }
 
 private func connectUnixSocket(fd: Int32, path: String) throws {
+    #if os(macOS)
     let one: Int32 = 1
     let setNoSigPipeRc = withUnsafePointer(to: one) { ptr in
         setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, ptr, socklen_t(MemoryLayout<Int32>.size))
@@ -201,6 +210,7 @@ private func connectUnixSocket(fd: Int32, path: String) throws {
     if setNoSigPipeRc != 0 {
         throw ShmBootstrapError.connectFailed(errno: errno)
     }
+    #endif
 
     var addr = sockaddr_un()
     addr.sun_family = sa_family_t(AF_UNIX)

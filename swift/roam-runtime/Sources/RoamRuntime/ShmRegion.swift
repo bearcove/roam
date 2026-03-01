@@ -1,5 +1,9 @@
+#if os(macOS) || os(Linux)
 #if os(macOS)
 import Darwin
+#else
+import Glibc
+#endif
 import Foundation
 
 // r[impl shm.file.cleanup]
@@ -207,6 +211,7 @@ public final class ShmRegion: @unchecked Sendable {
 #else
 import Foundation
 
+// Stub for platforms without POSIX mmap support (e.g. Windows, WASI).
 public enum ShmFileCleanup: Sendable {
     case manual
     case auto

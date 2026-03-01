@@ -76,7 +76,7 @@ struct SpawnArgs {
 }
 
 private func fail(_ message: String) -> Never {
-    fputs("shm-guest-client: \(message)\n", stderr)
+    FileHandle.standardError.write(Data("shm-guest-client: \(message)\n".utf8))
     exit(1)
 }
 

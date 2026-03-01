@@ -526,7 +526,11 @@ func runShmHostServer() async throws {
 private func makeUnixListener(path: String) throws -> Int32 {
     unlink(path)
 
+    #if canImport(Glibc)
+    let fd = socket(AF_UNIX, Int32(SOCK_STREAM.rawValue), 0)
+    #else
     let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+    #endif
     guard fd >= 0 else {
         throw SubjectError.socketSetupFailed
     }
