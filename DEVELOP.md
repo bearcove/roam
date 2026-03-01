@@ -114,6 +114,9 @@ just fuzz-asan shm_link_roundtrip 300
 
 # Fuzz with UBSAN
 just fuzz-ubsan protocol_decode 300
+
+# Fuzz with AFL++ SAND mode (native + sanitizer workers)
+just fuzz-sand protocol_decode 300
 ```
 
 Current targets:
@@ -121,6 +124,11 @@ Current targets:
 - `shm_link_roundtrip` (SHM send/recv roundtrip)
 - `protocol_decode` (Roam wire message decode/encode)
 - `testbed_mem_session` (generated `spec-proto` RPC traffic over in-memory session/driver)
+
+SAND recipes build three binaries per target under `fuzz/.sand/<target>/`:
+- `native`
+- `asan` (built with `AFL_USE_ASAN=1 AFL_LLVM_ONLY_FSRV=1`)
+- `ubsan` (built with `AFL_USE_UBSAN=1 AFL_LLVM_ONLY_FSRV=1`)
 
 ## Project Structure
 

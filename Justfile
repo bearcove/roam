@@ -212,3 +212,81 @@ fuzz-ubsan-run target="all" seconds="60":
 fuzz-ubsan target="all" seconds="60":
     just fuzz-ubsan-build "{{target}}"
     just fuzz-ubsan-run "{{target}}" "{{seconds}}"
+
+fuzz-sand-build target="all":
+    @build_one() { \
+      t="$1"; \
+      case "$t" in \
+        framing_peek|shm_link_roundtrip) \
+          manifest="fuzz/roam-shm-afl/Cargo.toml"; \
+          bin_path="fuzz/roam-shm-afl/target/debug/$t"; \
+          ;; \
+        protocol_decode|testbed_mem_session) \
+          manifest="fuzz/roam-afl/Cargo.toml"; \
+          bin_path="fuzz/roam-afl/target/debug/$t"; \
+          ;; \
+        *) \
+          echo "Unknown target: $t" >&2; \
+          just fuzz-targets; \
+          exit 1; \
+          ;; \
+      esac; \
+      out_dir="fuzz/.sand/$t"; \
+      mkdir -p "$out_dir"; \
+      cargo afl build --manifest-path "$manifest" --bin "$t"; \
+      cp "$bin_path" "$out_dir/native"; \
+      AFL_USE_ASAN=1 AFL_LLVM_ONLY_FSRV=1 cargo afl build --manifest-path "$manifest" --bin "$t"; \
+      cp "$bin_path" "$out_dir/asan"; \
+      AFL_USE_UBSAN=1 AFL_LLVM_ONLY_FSRV=1 cargo afl build --manifest-path "$manifest" --bin "$t"; \
+      cp "$bin_path" "$out_dir/ubsan"; \
+    }; \
+    case "{{target}}" in \
+      all) \
+        build_one framing_peek; \
+        build_one shm_link_roundtrip; \
+        build_one protocol_decode; \
+        build_one testbed_mem_session; \
+        ;; \
+      *) \
+        build_one "{{target}}"; \
+        ;; \
+    esac
+
+fuzz-sand-run target="all" seconds="60":
+    @run_one() { \
+      t="$1"; \
+      case "$t" in \
+        framing_peek|shm_link_roundtrip) in_dir="fuzz/roam-shm-afl/in/$t" ;; \
+        protocol_decode|testbed_mem_session) in_dir="fuzz/roam-afl/in/$t" ;; \
+        *) \
+          echo "Unknown target: $t" >&2; \
+          just fuzz-targets; \
+          exit 1; \
+          ;; \
+      esac; \
+      just fuzz-sand-build "$t"; \
+      out_dir="fuzz/.sand/out/$t"; \
+      bin_dir="fuzz/.sand/$t"; \
+      mkdir -p "$out_dir"; \
+      trap 'exit 130' INT TERM; \
+      cargo afl fuzz -V "{{seconds}}" -i "$in_dir" -o "$out_dir" -w "$bin_dir/asan" -w "$bin_dir/ubsan" -- "$bin_dir/native"; \
+      status=$?; \
+      case "$status" in \
+        0|130|143) ;; \
+        *) exit "$status" ;; \
+      esac; \
+    }; \
+    case "{{target}}" in \
+      all) \
+        run_one framing_peek; \
+        run_one shm_link_roundtrip; \
+        run_one protocol_decode; \
+        run_one testbed_mem_session; \
+        ;; \
+      *) \
+        run_one "{{target}}"; \
+        ;; \
+    esac
+
+fuzz-sand target="all" seconds="60":
+    just fuzz-sand-run "{{target}}" "{{seconds}}"
