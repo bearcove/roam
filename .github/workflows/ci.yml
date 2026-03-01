@@ -131,13 +131,12 @@ jobs:
       - name: Run Rust TCP subject matrix tests
         run: >
           cargo nextest run -p spec-tests --test spec_matrix
-          -E 'test(lang_rust_transport_tcp_direction_harness_to_subject_rpc_echo_roundtrip)
-          | test(lang_rust_transport_tcp_direction_harness_to_subject_rpc_user_error_roundtrip)
-          | test(lang_rust_transport_tcp_direction_harness_to_subject_rpc_pipelining_multiple_requests)
-          | test(lang_rust_transport_tcp_direction_subject_to_harness_channeling_sum_client_to_server)
-          | test(lang_rust_transport_tcp_direction_harness_to_subject_channeling_generate_server_to_client)
-          | test(lang_rust_transport_tcp_direction_bidirectional_channeling_transform)
-          | test(lang_rust_transport_tcp_direction_harness_to_subject_binary_payload_sizes)'
+          -E 'test(lang_rust_transport_tcp::)'
+
+      - name: Run Rust SHM guest subject matrix tests
+        run: >
+          cargo nextest run -p spec-tests --test spec_matrix
+          -E 'test(lang_rust_transport_shm_guest_mode::)'
 
       - name: Run Rust binary payload transport matrix (mem/tcp/shm)
         run: >
@@ -214,13 +213,7 @@ jobs:
       - name: Run TypeScript TCP subject matrix tests
         run: >
           cargo nextest run -p spec-tests --test spec_matrix
-          -E 'test(lang_typescript_transport_tcp_direction_harness_to_subject_rpc_echo_roundtrip)
-          | test(lang_typescript_transport_tcp_direction_harness_to_subject_rpc_user_error_roundtrip)
-          | test(lang_typescript_transport_tcp_direction_harness_to_subject_rpc_pipelining_multiple_requests)
-          | test(lang_typescript_transport_tcp_direction_subject_to_harness_channeling_sum_client_to_server)
-          | test(lang_typescript_transport_tcp_direction_harness_to_subject_channeling_generate_server_to_client)
-          | test(lang_typescript_transport_tcp_direction_bidirectional_channeling_transform)
-          | test(lang_typescript_transport_tcp_direction_harness_to_subject_binary_payload_sizes)'
+          -E 'test(lang_typescript_transport_tcp::)'
 
   swift-conformance:
     name: Conformance / Swift
@@ -259,25 +252,17 @@ jobs:
       - name: Run Swift TCP subject matrix tests
         run: >
           cargo nextest run -p spec-tests --test spec_matrix
-          -E 'test(lang_swift_transport_tcp_direction_harness_to_subject_rpc_echo_roundtrip)
-          | test(lang_swift_transport_tcp_direction_harness_to_subject_rpc_user_error_roundtrip)
-          | test(lang_swift_transport_tcp_direction_harness_to_subject_rpc_pipelining_multiple_requests)
-          | test(lang_swift_transport_tcp_direction_subject_to_harness_channeling_sum_client_to_server)
-          | test(lang_swift_transport_tcp_direction_harness_to_subject_channeling_generate_server_to_client)
-          | test(lang_swift_transport_tcp_direction_bidirectional_channeling_transform)
-          | test(lang_swift_transport_tcp_direction_harness_to_subject_binary_payload_sizes)'
+          -E 'test(lang_swift_transport_tcp::)'
 
-      - name: Run binary payload subject test (Swift over SHM)
+      - name: Run Swift SHM guest subject matrix tests
         run: >
           cargo nextest run -p spec-tests --test spec_matrix
-          -E 'test(lang_swift_transport_shm_direction_harness_to_subject_binary_payload_sizes_guest_mode)
-          | test(lang_swift_transport_shm_direction_harness_to_subject_binary_payload_cutover_boundaries_guest_mode)'
+          -E 'test(lang_swift_transport_shm_guest_mode::)'
 
-      - name: Run binary payload subject test (Swift over SHM host-direction)
+      - name: Run Swift SHM host subject matrix tests
         run: >
           cargo nextest run -p spec-tests --test spec_matrix
-          -E 'test(lang_swift_transport_shm_direction_harness_to_subject_binary_payload_sizes_host_mode)
-          | test(lang_swift_transport_shm_direction_harness_to_subject_binary_payload_cutover_boundaries_host_mode)'
+          -E 'test(lang_swift_transport_shm_host_mode::)'
 
   swift-linux:
     name: Conformance / Swift (Linux)
@@ -311,19 +296,12 @@ jobs:
       - name: Run Swift TCP subject matrix tests
         run: >
           cargo nextest run -p spec-tests --test spec_matrix
-          -E 'test(lang_swift_transport_tcp_direction_harness_to_subject_rpc_echo_roundtrip)
-          | test(lang_swift_transport_tcp_direction_harness_to_subject_rpc_user_error_roundtrip)
-          | test(lang_swift_transport_tcp_direction_harness_to_subject_rpc_pipelining_multiple_requests)
-          | test(lang_swift_transport_tcp_direction_subject_to_harness_channeling_sum_client_to_server)
-          | test(lang_swift_transport_tcp_direction_harness_to_subject_channeling_generate_server_to_client)
-          | test(lang_swift_transport_tcp_direction_bidirectional_channeling_transform)
-          | test(lang_swift_transport_tcp_direction_harness_to_subject_binary_payload_sizes)'
+          -E 'test(lang_swift_transport_tcp::)'
 
-      - name: Run binary payload subject test (Swift over SHM)
+      - name: Run Swift SHM guest subject matrix tests
         run: >
           cargo nextest run -p spec-tests --test spec_matrix
-          -E 'test(lang_swift_transport_shm_direction_harness_to_subject_binary_payload_sizes_guest_mode)
-          | test(lang_swift_transport_shm_direction_harness_to_subject_binary_payload_cutover_boundaries_guest_mode)'
+          -E 'test(lang_swift_transport_shm_guest_mode::)'
 
   rust-wasm:
     name: Rust / WebAssembly
