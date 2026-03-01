@@ -1246,4 +1246,30 @@ mod tests {
         assert_eq!(stats.slot_ref_sends, 1);
         assert_eq!(stats.mmap_ref_sends, 1);
     }
+
+    #[tokio::test]
+    async fn mmap_backing_survives_rx_drop_and_peer_teardown() {
+        let (a, b) = ShmLink::heap_pair(4096, 1 << 20, 32, SMALL_CLASSES).unwrap();
+        let (a_tx, _a_rx) = a.split();
+        let (_b_tx, mut b_rx) = b.split();
+
+        let payload = vec![0x5A_u8; 500];
+        let permit = a_tx.reserve().await.unwrap();
+        let mut slot = permit.alloc(payload.len()).unwrap();
+        slot.as_mut_slice().copy_from_slice(&payload);
+        slot.commit();
+
+        let backing = b_rx.recv().await.unwrap().unwrap();
+        let shared = match backing {
+            Backing::Shared(shared) => shared,
+            Backing::Boxed(_) => panic!("expected mmap-backed shared payload"),
+        };
+
+        // Tear down receiver state (drops MmapAttachments) and peer tx.
+        drop(b_rx);
+        drop(a_tx);
+
+        // Backing must remain valid independently of attachment table/peer lifetime.
+        assert_eq!(shared.as_bytes(), payload.as_slice());
+    }
 }
