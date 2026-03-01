@@ -1,15 +1,15 @@
 use roam::RoamError;
 use spec_proto::MathError;
-use spec_tests::harness::{accept_subject, run_async};
+use spec_tests::harness::{SubjectSpec, accept_subject_spec, run_async};
 
 // r[verify call.initiate]
 // r[verify call.complete]
 // r[verify call.lifecycle.single-response]
 // r[verify call.lifecycle.ordering]
 // r[verify transport.message.binary]
-pub fn run_rpc_echo_roundtrip() {
+pub fn run_rpc_echo_roundtrip(spec: SubjectSpec) {
     run_async(async {
-        let (client, mut child) = accept_subject().await?;
+        let (client, mut child) = accept_subject_spec(spec).await?;
         let resp = client
             .echo("hello".to_string())
             .await
@@ -24,9 +24,9 @@ pub fn run_rpc_echo_roundtrip() {
 }
 
 // r[verify call.error.user]
-pub fn run_rpc_user_error_roundtrip() {
+pub fn run_rpc_user_error_roundtrip(spec: SubjectSpec) {
     run_async(async {
-        let (client, mut child) = accept_subject().await?;
+        let (client, mut child) = accept_subject_spec(spec).await?;
         let result = client.divide(10, 0).await;
         match result {
             Err(RoamError::User(MathError::DivisionByZero)) => {}
@@ -52,9 +52,9 @@ pub fn run_rpc_user_error_roundtrip() {
 // r[verify call.pipelining.independence]
 // r[verify core.call]
 // r[verify core.call.request-id]
-pub fn run_rpc_pipelining_multiple_requests() {
+pub fn run_rpc_pipelining_multiple_requests(spec: SubjectSpec) {
     run_async(async {
-        let (client, mut child) = accept_subject().await?;
+        let (client, mut child) = accept_subject_spec(spec).await?;
         let (r1, r2, r3) = tokio::join!(
             client.echo("first".to_string()),
             client.echo("second".to_string()),

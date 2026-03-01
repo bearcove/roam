@@ -64,10 +64,57 @@ where
 }
 
 type TcpLink = StreamLink<tokio::net::tcp::OwnedReadHalf, tokio::net::tcp::OwnedWriteHalf>;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum SubjectTransport {
+pub enum SubjectLanguage {
+    Rust,
+    Swift,
+    TypeScript,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SubjectTestTransport {
     Tcp,
     Shm,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SubjectShmMode {
+    GuestServer,
+    HostServer,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SubjectSpec {
+    pub language: SubjectLanguage,
+    pub transport: SubjectTestTransport,
+    pub shm_mode: SubjectShmMode,
+}
+
+impl SubjectSpec {
+    pub const fn tcp(language: SubjectLanguage) -> Self {
+        Self {
+            language,
+            transport: SubjectTestTransport::Tcp,
+            shm_mode: SubjectShmMode::GuestServer,
+        }
+    }
+
+    pub const fn shm_guest(language: SubjectLanguage) -> Self {
+        Self {
+            language,
+            transport: SubjectTestTransport::Shm,
+            shm_mode: SubjectShmMode::GuestServer,
+        }
+    }
+
+    pub const fn shm_host(language: SubjectLanguage) -> Self {
+        Self {
+            language,
+            transport: SubjectTestTransport::Shm,
+            shm_mode: SubjectShmMode::HostServer,
+        }
+    }
 }
 
 struct NoopHandler;
@@ -91,23 +138,42 @@ pub fn subject_cmd() -> String {
     }
 }
 
-fn subject_transport() -> SubjectTransport {
+pub fn subject_cmd_for_language(language: SubjectLanguage) -> String {
+    match language {
+        SubjectLanguage::Rust => {
+            let debug = workspace_root().join("target/debug/subject-rust");
+            if debug.exists() {
+                return debug.display().to_string();
+            }
+            "./target/release/subject-rust".to_string()
+        }
+        SubjectLanguage::Swift => "sh swift/subject/subject-swift.sh".to_string(),
+        SubjectLanguage::TypeScript => "sh typescript/subject/subject-ts.sh".to_string(),
+    }
+}
+
+fn subject_transport() -> SubjectTestTransport {
     match std::env::var("SPEC_TRANSPORT")
         .ok()
         .unwrap_or_else(|| "tcp".to_string())
         .to_ascii_lowercase()
         .as_str()
     {
-        "shm" => SubjectTransport::Shm,
-        _ => SubjectTransport::Tcp,
+        "shm" => SubjectTestTransport::Shm,
+        _ => SubjectTestTransport::Tcp,
     }
 }
 
-fn shm_subject_mode() -> String {
-    std::env::var("SPEC_SHM_SUBJECT_MODE")
+fn shm_subject_mode() -> SubjectShmMode {
+    let mode = std::env::var("SPEC_SHM_SUBJECT_MODE")
         .ok()
         .unwrap_or_else(|| "shm-server".to_string())
-        .to_ascii_lowercase()
+        .to_ascii_lowercase();
+    if mode == "shm-host-server" {
+        SubjectShmMode::HostServer
+    } else {
+        SubjectShmMode::GuestServer
+    }
 }
 
 pub fn run_async<T>(f: impl Future<Output = T>) -> T {
@@ -297,15 +363,14 @@ impl TestbedServer for TestbedService {
 
 /// Spawn the subject binary, telling it to connect to `peer_addr`.
 pub async fn spawn_subject(peer_addr: &str) -> Result<Child, String> {
-    spawn_subject_with_env(peer_addr, &[]).await
+    spawn_subject_cmd_with_env(&subject_cmd(), peer_addr, &[]).await
 }
 
-async fn spawn_subject_with_env(
+async fn spawn_subject_cmd_with_env(
+    cmd: &str,
     peer_addr: &str,
     extra_env: &[(&str, &str)],
 ) -> Result<Child, String> {
-    let cmd = subject_cmd();
-
     let mut command = Command::new("sh");
     command
         .current_dir(workspace_root())
@@ -352,25 +417,36 @@ fn keep_tempdir_alive(dir: tempfile::TempDir) {
 /// Listen on a random TCP port, spawn the subject (which connects to us),
 /// complete the roam handshake as acceptor, and return a ready `TestbedClient`.
 pub async fn accept_subject() -> Result<(TestbedClient<DriverCaller>, Child), String> {
-    match subject_transport() {
-        SubjectTransport::Tcp => accept_subject_tcp().await,
-        SubjectTransport::Shm => accept_subject_shm().await,
-    }
+    let spec = SubjectSpec {
+        language: SubjectLanguage::Rust,
+        transport: subject_transport(),
+        shm_mode: shm_subject_mode(),
+    };
+    accept_subject_spec(spec).await
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SubjectTestTransport {
-    Tcp,
-    Shm,
+pub async fn accept_subject_spec(
+    spec: SubjectSpec,
+) -> Result<(TestbedClient<DriverCaller>, Child), String> {
+    let cmd = subject_cmd_for_language(spec.language);
+    match spec.transport {
+        SubjectTestTransport::Tcp => accept_subject_tcp(&cmd).await,
+        SubjectTestTransport::Shm => match spec.shm_mode {
+            SubjectShmMode::GuestServer => accept_subject_shm_subject_is_guest(&cmd).await,
+            SubjectShmMode::HostServer => accept_subject_shm_subject_is_host(&cmd).await,
+        },
+    }
 }
 
 pub async fn accept_subject_with_transport(
     transport: SubjectTestTransport,
 ) -> Result<(TestbedClient<DriverCaller>, Child), String> {
-    match transport {
-        SubjectTestTransport::Tcp => accept_subject_tcp().await,
-        SubjectTestTransport::Shm => accept_subject_shm().await,
-    }
+    accept_subject_spec(SubjectSpec {
+        language: SubjectLanguage::Rust,
+        transport,
+        shm_mode: shm_subject_mode(),
+    })
+    .await
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -465,7 +541,7 @@ where
     Ok(TestbedClient::new(caller))
 }
 
-async fn accept_subject_tcp() -> Result<(TestbedClient<DriverCaller>, Child), String> {
+async fn accept_subject_tcp(cmd: &str) -> Result<(TestbedClient<DriverCaller>, Child), String> {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .map_err(|e| format!("bind: {e}"))?;
@@ -473,7 +549,7 @@ async fn accept_subject_tcp() -> Result<(TestbedClient<DriverCaller>, Child), St
         .local_addr()
         .map_err(|e| format!("local_addr: {e}"))?;
 
-    let child = spawn_subject(&addr.to_string()).await?;
+    let child = spawn_subject_cmd_with_env(cmd, &addr.to_string(), &[]).await?;
 
     let (stream, _) = tokio::time::timeout(Duration::from_secs(5), listener.accept())
         .await
@@ -497,15 +573,9 @@ async fn accept_subject_tcp() -> Result<(TestbedClient<DriverCaller>, Child), St
     Ok((TestbedClient::new(caller), child))
 }
 
-async fn accept_subject_shm() -> Result<(TestbedClient<DriverCaller>, Child), String> {
-    if shm_subject_mode() == "shm-host-server" {
-        return accept_subject_shm_subject_is_host().await;
-    }
-    accept_subject_shm_subject_is_guest().await
-}
-
-async fn accept_subject_shm_subject_is_guest()
--> Result<(TestbedClient<DriverCaller>, Child), String> {
+async fn accept_subject_shm_subject_is_guest(
+    cmd: &str,
+) -> Result<(TestbedClient<DriverCaller>, Child), String> {
     let dir = tempfile::tempdir().map_err(|e| format!("tempdir: {e}"))?;
     let sid = sid_hex_32();
     let control_sock_path = dir.path().join("bootstrap.sock");
@@ -581,7 +651,8 @@ async fn accept_subject_shm_subject_is_guest()
         .ok_or_else(|| format!("invalid socket path: {}", control_sock_path.display()))?
         .to_string();
 
-    let child = spawn_subject_with_env(
+    let child = spawn_subject_cmd_with_env(
+        cmd,
         "",
         &[
             ("SUBJECT_MODE", "shm-server"),
@@ -617,8 +688,9 @@ async fn accept_subject_shm_subject_is_guest()
     Ok((TestbedClient::new(caller), child))
 }
 
-async fn accept_subject_shm_subject_is_host() -> Result<(TestbedClient<DriverCaller>, Child), String>
-{
+async fn accept_subject_shm_subject_is_host(
+    cmd: &str,
+) -> Result<(TestbedClient<DriverCaller>, Child), String> {
     let dir = tempfile::tempdir().map_err(|e| format!("tempdir: {e}"))?;
     let sid = sid_hex_32();
     let control_sock_path = dir.path().join("bootstrap.sock");
@@ -632,7 +704,8 @@ async fn accept_subject_shm_subject_is_host() -> Result<(TestbedClient<DriverCal
         .ok_or_else(|| format!("invalid shm path: {}", shm_path.display()))?
         .to_string();
 
-    let mut child = spawn_subject_with_env(
+    let mut child = spawn_subject_cmd_with_env(
+        cmd,
         "",
         &[
             ("SUBJECT_MODE", "shm-host-server"),

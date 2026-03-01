@@ -5,16 +5,16 @@
 //! - `generate(count: u32, output: Tx<i32>)` - server-to-client channel
 //! - `transform(input: Rx<String>, output: Tx<String>)` - bidirectional channels
 
-use spec_tests::harness::{accept_subject, run_async, spawn_loud};
+use spec_tests::harness::{SubjectSpec, accept_subject_spec, run_async, spawn_loud};
 
 // r[verify channeling.type]
 // r[verify channeling.data]
 // r[verify channeling.close]
 // r[verify channeling.caller-pov]
 // r[verify channeling.allocation.caller]
-pub fn run_channeling_sum_client_to_server() {
+pub fn run_channeling_sum_client_to_server(spec: SubjectSpec) {
     run_async(async {
-        let (client, mut child) = accept_subject().await?;
+        let (client, mut child) = accept_subject_spec(spec).await?;
 
         let (tx, rx) = roam::channel::<i32>();
         spawn_loud(async move {
@@ -38,9 +38,9 @@ pub fn run_channeling_sum_client_to_server() {
 // r[verify channeling.type]
 // r[verify channeling.data]
 // r[verify channeling.close]
-pub fn run_channeling_generate_server_to_client() {
+pub fn run_channeling_generate_server_to_client(spec: SubjectSpec) {
     run_async(async {
-        let (client, mut child) = accept_subject().await?;
+        let (client, mut child) = accept_subject_spec(spec).await?;
 
         let (tx, mut rx) = roam::channel::<i32>();
         let recv = spawn_loud(async move {
@@ -70,9 +70,9 @@ pub fn run_channeling_generate_server_to_client() {
 
 // r[verify channeling.type]
 // r[verify channeling.lifecycle.immediate-data]
-pub fn run_channeling_transform_bidirectional() {
+pub fn run_channeling_transform_bidirectional(spec: SubjectSpec) {
     run_async(async {
-        let (client, mut child) = accept_subject().await?;
+        let (client, mut child) = accept_subject_spec(spec).await?;
 
         let (input_tx, input_rx) = roam::channel::<String>();
         let (output_tx, mut output_rx) = roam::channel::<String>();

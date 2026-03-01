@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use spec_proto::Message;
-use spec_tests::harness::{accept_subject, run_async};
+use spec_tests::harness::{SubjectSpec, accept_subject_spec, run_async};
 
 fn payload_sizes() -> &'static [usize] {
     &[
@@ -45,9 +45,9 @@ fn make_payload(size: usize) -> Vec<u8> {
 }
 
 // r[verify transport.message.binary]
-pub fn run_subject_process_message_binary_payload_sizes() {
+pub fn run_subject_process_message_binary_payload_sizes(spec: SubjectSpec) {
     run_async(async {
-        let (client, mut child) = accept_subject().await?;
+        let (client, mut child) = accept_subject_spec(spec).await?;
         for &size in payload_sizes() {
             let payload = make_payload(size);
             let resp = client
@@ -82,18 +82,9 @@ pub fn run_subject_process_message_binary_payload_sizes() {
 
 // r[verify transport.message.binary]
 // r[verify shm.framing.threshold]
-pub fn run_subject_process_message_binary_payload_shm_cutover_boundaries() {
-    if std::env::var("SPEC_TRANSPORT")
-        .ok()
-        .map(|v| v.eq_ignore_ascii_case("shm"))
-        != Some(true)
-    {
-        eprintln!("skipping SHM cutover boundary test (set SPEC_TRANSPORT=shm to enable)");
-        return;
-    }
-
+pub fn run_subject_process_message_binary_payload_shm_cutover_boundaries(spec: SubjectSpec) {
     run_async(async {
-        let (client, mut child) = accept_subject().await?;
+        let (client, mut child) = accept_subject_spec(spec).await?;
         for &size in shm_cutover_payload_sizes() {
             let payload = make_payload(size);
             let resp = tokio::time::timeout(

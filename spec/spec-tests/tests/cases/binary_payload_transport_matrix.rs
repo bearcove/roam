@@ -1,7 +1,6 @@
 use spec_proto::Message;
 use spec_tests::harness::{
-    RustTransport, SubjectTestTransport, accept_rust_inproc, accept_subject_with_transport,
-    run_async,
+    RustTransport, SubjectSpec, accept_rust_inproc, accept_subject_spec, run_async,
 };
 
 fn payload_sizes() -> &'static [usize] {
@@ -69,20 +68,20 @@ async fn run_for_transport(transport: RustTransport) -> Result<(), String> {
     Ok(())
 }
 
-async fn run_for_subject_transport(transport: SubjectTestTransport) -> Result<(), String> {
-    let (client, mut child) = accept_subject_with_transport(transport).await?;
+async fn run_for_subject_transport(spec: SubjectSpec) -> Result<(), String> {
+    let (client, mut child) = accept_subject_spec(spec).await?;
     for &size in payload_sizes() {
         let payload = make_payload(size);
         let resp = client
             .process_message(Message::Data(payload.clone()))
             .await
-            .map_err(|e| format!("subject transport={transport:?} size={size}: {e:?}"))?;
+            .map_err(|e| format!("subject spec={spec:?} size={size}: {e:?}"))?;
         let actual = match &resp.ret {
             Message::Data(actual) => actual,
             _ => {
                 child.kill().await.ok();
                 return Err(format!(
-                    "subject transport={transport:?} size={size}: expected Data response"
+                    "subject spec={spec:?} size={size}: expected Data response"
                 ));
             }
         };
@@ -91,7 +90,7 @@ async fn run_for_subject_transport(transport: SubjectTestTransport) -> Result<()
         if actual != &expected {
             child.kill().await.ok();
             return Err(format!(
-                "subject transport={transport:?} size={size}: payload mismatch (len={})",
+                "subject spec={spec:?} size={size}: payload mismatch (len={})",
                 actual.len()
             ));
         }
@@ -100,19 +99,8 @@ async fn run_for_subject_transport(transport: SubjectTestTransport) -> Result<()
     Ok(())
 }
 
-fn transport_matrix_enabled() -> bool {
-    if std::env::var("RUN_RUST_TRANSPORT_MATRIX").as_deref() != Ok("1") {
-        eprintln!("skipping rust transport matrix (set RUN_RUST_TRANSPORT_MATRIX=1 to enable)");
-        return false;
-    }
-    true
-}
-
 // r[verify transport.message.binary]
 pub fn run_rust_binary_payload_transport_matrix_mem() {
-    if !transport_matrix_enabled() {
-        return;
-    }
     run_async(async {
         run_for_transport(RustTransport::Mem).await?;
         Ok::<_, String>(())
@@ -121,24 +109,18 @@ pub fn run_rust_binary_payload_transport_matrix_mem() {
 }
 
 // r[verify transport.message.binary]
-pub fn run_rust_binary_payload_transport_matrix_subject_tcp() {
-    if !transport_matrix_enabled() {
-        return;
-    }
+pub fn run_rust_binary_payload_transport_matrix_subject_tcp(spec: SubjectSpec) {
     run_async(async {
-        run_for_subject_transport(SubjectTestTransport::Tcp).await?;
+        run_for_subject_transport(spec).await?;
         Ok::<_, String>(())
     })
     .unwrap();
 }
 
 // r[verify transport.message.binary]
-pub fn run_rust_binary_payload_transport_matrix_subject_shm() {
-    if !transport_matrix_enabled() {
-        return;
-    }
+pub fn run_rust_binary_payload_transport_matrix_subject_shm(spec: SubjectSpec) {
     run_async(async {
-        run_for_subject_transport(SubjectTestTransport::Shm).await?;
+        run_for_subject_transport(spec).await?;
         Ok::<_, String>(())
     })
     .unwrap();

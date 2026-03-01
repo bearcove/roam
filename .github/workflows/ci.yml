@@ -128,21 +128,23 @@ jobs:
       - name: Build subject
         run: cargo build -p subject-rust
 
-      - name: Run spec tests (subject over TCP)
-        run: cargo nextest run -p spec-tests
-        env:
-          SUBJECT_CMD: "./target/debug/subject-rust"
-          SPEC_TRANSPORT: "tcp"
+      - name: Run Rust TCP subject matrix tests
+        run: >
+          cargo nextest run -p spec-tests --test spec_matrix
+          -E 'test(lang_rust_transport_tcp_direction_harness_to_subject_rpc_echo_roundtrip)
+          | test(lang_rust_transport_tcp_direction_harness_to_subject_rpc_user_error_roundtrip)
+          | test(lang_rust_transport_tcp_direction_harness_to_subject_rpc_pipelining_multiple_requests)
+          | test(lang_rust_transport_tcp_direction_subject_to_harness_channeling_sum_client_to_server)
+          | test(lang_rust_transport_tcp_direction_harness_to_subject_channeling_generate_server_to_client)
+          | test(lang_rust_transport_tcp_direction_bidirectional_channeling_transform)
+          | test(lang_rust_transport_tcp_direction_harness_to_subject_binary_payload_sizes)'
 
       - name: Run Rust binary payload transport matrix (mem/tcp/shm)
         run: >
           cargo nextest run -p spec-tests --test spec_matrix
           -E 'test(lang_rust_to_rust_transport_mem_direction_bidirectional_binary_payload_transport_matrix)
-          | test(lang_subject_to_rust_transport_tcp_direction_bidirectional_binary_payload_transport_matrix)
-          | test(lang_subject_to_rust_transport_shm_direction_bidirectional_binary_payload_transport_matrix)'
-        env:
-          RUN_RUST_TRANSPORT_MATRIX: "1"
-          SUBJECT_CMD: "./target/debug/subject-rust"
+          | test(lang_rust_to_rust_transport_tcp_direction_bidirectional_binary_payload_transport_matrix)
+          | test(lang_rust_to_rust_transport_shm_direction_bidirectional_binary_payload_transport_matrix)'
 
   generated-bindings:
     name: Generated / Bindings Sync
@@ -209,10 +211,16 @@ jobs:
       - name: Run TypeScript tests
         run: cd typescript && pnpm test
 
-      - name: Run spec tests
-        run: cargo nextest run -p spec-tests
-        env:
-          SUBJECT_CMD: "node --experimental-transform-types typescript/subject/subject.ts"
+      - name: Run TypeScript TCP subject matrix tests
+        run: >
+          cargo nextest run -p spec-tests --test spec_matrix
+          -E 'test(lang_typescript_transport_tcp_direction_harness_to_subject_rpc_echo_roundtrip)
+          | test(lang_typescript_transport_tcp_direction_harness_to_subject_rpc_user_error_roundtrip)
+          | test(lang_typescript_transport_tcp_direction_harness_to_subject_rpc_pipelining_multiple_requests)
+          | test(lang_typescript_transport_tcp_direction_subject_to_harness_channeling_sum_client_to_server)
+          | test(lang_typescript_transport_tcp_direction_harness_to_subject_channeling_generate_server_to_client)
+          | test(lang_typescript_transport_tcp_direction_bidirectional_channeling_transform)
+          | test(lang_typescript_transport_tcp_direction_harness_to_subject_binary_payload_sizes)'
 
   swift-conformance:
     name: Conformance / Swift
@@ -248,29 +256,28 @@ jobs:
           | test(lang_swift_to_rust_transport_shm_direction_guest_to_host_cross_language_message_v7)
           | test(lang_rust_to_swift_transport_shm_direction_host_to_guest_cross_language_mmap_ref_receive)'
 
-      - name: Run spec tests
-        run: cargo nextest run -p spec-tests
-        env:
-          SUBJECT_CMD: "sh swift/subject/subject-swift.sh"
+      - name: Run Swift TCP subject matrix tests
+        run: >
+          cargo nextest run -p spec-tests --test spec_matrix
+          -E 'test(lang_swift_transport_tcp_direction_harness_to_subject_rpc_echo_roundtrip)
+          | test(lang_swift_transport_tcp_direction_harness_to_subject_rpc_user_error_roundtrip)
+          | test(lang_swift_transport_tcp_direction_harness_to_subject_rpc_pipelining_multiple_requests)
+          | test(lang_swift_transport_tcp_direction_subject_to_harness_channeling_sum_client_to_server)
+          | test(lang_swift_transport_tcp_direction_harness_to_subject_channeling_generate_server_to_client)
+          | test(lang_swift_transport_tcp_direction_bidirectional_channeling_transform)
+          | test(lang_swift_transport_tcp_direction_harness_to_subject_binary_payload_sizes)'
 
       - name: Run binary payload subject test (Swift over SHM)
         run: >
           cargo nextest run -p spec-tests --test spec_matrix
-          -E 'test(lang_subject_to_harness_transport_env_selected_direction_harness_to_subject_binary_payload_sizes)
-          | test(lang_subject_to_harness_transport_shm_direction_harness_to_subject_binary_payload_cutover_boundaries)'
-        env:
-          SUBJECT_CMD: "sh swift/subject/subject-swift.sh"
-          SPEC_TRANSPORT: "shm"
+          -E 'test(lang_swift_transport_shm_direction_harness_to_subject_binary_payload_sizes_guest_mode)
+          | test(lang_swift_transport_shm_direction_harness_to_subject_binary_payload_cutover_boundaries_guest_mode)'
 
       - name: Run binary payload subject test (Swift over SHM host-direction)
         run: >
           cargo nextest run -p spec-tests --test spec_matrix
-          -E 'test(lang_subject_to_harness_transport_env_selected_direction_harness_to_subject_binary_payload_sizes)
-          | test(lang_subject_to_harness_transport_shm_direction_harness_to_subject_binary_payload_cutover_boundaries)'
-        env:
-          SUBJECT_CMD: "sh swift/subject/subject-swift.sh"
-          SPEC_TRANSPORT: "shm"
-          SPEC_SHM_SUBJECT_MODE: "shm-host-server"
+          -E 'test(lang_swift_transport_shm_direction_harness_to_subject_binary_payload_sizes_host_mode)
+          | test(lang_swift_transport_shm_direction_harness_to_subject_binary_payload_cutover_boundaries_host_mode)'
 
   swift-linux:
     name: Conformance / Swift (Linux)
@@ -301,19 +308,22 @@ jobs:
       - name: Run RoamRuntime Swift tests
         run: swift test --no-parallel -Xlinker -L$(pwd)/target/release
 
-      - name: Run spec tests
-        run: cargo nextest run -p spec-tests
-        env:
-          SUBJECT_CMD: "sh swift/subject/subject-swift.sh"
+      - name: Run Swift TCP subject matrix tests
+        run: >
+          cargo nextest run -p spec-tests --test spec_matrix
+          -E 'test(lang_swift_transport_tcp_direction_harness_to_subject_rpc_echo_roundtrip)
+          | test(lang_swift_transport_tcp_direction_harness_to_subject_rpc_user_error_roundtrip)
+          | test(lang_swift_transport_tcp_direction_harness_to_subject_rpc_pipelining_multiple_requests)
+          | test(lang_swift_transport_tcp_direction_subject_to_harness_channeling_sum_client_to_server)
+          | test(lang_swift_transport_tcp_direction_harness_to_subject_channeling_generate_server_to_client)
+          | test(lang_swift_transport_tcp_direction_bidirectional_channeling_transform)
+          | test(lang_swift_transport_tcp_direction_harness_to_subject_binary_payload_sizes)'
 
       - name: Run binary payload subject test (Swift over SHM)
         run: >
           cargo nextest run -p spec-tests --test spec_matrix
-          -E 'test(lang_subject_to_harness_transport_env_selected_direction_harness_to_subject_binary_payload_sizes)
-          | test(lang_subject_to_harness_transport_shm_direction_harness_to_subject_binary_payload_cutover_boundaries)'
-        env:
-          SUBJECT_CMD: "sh swift/subject/subject-swift.sh"
-          SPEC_TRANSPORT: "shm"
+          -E 'test(lang_swift_transport_shm_direction_harness_to_subject_binary_payload_sizes_guest_mode)
+          | test(lang_swift_transport_shm_direction_harness_to_subject_binary_payload_cutover_boundaries_guest_mode)'
 
   rust-wasm:
     name: Rust / WebAssembly
