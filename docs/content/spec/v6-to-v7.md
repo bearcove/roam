@@ -16,6 +16,7 @@ This page maps the old v6 Rust API surface to the current v7 API.
 4. `ConnectionHandle` is no longer a `Caller`; clients are built from `driver.caller()`.
 5. Session setup moved from `accept_framed` / `initiate_framed` to `session::acceptor` / `session::initiator` builders.
 6. Channels are now `Tx<T, N>` / `Rx<T, N>` with const-generic initial credit (`N`, default `16`).
+7. Codegen input moved from `*_service_detail()` to `*_service_descriptor()`.
 
 ## Service macro changes
 
@@ -91,6 +92,34 @@ let caller = driver.caller();
 
 Server side is analogous via `roam_core::session::acceptor(conduit).establish().await?`.
 
+## Codegen build script migration (Swift example)
+
+Your old v6 pattern used:
+
+```rust
+let service = vixenfs_proto::vfs_service_detail();
+let swift = roam_codegen::targets::swift::generate_service_with_bindings(
+    &service,
+    roam_codegen::targets::swift::SwiftBindings::Client,
+);
+```
+
+In v7, switch to the generated service descriptor function:
+
+```rust
+let service = vixenfs_proto::vfs_service_descriptor();
+let swift = roam_codegen::targets::swift::generate_service_with_bindings(
+    service,
+    roam_codegen::targets::swift::SwiftBindings::Client,
+);
+```
+
+Notes:
+
+1. `generate_service_with_bindings` still exists in v7.
+2. The main migration point is `*_service_detail()` -> `*_service_descriptor()`.
+3. Descriptor functions return `&'static ServiceDescriptor`, so pass it directly.
+
 ## Old-to-new symbol map
 
 | v6 | v7 | Notes |
@@ -101,6 +130,7 @@ Server side is analogous via `roam_core::session::acceptor(conduit).establish().
 | `accept_framed` / `initiate_framed` | `session::acceptor` / `session::initiator` + `.establish()` | New session builders |
 | `Tx<T>` / `Rx<T>` | `Tx<T, N>` / `Rx<T, N>` | `N` is initial credit (default `16`) |
 | `client.method(...).with_metadata(...)` | no generated call-builder equivalent | Use lower-level request construction if needed |
+| `*_service_detail()` | `*_service_descriptor()` | Used by `roam-codegen` targets |
 
 ## Migration checklist
 
@@ -111,3 +141,4 @@ Server side is analogous via `roam_core::session::acceptor(conduit).establish().
 5. Update bootstrap code to `session::{initiator,acceptor}` and instantiate `Driver`.
 6. Switch client construction from connection handles to `driver.caller()`.
 7. If needed, annotate channel credit explicitly with `Tx<T, N>` / `Rx<T, N>`.
+8. Update custom codegen scripts from `*_service_detail()` to `*_service_descriptor()`.

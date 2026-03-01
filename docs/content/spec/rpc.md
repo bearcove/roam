@@ -77,8 +77,9 @@ If you're coming from roam v6 APIs, see the
 > r[rpc.caller]
 >
 > A caller makes outgoing requests on a connection. It is a generated struct
-> (e.g. `AdderClient`) that provides the same async methods as the service trait,
-> and takes care of serialization and response handling internally.
+> (e.g. `AdderClient`) that provides async methods matching the source trait
+> signature, and takes care of serialization and response handling internally.
+> Successful responses include both return data and response metadata.
 
 > r[rpc.session-setup]
 >
@@ -100,16 +101,20 @@ let response = client.add(3, 5).await?;
 let result = response.ret;
 ```
 
+`session.run()` and `driver.run()` must run concurrently for calls to flow.
+
 > r[rpc.virtual-connection.accept]
 >
 > When a virtual connection is opened by the counterpart, the accepting peer
 > receives the connection metadata, decides which handler to assign to it,
-> and obtains a typed caller for that virtual connection.
+> and receives a connection handle. A generated client for that connection is
+> created from the corresponding driver caller.
 
 > r[rpc.virtual-connection.open]
 >
 > A peer may open a virtual connection on an existing session, providing a
-> handler and receiving a typed caller, just like during session establishment.
+> handler and receiving a connection handle, just like during session
+> establishment.
 
 # Requests and responses
 
@@ -163,10 +168,19 @@ let result = response.ret;
 > r[rpc.fallible.caller-signature]
 >
 > On the caller side, the generated client wraps all return types in
-> `Result<_, RoamError<E>>`:
+> `Result<ResponseParts<_>, RoamError<E>>`:
 >
->   * Infallible `fn foo() -> T` becomes `fn foo() -> Result<T, RoamError>`
->   * Fallible `fn foo() -> Result<T, E>` becomes `fn foo() -> Result<T, RoamError<E>>`
+>   * Infallible `fn foo() -> T` becomes
+>     `fn foo() -> Result<ResponseParts<T>, RoamError>`
+>   * Fallible `fn foo() -> Result<T, E>` becomes
+>     `fn foo() -> Result<ResponseParts<T>, RoamError<E>>`
+>
+> `ResponseParts<T>` contains:
+>
+>   * `ret: T` — decoded return value
+>   * `metadata` — response metadata
+>
+> `ResponseParts<T>` dereferences to `T` for convenience.
 
 > r[rpc.fallible.roam-error]
 >
@@ -198,8 +212,8 @@ let result = response.ret;
 > `Tx<T, N>` means "I send" and `Rx<T, N>` means "I receive", where "I" is
 > whoever holds the handle. Position determines who holds it:
 >
->   * In arg position (handler holds): `Tx<T>` = handler sends → caller,
->     `Rx<T>` = handler receives ← caller.
+>   * In arg position (handler holds): `Tx<T, N>` = handler sends → caller,
+>     `Rx<T, N>` = handler receives ← caller.
 
 > r[rpc.channel.placement]
 >
@@ -434,7 +448,8 @@ metadata.push((
 
 > r[rpc.channel.pair]
 >
-> `channel<T>()` returns a `(Tx<T>, Rx<T>)` pair that share a single
+> `channel<T>()` returns a `(Tx<T, 16>, Rx<T, 16>)` pair (default initial
+> credit `N = 16`) that share a single
 > channel core. Both handles hold an `Arc` reference to the core. The
 > core contains a `Mutex<Option<ChannelBinding>>` where `ChannelBinding`
 > is either a `Sink` or a `Receiver` — never both. The `Mutex` is
