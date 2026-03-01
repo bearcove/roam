@@ -148,6 +148,7 @@ fuzz-build target="all":
     esac
 
 fuzz-run target="all" seconds="60":
+    just fuzz-build "{{target}}"
     @mkdir -p \
       fuzz/roam-shm-afl/out/framing_peek \
       fuzz/roam-shm-afl/out/shm_link_roundtrip \
@@ -180,5 +181,4 @@ fuzz-run target="all" seconds="60":
     esac
 
 fuzz target="all" seconds="60":
-    just fuzz-build "{{target}}"
     just fuzz-run "{{target}}" "{{seconds}}"
