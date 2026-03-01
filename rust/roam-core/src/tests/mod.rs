@@ -141,6 +141,43 @@ struct TestSink {
     saw_owned_payload: Arc<AtomicBool>,
 }
 
+struct DropCloseSink {
+    close_count: Arc<AtomicUsize>,
+}
+
+impl DropCloseSink {
+    fn new() -> Self {
+        Self {
+            close_count: Arc::new(AtomicUsize::new(0)),
+        }
+    }
+}
+
+impl ChannelSink for DropCloseSink {
+    fn send_payload<'a>(
+        &self,
+        _payload: Payload<'a>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), TxError>> + Send + 'a>> {
+        Box::pin(async { Ok(()) })
+    }
+
+    fn close_channel(
+        &self,
+        _metadata: Metadata,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), TxError>> + Send + 'static>>
+    {
+        let close_count = self.close_count.clone();
+        Box::pin(async move {
+            close_count.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        })
+    }
+
+    fn close_channel_on_drop(&self) {
+        self.close_count.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
 impl TestSink {
     fn new() -> Self {
         Self {
@@ -208,6 +245,41 @@ async fn tx_send_waits_for_sink_completion() {
     sink.open_gate();
     fut.await.expect("send should complete once sink opens");
     assert_eq!(sink.send_count.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn tx_drop_triggers_close_signal() {
+    let mut tx = Tx::<u32>::unbound();
+    let sink = Arc::new(DropCloseSink::new());
+    tx.bind(sink.clone());
+
+    drop(tx);
+    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+
+    assert_eq!(
+        sink.close_count.load(Ordering::SeqCst),
+        1,
+        "dropping Tx should emit channel close"
+    );
+}
+
+#[tokio::test]
+async fn tx_close_then_drop_emits_single_close_signal() {
+    let mut tx = Tx::<u32>::unbound();
+    let sink = Arc::new(DropCloseSink::new());
+    tx.bind(sink.clone());
+
+    tx.close(Metadata::default())
+        .await
+        .expect("explicit close should succeed");
+    drop(tx);
+    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+
+    assert_eq!(
+        sink.close_count.load(Ordering::SeqCst),
+        1,
+        "drop after explicit close should not emit duplicate close"
+    );
 }
 
 #[derive(Facet)]

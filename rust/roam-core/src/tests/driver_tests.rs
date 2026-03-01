@@ -3,9 +3,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use moire::task::FutureExt;
 use roam_types::{
-    Caller, ConnectionSettings, Handler, MessageFamily, Metadata, MethodId, Parity, Payload,
-    ReplySink, RequestBody, RequestCall, RequestCancel, RequestMessage, RequestResponse, RoamError,
-    SelfRef,
+    Caller, ChannelBinder, ConnectionSettings, Handler, MessageFamily, Metadata, MethodId, Parity,
+    Payload, ReplySink, RequestBody, RequestCall, RequestCancel, RequestMessage, RequestResponse,
+    RoamError, SelfRef,
 };
 
 use crate::session::{
@@ -444,6 +444,66 @@ async fn close_virtual_connection() {
     assert!(
         server_driver_exited_check.load(Ordering::SeqCst),
         "server-side driver should have exited after close"
+    );
+}
+
+// r[verify connection.close.semantics]
+// r[verify rpc.channel.close]
+#[tokio::test]
+async fn close_virtual_connection_closes_registered_rx_channels() {
+    let (client_conduit, server_conduit) = message_conduit_pair();
+
+    let server_task = moire::task::spawn(
+        async move {
+            let (mut server_session, server_handle, _sh) = acceptor(server_conduit)
+                .on_connection(EchoAcceptor)
+                .establish()
+                .await
+                .expect("server handshake failed");
+            let mut server_driver = Driver::new(server_handle, (), Parity::Even);
+            moire::task::spawn(async move { server_session.run().await }.named("server_session"));
+            moire::task::spawn(async move { server_driver.run().await }.named("server_driver"));
+        }
+        .named("server_setup"),
+    );
+
+    let (mut client_session, _client_handle, session_handle) = initiator(client_conduit)
+        .establish()
+        .await
+        .expect("client handshake failed");
+    moire::task::spawn(async move { client_session.run().await }.named("client_session"));
+
+    server_task.await.expect("server setup failed");
+
+    let vconn_handle = session_handle
+        .open_connection(
+            ConnectionSettings {
+                parity: Parity::Odd,
+                max_concurrent_requests: 64,
+            },
+            vec![],
+        )
+        .await
+        .expect("open virtual connection");
+
+    let conn_id = vconn_handle.connection_id();
+    let mut vconn_driver = Driver::new(vconn_handle, (), Parity::Odd);
+    let caller = vconn_driver.caller();
+    moire::task::spawn(async move { vconn_driver.run().await }.named("vconn_client_driver"));
+
+    let (_channel_id, mut rx_items) = caller.create_rx();
+
+    session_handle
+        .close_connection(conn_id, vec![])
+        .await
+        .expect("close virtual connection");
+
+    let recv_result = tokio::time::timeout(std::time::Duration::from_millis(200), rx_items.recv())
+        .await
+        .expect("timed out waiting for channel receiver to close");
+    assert!(
+        recv_result.is_none(),
+        "registered Rx channel should close when virtual connection closes"
     );
 }
 

@@ -5,6 +5,8 @@ use std::pin::Pin;
 use std::sync::Arc;
 #[cfg(not(target_arch = "wasm32"))]
 use std::sync::Mutex;
+#[cfg(not(target_arch = "wasm32"))]
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use facet::Facet;
 use facet_core::PtrConst;
@@ -123,6 +125,13 @@ pub trait ChannelSink: Send + Sync + 'static {
         &self,
         metadata: Metadata,
     ) -> Pin<Box<dyn Future<Output = Result<(), TxError>> + Send + 'static>>;
+
+    /// Synchronous drop-time close signal.
+    ///
+    /// This is used by `Tx::drop` to notify the runtime immediately without
+    /// spawning detached tasks. Implementations should enqueue a close intent
+    /// to their runtime/driver if possible.
+    fn close_channel_on_drop(&self) {}
 }
 
 // r[impl rpc.flow-control.credit]
@@ -182,6 +191,10 @@ impl<S: ChannelSink> ChannelSink for CreditSink<S> {
         // Close does not consume credit — it's a control message.
         self.inner.close_channel(metadata)
     }
+
+    fn close_channel_on_drop(&self) {
+        self.inner.close_channel_on_drop();
+    }
 }
 
 /// Message delivered to an `Rx` by the driver.
@@ -240,6 +253,9 @@ impl ReceiverSlot {
 pub struct Tx<T, const N: usize = 16> {
     pub(crate) sink: SinkSlot,
     pub(crate) core: CoreSlot,
+    #[cfg(not(target_arch = "wasm32"))]
+    #[facet(opaque)]
+    closed: AtomicBool,
     #[facet(opaque)]
     _marker: PhantomData<T>,
 }
@@ -250,6 +266,8 @@ impl<T, const N: usize> Tx<T, N> {
         Self {
             sink: SinkSlot::empty(),
             core: CoreSlot::empty(),
+            #[cfg(not(target_arch = "wasm32"))]
+            closed: AtomicBool::new(false),
             _marker: PhantomData,
         }
     }
@@ -260,6 +278,7 @@ impl<T, const N: usize> Tx<T, N> {
         Self {
             sink: SinkSlot::empty(),
             core: CoreSlot { inner: Some(core) },
+            closed: AtomicBool::new(false),
             _marker: PhantomData,
         }
     }
@@ -321,6 +340,7 @@ impl<T, const N: usize> Tx<T, N> {
     // r[impl rpc.channel.lifecycle]
     #[cfg(not(target_arch = "wasm32"))]
     pub async fn close<'value>(&self, metadata: Metadata<'value>) -> Result<(), TxError> {
+        self.closed.store(true, Ordering::Release);
         let sink = self.resolve_sink()?;
         sink.close_channel(metadata).await
     }
@@ -329,6 +349,30 @@ impl<T, const N: usize> Tx<T, N> {
     #[cfg(not(target_arch = "wasm32"))]
     pub fn bind(&mut self, sink: Arc<dyn ChannelSink>) {
         self.sink.inner = Some(sink);
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl<T, const N: usize> Drop for Tx<T, N> {
+    fn drop(&mut self) {
+        if self.closed.swap(true, Ordering::AcqRel) {
+            return;
+        }
+
+        let sink = if let Some(sink) = &self.sink.inner {
+            Some(sink.clone())
+        } else if let Some(core) = &self.core.inner {
+            core.get_sink()
+        } else {
+            None
+        };
+
+        let Some(sink) = sink else {
+            return;
+        };
+
+        // Synchronous signal into the runtime/driver; no detached async work here.
+        sink.close_channel_on_drop();
     }
 }
 

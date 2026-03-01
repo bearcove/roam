@@ -83,6 +83,7 @@ impl Drop for DriverReplySink {
 pub struct DriverChannelSink {
     sender: ConnectionSender,
     channel_id: ChannelId,
+    local_control_tx: mpsc::UnboundedSender<DriverLocalControl>,
 }
 
 impl ChannelSink for DriverChannelSink {
@@ -124,6 +125,14 @@ impl ChannelSink for DriverChannelSink {
                 .map_err(|()| TxError::Transport("connection closed".into()))
         })
     }
+
+    fn close_channel_on_drop(&self) {
+        let _ = self
+            .local_control_tx
+            .send(DriverLocalControl::CloseChannel {
+                channel_id: self.channel_id,
+            });
+    }
 }
 
 /// Cloneable handle for making outgoing calls through a connection.
@@ -134,6 +143,7 @@ impl ChannelSink for DriverChannelSink {
 pub struct DriverCaller {
     sender: ConnectionSender,
     shared: Arc<DriverShared>,
+    local_control_tx: mpsc::UnboundedSender<DriverLocalControl>,
 }
 
 impl DriverCaller {
@@ -150,6 +160,7 @@ impl DriverCaller {
         let inner = DriverChannelSink {
             sender: self.sender.clone(),
             channel_id,
+            local_control_tx: self.local_control_tx.clone(),
         };
         let sink = Arc::new(CreditSink::new(inner, initial_credit));
         self.shared
@@ -200,6 +211,7 @@ impl ChannelBinder for DriverCaller {
         let inner = DriverChannelSink {
             sender: self.sender.clone(),
             channel_id,
+            local_control_tx: self.local_control_tx.clone(),
         };
         let sink = Arc::new(CreditSink::new(inner, initial_credit));
         self.shared
@@ -280,11 +292,17 @@ pub struct Driver<H: Handler<DriverReplySink>> {
     sender: ConnectionSender,
     rx: mpsc::Receiver<SelfRef<ConnectionMessage<'static>>>,
     failures_rx: mpsc::UnboundedReceiver<(RequestId, &'static str)>,
+    local_control_rx: mpsc::UnboundedReceiver<DriverLocalControl>,
     handler: Arc<H>,
     shared: Arc<DriverShared>,
     /// In-flight server-side handler tasks, keyed by request ID.
     /// Used to abort handlers on cancel.
     in_flight_handlers: BTreeMap<RequestId, moire::task::JoinHandle<()>>,
+    local_control_tx: mpsc::UnboundedSender<DriverLocalControl>,
+}
+
+enum DriverLocalControl {
+    CloseChannel { channel_id: ChannelId },
 }
 
 impl<H: Handler<DriverReplySink>> Driver<H> {
@@ -294,10 +312,12 @@ impl<H: Handler<DriverReplySink>> Driver<H> {
             rx,
             failures_rx,
         } = handle;
+        let (local_control_tx, local_control_rx) = mpsc::unbounded_channel("driver.local_control");
         Self {
             sender,
             rx,
             failures_rx,
+            local_control_rx,
             handler: Arc::new(handler),
             shared: Arc::new(DriverShared {
                 pending_responses: SyncMutex::new("driver.pending_responses", BTreeMap::new()),
@@ -308,6 +328,7 @@ impl<H: Handler<DriverReplySink>> Driver<H> {
                 channel_credits: SyncMutex::new("driver.channel_credits", BTreeMap::new()),
             }),
             in_flight_handlers: BTreeMap::new(),
+            local_control_tx,
         }
     }
 
@@ -316,6 +337,7 @@ impl<H: Handler<DriverReplySink>> Driver<H> {
         DriverCaller {
             sender: self.sender.clone(),
             shared: Arc::clone(&self.shared),
+            local_control_tx: self.local_control_tx.clone(),
         }
     }
 
@@ -345,6 +367,31 @@ impl<H: Handler<DriverReplySink>> Driver<H> {
                         }).await;
                     }
                 }
+                Some(ctrl) = self.local_control_rx.recv() => {
+                    self.handle_local_control(ctrl).await;
+                }
+            }
+        }
+
+        // Connection is gone: drop channel runtime state so any registered Rx
+        // receivers observe closure instead of hanging on recv().
+        self.shared.channel_senders.lock().clear();
+        self.shared.channel_buffers.lock().clear();
+        self.shared.channel_credits.lock().clear();
+    }
+
+    async fn handle_local_control(&mut self, control: DriverLocalControl) {
+        match control {
+            DriverLocalControl::CloseChannel { channel_id } => {
+                let _ = self
+                    .sender
+                    .send(ConnectionMessage::Channel(ChannelMessage {
+                        id: channel_id,
+                        body: ChannelBody::Close(ChannelClose {
+                            metadata: Default::default(),
+                        }),
+                    }))
+                    .await;
             }
         }
     }
