@@ -9,6 +9,8 @@ members = [
   "rust/roam-hash",
   "rust/roam-stream",
   "rust/roam-websocket",
+  "rust/roam-local",
+  "rust/roam-fdpass",
   "rust/roam-shm",
   "rust/roam-shm-ffi",
   "rust/roam-macros-parse",

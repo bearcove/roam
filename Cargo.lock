@@ -1966,6 +1966,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "passfd"
+version = "0.1.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b332c50e4d07c0011fff51ea305374408319908908bc1dbed7a0ffaaf63a8151"
+dependencies = [
+ "libc",
+]
+
+[[package]]
 name = "peer-server"
 version = "3.0.0"
 dependencies = [
@@ -2376,6 +2385,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "roam-fdpass"
+version = "3.0.0"
+dependencies = [
+ "libc",
+ "passfd",
+ "tokio",
+ "windows-sys 0.59.0",
+]
+
+[[package]]
 name = "roam-hash"
 version = "3.0.0"
 dependencies = [
@@ -2384,6 +2403,14 @@ dependencies = [
  "facet-core 0.43.2 (git+https://github.com/facet-rs/facet?branch=main)",
  "heck 0.5.0",
  "roam-types",
+]
+
+[[package]]
+name = "roam-local"
+version = "3.0.0"
+dependencies = [
+ "moire",
+ "tokio",
 ]
 
 [[package]]
