@@ -17,8 +17,6 @@ use crate::mmap_registry::{
     MmapAllocation, MmapAttachments, MmapChannelRx, MmapChannelTx, MmapRegistry,
     create_in_process_mmap_channel,
 };
-use crate::segment::Segment;
-use crate::varslot::{SizeClassConfig, SlotRef, VarSlotPool};
 
 pub mod framing;
 #[cfg(unix)]
@@ -27,6 +25,27 @@ pub mod mmap_registry;
 pub mod peer_table;
 pub mod segment;
 pub mod varslot;
+
+pub use segment::{AttachError, Segment, SegmentConfig, SegmentLayout};
+pub use varslot::{SizeClassConfig, SlotRef, VarSlotPool};
+
+#[cfg(unix)]
+pub use host::{
+    AddPeerOptions, GuestSpawnTicket, HostHub, HostPeer, MultiPeerHostDriver, PreparedPeer,
+    ShmHost, guest_link_from_raw, guest_link_from_ticket,
+};
+
+#[cfg(unix)]
+pub mod bootstrap {
+    pub use crate::host::{
+        GuestSpawnTicket, HostHub, PreparedPeer, guest_link_from_raw, guest_link_from_ticket,
+    };
+}
+
+#[cfg(unix)]
+pub mod driver {
+    pub use crate::host::{AddPeerOptions, MultiPeerHostDriver, ShmHost};
+}
 
 const SLOT_LEN_PREFIX_SIZE: usize = 4;
 

@@ -149,6 +149,38 @@ impl PreparedPeer {
     }
 }
 
+/// Backward-compat host options placeholder.
+///
+/// v7 currently has no peer-add tunables in this helper layer.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct AddPeerOptions;
+
+/// Backward-compat alias for users migrating from older SHM host APIs.
+pub type MultiPeerHostDriver = ShmHost;
+
+/// Thin compatibility wrapper around [`HostHub`].
+///
+/// This keeps old call sites compiling while using the v7 primitive orchestration.
+pub struct ShmHost {
+    hub: HostHub,
+}
+
+impl ShmHost {
+    pub fn new(segment: Arc<Segment>) -> Self {
+        Self {
+            hub: HostHub::new(segment),
+        }
+    }
+
+    pub fn segment(&self) -> &Arc<Segment> {
+        self.hub.segment()
+    }
+
+    pub fn add_peer(&self, _options: AddPeerOptions) -> io::Result<PreparedPeer> {
+        self.hub.prepare_peer()
+    }
+}
+
 /// Build a guest-side link from inherited raw fds.
 ///
 /// `claim_reserved` should be true for spawned guests that were pre-reserved by

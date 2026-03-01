@@ -680,6 +680,76 @@ Each guest has two BipBuffers (bipartite circular buffers):
 > inheritable by the child process. The host MUST NOT set `O_CLOEXEC`
 > on either guest endpoint before spawning.
 
+## Bootstrap over Control Connection
+
+> r[shm.bootstrap]
+>
+> A host MAY bootstrap SHM guests over a pre-existing control
+> connection instead of relying on direct fd inheritance at spawn time.
+> This bootstrap flow allocates (or confirms) a guest peer and transfers
+> the SHM resources needed to attach.
+
+> r[shm.bootstrap.request]
+>
+> The guest bootstrap request payload MUST be:
+>
+>   1. 4-byte magic `RSH0`
+>   2. `sid_len` as little-endian `u16`
+>   3. `sid_len` bytes of session identifier data
+>
+> The host MUST reject requests with the wrong magic or malformed
+> length.
+
+> r[shm.bootstrap.sid]
+>
+> The bootstrap wire protocol treats session identifier bytes as opaque.
+> Any format constraints (for example UUID/hex policy) are
+> application-specific validation layered above this protocol.
+
+> r[shm.bootstrap.response]
+>
+> The host bootstrap response payload MUST be:
+>
+>   1. 4-byte magic `RSP0`
+>   2. `status` as `u8`
+>   3. `peer_id` as little-endian `u32`
+>   4. `payload_len` as little-endian `u16`
+>   5. `payload_len` bytes of payload
+
+> r[shm.bootstrap.status]
+>
+> Bootstrap status codes are:
+>
+>   * `0` = success
+>   * `1` = error
+>
+> Unknown status values MUST be treated as protocol error.
+
+> r[shm.bootstrap.success]
+>
+> On success (`status = 0`), `peer_id` MUST be the assigned guest peer,
+> and the host MUST transfer bootstrap file descriptors as ancillary data
+> on Unix (`SCM_RIGHTS`) in this exact order:
+>
+>   1. guest doorbell fd
+>   2. SHM segment file fd
+>   3. optional mapping-control fd
+>
+> Implementations MUST accept both 2-fd and 3-fd success cases.
+
+> r[shm.bootstrap.error]
+>
+> On error (`status = 1`), `peer_id` MUST be zero. The payload SHOULD
+> contain a UTF-8 diagnostic string. The host MUST NOT transfer SHM
+> bootstrap fds for error responses.
+
+> r[shm.bootstrap.unix]
+>
+> On Unix, descriptor transfer for bootstrap success MUST use
+> `sendmsg`/`recvmsg` ancillary data (`SCM_RIGHTS`). The response frame
+> and its fd transfer MUST correspond to the same accepted bootstrap
+> request.
+
 ## Crash Detection
 
 > r[shm.crash.detection]
