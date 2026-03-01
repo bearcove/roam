@@ -22,6 +22,16 @@ fn io_other(msg: impl Into<String>) -> io::Error {
     io::Error::other(msg.into())
 }
 
+fn dup_fd(fd: RawFd) -> io::Result<RawFd> {
+    // SAFETY: libc::dup does not take ownership of `fd`.
+    let duplicated = unsafe { libc::dup(fd) };
+    if duplicated < 0 {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(duplicated)
+    }
+}
+
 /// Host-side SHM orchestrator over an existing segment.
 ///
 /// Owns no runtime tasks; it only creates per-peer setup bundles.
@@ -54,21 +64,23 @@ impl HostHub {
         let (host_doorbell, guest_doorbell) = Doorbell::create_pair()?;
         clear_cloexec(guest_doorbell.as_raw_fd())?;
 
-        // host -> guest mmap attach stream
+        // Single bidirectional mmap control socketpair endpoint per side.
+        //
+        // We still expose split sender/receiver handles to the runtime by
+        // duplicating each side's endpoint for distinct ownership.
         let (host_mmap_tx, guest_mmap_rx) = create_mmap_control_pair()?;
         clear_cloexec(guest_mmap_rx.as_raw_fd())?;
-
-        // guest -> host mmap attach stream
-        let (guest_mmap_tx, host_mmap_rx) = create_mmap_control_pair()?;
-        clear_cloexec(guest_mmap_tx.as_raw_fd())?;
-        let guest_mmap_tx_fd = guest_mmap_tx.into_raw_fd();
+        let host_mmap_rx_fd = dup_fd(host_mmap_tx.as_raw_fd())?;
+        let guest_mmap_tx_fd = dup_fd(guest_mmap_rx.as_raw_fd())?;
+        clear_cloexec(guest_mmap_tx_fd)?;
 
         let host = HostPeer {
             segment: Arc::clone(&self.segment),
             peer_id,
             doorbell: host_doorbell,
             mmap_tx: host_mmap_tx,
-            mmap_rx: host_mmap_rx,
+            // SAFETY: `dup_fd` returns a fresh owning descriptor.
+            mmap_rx: unsafe { MmapControlHandle::from_raw_fd(host_mmap_rx_fd) },
         };
         let guest = GuestSpawnTicket {
             peer_id,

@@ -5,15 +5,23 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use roam_core::{BareConduit, Driver, DriverCaller, DriverReplySink, acceptor};
+use roam::{Call, Rx, Tx};
+use roam_core::{
+    BareConduit, Driver, DriverCaller, DriverReplySink, acceptor, initiator, memory_link_pair,
+};
 use roam_shm::HostHub;
+use roam_shm::ShmLink;
 use roam_shm::bootstrap::decode_request;
 use roam_shm::segment::{Segment, SegmentConfig};
+use roam_shm::varslot::SizeClassConfig as RoamShmSizeClassConfig;
 use roam_stream::StreamLink;
 use roam_types::{MessageFamily, Parity, RequestCall, SelfRef};
 use shm_primitives::FileCleanup;
 use shm_primitives::SizeClassConfig;
-use spec_proto::TestbedClient;
+use spec_proto::{
+    Canvas, Color, LookupError, MathError, Message, Person, Point, Rectangle, Shape, TestbedClient,
+    TestbedDispatcher, TestbedServer,
+};
 use std::process::Stdio;
 use tokio::io::AsyncReadExt;
 use tokio::net::TcpListener;
@@ -53,7 +61,6 @@ where
 }
 
 type TcpLink = StreamLink<tokio::net::tcp::OwnedReadHalf, tokio::net::tcp::OwnedWriteHalf>;
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SubjectTransport {
     Tcp,
@@ -99,6 +106,183 @@ pub fn run_async<T>(f: impl Future<Output = T>) -> T {
         .build()
         .expect("tokio runtime");
     rt.block_on(f)
+}
+
+#[derive(Clone)]
+struct TestbedService;
+
+impl TestbedServer for TestbedService {
+    async fn echo(&self, call: impl Call<String, std::convert::Infallible>, message: String) {
+        call.ok(message).await;
+    }
+
+    async fn reverse(&self, call: impl Call<String, std::convert::Infallible>, message: String) {
+        call.ok(message.chars().rev().collect()).await;
+    }
+
+    async fn divide(&self, call: impl Call<i64, MathError>, dividend: i64, divisor: i64) {
+        if divisor == 0 {
+            call.err(MathError::DivisionByZero).await;
+        } else {
+            call.ok(dividend / divisor).await;
+        }
+    }
+
+    async fn lookup(&self, call: impl Call<Person, LookupError>, id: u32) {
+        match id {
+            1 => {
+                call.ok(Person {
+                    name: "Alice".to_string(),
+                    age: 30,
+                    email: Some("alice@example.com".to_string()),
+                })
+                .await
+            }
+            2 => {
+                call.ok(Person {
+                    name: "Bob".to_string(),
+                    age: 25,
+                    email: None,
+                })
+                .await
+            }
+            3 => {
+                call.ok(Person {
+                    name: "Charlie".to_string(),
+                    age: 35,
+                    email: Some("charlie@example.com".to_string()),
+                })
+                .await
+            }
+            _ => call.err(LookupError::NotFound).await,
+        }
+    }
+
+    async fn sum(&self, call: impl Call<i64, std::convert::Infallible>, mut numbers: Rx<i32>) {
+        let mut total: i64 = 0;
+        while let Ok(Some(n)) = numbers.recv().await {
+            total += *n as i64;
+        }
+        call.ok(total).await;
+    }
+
+    async fn generate(
+        &self,
+        call: impl Call<(), std::convert::Infallible>,
+        count: u32,
+        output: Tx<i32>,
+    ) {
+        for i in 0..count as i32 {
+            if output.send(i).await.is_err() {
+                break;
+            }
+        }
+        output.close(Default::default()).await.ok();
+        call.ok(()).await;
+    }
+
+    async fn transform(
+        &self,
+        call: impl Call<(), std::convert::Infallible>,
+        mut input: Rx<String>,
+        output: Tx<String>,
+    ) {
+        while let Ok(Some(s)) = input.recv().await {
+            let _ = output.send(s.clone()).await;
+        }
+        output.close(Default::default()).await.ok();
+        call.ok(()).await;
+    }
+
+    async fn echo_point(&self, call: impl Call<Point, std::convert::Infallible>, point: Point) {
+        call.ok(point).await;
+    }
+
+    async fn create_person(
+        &self,
+        call: impl Call<Person, std::convert::Infallible>,
+        name: String,
+        age: u8,
+        email: Option<String>,
+    ) {
+        call.ok(Person { name, age, email }).await;
+    }
+
+    async fn rectangle_area(
+        &self,
+        call: impl Call<f64, std::convert::Infallible>,
+        rect: Rectangle,
+    ) {
+        let width = (rect.bottom_right.x - rect.top_left.x).abs() as f64;
+        let height = (rect.bottom_right.y - rect.top_left.y).abs() as f64;
+        call.ok(width * height).await;
+    }
+
+    async fn parse_color(
+        &self,
+        call: impl Call<Option<Color>, std::convert::Infallible>,
+        name: String,
+    ) {
+        let color = match name.to_lowercase().as_str() {
+            "red" => Some(Color::Red),
+            "green" => Some(Color::Green),
+            "blue" => Some(Color::Blue),
+            _ => None,
+        };
+        call.ok(color).await;
+    }
+
+    async fn shape_area(&self, call: impl Call<f64, std::convert::Infallible>, shape: Shape) {
+        let area = match shape {
+            Shape::Circle { radius } => std::f64::consts::PI * radius * radius,
+            Shape::Rectangle { width, height } => width * height,
+            Shape::Point => 0.0,
+        };
+        call.ok(area).await;
+    }
+
+    async fn create_canvas(
+        &self,
+        call: impl Call<Canvas, std::convert::Infallible>,
+        name: String,
+        shapes: Vec<Shape>,
+        background: Color,
+    ) {
+        call.ok(Canvas {
+            name,
+            shapes,
+            background,
+        })
+        .await;
+    }
+
+    async fn process_message(
+        &self,
+        call: impl Call<Message, std::convert::Infallible>,
+        msg: Message,
+    ) {
+        let response = match msg {
+            Message::Text(s) => Message::Text(format!("processed: {s}")),
+            Message::Number(n) => Message::Number(n * 2),
+            Message::Data(d) => Message::Data(d.into_iter().rev().collect()),
+        };
+        call.ok(response).await;
+    }
+
+    async fn get_points(&self, call: impl Call<Vec<Point>, std::convert::Infallible>, count: u32) {
+        let points = (0..count as i32)
+            .map(|i| Point { x: i, y: i * 2 })
+            .collect();
+        call.ok(points).await;
+    }
+
+    async fn swap_pair(
+        &self,
+        call: impl Call<(String, i32), std::convert::Infallible>,
+        pair: (i32, String),
+    ) {
+        call.ok((pair.1, pair.0)).await;
+    }
 }
 
 /// Spawn the subject binary, telling it to connect to `peer_addr`.
@@ -164,6 +348,113 @@ pub async fn accept_subject() -> Result<(TestbedClient<DriverCaller>, Child), St
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SubjectTestTransport {
+    Tcp,
+    Shm,
+}
+
+pub async fn accept_subject_with_transport(
+    transport: SubjectTestTransport,
+) -> Result<(TestbedClient<DriverCaller>, Child), String> {
+    match transport {
+        SubjectTestTransport::Tcp => accept_subject_tcp().await,
+        SubjectTestTransport::Shm => accept_subject_shm().await,
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RustTransport {
+    Mem,
+    Tcp,
+    Shm,
+}
+
+pub async fn accept_rust_inproc(
+    transport: RustTransport,
+) -> Result<TestbedClient<DriverCaller>, String> {
+    match transport {
+        RustTransport::Mem => {
+            let (a, b) = memory_link_pair(64 * 1024);
+            accept_rust_inproc_with_conduits(BareConduit::new(a), BareConduit::new(b)).await
+        }
+        RustTransport::Tcp => {
+            let listener = TcpListener::bind("127.0.0.1:0")
+                .await
+                .map_err(|e| format!("bind: {e}"))?;
+            let addr = listener
+                .local_addr()
+                .map_err(|e| format!("local_addr: {e}"))?;
+            let connect_task =
+                tokio::spawn(async move { tokio::net::TcpStream::connect(addr).await });
+            let (server_stream, _) = listener
+                .accept()
+                .await
+                .map_err(|e| format!("accept: {e}"))?;
+            let client_stream = connect_task
+                .await
+                .map_err(|e| format!("connect task join: {e}"))?
+                .map_err(|e| format!("connect: {e}"))?;
+            server_stream.set_nodelay(true).unwrap();
+            client_stream.set_nodelay(true).unwrap();
+            accept_rust_inproc_with_conduits(
+                BareConduit::new(StreamLink::tcp(client_stream)),
+                BareConduit::new(StreamLink::tcp(server_stream)),
+            )
+            .await
+        }
+        RustTransport::Shm => {
+            let classes = [RoamShmSizeClassConfig {
+                slot_size: 4096,
+                slot_count: 64,
+            }];
+            let (a, b) = ShmLink::heap_pair(1 << 16, 1 << 20, 256, &classes)
+                .map_err(|e| format!("shm heap_pair: {e}"))?;
+            accept_rust_inproc_with_conduits(BareConduit::new(a), BareConduit::new(b)).await
+        }
+    }
+}
+
+async fn accept_rust_inproc_with_conduits<L>(
+    client_conduit: BareConduit<MessageFamily, L>,
+    server_conduit: BareConduit<MessageFamily, L>,
+) -> Result<TestbedClient<DriverCaller>, String>
+where
+    L: roam_types::Link + Send + 'static,
+    L::Tx: Send + 'static,
+    L::Rx: Send + 'static,
+    <L::Rx as roam_types::LinkRx>::Error: std::error::Error + Send + Sync + 'static,
+{
+    let server_task = tokio::spawn(async move {
+        let (mut server_session, server_handle, _sh) =
+            acceptor(server_conduit)
+                .establish()
+                .await
+                .map_err(|e| format!("server handshake: {e}"))?;
+        let dispatcher = TestbedDispatcher::new(TestbedService);
+        let mut server_driver = Driver::new(server_handle, dispatcher, Parity::Even);
+        tokio::spawn(async move { server_session.run().await });
+        tokio::spawn(async move { server_driver.run().await });
+        Ok::<(), String>(())
+    });
+
+    let (mut client_session, client_handle, _sh) = initiator(client_conduit)
+        .establish()
+        .await
+        .map_err(|e| format!("client handshake: {e}"))?;
+    let mut client_driver = Driver::new(client_handle, NoopHandler, Parity::Odd);
+    let caller = client_driver.caller();
+
+    tokio::spawn(async move { client_session.run().await });
+    tokio::spawn(async move { client_driver.run().await });
+
+    server_task
+        .await
+        .map_err(|e| format!("server task join: {e}"))??;
+
+    Ok(TestbedClient::new(caller))
+}
+
 async fn accept_subject_tcp() -> Result<(TestbedClient<DriverCaller>, Child), String> {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
@@ -226,10 +517,14 @@ async fn accept_subject_shm() -> Result<(TestbedClient<DriverCaller>, Child), St
     let listener = tokio::net::UnixListener::bind(&control_sock_path)
         .map_err(|e| format!("unix bind {}: {e}", control_sock_path.display()))?;
 
+    let hub_path_bytes = shm_path.as_os_str().as_bytes().to_vec();
+    let prepared = hub
+        .prepare_bootstrap_success(&hub_path_bytes)
+        .map_err(|e| format!("prepare bootstrap success: {e}"))?;
+    let mmap_tx_fd_env = prepared.guest_ticket.mmap_tx_fd.to_string();
+
     let (peer_tx, peer_rx) = oneshot::channel();
     let sid_for_task = sid.clone();
-    let shm_path_for_task = shm_path.clone();
-    let hub_for_task = Arc::clone(&hub);
     let segment_for_task = Arc::clone(&segment);
     tokio::spawn(async move {
         let result: Result<roam_shm::host::HostPeer, String> = async {
@@ -254,11 +549,6 @@ async fn accept_subject_shm() -> Result<(TestbedClient<DriverCaller>, Child), St
                     "sid mismatch: expected {sid_for_task}, got {got_sid}"
                 ));
             }
-
-            let hub_path_bytes = shm_path_for_task.as_os_str().as_bytes().to_vec();
-            let prepared = hub_for_task
-                .prepare_bootstrap_success(&hub_path_bytes)
-                .map_err(|e| format!("prepare bootstrap success: {e}"))?;
             prepared
                 .send_success_unix(stream.as_raw_fd(), &segment_for_task, true)
                 .map_err(|e| format!("send bootstrap success: {e}"))?;
@@ -279,6 +569,7 @@ async fn accept_subject_shm() -> Result<(TestbedClient<DriverCaller>, Child), St
             ("SUBJECT_MODE", "shm-server"),
             ("SHM_CONTROL_SOCK", &control_sock),
             ("SHM_SESSION_ID", &sid),
+            ("SHM_MMAP_TX_FD", &mmap_tx_fd_env),
         ],
     )
     .await?;

@@ -487,6 +487,76 @@ struct ShmDoorbellAndPayloadTests {
         #expect(recv.payload == payload)
     }
 
+    // r[verify shm.mmap.ordering]
+    // r[verify zerocopy.send.shm]
+    @Test func mmapRefSendPathEmitsAttachmentAndFrame() throws {
+        let path = tmpPath("guest-mmap-send.bin")
+        defer { try? FileManager.default.removeItem(atPath: path) }
+
+        let fixture = try makeSegmentFixture(
+            path: path,
+            inlineThreshold: 64,
+            maxPayloadSize: 16 * 1024,
+            classes: [ShmVarSlotClass(slotSize: 4096, count: 2)],
+            reservedPeer: 1
+        )
+
+        let doorbell = try makeDoorbellPair()
+        let control = try makeDgramPair()
+        defer {
+            close(doorbell.host)
+            close(doorbell.guest)
+            close(control.host)
+            close(control.guest)
+        }
+
+        let guest = try ShmGuestRuntime.attach(
+            ticket: ShmBootstrapTicket(
+                peerId: 1,
+                hubPath: path,
+                doorbellFd: doorbell.guest,
+                mmapControlFd: control.guest
+            )
+        )
+
+        let payload = (0..<5000).map { UInt8(truncatingIfNeeded: $0) }
+        try guest.send(frame: ShmGuestFrame(payload: payload))
+
+        let ringOffset = try #require(fixture.ringOffsets[1])
+        let g2h = try ShmBipBuffer.attach(region: fixture.region, headerOffset: ringOffset)
+        let readable = try #require(g2h.tryRead())
+        let decoded = try decodeShmFrame(Array(readable))
+        guard case .mmapRef(let header, let mmapRef) = decoded else {
+            Issue.record("expected mmap-ref frame")
+            return
+        }
+        #expect(mmapRef.payloadLen == UInt32(payload.count))
+
+        guard let attachments = roam_mmap_attachments_create(control.host) else {
+            Issue.record("failed to create host-side mmap attachments")
+            return
+        }
+        defer { roam_mmap_attachments_destroy(attachments) }
+
+        #expect(roam_mmap_attachments_drain_control(attachments) >= 1)
+
+        var resolvedPtr: UnsafePointer<UInt8>?
+        let rc = roam_mmap_attachments_resolve_ptr(
+            attachments,
+            mmapRef.mapId,
+            mmapRef.mapGeneration,
+            mmapRef.mapOffset,
+            mmapRef.payloadLen,
+            &resolvedPtr
+        )
+        #expect(rc == 0)
+        let ptr = try #require(resolvedPtr)
+        let resolved = Array(UnsafeBufferPointer(start: ptr, count: Int(mmapRef.payloadLen)))
+        #expect(resolved == payload)
+
+        try g2h.release(header.totalLen)
+    }
+
     // r[verify shm.signal.doorbell]
     // r[verify shm.signal.doorbell.signal]
     // r[verify shm.signal.doorbell.wait]

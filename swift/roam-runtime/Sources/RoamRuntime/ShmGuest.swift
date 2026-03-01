@@ -339,6 +339,9 @@ public enum ShmGuestSendError: Error, Equatable {
     case ringFull
     case slotExhausted
     case slotError
+    case mmapAllocationFailed
+    case mmapUnavailable
+    case mmapControlError
     case doorbellPeerDead
 }
 
@@ -411,6 +414,9 @@ public final class ShmGuestRuntime: @unchecked Sendable {
     private var slotPool: ShmVarSlotPool
     private let doorbell: ShmDoorbell?
     private let mmapAttachments: ShmMmapAttachments?
+    private let mmapControlFd: Int32
+    private let maxVarSlotPayload: UInt32
+    private var nextMmapId: UInt32 = 1
     private var fatalError = false
 
     // r[impl shm.guest.attach]
@@ -511,12 +517,15 @@ public final class ShmGuestRuntime: @unchecked Sendable {
         let g2h = try ShmBipBuffer.attach(region: region, headerOffset: ringOffset)
         let h2g = try ShmBipBuffer.attach(region: region, headerOffset: ringOffset + shmBipbufHeaderSize + Int(g2h.capacity))
         let doorbell = ticket.map { ShmDoorbell(fd: $0.doorbellFd) }
+        let mmapControlFd = ticket?.mmapControlFd ?? -1
         let mmapAttachments: ShmMmapAttachments?
-        if let ticket, ticket.mmapControlFd >= 0 {
-            mmapAttachments = ShmMmapAttachments(controlFd: ticket.mmapControlFd)
+        if mmapControlFd >= 0 {
+            mmapAttachments = ShmMmapAttachments(controlFd: mmapControlFd)
         } else {
             mmapAttachments = nil
         }
+        let maxSlotSize = classes.map(\.slotSize).max() ?? 0
+        let maxVarSlotPayload = maxSlotSize >= 4 ? maxSlotSize - 4 : 0
 
         return ShmGuestRuntime(
             peerId: chosenPeerId,
@@ -526,7 +535,9 @@ public final class ShmGuestRuntime: @unchecked Sendable {
             hostToGuest: h2g,
             slotPool: pool,
             doorbell: doorbell,
-            mmapAttachments: mmapAttachments
+            mmapAttachments: mmapAttachments,
+            mmapControlFd: mmapControlFd,
+            maxVarSlotPayload: maxVarSlotPayload
         )
     }
 
@@ -538,7 +549,9 @@ public final class ShmGuestRuntime: @unchecked Sendable {
         hostToGuest: ShmBipBuffer,
         slotPool: ShmVarSlotPool,
         doorbell: ShmDoorbell?,
-        mmapAttachments: ShmMmapAttachments?
+        mmapAttachments: ShmMmapAttachments?,
+        mmapControlFd: Int32,
+        maxVarSlotPayload: UInt32
     ) {
         self.peerId = peerId
         self.region = region
@@ -548,6 +561,8 @@ public final class ShmGuestRuntime: @unchecked Sendable {
         self.slotPool = slotPool
         self.doorbell = doorbell
         self.mmapAttachments = mmapAttachments
+        self.mmapControlFd = mmapControlFd
+        self.maxVarSlotPayload = maxVarSlotPayload
     }
 
     // r[impl zerocopy.send.shm]
@@ -588,6 +603,15 @@ public final class ShmGuestRuntime: @unchecked Sendable {
         guard slotPayloadLen >= payloadLen else {
             throw ShmGuestSendError.payloadTooLarge
         }
+        if payloadLen <= maxVarSlotPayload {
+            try sendViaSlot(frame, payloadLen: payloadLen, slotPayloadLen: slotPayloadLen)
+            return
+        }
+
+        try sendViaMmap(frame, payloadLen: payloadLen)
+    }
+
+    private func sendViaSlot(_ frame: ShmGuestFrame, payloadLen: UInt32, slotPayloadLen: UInt32) throws {
         guard let handle = slotPool.alloc(size: slotPayloadLen, owner: peerId) else {
             throw ShmGuestSendError.slotExhausted
         }
@@ -629,6 +653,68 @@ public final class ShmGuestRuntime: @unchecked Sendable {
 
         try? slotPool.free(handle)
         throw ShmGuestSendError.ringFull
+    }
+
+    private func sendViaMmap(_ frame: ShmGuestFrame, payloadLen: UInt32) throws {
+        guard mmapControlFd >= 0 else {
+            throw ShmGuestSendError.mmapUnavailable
+        }
+
+        let frameSize = UInt32(shmFrameHeaderSize + shmMmapRefSize)
+        guard let grant = try guestToHost.tryGrant(frameSize) else {
+            throw ShmGuestSendError.ringFull
+        }
+
+        let payloadCount = Int(payloadLen)
+        let pageSize = max(Int(getpagesize()), 4096)
+        let mappingLength = max(((payloadCount + pageSize - 1) / pageSize) * pageSize, payloadCount)
+        let mmapPath = "\(NSTemporaryDirectory())roam-swift-mmap-\(UUID().uuidString).bin"
+        let mapping: ShmRegion
+        do {
+            mapping = try ShmRegion.create(path: mmapPath, size: mappingLength, cleanup: .auto)
+        } catch {
+            throw ShmGuestSendError.mmapAllocationFailed
+        }
+
+        frame.payload.withUnsafeBytes { raw in
+            if let base = raw.baseAddress {
+                memcpy(mapping.basePointer(), base, raw.count)
+            }
+        }
+
+        let mapId = allocateMmapId()
+        let mapGeneration: UInt32 = 1
+        let sendRc = roam_mmap_control_send(
+            mmapControlFd,
+            mapping.rawFd,
+            mapId,
+            mapGeneration,
+            UInt64(mappingLength)
+        )
+        guard sendRc == 0 else {
+            throw ShmGuestSendError.mmapControlError
+        }
+
+        let mmapFrame = encodeShmMmapRefFrame(
+            mmapRef: ShmMmapRef(
+                mapId: mapId,
+                mapGeneration: mapGeneration,
+                mapOffset: 0,
+                payloadLen: payloadLen
+            )
+        )
+        grant.copyBytes(from: mmapFrame)
+        try guestToHost.commit(UInt32(mmapFrame.count))
+        try doorbell?.signal()
+    }
+
+    private func allocateMmapId() -> UInt32 {
+        let mapId = nextMmapId
+        nextMmapId &+= 1
+        if nextMmapId == 0 {
+            nextMmapId = 1
+        }
+        return mapId
     }
 
     // r[impl zerocopy.recv.shm.inline]

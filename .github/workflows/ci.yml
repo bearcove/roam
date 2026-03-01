@@ -128,9 +128,16 @@ jobs:
       - name: Build subject
         run: cargo build -p subject-rust
 
-      - name: Run spec tests
+      - name: Run spec tests (subject over TCP)
         run: cargo nextest run -p spec-tests
         env:
+          SUBJECT_CMD: "./target/debug/subject-rust"
+          SPEC_TRANSPORT: "tcp"
+
+      - name: Run Rust binary payload transport matrix (mem/tcp/shm)
+        run: cargo nextest run -p spec-tests --test binary_payload_transport_matrix
+        env:
+          RUN_RUST_TRANSPORT_MATRIX: "1"
           SUBJECT_CMD: "./target/debug/subject-rust"
 
   generated-bindings:
@@ -232,6 +239,12 @@ jobs:
         env:
           SUBJECT_CMD: "sh swift/subject/subject-swift.sh"
 
+      - name: Run binary payload subject test (Swift over SHM)
+        run: cargo nextest run -p spec-tests --test binary_payloads
+        env:
+          SUBJECT_CMD: "sh swift/subject/subject-swift.sh"
+          SPEC_TRANSPORT: "shm"
+
   swift-linux:
     name: Conformance / Swift (Linux)
     runs-on: depot-ubuntu-24.04-16
@@ -265,6 +278,12 @@ jobs:
         run: cargo nextest run -p spec-tests
         env:
           SUBJECT_CMD: "sh swift/subject/subject-swift.sh"
+
+      - name: Run binary payload subject test (Swift over SHM)
+        run: cargo nextest run -p spec-tests --test binary_payloads
+        env:
+          SUBJECT_CMD: "sh swift/subject/subject-swift.sh"
+          SPEC_TRANSPORT: "shm"
 
   shm-generated-client:
     name: SHM / Generated Clients

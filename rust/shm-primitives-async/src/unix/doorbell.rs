@@ -88,7 +88,7 @@ pub struct Doorbell {
     peer_dead_logged: AtomicBool,
 }
 
-fn drain_fd(fd: RawFd, would_block_is_error: bool) -> io::Result<bool> {
+fn drain_fd(fd: RawFd, would_block_is_error: bool, eof_is_error: bool) -> io::Result<bool> {
     let mut buf = [0u8; 64];
     let mut drained = false;
 
@@ -102,6 +102,12 @@ fn drain_fd(fd: RawFd, would_block_is_error: bool) -> io::Result<bool> {
 
         if ret == 0 {
             // EOF: peer closed the connection
+            if eof_is_error {
+                return Err(io::Error::new(
+                    ErrorKind::BrokenPipe,
+                    "doorbell peer closed",
+                ));
+            }
             return Ok(drained);
         }
 
@@ -243,7 +249,7 @@ impl Doorbell {
 
             let drained = guard.try_io(|inner| {
                 let fd = inner.get_ref().as_raw_fd();
-                drain_fd(fd, true).map(|_| ())
+                drain_fd(fd, true, true).map(|_| ())
             });
 
             match drained {
@@ -256,7 +262,7 @@ impl Doorbell {
 
     fn try_drain(&self) -> bool {
         let fd = self.async_fd.get_ref().as_raw_fd();
-        match drain_fd(fd, false) {
+        match drain_fd(fd, false, false) {
             Ok(drained) => drained,
             Err(err) => {
                 tracing::warn!(fd, error = %err, "doorbell drain failed");
@@ -367,5 +373,48 @@ pub fn clear_cloexec(fd: RawFd) -> io::Result<()> {
         Err(io::Error::last_os_error())
     } else {
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wait_returns_broken_pipe_when_peer_closed() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_io()
+            .build()
+            .expect("tokio runtime");
+
+        let err = rt
+            .block_on(async {
+                let (doorbell, peer) = Doorbell::create_pair().expect("create doorbell pair");
+                drop(peer);
+                doorbell.wait().await
+            })
+            .expect_err("wait should fail when peer has closed");
+        assert_eq!(
+            err.kind(),
+            ErrorKind::BrokenPipe,
+            "expected BrokenPipe, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn drain_fd_reports_eof_as_error_when_requested() {
+        let (a, b) = create_socketpair().expect("create socketpair");
+        drop(b);
+        let err = drain_fd(a.as_raw_fd(), true, true).expect_err("expected eof error");
+        assert_eq!(
+            err.kind(),
+            ErrorKind::BrokenPipe,
+            "expected BrokenPipe, got {err:?}"
+        );
+
+        let (a2, b2) = create_socketpair().expect("create socketpair");
+        drop(b2);
+        let drained = drain_fd(a2.as_raw_fd(), false, false).expect("drain without eof error");
+        assert!(!drained, "expected no drained bytes on clean EOF");
     }
 }

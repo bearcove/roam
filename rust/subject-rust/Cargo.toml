@@ -14,8 +14,10 @@ rustdoc-args = ["--html-in-header", "arborium-header.html"]
 [dependencies]
 roam = { workspace = true }
 roam-core = { workspace = true }
+roam-shm = { path = "../roam-shm" }
 roam-stream = { workspace = true }
 roam-types = { workspace = true }
+shm-primitives = { workspace = true }
 spec-proto = { path = "../../spec/spec-proto" }
 tokio = { workspace = true, features = ["rt", "net"] }
 moire = { workspace = true }

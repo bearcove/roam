@@ -183,6 +183,11 @@ public final class ShmRegion: @unchecked Sendable {
     }
 
     @inline(__always)
+    public var rawFd: Int32 {
+        fd
+    }
+
+    @inline(__always)
     public func pointer(at offset: Int) throws -> UnsafeMutableRawPointer {
         guard offset >= 0, offset < length else {
             throw ShmRegionError.invalidOffset
@@ -236,6 +241,7 @@ public final class ShmRegion: @unchecked Sendable {
     public func basePointer() -> UnsafeMutableRawPointer {
         UnsafeMutableRawPointer(bitPattern: 1)!
     }
+    public var rawFd: Int32 { -1 }
     public func pointer(at offset: Int) throws -> UnsafeMutableRawPointer {
         throw ShmRegionError.unsupportedPlatform
     }

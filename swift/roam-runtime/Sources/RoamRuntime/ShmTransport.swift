@@ -107,7 +107,7 @@ public final class ShmGuestTransport: MessageTransport, @unchecked Sendable {
                 throw TransportError.wouldBlock
             case .hostGoodbye, .doorbellPeerDead:
                 throw TransportError.connectionClosed
-            case .payloadTooLarge, .slotError:
+            case .payloadTooLarge, .slotError, .mmapAllocationFailed, .mmapUnavailable, .mmapControlError:
                 throw TransportError.transportIO("shm send failed: \(err)")
             }
         } catch {

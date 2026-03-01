@@ -31,6 +31,43 @@ swift *args:
     SUBJECT_CMD="sh swift/subject/subject-swift.sh" cargo nextest run -p spec-tests {{ quote(args) }}
     SPEC_TRANSPORT=shm SUBJECT_CMD="sh swift/subject/subject-swift.sh" cargo nextest run -p spec-tests {{ quote(args) }}
 
+swift-subject-cov *args:
+    just rust-ffi
+    rm -rf .coverage/swift-subject
+    mkdir -p .coverage/swift-subject
+    swift build -c debug --package-path swift/subject --product subject-swift \
+      -Xswiftc -profile-generate \
+      -Xswiftc -profile-coverage-mapping
+    LLVM_PROFILE_FILE="$(pwd)/.coverage/swift-subject/tcp-%p%c.profraw" \
+      SUBJECT_CMD="$(pwd)/swift/subject/.build/debug/subject-swift" \
+      cargo nextest run -P coverage --test-threads=1 -p spec-tests {{ quote(args) }}
+    LLVM_PROFILE_FILE="$(pwd)/.coverage/swift-subject/shm-%p%c.profraw" \
+      SPEC_TRANSPORT=shm \
+      SUBJECT_CMD="$(pwd)/swift/subject/.build/debug/subject-swift" \
+      cargo nextest run -P coverage --test-threads=1 -p spec-tests {{ quote(args) }}
+    xcrun llvm-profdata merge -sparse .coverage/swift-subject/*.profraw -o .coverage/swift-subject/subject.profdata
+    xcrun llvm-cov report "$(pwd)/swift/subject/.build/debug/subject-swift" \
+      -instr-profile=.coverage/swift-subject/subject.profdata
+
+swift-subject-cov-tcp *args:
+    just rust-ffi
+    rm -rf .coverage/swift-subject
+    mkdir -p .coverage/swift-subject
+    swift build -c debug --package-path swift/subject --product subject-swift \
+      -Xswiftc -profile-generate \
+      -Xswiftc -profile-coverage-mapping
+    LLVM_PROFILE_FILE="$(pwd)/.coverage/swift-subject/tcp-%p%c.profraw" \
+      SUBJECT_CMD="$(pwd)/swift/subject/.build/debug/subject-swift" \
+      cargo nextest run -P coverage --test-threads=1 -p spec-tests {{ quote(args) }}
+    xcrun llvm-profdata merge -sparse .coverage/swift-subject/*.profraw -o .coverage/swift-subject/subject.profdata
+    xcrun llvm-cov report "$(pwd)/swift/subject/.build/debug/subject-swift" \
+      -instr-profile=.coverage/swift-subject/subject.profdata
+
+swift-subject-cov-html:
+    xcrun llvm-cov show "$(pwd)/swift/subject/.build/debug/subject-swift" \
+      -instr-profile=.coverage/swift-subject/subject.profdata \
+      -format=html -output-dir .coverage/swift-subject/html
+
 all *args:
     just rust {{ quote(args) }}
     just ts {{ quote(args) }}

@@ -2,6 +2,9 @@
 
 use roam::{Call, Rx, Tx};
 use roam_core::{BareConduit, Driver, initiator};
+use roam_shm::bootstrap::{BootstrapStatus, encode_request};
+use roam_shm::guest_link_from_raw;
+use roam_shm::segment::Segment;
 use roam_stream::StreamLink;
 use roam_types::{MessageFamily, Parity};
 use spec_proto::{
@@ -9,12 +12,14 @@ use spec_proto::{
     TestbedDispatcher, TestbedServer,
 };
 use std::convert::Infallible;
+use std::os::fd::AsRawFd;
 use tracing::{debug, error, info, instrument};
 
 type TcpConduit = BareConduit<
     MessageFamily,
     StreamLink<tokio::net::tcp::OwnedReadHalf, tokio::net::tcp::OwnedWriteHalf>,
 >;
+type ShmConduit = BareConduit<MessageFamily, roam_shm::ShmLink>;
 
 #[derive(Clone)]
 struct TestbedService;
@@ -205,7 +210,12 @@ fn main() -> Result<(), String> {
         .build()
         .map_err(|e| format!("failed to create tokio runtime: {e}"))?;
 
-    rt.block_on(connect_and_serve())
+    let mode = std::env::var("SUBJECT_MODE").unwrap_or_else(|_| "server".to_string());
+    match mode.as_str() {
+        "server" => rt.block_on(connect_and_serve()),
+        "shm-server" => rt.block_on(connect_and_serve_shm()),
+        other => Err(format!("unknown SUBJECT_MODE: {other}")),
+    }
 }
 
 async fn connect_and_serve() -> Result<(), String> {
@@ -218,6 +228,68 @@ async fn connect_and_serve() -> Result<(), String> {
     stream.set_nodelay(true).unwrap();
 
     let conduit: TcpConduit = BareConduit::new(StreamLink::tcp(stream));
+    let (mut session, handle, _sh) = initiator(conduit)
+        .establish()
+        .await
+        .map_err(|e| format!("handshake failed: {e}"))?;
+
+    let dispatcher = TestbedDispatcher::new(TestbedService);
+    let mut driver = Driver::new(handle, dispatcher, Parity::Odd);
+
+    moire::task::spawn(async move { session.run().await });
+    driver.run().await;
+    Ok(())
+}
+
+async fn connect_and_serve_shm() -> Result<(), String> {
+    let control_sock = std::env::var("SHM_CONTROL_SOCK")
+        .map_err(|_| "SHM_CONTROL_SOCK env var not set".to_string())?;
+    let sid = std::env::var("SHM_SESSION_ID")
+        .map_err(|_| "SHM_SESSION_ID env var not set".to_string())?;
+    let mmap_tx_fd: i32 = std::env::var("SHM_MMAP_TX_FD")
+        .map_err(|_| "SHM_MMAP_TX_FD env var not set".to_string())?
+        .parse()
+        .map_err(|e| format!("invalid SHM_MMAP_TX_FD: {e}"))?;
+
+    let mut stream = std::os::unix::net::UnixStream::connect(&control_sock)
+        .map_err(|e| format!("connect bootstrap socket: {e}"))?;
+    let request = encode_request(sid.as_bytes()).map_err(|e| format!("encode request: {e}"))?;
+    std::io::Write::write_all(&mut stream, &request)
+        .map_err(|e| format!("send bootstrap request: {e}"))?;
+
+    let received = shm_primitives::bootstrap::recv_response_unix(stream.as_raw_fd())
+        .map_err(|e| format!("recv bootstrap response: {e}"))?;
+    if received.response.status != BootstrapStatus::Success {
+        return Err(format!(
+            "bootstrap failed: status={:?}, payload={}",
+            received.response.status,
+            String::from_utf8_lossy(&received.response.payload)
+        ));
+    }
+    let fds = received
+        .fds
+        .ok_or_else(|| "missing bootstrap success fds".to_string())?;
+    let hub_path = std::str::from_utf8(&received.response.payload)
+        .map_err(|e| format!("bootstrap payload is not utf-8 path: {e}"))?;
+    let segment = std::sync::Arc::new(
+        Segment::attach(std::path::Path::new(hub_path))
+            .map_err(|e| format!("attach segment at {hub_path}: {e}"))?,
+    );
+    let peer_id = shm_primitives::PeerId::new(received.response.peer_id as u8)
+        .ok_or_else(|| format!("invalid peer id {}", received.response.peer_id))?;
+
+    use std::os::fd::IntoRawFd;
+    let doorbell_fd = fds.doorbell_fd.into_raw_fd();
+    let mmap_rx_fd = fds
+        .mmap_control_fd
+        .ok_or_else(|| "missing mmap control fd in bootstrap success".to_string())?
+        .into_raw_fd();
+
+    let link =
+        unsafe { guest_link_from_raw(segment, peer_id, doorbell_fd, mmap_rx_fd, mmap_tx_fd, true) }
+            .map_err(|e| format!("guest_link_from_raw: {e}"))?;
+    let conduit: ShmConduit = BareConduit::new(link);
+
     let (mut session, handle, _sh) = initiator(conduit)
         .establish()
         .await
