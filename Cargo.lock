@@ -2731,6 +2731,8 @@ dependencies = [
 name = "spec-tests"
 version = "3.0.0"
 dependencies = [
+ "facet-postcard",
+ "libc",
  "moire",
  "roam",
  "roam-core",
@@ -2738,6 +2740,7 @@ dependencies = [
  "roam-stream",
  "roam-types",
  "shm-primitives",
+ "shm-primitives-async",
  "spec-proto",
  "tempfile",
  "tokio",

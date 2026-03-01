@@ -234,6 +234,12 @@ jobs:
       - name: Run RoamRuntime Swift tests
         run: swift test --no-parallel -Xlinker -L$(pwd)/target/release
 
+      - name: Build Swift shm-guest-client
+        run: swift build -c debug --package-path swift/roam-runtime --product shm-guest-client
+
+      - name: Run SHM cross-language guest regression tests (via spec-tests)
+        run: cargo nextest run -p spec-tests --test swift_guest_cross_language
+
       - name: Run spec tests
         run: cargo nextest run -p spec-tests
         env:
@@ -291,30 +297,6 @@ jobs:
         env:
           SUBJECT_CMD: "sh swift/subject/subject-swift.sh"
           SPEC_TRANSPORT: "shm"
-
-  shm-generated-client:
-    name: SHM / Generated Clients
-    runs-on: depot-macos-15
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Install cargo-nextest
-        uses: taiki-e/install-action@nextest
-
-      - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
-
-      - name: Build Rust FFI staticlib
-        run: cargo build --release -p roam-shm-ffi
-
-      - name: Build Swift shm-guest-client
-        run: swift build -c debug --package-path swift/roam-runtime
-
-      - name: Run SHM cross-language regression tests
-        run: cargo nextest run -p roam-shm --test swift_guest_cross_language
 
   rust-wasm:
     name: Rust / WebAssembly

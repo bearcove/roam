@@ -22,3 +22,8 @@ tokio = { workspace = true, features = [
   "process",
 ] }
 tempfile = "3.23"
+
+[dev-dependencies]
+facet-postcard.workspace = true
+shm-primitives-async.workspace = true
+libc.workspace = true
