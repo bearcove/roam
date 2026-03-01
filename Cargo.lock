@@ -2462,7 +2462,6 @@ version = "3.0.0"
 dependencies = [
  "cbindgen",
  "libc",
- "roam-shm",
  "shm-primitives",
 ]
 
@@ -2639,7 +2638,6 @@ dependencies = [
  "libc",
  "loom",
  "tempfile",
- "tracing",
  "windows-sys 0.61.2",
 ]
 

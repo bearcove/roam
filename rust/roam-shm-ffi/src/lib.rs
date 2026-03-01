@@ -9,11 +9,11 @@ use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::collections::HashMap;
 use std::sync::Mutex;
 
-use roam_shm::varslot::{SizeClassConfig, SlotRef, VarSlotPool};
 #[cfg(unix)]
 use shm_primitives::MmapRegion;
 use shm_primitives::Region;
 use shm_primitives::bipbuf::{BIPBUF_HEADER_SIZE, BipBufHeader, BipBufRaw};
+use shm_primitives::{SizeClassConfig, SlotRef, VarSlotPool};
 #[cfg(unix)]
 use std::io::ErrorKind;
 #[cfg(unix)]
