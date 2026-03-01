@@ -247,7 +247,11 @@ jobs:
           cargo nextest run -p spec-tests --test spec_matrix
           -E 'test(lang_swift_to_rust_transport_shm_direction_guest_to_host_cross_language_data_path)
           | test(lang_swift_to_rust_transport_shm_direction_guest_to_host_cross_language_message_v7)
-          | test(lang_rust_to_swift_transport_shm_direction_host_to_guest_cross_language_mmap_ref_receive)'
+          | test(lang_rust_to_swift_transport_shm_direction_host_to_guest_cross_language_mmap_ref_receive)
+          | test(lang_rust_to_swift_transport_shm_direction_host_to_guest_cross_language_cutover_boundaries)
+          | test(lang_swift_to_rust_transport_shm_direction_guest_to_host_cross_language_cutover_boundaries)
+          | test(lang_swift_to_rust_transport_shm_direction_guest_to_host_cross_language_fault_mmap_control_breakage)
+          | test(lang_rust_to_swift_transport_shm_direction_host_to_guest_cross_language_fault_host_goodbye_wake)'
 
       - name: Run Swift TCP subject matrix tests
         run: >

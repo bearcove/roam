@@ -249,3 +249,42 @@ fn lang_swift_to_rust_transport_shm_direction_guest_to_host_cross_language_messa
 fn lang_rust_to_swift_transport_shm_direction_host_to_guest_cross_language_mmap_ref_receive() {
     cross_language_shm_guest_matrix::run_mmap_ref_receive_case();
 }
+
+// r[verify transport.shm]
+// r[verify transport.interop]
+// r[verify shm.framing.threshold]
+#[cfg(all(unix, target_os = "macos"))]
+#[test]
+fn lang_rust_to_swift_transport_shm_direction_host_to_guest_cross_language_cutover_boundaries() {
+    cross_language_shm_guest_matrix::run_boundary_cutover_rust_to_swift_case();
+}
+
+// r[verify transport.shm]
+// r[verify transport.interop]
+// r[verify shm.framing.threshold]
+#[cfg(all(unix, target_os = "macos"))]
+#[test]
+fn lang_swift_to_rust_transport_shm_direction_guest_to_host_cross_language_cutover_boundaries() {
+    cross_language_shm_guest_matrix::run_boundary_cutover_swift_to_rust_case();
+}
+
+// r[verify transport.shm]
+// r[verify transport.interop]
+// r[verify shm.mmap.attach]
+#[cfg(all(unix, target_os = "macos"))]
+#[test]
+fn lang_swift_to_rust_transport_shm_direction_guest_to_host_cross_language_fault_mmap_control_breakage()
+ {
+    cross_language_shm_guest_matrix::run_fault_mmap_control_breakage_case();
+}
+
+// r[verify transport.shm]
+// r[verify transport.interop]
+// r[verify shm.host.goodbye]
+// r[verify shm.signal.doorbell]
+#[cfg(all(unix, target_os = "macos"))]
+#[test]
+fn lang_rust_to_swift_transport_shm_direction_host_to_guest_cross_language_fault_host_goodbye_wake()
+{
+    cross_language_shm_guest_matrix::run_fault_host_goodbye_wake_case();
+}

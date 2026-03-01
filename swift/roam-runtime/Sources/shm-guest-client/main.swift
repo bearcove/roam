@@ -72,6 +72,7 @@ struct SpawnArgs {
     let mmapControlFd: Int32
     let scenario: String
     let iterations: Int?
+    let sizes: [Int]?
 }
 
 private func fail(_ message: String) -> Never {
@@ -86,6 +87,7 @@ private func parseArgs(_ args: [String]) -> SpawnArgs {
     var mmapControlFd: Int32 = -1
     var scenario = "data-path"
     var iterations: Int?
+    var sizes: [Int]?
 
     for arg in args {
         if let value = arg.split(separator: "=", maxSplits: 1).last, arg.hasPrefix("--hub-path=") {
@@ -109,6 +111,17 @@ private func parseArgs(_ args: [String]) -> SpawnArgs {
                 fail("invalid --iterations value")
             }
             iterations = n
+        } else if let value = arg.split(separator: "=", maxSplits: 1).last, arg.hasPrefix("--sizes=") {
+            let parsed = value
+                .split(separator: ",")
+                .compactMap { Int($0) }
+            if parsed.isEmpty {
+                fail("invalid --sizes value")
+            }
+            if parsed.contains(where: { $0 < 0 }) {
+                fail("--sizes must be non-negative")
+            }
+            sizes = parsed
         }
     }
 
@@ -127,8 +140,49 @@ private func parseArgs(_ args: [String]) -> SpawnArgs {
         doorbellFd: doorbellFd,
         mmapControlFd: mmapControlFd,
         scenario: scenario,
-        iterations: iterations
+        iterations: iterations,
+        sizes: sizes
     )
+}
+
+private func makeBoundaryPayload(index: Int, size: Int) -> [UInt8] {
+    if size == 0 { return [] }
+    return (0..<size).map { pos in
+        UInt8(truncatingIfNeeded: index &* 31 &+ pos &* 17)
+    }
+}
+
+private func checksum(_ bytes: [UInt8]) -> UInt32 {
+    bytes.reduce(0) { partial, byte in
+        partial &+ UInt32(byte)
+    }
+}
+
+private func decodeAck(_ payload: [UInt8]) -> (len: UInt32, checksum: UInt32)? {
+    guard payload.count == 8 else { return nil }
+    let len = UInt32(payload[0])
+        | (UInt32(payload[1]) << 8)
+        | (UInt32(payload[2]) << 16)
+        | (UInt32(payload[3]) << 24)
+    let sum = UInt32(payload[4])
+        | (UInt32(payload[5]) << 8)
+        | (UInt32(payload[6]) << 16)
+        | (UInt32(payload[7]) << 24)
+    return (len, sum)
+}
+
+private func makeAck(length: Int, checksum: UInt32) -> [UInt8] {
+    let len = UInt32(length)
+    return [
+        UInt8(truncatingIfNeeded: len),
+        UInt8(truncatingIfNeeded: len >> 8),
+        UInt8(truncatingIfNeeded: len >> 16),
+        UInt8(truncatingIfNeeded: len >> 24),
+        UInt8(truncatingIfNeeded: checksum),
+        UInt8(truncatingIfNeeded: checksum >> 8),
+        UInt8(truncatingIfNeeded: checksum >> 16),
+        UInt8(truncatingIfNeeded: checksum >> 24),
+    ]
 }
 
 @main
@@ -350,6 +404,102 @@ struct ShmGuestClientMain {
             _ = await runTask.result
             print("ok")
             exit(0)
+
+        case "boundary-recv-ack":
+            guard let sizes = args.sizes, !sizes.isEmpty else {
+                fail("missing --sizes for boundary-recv-ack scenario")
+            }
+
+            let deadline = Date().addingTimeInterval(5)
+            var received = 0
+            while received < sizes.count {
+                if Date() > deadline {
+                    fail("timed out waiting for boundary payload \(received)")
+                }
+                do {
+                    guard let frame = try guest.receive() else {
+                        usleep(10_000)
+                        continue
+                    }
+                    let expectedLen = sizes[received]
+                    if frame.payload.count != expectedLen {
+                        fail("boundary-recv-ack length mismatch at index \(received)")
+                    }
+                    let ack = makeAck(length: frame.payload.count, checksum: checksum(frame.payload))
+                    try guest.send(frame: ShmGuestFrame(payload: ack))
+                    received += 1
+                } catch {
+                    fail("boundary-recv-ack failed: \(error)")
+                }
+            }
+
+            guest.detach()
+            print("ok")
+            exit(0)
+
+        case "boundary-send-await-ack":
+            guard let sizes = args.sizes, !sizes.isEmpty else {
+                fail("missing --sizes for boundary-send-await-ack scenario")
+            }
+
+            for (idx, size) in sizes.enumerated() {
+                let payload = makeBoundaryPayload(index: idx, size: size)
+                do {
+                    try guest.send(frame: ShmGuestFrame(payload: payload))
+                } catch {
+                    fail("boundary-send-await-ack send failed at index \(idx): \(error)")
+                }
+
+                let ackDeadline = Date().addingTimeInterval(2)
+                var gotAck = false
+                while Date() < ackDeadline {
+                    do {
+                        guard let frame = try guest.receive() else {
+                            usleep(10_000)
+                            continue
+                        }
+                        guard let ack = decodeAck(frame.payload) else {
+                            fail("boundary-send-await-ack invalid ack payload")
+                        }
+                        if ack.len != UInt32(size) || ack.checksum != checksum(payload) {
+                            fail("boundary-send-await-ack ack mismatch at index \(idx)")
+                        }
+                        gotAck = true
+                        break
+                    } catch {
+                        fail("boundary-send-await-ack receive failed at index \(idx): \(error)")
+                    }
+                }
+                if !gotAck {
+                    fail("timed out waiting for boundary ack at index \(idx)")
+                }
+            }
+
+            guest.detach()
+            print("ok")
+            exit(0)
+
+        case "fault-mmap-send-control-breakage":
+            let payload = [UInt8](repeating: 0xAB, count: 5000)
+            do {
+                try guest.send(frame: ShmGuestFrame(payload: payload))
+                fail("expected mmap send to fail when control fd is broken")
+            } catch {
+                print("ok")
+                exit(0)
+            }
+
+        case "fault-host-goodbye-wake":
+            let deadline = Date().addingTimeInterval(3)
+            while Date() < deadline {
+                _ = try? guest.waitForDoorbell(timeoutMs: 100)
+                if guest.isHostGoodbye() {
+                    guest.detach()
+                    print("ok")
+                    exit(0)
+                }
+            }
+            fail("timed out waiting for host-goodbye wake")
 
         case "message-v7":
             let transport = ShmGuestTransport(runtime: guest)
