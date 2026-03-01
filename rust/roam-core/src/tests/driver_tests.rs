@@ -3,9 +3,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use moire::task::FutureExt;
 use roam_types::{
-    Caller, ChannelBinder, ConnectionSettings, Handler, MessageFamily, Metadata, MethodId, Parity,
-    Payload, ReplySink, RequestBody, RequestCall, RequestCancel, RequestMessage, RequestResponse,
-    RoamError, SelfRef,
+    Caller, ChannelBinder, ChannelBody, ChannelGrantCredit, ChannelId, ChannelItem, ChannelMessage,
+    ChannelSink, ConnectionSettings, Handler, IncomingChannelMessage, MessageFamily, Metadata,
+    MethodId, Parity, Payload, ReplySink, RequestBody, RequestCall, RequestCancel, RequestMessage,
+    RequestResponse, RoamError, SelfRef,
 };
 
 use crate::session::{
@@ -785,4 +786,121 @@ async fn echo_call_across_memory_link() {
     };
     let result: u32 = facet_postcard::from_slice(ret_bytes).expect("deserialize response");
     assert_eq!(result, 42);
+}
+
+#[tokio::test]
+async fn buffers_inbound_channel_items_until_rx_is_registered() {
+    let (client_conduit, server_conduit) = message_conduit_pair();
+
+    let server_task = moire::task::spawn(
+        async move {
+            let (mut server_session, server_handle, _sh) = acceptor(server_conduit)
+                .establish()
+                .await
+                .expect("server handshake failed");
+            let mut server_driver = Driver::new(server_handle, (), Parity::Even);
+            let server_caller = server_driver.caller();
+            moire::task::spawn(async move { server_session.run().await }.named("server_session"));
+            moire::task::spawn(async move { server_driver.run().await }.named("server_driver"));
+            server_caller
+        }
+        .named("server_setup"),
+    );
+
+    let (mut client_session, client_handle, _sh) = initiator(client_conduit)
+        .establish()
+        .await
+        .expect("client handshake failed");
+    let client_sender = client_handle.sender.clone();
+    moire::task::spawn(async move { client_session.run().await }.named("client_session"));
+
+    let server_caller = server_task.await.expect("server setup failed");
+
+    let channel_id = ChannelId(99);
+    let value = 123_u32;
+    client_sender
+        .send(crate::session::ConnectionMessage::Channel(ChannelMessage {
+            id: channel_id,
+            body: ChannelBody::Item(ChannelItem {
+                item: Payload::outgoing(&value),
+            }),
+        }))
+        .await
+        .expect("send channel item");
+
+    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+
+    let mut rx = server_caller.register_rx_channel(channel_id);
+    let msg = tokio::time::timeout(std::time::Duration::from_millis(200), rx.recv())
+        .await
+        .expect("timed out waiting for buffered channel item")
+        .expect("channel receiver closed unexpectedly");
+
+    let IncomingChannelMessage::Item(item) = msg else {
+        panic!("expected buffered item");
+    };
+    let bytes = match item.item {
+        Payload::Incoming(bytes) => bytes,
+        _ => panic!("expected incoming payload"),
+    };
+    let decoded: u32 = facet_postcard::from_slice(bytes).expect("deserialize buffered item");
+    assert_eq!(decoded, 123);
+}
+
+#[tokio::test]
+async fn grant_credit_unblocks_driver_created_tx_channel() {
+    let (client_conduit, server_conduit) = message_conduit_pair();
+
+    let server_task = moire::task::spawn(
+        async move {
+            let (mut server_session, server_handle, _sh) = acceptor(server_conduit)
+                .establish()
+                .await
+                .expect("server handshake failed");
+            let mut server_driver = Driver::new(server_handle, (), Parity::Even);
+            let server_caller = server_driver.caller();
+            moire::task::spawn(async move { server_session.run().await }.named("server_session"));
+            moire::task::spawn(async move { server_driver.run().await }.named("server_driver"));
+            server_caller
+        }
+        .named("server_setup"),
+    );
+
+    let (mut client_session, client_handle, _sh) = initiator(client_conduit)
+        .establish()
+        .await
+        .expect("client handshake failed");
+    let client_sender = client_handle.sender.clone();
+    moire::task::spawn(async move { client_session.run().await }.named("client_session"));
+
+    let server_caller = server_task.await.expect("server setup failed");
+    let (channel_id, sink) = server_caller.create_tx_channel(0);
+
+    let send_task = moire::task::spawn(async move {
+        let value = 42_u32;
+        sink.send_payload(Payload::outgoing(&value)).await
+    });
+
+    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    assert!(
+        !send_task.is_finished(),
+        "send should block when initial credit is zero"
+    );
+
+    client_sender
+        .send(crate::session::ConnectionMessage::Channel(ChannelMessage {
+            id: channel_id,
+            body: ChannelBody::GrantCredit(ChannelGrantCredit { additional: 1 }),
+        }))
+        .await
+        .expect("send grant credit");
+
+    let send_result = tokio::time::timeout(std::time::Duration::from_millis(200), send_task)
+        .await
+        .expect("timed out waiting for send to unblock")
+        .expect("send task join");
+    assert!(
+        send_result.is_ok(),
+        "send should succeed after credit grant"
+    );
 }

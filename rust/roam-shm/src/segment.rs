@@ -122,6 +122,18 @@ unsafe impl Send for Segment {}
 unsafe impl Sync for Segment {}
 
 impl Segment {
+    fn refresh_views_after_remap(&mut self) {
+        let region = self.mmap.region();
+        self.header = unsafe { region.get_mut::<SegmentHeader>(0) };
+
+        let peer_table_offset = self.header().peer_table_offset as usize;
+        let var_pool_offset = self.header().var_pool_offset as usize;
+        self.bipbuf_capacity = self.header().bipbuf_capacity;
+
+        self.peer_table = unsafe { PeerTable::attach(region, peer_table_offset, self.max_guests) };
+        self.var_pool = unsafe { VarSlotPool::attach(region, var_pool_offset, &self.size_classes) };
+    }
+
     /// Create a new segment file at `path` and initialize all sub-structures.
     ///
     /// r[impl shm.segment]
@@ -376,6 +388,7 @@ impl Segment {
     pub fn grow_segment(&mut self, new_size: usize) -> io::Result<()> {
         // Step 1: truncate/grow the backing file and remap.
         self.mmap.resize(new_size)?;
+        self.refresh_views_after_remap();
 
         // Step 2: publish new size with Release ordering.
         self.header()
@@ -398,6 +411,7 @@ impl Segment {
         let mapped = self.mmap.len();
         if published as usize > mapped {
             self.mmap.resize(published as usize)?;
+            self.refresh_views_after_remap();
             Ok(true)
         } else {
             Ok(false)
@@ -426,5 +440,168 @@ impl Segment {
             g2h_offset + shm_primitives::BIPBUF_HEADER_SIZE + self.bipbuf_capacity as usize;
         let region = self.mmap.region();
         unsafe { BipBuf::attach(region, h2g_offset) }
+    }
+}
+
+#[cfg(all(test, not(loom)))]
+mod tests {
+    use std::path::PathBuf;
+
+    use shm_primitives::{FileCleanup, MAGIC, MmapRegion, PeerState};
+
+    use super::{AttachError, Segment, SegmentConfig, SegmentLayout};
+    use crate::varslot::SizeClassConfig;
+
+    fn test_size_classes() -> [SizeClassConfig; 2] {
+        [
+            SizeClassConfig {
+                slot_size: 1024,
+                slot_count: 8,
+            },
+            SizeClassConfig {
+                slot_size: 16384,
+                slot_count: 4,
+            },
+        ]
+    }
+
+    fn test_path(name: &str) -> (tempfile::TempDir, PathBuf) {
+        let dir = tempfile::tempdir().expect("create tempdir");
+        let path = dir.path().join(name);
+        (dir, path)
+    }
+
+    fn make_config<'a>(size_classes: &'a [SizeClassConfig]) -> SegmentConfig<'a> {
+        SegmentConfig {
+            max_guests: 4,
+            bipbuf_capacity: 4096,
+            max_payload_size: 64 * 1024,
+            inline_threshold: 0,
+            heartbeat_interval: 1_000_000,
+            size_classes,
+        }
+    }
+
+    #[test]
+    fn layout_compute_produces_aligned_monotonic_offsets() {
+        let size_classes = test_size_classes();
+        let layout = SegmentLayout::compute(4, 4096, &size_classes);
+
+        assert_eq!(
+            layout.peer_table_offset,
+            shm_primitives::SEGMENT_HEADER_SIZE
+        );
+        assert!(layout.ring_base_offset >= layout.peer_table_offset);
+        assert!(layout.var_pool_offset >= layout.ring_base_offset);
+        assert!(layout.var_pool_offset.is_multiple_of(64));
+        assert!(layout.total_size > layout.var_pool_offset);
+    }
+
+    #[test]
+    fn create_then_attach_roundtrips_header_and_offsets() {
+        let size_classes = test_size_classes();
+        let (_tmp, path) = test_path("roundtrip.segment");
+
+        let host = Segment::create(&path, make_config(&size_classes), FileCleanup::Manual)
+            .expect("create segment");
+        let guest = Segment::attach(&path).expect("attach segment");
+
+        assert_eq!(host.header().magic, MAGIC);
+        assert_eq!(guest.header().magic, MAGIC);
+        assert_eq!(host.header().max_guests, 4);
+        assert_eq!(guest.header().max_guests, 4);
+        assert_eq!(host.header().bipbuf_capacity, 4096);
+        assert_eq!(guest.header().bipbuf_capacity, 4096);
+        assert_eq!(
+            host.header().peer_table_offset,
+            guest.header().peer_table_offset
+        );
+        assert_eq!(
+            host.header().var_pool_offset,
+            guest.header().var_pool_offset
+        );
+    }
+
+    #[test]
+    fn attach_rejects_corrupted_header_magic() {
+        let size_classes = test_size_classes();
+        let (_tmp, path) = test_path("corrupt.segment");
+        let _segment = Segment::create(&path, make_config(&size_classes), FileCleanup::Manual)
+            .expect("create segment");
+
+        let mmap = MmapRegion::attach(&path).expect("attach raw mmap");
+        let region = mmap.region();
+        let header = unsafe { region.get_mut::<shm_primitives::SegmentHeader>(0) };
+        header.magic[0] ^= 0xFF;
+        drop(mmap);
+
+        let err = match Segment::attach(&path) {
+            Ok(_) => panic!("corrupted header must fail attach"),
+            Err(err) => err,
+        };
+        assert!(
+            matches!(err, AttachError::BadHeader(_)),
+            "unexpected err: {err:?}"
+        );
+    }
+
+    #[test]
+    fn peer_lifecycle_reserve_release_claim_detach_and_attach() {
+        let size_classes = test_size_classes();
+        let (_tmp, path) = test_path("peer-lifecycle.segment");
+        let segment = Segment::create(&path, make_config(&size_classes), FileCleanup::Manual)
+            .expect("create segment");
+
+        let reserved = segment.reserve_peer().expect("reserve peer");
+        assert_eq!(
+            segment.peer_table().entry(reserved).state(),
+            PeerState::Reserved
+        );
+        segment.release_reserved_peer(reserved);
+        assert_eq!(
+            segment.peer_table().entry(reserved).state(),
+            PeerState::Empty
+        );
+
+        let reserved_again = segment.reserve_peer().expect("reserve peer again");
+        segment
+            .claim_peer(reserved_again)
+            .expect("claim reserved peer");
+        assert_eq!(
+            segment.peer_table().entry(reserved_again).state(),
+            PeerState::Attached
+        );
+        segment.detach_peer(reserved_again);
+        assert_eq!(
+            segment.peer_table().entry(reserved_again).state(),
+            PeerState::Goodbye
+        );
+
+        let attached = segment.attach_peer().expect("attach walk-in peer");
+        assert_eq!(
+            segment.peer_table().entry(attached).state(),
+            PeerState::Attached
+        );
+    }
+
+    #[test]
+    fn grow_segment_publishes_size_and_guest_remaps() {
+        let size_classes = test_size_classes();
+        let (_tmp, path) = test_path("grow.segment");
+        let mut host = Segment::create(&path, make_config(&size_classes), FileCleanup::Manual)
+            .expect("create segment");
+        let mut guest = Segment::attach(&path).expect("attach guest");
+
+        let old_size = host.header().current_size() as usize;
+        let new_size = old_size + 64 * 1024;
+
+        host.grow_segment(new_size).expect("grow segment");
+        assert_eq!(host.header().current_size() as usize, new_size);
+
+        let remapped = guest.check_and_remap().expect("guest remap check");
+        assert!(remapped, "guest should remap after host growth");
+
+        let remapped_again = guest.check_and_remap().expect("guest remap check again");
+        assert!(!remapped_again, "no additional growth should produce false");
     }
 }
