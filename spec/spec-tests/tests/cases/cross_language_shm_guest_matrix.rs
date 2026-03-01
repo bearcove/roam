@@ -113,8 +113,7 @@ fn ring_doorbell(fd: i32) {
     );
 }
 
-#[test]
-fn rust_segment_to_swift_guest_data_path() {
+pub fn run_data_path_case() {
     let dir = tempfile::tempdir().unwrap();
     let shm_path = dir.path().join("xlang-shm-data-path.shm");
     let class = [SizeClassConfig {
@@ -193,8 +192,7 @@ fn rust_segment_to_swift_guest_data_path() {
     }
 }
 
-#[test]
-fn rust_segment_to_swift_guest_message_v7_path() {
+pub fn run_message_v7_case() {
     let dir = tempfile::tempdir().unwrap();
     let shm_path = dir.path().join("xlang-shm-message-v7.shm");
     let class = [SizeClassConfig {
@@ -323,8 +321,7 @@ fn rust_segment_to_swift_guest_message_v7_path() {
     }
 }
 
-#[test]
-fn rust_segment_to_swift_guest_mmap_ref_receive_path() {
+pub fn run_mmap_ref_receive_case() {
     let dir = tempfile::tempdir().unwrap();
     let shm_path = dir.path().join("xlang-shm-mmap-recv.shm");
     let class = [SizeClassConfig {

@@ -12,8 +12,7 @@ use spec_tests::harness::{accept_subject, run_async, spawn_loud};
 // r[verify channeling.close]
 // r[verify channeling.caller-pov]
 // r[verify channeling.allocation.caller]
-#[test]
-fn channeling_sum_client_to_server() {
+pub fn run_channeling_sum_client_to_server() {
     run_async(async {
         let (client, mut child) = accept_subject().await?;
 
@@ -39,8 +38,7 @@ fn channeling_sum_client_to_server() {
 // r[verify channeling.type]
 // r[verify channeling.data]
 // r[verify channeling.close]
-#[test]
-fn channeling_generate_server_to_client() {
+pub fn run_channeling_generate_server_to_client() {
     run_async(async {
         let (client, mut child) = accept_subject().await?;
 
@@ -72,8 +70,7 @@ fn channeling_generate_server_to_client() {
 
 // r[verify channeling.type]
 // r[verify channeling.lifecycle.immediate-data]
-#[test]
-fn channeling_transform_bidirectional() {
+pub fn run_channeling_transform_bidirectional() {
     run_async(async {
         let (client, mut child) = accept_subject().await?;
 

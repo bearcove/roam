@@ -45,8 +45,7 @@ fn make_payload(size: usize) -> Vec<u8> {
 }
 
 // r[verify transport.message.binary]
-#[test]
-fn subject_process_message_binary_payload_sizes() {
+pub fn run_subject_process_message_binary_payload_sizes() {
     run_async(async {
         let (client, mut child) = accept_subject().await?;
         for &size in payload_sizes() {
@@ -83,8 +82,7 @@ fn subject_process_message_binary_payload_sizes() {
 
 // r[verify transport.message.binary]
 // r[verify shm.framing.threshold]
-#[test]
-fn subject_process_message_binary_payload_shm_cutover_boundaries() {
+pub fn run_subject_process_message_binary_payload_shm_cutover_boundaries() {
     if std::env::var("SPEC_TRANSPORT")
         .ok()
         .map(|v| v.eq_ignore_ascii_case("shm"))

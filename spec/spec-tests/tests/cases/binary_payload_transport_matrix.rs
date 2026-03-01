@@ -100,18 +100,44 @@ async fn run_for_subject_transport(transport: SubjectTestTransport) -> Result<()
     Ok(())
 }
 
-// r[verify transport.message.binary]
-#[test]
-fn rust_binary_payload_transport_matrix_mem_tcp_shm() {
+fn transport_matrix_enabled() -> bool {
     if std::env::var("RUN_RUST_TRANSPORT_MATRIX").as_deref() != Ok("1") {
         eprintln!("skipping rust transport matrix (set RUN_RUST_TRANSPORT_MATRIX=1 to enable)");
+        return false;
+    }
+    true
+}
+
+// r[verify transport.message.binary]
+pub fn run_rust_binary_payload_transport_matrix_mem() {
+    if !transport_matrix_enabled() {
         return;
     }
     run_async(async {
-        // mem has no IPC boundary; keep this as an in-process sanity check only.
         run_for_transport(RustTransport::Mem).await?;
-        // tcp + shm must be cross-process for real transport coverage.
+        Ok::<_, String>(())
+    })
+    .unwrap();
+}
+
+// r[verify transport.message.binary]
+pub fn run_rust_binary_payload_transport_matrix_subject_tcp() {
+    if !transport_matrix_enabled() {
+        return;
+    }
+    run_async(async {
         run_for_subject_transport(SubjectTestTransport::Tcp).await?;
+        Ok::<_, String>(())
+    })
+    .unwrap();
+}
+
+// r[verify transport.message.binary]
+pub fn run_rust_binary_payload_transport_matrix_subject_shm() {
+    if !transport_matrix_enabled() {
+        return;
+    }
+    run_async(async {
         run_for_subject_transport(SubjectTestTransport::Shm).await?;
         Ok::<_, String>(())
     })

@@ -7,8 +7,7 @@ use spec_tests::harness::{accept_subject, run_async};
 // r[verify call.lifecycle.single-response]
 // r[verify call.lifecycle.ordering]
 // r[verify transport.message.binary]
-#[test]
-fn rpc_echo_roundtrip() {
+pub fn run_rpc_echo_roundtrip() {
     run_async(async {
         let (client, mut child) = accept_subject().await?;
         let resp = client
@@ -25,8 +24,7 @@ fn rpc_echo_roundtrip() {
 }
 
 // r[verify call.error.user]
-#[test]
-fn rpc_user_error_roundtrip() {
+pub fn run_rpc_user_error_roundtrip() {
     run_async(async {
         let (client, mut child) = accept_subject().await?;
         let result = client.divide(10, 0).await;
@@ -54,8 +52,7 @@ fn rpc_user_error_roundtrip() {
 // r[verify call.pipelining.independence]
 // r[verify core.call]
 // r[verify core.call.request-id]
-#[test]
-fn rpc_pipelining_multiple_requests() {
+pub fn run_rpc_pipelining_multiple_requests() {
     run_async(async {
         let (client, mut child) = accept_subject().await?;
         let (r1, r2, r3) = tokio::join!(

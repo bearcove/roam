@@ -135,7 +135,11 @@ jobs:
           SPEC_TRANSPORT: "tcp"
 
       - name: Run Rust binary payload transport matrix (mem/tcp/shm)
-        run: cargo nextest run -p spec-tests --test binary_payload_transport_matrix
+        run: >
+          cargo nextest run -p spec-tests --test spec_matrix
+          -E 'test(lang_rust_to_rust_transport_mem_direction_bidirectional_binary_payload_transport_matrix)
+          | test(lang_subject_to_rust_transport_tcp_direction_bidirectional_binary_payload_transport_matrix)
+          | test(lang_subject_to_rust_transport_shm_direction_bidirectional_binary_payload_transport_matrix)'
         env:
           RUN_RUST_TRANSPORT_MATRIX: "1"
           SUBJECT_CMD: "./target/debug/subject-rust"
@@ -238,7 +242,11 @@ jobs:
         run: swift build -c debug --package-path swift/roam-runtime --product shm-guest-client
 
       - name: Run SHM cross-language guest regression tests (via spec-tests)
-        run: cargo nextest run -p spec-tests --test swift_guest_cross_language
+        run: >
+          cargo nextest run -p spec-tests --test spec_matrix
+          -E 'test(lang_swift_to_rust_transport_shm_direction_guest_to_host_cross_language_data_path)
+          | test(lang_swift_to_rust_transport_shm_direction_guest_to_host_cross_language_message_v7)
+          | test(lang_rust_to_swift_transport_shm_direction_host_to_guest_cross_language_mmap_ref_receive)'
 
       - name: Run spec tests
         run: cargo nextest run -p spec-tests
@@ -246,13 +254,19 @@ jobs:
           SUBJECT_CMD: "sh swift/subject/subject-swift.sh"
 
       - name: Run binary payload subject test (Swift over SHM)
-        run: cargo nextest run -p spec-tests --test binary_payloads
+        run: >
+          cargo nextest run -p spec-tests --test spec_matrix
+          -E 'test(lang_subject_to_harness_transport_env_selected_direction_harness_to_subject_binary_payload_sizes)
+          | test(lang_subject_to_harness_transport_shm_direction_harness_to_subject_binary_payload_cutover_boundaries)'
         env:
           SUBJECT_CMD: "sh swift/subject/subject-swift.sh"
           SPEC_TRANSPORT: "shm"
 
       - name: Run binary payload subject test (Swift over SHM host-direction)
-        run: cargo nextest run -p spec-tests --test binary_payloads
+        run: >
+          cargo nextest run -p spec-tests --test spec_matrix
+          -E 'test(lang_subject_to_harness_transport_env_selected_direction_harness_to_subject_binary_payload_sizes)
+          | test(lang_subject_to_harness_transport_shm_direction_harness_to_subject_binary_payload_cutover_boundaries)'
         env:
           SUBJECT_CMD: "sh swift/subject/subject-swift.sh"
           SPEC_TRANSPORT: "shm"
@@ -293,7 +307,10 @@ jobs:
           SUBJECT_CMD: "sh swift/subject/subject-swift.sh"
 
       - name: Run binary payload subject test (Swift over SHM)
-        run: cargo nextest run -p spec-tests --test binary_payloads
+        run: >
+          cargo nextest run -p spec-tests --test spec_matrix
+          -E 'test(lang_subject_to_harness_transport_env_selected_direction_harness_to_subject_binary_payload_sizes)
+          | test(lang_subject_to_harness_transport_shm_direction_harness_to_subject_binary_payload_cutover_boundaries)'
         env:
           SUBJECT_CMD: "sh swift/subject/subject-swift.sh"
           SPEC_TRANSPORT: "shm"
