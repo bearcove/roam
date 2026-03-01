@@ -576,12 +576,26 @@ async fn accept_subject_tcp(cmd: &str) -> Result<(TestbedClient<DriverCaller>, C
         .local_addr()
         .map_err(|e| format!("local_addr: {e}"))?;
 
-    let child = spawn_subject_cmd_with_env(cmd, &addr.to_string(), &[]).await?;
+    let mut child = spawn_subject_cmd_with_env(cmd, &addr.to_string(), &[]).await?;
 
-    let (stream, _) = tokio::time::timeout(Duration::from_secs(5), listener.accept())
-        .await
-        .map_err(|_| "subject did not connect within 5s".to_string())?
-        .map_err(|e| format!("accept: {e}"))?;
+    let (stream, _) = tokio::select! {
+        accepted = listener.accept() => {
+            accepted.map_err(|e| format!("accept: {e}"))?
+        }
+        status = child.wait() => {
+            let status = status.map_err(|e| format!("wait on subject process: {e}"))?;
+            return Err(format!("subject exited before connecting: {status}"));
+        }
+        _ = tokio::time::sleep(Duration::from_secs(5)) => {
+            if let Some(status) = child
+                .try_wait()
+                .map_err(|e| format!("try_wait on subject process: {e}"))?
+            {
+                return Err(format!("subject exited before connecting: {status}"));
+            }
+            return Err("subject did not connect within 5s".to_string());
+        }
+    };
     stream.set_nodelay(true).unwrap();
 
     let conduit: BareConduit<MessageFamily, TcpLink> = BareConduit::new(StreamLink::tcp(stream));
@@ -678,7 +692,7 @@ async fn accept_subject_shm_subject_is_guest(
         .ok_or_else(|| format!("invalid socket path: {}", control_sock_path.display()))?
         .to_string();
 
-    let child = spawn_subject_cmd_with_env(
+    let mut child = spawn_subject_cmd_with_env(
         cmd,
         "",
         &[
@@ -690,10 +704,25 @@ async fn accept_subject_shm_subject_is_guest(
     )
     .await?;
 
-    let host_peer = tokio::time::timeout(Duration::from_secs(5), peer_rx)
-        .await
-        .map_err(|_| "timed out waiting for bootstrap request".to_string())?
-        .map_err(|_| "bootstrap task dropped".to_string())??;
+    let mut peer_rx = peer_rx;
+    let host_peer = tokio::select! {
+        peer = &mut peer_rx => {
+            peer.map_err(|_| "bootstrap task dropped".to_string())??
+        }
+        status = child.wait() => {
+            let status = status.map_err(|e| format!("wait on subject process: {e}"))?;
+            return Err(format!("subject exited before bootstrap request: {status}"));
+        }
+        _ = tokio::time::sleep(Duration::from_secs(5)) => {
+            if let Some(status) = child
+                .try_wait()
+                .map_err(|e| format!("try_wait on subject process: {e}"))?
+            {
+                return Err(format!("subject exited before bootstrap request: {status}"));
+            }
+            return Err("timed out waiting for bootstrap request".to_string());
+        }
+    };
 
     let link = host_peer
         .into_link()
@@ -746,6 +775,14 @@ async fn accept_subject_shm_subject_is_host(
     let setup_result: Result<TestbedClient<DriverCaller>, String> = async {
         let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
         let mut stream = loop {
+            if let Some(status) = child
+                .try_wait()
+                .map_err(|e| format!("try_wait on subject process: {e}"))?
+            {
+                return Err(format!(
+                    "subject exited before bootstrap handshake: {status}"
+                ));
+            }
             match StdUnixStream::connect(&control_sock_path) {
                 Ok(stream) => break stream,
                 Err(e) => {
