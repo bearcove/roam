@@ -61,22 +61,17 @@ tokio-tungstenite = "0.26"
 libc = "0.2.180"
 
 # facet ecosystem
-facet = { version = "0.43.0", git = "https://github.com/facet-rs/facet", branch = "main", features = [
-  "camino",
-  "reflect",
-] }
-facet-core = { version = "0.43.0", git = "https://github.com/facet-rs/facet", branch = "main" }
-facet-postcard = { version = "0.43.0", git = "https://github.com/facet-rs/facet", branch = "main", features = [
-  "camino",
-] }
-facet-path = { version = "0.43.0", git = "https://github.com/facet-rs/facet", branch = "main" }
-facet-reflect = { version = "0.43.0", git = "https://github.com/facet-rs/facet", branch = "main" }
-facet-format = { version = "0.43.0", git = "https://github.com/facet-rs/facet", branch = "main" }
-facet-pretty = { version = "0.43.0", git = "https://github.com/facet-rs/facet", branch = "main" }
-facet-json = { version = "0.43.0", git = "https://github.com/facet-rs/facet", branch = "main" }
-facet-value = { version = "0.43.0", git = "https://github.com/facet-rs/facet", branch = "main" }
-facet-testhelpers = { version = "0.43.0", git = "https://github.com/facet-rs/facet", branch = "main" }
-facet-cargo-toml = { version = "0.43.0", git = "https://github.com/bearcove/facet-cargo-toml", branch = "main" }
+facet = { version = "0.44.0", features = ["camino", "reflect"] }
+facet-core = { version = "0.44.0" }
+facet-postcard = { version = "0.44.0", features = ["camino"] }
+facet-path = { version = "0.44.0" }
+facet-reflect = { version = "0.44.0" }
+facet-format = { version = "0.44.0" }
+facet-pretty = { version = "0.44.0" }
+facet-json = { version = "0.44.0" }
+facet-value = { version = "0.44.0" }
+facet-testhelpers = { version = "0.44.0" }
+facet-cargo-toml = { version = "0.44.0" }
 
 # Futures utilities
 futures-util = "0.3"
