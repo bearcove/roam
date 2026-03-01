@@ -511,4 +511,45 @@ mod tests {
         assert!(!shape_contains_channel(Recursive::SHAPE));
         assert!(shape_contains_channel(ChannelNested::SHAPE));
     }
+
+    #[test]
+    fn encode_shape_emits_expected_scalar_and_container_tags() {
+        fn head(shape: &'static facet_core::Shape) -> u8 {
+            let mut out = Vec::new();
+            encode_shape(shape, &mut out);
+            out[0]
+        }
+
+        assert_eq!(head(<bool as Facet>::SHAPE), sig::BOOL);
+        assert_eq!(head(<u64 as Facet>::SHAPE), sig::U64);
+        assert_eq!(head(<i32 as Facet>::SHAPE), sig::I32);
+        assert_eq!(head(<String as Facet>::SHAPE), sig::STRING);
+        assert_eq!(head(<Option<u8> as Facet>::SHAPE), sig::OPTION);
+        assert_eq!(head(<Vec<u16> as Facet>::SHAPE), sig::LIST);
+        assert_eq!(head(<[u16; 4] as Facet>::SHAPE), sig::ARRAY);
+        assert_eq!(
+            head(<std::collections::BTreeMap<u8, u16> as Facet>::SHAPE),
+            sig::MAP
+        );
+        assert_eq!(
+            head(<std::collections::BTreeSet<u8> as Facet>::SHAPE),
+            sig::SET
+        );
+        assert_eq!(head(<(u8, u16) as Facet>::SHAPE), sig::TUPLE);
+    }
+
+    #[test]
+    fn encode_shape_marks_recursive_types_with_backref() {
+        #[derive(Facet)]
+        struct Node {
+            next: Option<Box<Node>>,
+        }
+
+        let mut out = Vec::new();
+        encode_shape(Node::SHAPE, &mut out);
+        assert!(
+            out.contains(&sig::BACKREF),
+            "recursive encoding should contain BACKREF marker"
+        );
+    }
 }
