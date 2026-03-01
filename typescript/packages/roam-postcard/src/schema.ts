@@ -27,6 +27,16 @@ export type PrimitiveKind =
   | "string"
   | "bytes";
 
+/** Schema for bytes (`Vec<u8>`/`&[u8]` style payloads). */
+export interface BytesSchema {
+  kind: "bytes";
+  /**
+   * When true, bytes are encoded/decoded as "remaining input" without an outer
+   * length prefix. This must only be used for structurally trailing fields.
+   */
+  trailing?: boolean;
+}
+
 // ============================================================================
 // Container Schemas
 // ============================================================================
@@ -151,7 +161,8 @@ export interface RxSchema {
 
 /** Union of all schema types. */
 export type Schema =
-  | { kind: PrimitiveKind }
+  | { kind: Exclude<PrimitiveKind, "bytes"> }
+  | BytesSchema
   | VecSchema
   | OptionSchema
   | MapSchema

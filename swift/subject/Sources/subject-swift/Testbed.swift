@@ -16,7 +16,7 @@ public enum TestbedMethodId {
     public static let transform: UInt64 = 0x5d9895604eb18b19
     public static let echoPoint: UInt64 = 0x453fa9bf6932528c
     public static let createPerson: UInt64 = 0x3dd231f57b1bca21
-    public static let rectangleArea: UInt64 = 0x04ef653fdf0653c4
+    public static let rectangleArea: UInt64 = 0xba75c48683f1d9e6
     public static let parseColor: UInt64 = 0xe285f31c6dfffbfc
     public static let shapeArea: UInt64 = 0x6e706354167c00c2
     public static let createCanvas: UInt64 = 0xa914982e7d3c7b55
@@ -194,7 +194,7 @@ public final class TestbedClient: TestbedCaller {
                 throw RoamError.decodeError("user error without payload")
             }
             var cursor = 0
-            let _userError_disc = try decodeU8(from: errorPayload, offset: &cursor)
+            let _userError_disc = try decodeVarint(from: errorPayload, offset: &cursor)
             let userError: MathError
             switch _userError_disc {
             case 0:
@@ -226,7 +226,7 @@ public final class TestbedClient: TestbedCaller {
                 throw RoamError.decodeError("user error without payload")
             }
             var cursor = 0
-            let _userError_disc = try decodeU8(from: errorPayload, offset: &cursor)
+            let _userError_disc = try decodeVarint(from: errorPayload, offset: &cursor)
             let userError: LookupError
             switch _userError_disc {
             case 0:
@@ -257,7 +257,7 @@ public final class TestbedClient: TestbedCaller {
         let payload = Data(payloadBytes)
         let channels = collectChannelIds(schemas: testbed_schemas["sum"]!.args, args: [numbers])
 
-        let response = try await connection.call(methodId: 0x855b3a25d97bfefd, metadata: [], payload: payload, channels: channels, timeout: timeout)
+        let response = try await connection.call(methodId: 0x855b3a25d97bfefd, payload: payload, channels: channels, timeout: timeout)
         var cursor = 0
         try decodeRpcResult(from: response, offset: &cursor)
         let result = try decodeI64(from: response, offset: &cursor)
@@ -282,7 +282,7 @@ public final class TestbedClient: TestbedCaller {
         let payload = Data(payloadBytes)
         let channels = collectChannelIds(schemas: testbed_schemas["generate"]!.args, args: [count, output])
 
-        let response = try await connection.call(methodId: 0x54d2273d8cdb9c38, metadata: [], payload: payload, channels: channels, timeout: timeout)
+        let response = try await connection.call(methodId: 0x54d2273d8cdb9c38, payload: payload, channels: channels, timeout: timeout)
         var cursor = 0
         try decodeRpcResult(from: response, offset: &cursor)
     }
@@ -305,7 +305,7 @@ public final class TestbedClient: TestbedCaller {
         let payload = Data(payloadBytes)
         let channels = collectChannelIds(schemas: testbed_schemas["transform"]!.args, args: [input, output])
 
-        let response = try await connection.call(methodId: 0x5d9895604eb18b19, metadata: [], payload: payload, channels: channels, timeout: timeout)
+        let response = try await connection.call(methodId: 0x5d9895604eb18b19, payload: payload, channels: channels, timeout: timeout)
         var cursor = 0
         try decodeRpcResult(from: response, offset: &cursor)
     }
@@ -343,7 +343,7 @@ public final class TestbedClient: TestbedCaller {
         var payloadBytes: [UInt8] = []
         payloadBytes += encodeI32(rect.topLeft.x) + encodeI32(rect.topLeft.y) + encodeI32(rect.bottomRight.x) + encodeI32(rect.bottomRight.y) + encodeOption(rect.label, encoder: { encodeString($0) })
         let payload = Data(payloadBytes)
-        let response = try await connection.call(methodId: 0x04ef653fdf0653c4, payload: payload, timeout: timeout)
+        let response = try await connection.call(methodId: 0xba75c48683f1d9e6, payload: payload, timeout: timeout)
         var cursor = 0
         try decodeRpcResult(from: response, offset: &cursor)
         let result = try decodeF64(from: response, offset: &cursor)
@@ -358,7 +358,7 @@ public final class TestbedClient: TestbedCaller {
         var cursor = 0
         try decodeRpcResult(from: response, offset: &cursor)
         let result = try decodeOption(from: response, offset: &cursor, decoder: { data, off in
-            let disc = try decodeU8(from: data, offset: &off)
+            let disc = try decodeVarint(from: data, offset: &off)
             let result: Color
             switch disc {
             case 0:
@@ -380,11 +380,11 @@ public final class TestbedClient: TestbedCaller {
         payloadBytes += { v in
     switch v {
     case .circle(let radius):
-        return [UInt8(0)] + encodeF64(radius)
+        return encodeVarint(UInt64(0)) + encodeF64(radius)
     case .rectangle(let width, let height):
-        return [UInt8(1)] + encodeF64(width) + encodeF64(height)
+        return encodeVarint(UInt64(1)) + encodeF64(width) + encodeF64(height)
     case .point:
-        return [UInt8(2)]
+        return encodeVarint(UInt64(2))
     }
 }(shape)
         let payload = Data(payloadBytes)
@@ -401,21 +401,21 @@ public final class TestbedClient: TestbedCaller {
         payloadBytes += encodeVec(shapes, encoder: { v in
     switch v {
     case .circle(let radius):
-        return [UInt8(0)] + encodeF64(radius)
+        return encodeVarint(UInt64(0)) + encodeF64(radius)
     case .rectangle(let width, let height):
-        return [UInt8(1)] + encodeF64(width) + encodeF64(height)
+        return encodeVarint(UInt64(1)) + encodeF64(width) + encodeF64(height)
     case .point:
-        return [UInt8(2)]
+        return encodeVarint(UInt64(2))
     }
 })
         payloadBytes += { v in
     switch v {
     case .red:
-        return [UInt8(0)]
+        return encodeVarint(UInt64(0))
     case .green:
-        return [UInt8(1)]
+        return encodeVarint(UInt64(1))
     case .blue:
-        return [UInt8(2)]
+        return encodeVarint(UInt64(2))
     }
 }(background)
         let payload = Data(payloadBytes)
@@ -424,7 +424,7 @@ public final class TestbedClient: TestbedCaller {
         try decodeRpcResult(from: response, offset: &cursor)
         let _result_name = try decodeString(from: response, offset: &cursor)
         let _result_shapes = try decodeVec(from: response, offset: &cursor, decoder: { data, off in
-            let disc = try decodeU8(from: data, offset: &off)
+            let disc = try decodeVarint(from: data, offset: &off)
             let result: Shape
             switch disc {
             case 0:
@@ -441,7 +441,7 @@ public final class TestbedClient: TestbedCaller {
             }
             return result
         })
-        let __result_background_disc = try decodeU8(from: response, offset: &cursor)
+        let __result_background_disc = try decodeVarint(from: response, offset: &cursor)
         let _result_background: Color
         switch __result_background_disc {
         case 0:
@@ -462,18 +462,18 @@ public final class TestbedClient: TestbedCaller {
         payloadBytes += { v in
     switch v {
     case .text(let val):
-        return [UInt8(0)] + encodeString(val)
+        return encodeVarint(UInt64(0)) + encodeString(val)
     case .number(let val):
-        return [UInt8(1)] + encodeI64(val)
+        return encodeVarint(UInt64(1)) + encodeI64(val)
     case .data(let val):
-        return [UInt8(2)] + encodeBytes(Array(val))
+        return encodeVarint(UInt64(2)) + encodeBytes(Array(val))
     }
 }(msg)
         let payload = Data(payloadBytes)
         let response = try await connection.call(methodId: 0xed1dc0c625889d30, payload: payload, timeout: timeout)
         var cursor = 0
         try decodeRpcResult(from: response, offset: &cursor)
-        let _result_disc = try decodeU8(from: response, offset: &cursor)
+        let _result_disc = try decodeVarint(from: response, offset: &cursor)
         let result: Message
         switch _result_disc {
         case 0:
@@ -595,7 +595,7 @@ public final class TestbedChannelingDispatcher {
             await dispatch_echoPoint(requestId: requestId, channels: channels, payload: payload)
         case 0x3dd231f57b1bca21:
             await dispatch_createPerson(requestId: requestId, channels: channels, payload: payload)
-        case 0x04ef653fdf0653c4:
+        case 0xba75c48683f1d9e6:
             await dispatch_rectangleArea(requestId: requestId, channels: channels, payload: payload)
         case 0xe285f31c6dfffbfc:
             await dispatch_parseColor(requestId: requestId, channels: channels, payload: payload)
@@ -673,9 +673,9 @@ public final class TestbedChannelingDispatcher {
             taskSender(.response(requestId: requestId, payload: { switch result { case .success(let v): return [UInt8(0)] + { encodeI64($0) }(v); case .failure(let e): return [UInt8(1), UInt8(0)] + { v in
     switch v {
     case .divisionByZero:
-        return [UInt8(0)]
+        return encodeVarint(UInt64(0))
     case .overflow:
-        return [UInt8(1)]
+        return encodeVarint(UInt64(1))
     }
 }(e) } }()))
         } catch {
@@ -691,9 +691,9 @@ public final class TestbedChannelingDispatcher {
             taskSender(.response(requestId: requestId, payload: { switch result { case .success(let v): return [UInt8(0)] + { encodeString($0.name) + encodeU8($0.age) + encodeOption($0.email, encoder: { encodeString($0) }) }(v); case .failure(let e): return [UInt8(1), UInt8(0)] + { v in
     switch v {
     case .notFound:
-        return [UInt8(0)]
+        return encodeVarint(UInt64(0))
     case .accessDenied:
-        return [UInt8(1)]
+        return encodeVarint(UInt64(1))
     }
 }(e) } }()))
         } catch {
@@ -811,11 +811,11 @@ public final class TestbedChannelingDispatcher {
             taskSender(.response(requestId: requestId, payload: encodeResultOk(result, encoder: { encodeOption($0, encoder: { v in
     switch v {
     case .red:
-        return [UInt8(0)]
+        return encodeVarint(UInt64(0))
     case .green:
-        return [UInt8(1)]
+        return encodeVarint(UInt64(1))
     case .blue:
-        return [UInt8(2)]
+        return encodeVarint(UInt64(2))
     }
 }) })))
         } catch {
@@ -826,7 +826,7 @@ public final class TestbedChannelingDispatcher {
     private func dispatch_shapeArea(requestId: UInt64, channels: [UInt64], payload: Data) async {
         do {
             var cursor = 0
-            let _shape_disc = try decodeU8(from: payload, offset: &cursor)
+            let _shape_disc = try decodeVarint(from: payload, offset: &cursor)
             let shape: Shape
             switch _shape_disc {
             case 0:
@@ -853,7 +853,7 @@ public final class TestbedChannelingDispatcher {
             var cursor = 0
             let name = try decodeString(from: payload, offset: &cursor)
             let shapes = try decodeVec(from: payload, offset: &cursor, decoder: { data, off in
-                let disc = try decodeU8(from: data, offset: &off)
+                let disc = try decodeVarint(from: data, offset: &off)
                 let result: Shape
                 switch disc {
                 case 0:
@@ -870,7 +870,7 @@ public final class TestbedChannelingDispatcher {
                 }
                 return result
             })
-            let _background_disc = try decodeU8(from: payload, offset: &cursor)
+            let _background_disc = try decodeVarint(from: payload, offset: &cursor)
             let background: Color
             switch _background_disc {
             case 0:
@@ -886,20 +886,20 @@ public final class TestbedChannelingDispatcher {
             taskSender(.response(requestId: requestId, payload: encodeResultOk(result, encoder: { encodeString($0.name) + encodeVec($0.shapes, encoder: { v in
     switch v {
     case .circle(let radius):
-        return [UInt8(0)] + encodeF64(radius)
+        return encodeVarint(UInt64(0)) + encodeF64(radius)
     case .rectangle(let width, let height):
-        return [UInt8(1)] + encodeF64(width) + encodeF64(height)
+        return encodeVarint(UInt64(1)) + encodeF64(width) + encodeF64(height)
     case .point:
-        return [UInt8(2)]
+        return encodeVarint(UInt64(2))
     }
 }) + { v in
     switch v {
     case .red:
-        return [UInt8(0)]
+        return encodeVarint(UInt64(0))
     case .green:
-        return [UInt8(1)]
+        return encodeVarint(UInt64(1))
     case .blue:
-        return [UInt8(2)]
+        return encodeVarint(UInt64(2))
     }
 }($0.background) })))
         } catch {
@@ -910,7 +910,7 @@ public final class TestbedChannelingDispatcher {
     private func dispatch_processMessage(requestId: UInt64, channels: [UInt64], payload: Data) async {
         do {
             var cursor = 0
-            let _msg_disc = try decodeU8(from: payload, offset: &cursor)
+            let _msg_disc = try decodeVarint(from: payload, offset: &cursor)
             let msg: Message
             switch _msg_disc {
             case 0:
@@ -929,11 +929,11 @@ public final class TestbedChannelingDispatcher {
             taskSender(.response(requestId: requestId, payload: encodeResultOk(result, encoder: { v in
     switch v {
     case .text(let val):
-        return [UInt8(0)] + encodeString(val)
+        return encodeVarint(UInt64(0)) + encodeString(val)
     case .number(let val):
-        return [UInt8(1)] + encodeI64(val)
+        return encodeVarint(UInt64(1)) + encodeI64(val)
     case .data(let val):
-        return [UInt8(2)] + encodeBytes(Array(val))
+        return encodeVarint(UInt64(2)) + encodeBytes(Array(val))
     }
 })))
         } catch {
@@ -1027,3 +1027,4 @@ public struct TestbedSerializers: BindingSerializers {
         }
     }
 }
+

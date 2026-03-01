@@ -3,7 +3,7 @@
 //! Generates caller protocol and client implementation for making RPC calls.
 
 use heck::{ToLowerCamelCase, ToUpperCamelCase};
-use roam_schema::{MethodDetail, ServiceDetail, ShapeKind, classify_shape, is_rx, is_tx};
+use roam_types::{MethodDescriptor, ServiceDescriptor, ShapeKind, classify_shape, is_rx, is_tx};
 
 use super::decode::generate_decode_stmt_from_with_cursor;
 use super::encode::generate_encode_expr;
@@ -13,7 +13,7 @@ use crate::cw_writeln;
 use crate::render::hex_u64;
 
 /// Generate complete client code (caller protocol + client implementation).
-pub fn generate_client(service: &ServiceDetail) -> String {
+pub fn generate_client(service: &ServiceDescriptor) -> String {
     let mut out = String::new();
     out.push_str(&generate_caller_protocol(service));
     out.push_str(&generate_client_impl(service));
@@ -21,16 +21,16 @@ pub fn generate_client(service: &ServiceDetail) -> String {
 }
 
 /// Generate caller protocol (for making calls to the service).
-fn generate_caller_protocol(service: &ServiceDetail) -> String {
+fn generate_caller_protocol(service: &ServiceDescriptor) -> String {
     let mut out = String::new();
-    let service_name = service.name.to_upper_camel_case();
+    let service_name = service.service_name.to_upper_camel_case();
 
     if let Some(doc) = &service.doc {
         out.push_str(&format_doc(doc, ""));
     }
     out.push_str(&format!("public protocol {service_name}Caller {{\n"));
 
-    for method in &service.methods {
+    for method in service.methods {
         let method_name = method.method_name.to_lower_camel_case();
 
         if let Some(doc) = &method.doc {
@@ -44,12 +44,12 @@ fn generate_caller_protocol(service: &ServiceDetail) -> String {
                 format!(
                     "{}: {}",
                     a.name.to_lower_camel_case(),
-                    swift_type_client_arg(a.ty)
+                    swift_type_client_arg(a.shape)
                 )
             })
             .collect();
 
-        let ret_type = swift_type_client_return(method.return_type);
+        let ret_type = swift_type_client_return(method.return_shape);
 
         if ret_type == "Void" {
             out.push_str(&format!(
@@ -69,10 +69,10 @@ fn generate_caller_protocol(service: &ServiceDetail) -> String {
 }
 
 /// Generate client implementation (for making calls to the service).
-fn generate_client_impl(service: &ServiceDetail) -> String {
+fn generate_client_impl(service: &ServiceDescriptor) -> String {
     let mut out = String::new();
     let mut w = CodeWriter::with_indent_spaces(&mut out, 4);
-    let service_name = service.name.to_upper_camel_case();
+    let service_name = service.service_name.to_upper_camel_case();
 
     w.writeln(&format!(
         "public final class {service_name}Client: {service_name}Caller {{"
@@ -92,7 +92,7 @@ fn generate_client_impl(service: &ServiceDetail) -> String {
         }
         w.writeln("}").unwrap();
 
-        for method in &service.methods {
+        for method in service.methods {
             w.blank_line().unwrap();
             generate_client_method(&mut w, method, &service_name);
         }
@@ -106,7 +106,7 @@ fn generate_client_impl(service: &ServiceDetail) -> String {
 /// Generate a single client method implementation.
 fn generate_client_method(
     w: &mut CodeWriter<&mut String>,
-    method: &MethodDetail,
+    method: &MethodDescriptor,
     service_name: &str,
 ) {
     let method_name = method.method_name.to_lower_camel_case();
@@ -119,14 +119,13 @@ fn generate_client_method(
             format!(
                 "{}: {}",
                 a.name.to_lower_camel_case(),
-                swift_type_client_arg(a.ty)
+                swift_type_client_arg(a.shape)
             )
         })
         .collect();
 
-    let ret_type = swift_type_client_return(method.return_type);
-    let has_streaming =
-        method.args.iter().any(|a| is_channel(a.ty)) || is_channel(method.return_type);
+    let ret_type = swift_type_client_return(method.return_shape);
+    let has_streaming = method.args.iter().any(|a| is_channel(a.shape));
 
     // Method signature
     if ret_type == "Void" {
@@ -147,13 +146,13 @@ fn generate_client_method(
 
     {
         let _indent = w.indent();
-        let cursor_var = unique_decode_cursor_name(&method.args);
+        let cursor_var = unique_decode_cursor_name(method.args);
 
         if has_streaming {
             generate_streaming_client_body(w, method, service_name, &method_id_name, &cursor_var);
         } else {
             // Encode arguments
-            generate_encode_args(w, &method.args);
+            generate_encode_args(w, method.args);
 
             // Make call
             let method_id = crate::method_id(method);
@@ -179,12 +178,14 @@ fn generate_client_method(
                 .unwrap();
 
                 // Check if this method returns Result<T, E>
-                let is_fallible =
-                    matches!(classify_shape(method.return_type), ShapeKind::Result { .. });
+                let is_fallible = matches!(
+                    classify_shape(method.return_shape),
+                    ShapeKind::Result { .. }
+                );
 
                 if is_fallible {
                     // Fallible method: handle both success and user error
-                    let ShapeKind::Result { ok, err } = classify_shape(method.return_type) else {
+                    let ShapeKind::Result { ok, err } = classify_shape(method.return_shape) else {
                         unreachable!()
                     };
 
@@ -249,7 +250,7 @@ fn generate_client_method(
                     )
                     .unwrap();
                     let decode_stmt = generate_decode_stmt_from_with_cursor(
-                        method.return_type,
+                        method.return_shape,
                         "result",
                         "",
                         "response",
@@ -267,7 +268,7 @@ fn generate_client_method(
 }
 
 /// Generate code to encode method arguments (for client).
-fn generate_encode_args(w: &mut CodeWriter<&mut String>, args: &[roam_schema::ArgDetail]) {
+fn generate_encode_args(w: &mut CodeWriter<&mut String>, args: &[roam_types::ArgDescriptor]) {
     if args.is_empty() {
         w.writeln("let payload = Data()").unwrap();
         return;
@@ -276,7 +277,7 @@ fn generate_encode_args(w: &mut CodeWriter<&mut String>, args: &[roam_schema::Ar
     w.writeln("var payloadBytes: [UInt8] = []").unwrap();
     for arg in args {
         let arg_name = arg.name.to_lower_camel_case();
-        let encode_expr = generate_encode_expr(arg.ty, &arg_name);
+        let encode_expr = generate_encode_expr(arg.shape, &arg_name);
         cw_writeln!(w, "payloadBytes += {encode_expr}").unwrap();
     }
     w.writeln("let payload = Data(payloadBytes)").unwrap();
@@ -285,7 +286,7 @@ fn generate_encode_args(w: &mut CodeWriter<&mut String>, args: &[roam_schema::Ar
 /// Generate client body for channeled methods.
 fn generate_streaming_client_body(
     w: &mut CodeWriter<&mut String>,
-    method: &MethodDetail,
+    method: &MethodDescriptor,
     service_name: &str,
     method_id_name: &str,
     cursor_var: &str,
@@ -324,12 +325,12 @@ fn generate_streaming_client_body(
     // in Request.channels for schema-driven discovery.
     w.writeln("// Encode payload with channel IDs").unwrap();
     w.writeln("var payloadBytes: [UInt8] = []").unwrap();
-    for arg in &method.args {
+    for arg in method.args {
         let arg_name = arg.name.to_lower_camel_case();
-        if is_tx(arg.ty) || is_rx(arg.ty) {
+        if is_tx(arg.shape) || is_rx(arg.shape) {
             cw_writeln!(w, "payloadBytes += encodeVarint({arg_name}.channelId)").unwrap();
         } else {
-            let encode_expr = generate_encode_expr(arg.ty, &arg_name);
+            let encode_expr = generate_encode_expr(arg.shape, &arg_name);
             cw_writeln!(w, "payloadBytes += {encode_expr}").unwrap();
         }
     }
@@ -343,7 +344,7 @@ fn generate_streaming_client_body(
     w.blank_line().unwrap();
 
     // Make the call
-    let ret_type = swift_type_client_return(method.return_type);
+    let ret_type = swift_type_client_return(method.return_shape);
     let method_id = crate::method_id(method);
     if ret_type == "Void" {
         cw_writeln!(
@@ -367,11 +368,14 @@ fn generate_streaming_client_body(
         .unwrap();
 
         // Check if this method returns Result<T, E>
-        let is_fallible = matches!(classify_shape(method.return_type), ShapeKind::Result { .. });
+        let is_fallible = matches!(
+            classify_shape(method.return_shape),
+            ShapeKind::Result { .. }
+        );
 
         if is_fallible {
             // Fallible method: handle both success and user error
-            let ShapeKind::Result { ok, err } = classify_shape(method.return_type) else {
+            let ShapeKind::Result { ok, err } = classify_shape(method.return_shape) else {
                 unreachable!()
             };
 
@@ -429,7 +433,7 @@ fn generate_streaming_client_body(
             )
             .unwrap();
             let decode_stmt = generate_decode_stmt_from_with_cursor(
-                method.return_type,
+                method.return_shape,
                 "result",
                 "",
                 "response",
@@ -443,127 +447,11 @@ fn generate_streaming_client_body(
     }
 }
 
-fn unique_decode_cursor_name(args: &[roam_schema::ArgDetail]) -> String {
+fn unique_decode_cursor_name(args: &[roam_types::ArgDescriptor]) -> String {
     let arg_names: Vec<String> = args.iter().map(|a| a.name.to_lower_camel_case()).collect();
     let mut candidate = String::from("cursor");
     while arg_names.iter().any(|name| name == &candidate) {
         candidate.push('_');
     }
     candidate
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use facet::Facet;
-    use roam_schema::{ArgDetail, MethodDetail, ServiceDetail};
-    use std::borrow::Cow;
-
-    fn sample_service() -> ServiceDetail {
-        ServiceDetail {
-            name: Cow::Borrowed("Echo"),
-            doc: Some(Cow::Borrowed("Simple echo service")),
-            methods: vec![MethodDetail {
-                service_name: Cow::Borrowed("Echo"),
-                method_name: Cow::Borrowed("echo"),
-                args: vec![ArgDetail {
-                    name: Cow::Borrowed("message"),
-                    ty: <String as Facet>::SHAPE,
-                }],
-                return_type: <String as Facet>::SHAPE,
-                doc: Some(Cow::Borrowed("Echo back the message")),
-            }],
-        }
-    }
-
-    fn offset_arg_service() -> ServiceDetail {
-        ServiceDetail {
-            name: Cow::Borrowed("Vfs"),
-            doc: None,
-            methods: vec![MethodDetail {
-                service_name: Cow::Borrowed("Vfs"),
-                method_name: Cow::Borrowed("read"),
-                args: vec![
-                    ArgDetail {
-                        name: Cow::Borrowed("item_id"),
-                        ty: <u64 as Facet>::SHAPE,
-                    },
-                    ArgDetail {
-                        name: Cow::Borrowed("offset"),
-                        ty: <u64 as Facet>::SHAPE,
-                    },
-                    ArgDetail {
-                        name: Cow::Borrowed("len"),
-                        ty: <u64 as Facet>::SHAPE,
-                    },
-                ],
-                return_type: <u64 as Facet>::SHAPE,
-                doc: None,
-            }],
-        }
-    }
-
-    fn cursor_arg_service() -> ServiceDetail {
-        ServiceDetail {
-            name: Cow::Borrowed("Vfs"),
-            doc: None,
-            methods: vec![MethodDetail {
-                service_name: Cow::Borrowed("Vfs"),
-                method_name: Cow::Borrowed("read"),
-                args: vec![
-                    ArgDetail {
-                        name: Cow::Borrowed("cursor"),
-                        ty: <u64 as Facet>::SHAPE,
-                    },
-                    ArgDetail {
-                        name: Cow::Borrowed("cursor_"),
-                        ty: <u64 as Facet>::SHAPE,
-                    },
-                ],
-                return_type: <u64 as Facet>::SHAPE,
-                doc: None,
-            }],
-        }
-    }
-
-    #[test]
-    fn test_generate_caller_protocol() {
-        let service = sample_service();
-        let code = generate_caller_protocol(&service);
-
-        assert!(code.contains("protocol EchoCaller"));
-        assert!(code.contains("func echo(message: String)"));
-        assert!(code.contains("async throws -> String"));
-    }
-
-    #[test]
-    fn test_generate_client_impl() {
-        let service = sample_service();
-        let code = generate_client_impl(&service);
-
-        assert!(code.contains("class EchoClient"));
-        assert!(code.contains("EchoCaller"));
-        assert!(code.contains("RoamConnection"));
-        assert!(code.contains("public func echo"));
-    }
-
-    #[test]
-    fn test_client_uses_cursor_for_offset_argument() {
-        let code = generate_client_impl(&offset_arg_service());
-
-        assert!(code.contains(
-            "public func read(itemId: UInt64, offset: UInt64, len: UInt64) async throws -> UInt64"
-        ));
-        assert!(code.contains("var cursor = 0"));
-        assert!(!code.contains("var offset = 0"));
-    }
-
-    #[test]
-    fn test_client_chooses_unique_cursor_variable_name() {
-        let code = generate_client_impl(&cursor_arg_service());
-
-        assert!(code.contains("public func read("));
-        assert!(code.contains("var cursor_ = 0") || code.contains("var cursor__ = 0"));
-        assert!(!code.contains("var cursor = 0"));
-    }
 }

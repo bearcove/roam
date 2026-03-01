@@ -3,7 +3,7 @@
 //! Generates TypeScript code that encodes Rust types into byte arrays.
 
 use facet_core::{ScalarType, Shape, StructKind};
-use roam_schema::{
+use roam_types::{
     EnumInfo, ShapeKind, StructInfo, VariantKind, classify_shape, classify_variant, is_bytes,
 };
 
@@ -123,7 +123,7 @@ pub fn generate_encode_expr(shape: &'static Shape, expr: &str) -> String {
         }
         ShapeKind::Tx { .. } | ShapeKind::Rx { .. } => {
             // Channel types encode as u64 channel ID (varint)
-            // r[impl channeling.type] - Tx/Rx serialize as channel_id on wire.
+            // r[impl rpc.channel] - Tx/Rx serialize as channel_id on wire.
             format!("pc.encodeU64({expr}.channelId)")
         }
         ShapeKind::Pointer { pointee } => generate_encode_expr(pointee, expr),

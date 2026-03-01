@@ -13,6 +13,7 @@ import type {
   VecSchema,
   OptionSchema,
   MapSchema,
+  BytesSchema,
 } from "./schema.ts";
 import {
   resolveSchema,
@@ -152,6 +153,8 @@ class DecodeContext {
         return `map<${this.schemaToString(schema.key)}, ${this.schemaToString(schema.value)}>`;
       case "tuple":
         return `tuple(${schema.elements.length} elements)`;
+      case "bytes":
+        return schema.trailing ? "bytes(trailing)" : "bytes";
       default:
         return schema.kind;
     }
@@ -205,7 +208,7 @@ export function encodeWithSchema(
     case "string":
       return encodeString(value as string);
     case "bytes":
-      return encodeBytes(value as Uint8Array);
+      return encodeBytesWithSchema(value, resolved);
 
     // Containers
     case "vec":
@@ -227,12 +230,11 @@ export function encodeWithSchema(
         registry,
       );
 
-    // Streaming types encode as channel IDs (u64)
+    // Streaming types encode as unit (zero bytes) - channel IDs are carried
+    // in the Request/Response `channels` field, not in the args payload.
     case "tx":
     case "rx":
-      // The value should have a channelId property
-      const channelId = (value as { channelId: bigint }).channelId;
-      return encodeU64(channelId);
+      return new Uint8Array(0);
 
     // Ref should have been resolved above
     case "ref":
@@ -290,6 +292,14 @@ function encodeStructWithSchema(
     parts.push(encodeWithSchema(obj[fieldName], fieldSchema, registry));
   }
   return concat(...parts);
+}
+
+function encodeBytesWithSchema(value: unknown, schema: BytesSchema): Uint8Array {
+  const bytes = value as Uint8Array;
+  if (schema.trailing) {
+    return bytes;
+  }
+  return encodeBytes(bytes);
 }
 
 function encodeTupleWithSchema(
@@ -407,7 +417,7 @@ function decodeWithSchemaImpl(
       case "string":
         return decodeString(buf, offset);
       case "bytes":
-        return decodeBytes(buf, offset);
+        return decodeBytesWithSchema(buf, offset, resolved);
 
       // Containers
       case "vec":
@@ -425,12 +435,11 @@ function decodeWithSchemaImpl(
       case "enum":
         return decodeEnumWithSchemaImpl(buf, offset, resolved, registry, ctx);
 
-      // Streaming types decode as channel IDs (u64)
+      // Streaming types decode as unit (zero bytes) - channel IDs are carried
+      // in the Request/Response `channels` field, not in the args payload.
       case "tx":
-      case "rx": {
-        const result = decodeU64(buf, offset);
-        return { value: { channelId: result.value }, next: result.next };
-      }
+      case "rx":
+        return { value: {}, next: offset };
 
       // Ref should have been resolved above
       case "ref":
@@ -534,6 +543,17 @@ function decodeStructWithSchemaImpl(
     ctx.pop();
   }
   return { value: obj, next: pos };
+}
+
+function decodeBytesWithSchema(
+  buf: Uint8Array,
+  offset: number,
+  schema: BytesSchema,
+): DecodeResult<Uint8Array> {
+  if (schema.trailing) {
+    return { value: buf.subarray(offset), next: buf.length };
+  }
+  return decodeBytes(buf, offset);
 }
 
 function decodeTupleWithSchemaImpl(
