@@ -16,7 +16,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::mpsc;
 
-use shm_primitives::{MmapAttachMessage, MmapRegion};
+use shm_primitives::MmapRegion;
+use shm_primitives_async::MmapAttachMessage;
 
 /// r[impl shm.mmap]
 /// r[impl shm.mmap.registry]
@@ -171,14 +172,14 @@ fn create_mmap_region(size: usize) -> io::Result<MmapRegion> {
 /// Sender half of the mmap control channel.
 pub enum MmapChannelTx {
     #[cfg(unix)]
-    Real(shm_primitives::MmapControlSender),
+    Real(shm_primitives_async::MmapControlSender),
     InProcess(mpsc::Sender<(Arc<MmapRegion>, MmapAttachMessage)>),
 }
 
 /// Receiver half of the mmap control channel.
 pub enum MmapChannelRx {
     #[cfg(unix)]
-    Real(shm_primitives::MmapControlReceiver),
+    Real(shm_primitives_async::MmapControlReceiver),
     InProcess(mpsc::Receiver<(Arc<MmapRegion>, MmapAttachMessage)>),
 }
 

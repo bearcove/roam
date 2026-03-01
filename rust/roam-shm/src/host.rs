@@ -8,8 +8,9 @@ use std::io;
 use std::os::unix::io::RawFd;
 use std::sync::Arc;
 
-use shm_primitives::{
-    Doorbell, DoorbellHandle, MmapControlHandle, MmapControlReceiver, MmapControlSender, PeerId,
+use shm_primitives::PeerId;
+use shm_primitives_async::{
+    Doorbell, DoorbellHandle, MmapControlHandle, MmapControlReceiver, MmapControlSender,
     clear_cloexec, create_mmap_control_pair,
 };
 

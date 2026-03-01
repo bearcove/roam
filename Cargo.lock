@@ -2450,6 +2450,7 @@ dependencies = [
  "loom",
  "roam-types",
  "shm-primitives",
+ "shm-primitives-async",
  "tempfile",
  "tokio",
  "zerocopy",
@@ -2637,6 +2638,16 @@ version = "3.0.0"
 dependencies = [
  "libc",
  "loom",
+ "tempfile",
+ "tracing",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "shm-primitives-async"
+version = "3.0.0"
+dependencies = [
+ "libc",
  "tempfile",
  "tokio",
  "tracing",

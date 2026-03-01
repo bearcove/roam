@@ -10,7 +10,8 @@ use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use std::sync::{Arc, Mutex};
 
 use roam_types::{Backing, Link, LinkRx, LinkTx, LinkTxPermit, SharedBacking, WriteSlot};
-use shm_primitives::{BIPBUF_HEADER_SIZE, BipBuf, Doorbell, HeapRegion, PeerId};
+use shm_primitives::{BIPBUF_HEADER_SIZE, BipBuf, HeapRegion, PeerId};
+use shm_primitives_async::{Doorbell, SignalResult};
 
 use crate::framing::{DEFAULT_INLINE_THRESHOLD, MmapRef, OwnedFrame};
 use crate::mmap_registry::{
@@ -426,10 +427,7 @@ impl Drop for ShmWriteSlot {
             ShmWriteSlotInner::VarSlot { slot_ref, .. } => {
                 if let Some(slot_ref) = slot_ref.take() {
                     self.shared.backend.free_slot(slot_ref);
-                    if matches!(
-                        self.shared.doorbell.signal_now(),
-                        shm_primitives::SignalResult::PeerDead
-                    ) {
+                    if matches!(self.shared.doorbell.signal_now(), SignalResult::PeerDead) {
                         self.shared.doorbell_dead.store(true, Ordering::Release);
                         self.shared
                             .stats
@@ -527,7 +525,7 @@ impl LinkTx for ShmLinkTx {
     async fn close(self) -> io::Result<()> {
         self.tx_closed.store(true, Ordering::Release);
         match self.shared.doorbell.signal_now() {
-            shm_primitives::SignalResult::PeerDead => {
+            SignalResult::PeerDead => {
                 self.shared.doorbell_dead.store(true, Ordering::Release);
                 self.shared
                     .stats
@@ -616,10 +614,7 @@ impl LinkTxPermit for ShmTxPermit {
                     .stats
                     .varslot_exhausted
                     .fetch_add(1, AtomicOrdering::Relaxed);
-                if matches!(
-                    self.shared.doorbell.signal_now(),
-                    shm_primitives::SignalResult::PeerDead
-                ) {
+                if matches!(self.shared.doorbell.signal_now(), SignalResult::PeerDead) {
                     self.shared.doorbell_dead.store(true, Ordering::Release);
                     self.shared
                         .stats
@@ -669,10 +664,7 @@ impl WriteSlot for ShmWriteSlot {
 
     fn commit(mut self) {
         fn ring_doorbell(shared: &TxShared) {
-            if matches!(
-                shared.doorbell.signal_now(),
-                shm_primitives::SignalResult::PeerDead
-            ) {
+            if matches!(shared.doorbell.signal_now(), SignalResult::PeerDead) {
                 shared.doorbell_dead.store(true, Ordering::Release);
                 shared
                     .stats
@@ -833,10 +825,7 @@ impl LinkRx for ShmLinkRx {
                         self.stats
                             .inline_recvs
                             .fetch_add(1, AtomicOrdering::Relaxed);
-                        if matches!(
-                            self.doorbell.signal_now(),
-                            shm_primitives::SignalResult::PeerDead
-                        ) {
+                        if matches!(self.doorbell.signal_now(), SignalResult::PeerDead) {
                             self.peer_closed.store(true, Ordering::Release);
                             self.stats
                                 .doorbell_peer_dead
@@ -849,10 +838,7 @@ impl LinkRx for ShmLinkRx {
                         self.stats
                             .slot_ref_recvs
                             .fetch_add(1, AtomicOrdering::Relaxed);
-                        if matches!(
-                            self.doorbell.signal_now(),
-                            shm_primitives::SignalResult::PeerDead
-                        ) {
+                        if matches!(self.doorbell.signal_now(), SignalResult::PeerDead) {
                             self.peer_closed.store(true, Ordering::Release);
                             self.stats
                                 .doorbell_peer_dead
@@ -891,10 +877,7 @@ impl LinkRx for ShmLinkRx {
                         self.stats
                             .mmap_ref_recvs
                             .fetch_add(1, AtomicOrdering::Relaxed);
-                        if matches!(
-                            self.doorbell.signal_now(),
-                            shm_primitives::SignalResult::PeerDead
-                        ) {
+                        if matches!(self.doorbell.signal_now(), SignalResult::PeerDead) {
                             self.peer_closed.store(true, Ordering::Release);
                             self.stats
                                 .doorbell_peer_dead
@@ -971,10 +954,7 @@ impl SharedBacking for ShmVarSlotBacking {
 impl Drop for ShmVarSlotBacking {
     fn drop(&mut self) {
         self.backend.free_slot(self.slot_ref);
-        if matches!(
-            self.doorbell.signal_now(),
-            shm_primitives::SignalResult::PeerDead
-        ) {
+        if matches!(self.doorbell.signal_now(), SignalResult::PeerDead) {
             self.peer_closed.store(true, Ordering::Release);
             self.stats
                 .doorbell_peer_dead

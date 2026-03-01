@@ -19,7 +19,8 @@ fn main() {
         ConnectionId, Message, MessagePayload, MethodId, Payload, RequestBody, RequestCall,
         RequestId, RequestMessage,
     };
-    use shm_primitives::{FileCleanup, clear_cloexec};
+    use shm_primitives::FileCleanup;
+    use shm_primitives_async::clear_cloexec;
 
     fn swift_runtime_package_path() -> std::path::PathBuf {
         std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))

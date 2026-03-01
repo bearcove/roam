@@ -14,9 +14,8 @@ use roam_types::{
     Message, MessagePayload, Metadata, MetadataEntry, MetadataFlags, MetadataValue, Payload,
     RequestBody, RequestId, RequestMessage, RequestResponse,
 };
-use shm_primitives::{
-    FileCleanup, MmapAttachMessage, MmapRegion, clear_cloexec, create_mmap_control_pair,
-};
+use shm_primitives::{FileCleanup, MmapRegion};
+use shm_primitives_async::{MmapAttachMessage, clear_cloexec, create_mmap_control_pair};
 
 fn swift_runtime_package_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
