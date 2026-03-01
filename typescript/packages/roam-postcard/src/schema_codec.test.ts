@@ -454,20 +454,20 @@ describe("wire protocol types", () => {
 // ============================================================================
 
 describe("streaming types (tx/rx)", () => {
-  it("encodes tx as channel id", () => {
+  it("encodes tx as zero bytes (channel ids are carried out-of-band)", () => {
     const schema: Schema = { kind: "tx", element: { kind: "i32" } };
-    const value = { channelId: 42n };
-    const encoded = encodeWithSchema(value, schema);
+    const encoded = encodeWithSchema({ channelId: 42n }, schema);
+    expect(encoded.length).toBe(0);
     const decoded = decodeWithSchema(encoded, 0, schema);
-    expect((decoded.value as { channelId: bigint }).channelId).toBe(42n);
+    expect(decoded.value).toEqual({});
   });
 
-  it("encodes rx as channel id", () => {
+  it("encodes rx as zero bytes (channel ids are carried out-of-band)", () => {
     const schema: Schema = { kind: "rx", element: { kind: "string" } };
-    const value = { channelId: 123n };
-    const encoded = encodeWithSchema(value, schema);
+    const encoded = encodeWithSchema({ channelId: 123n }, schema);
+    expect(encoded.length).toBe(0);
     const decoded = decodeWithSchema(encoded, 0, schema);
-    expect((decoded.value as { channelId: bigint }).channelId).toBe(123n);
+    expect(decoded.value).toEqual({});
   });
 });
 
