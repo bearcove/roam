@@ -166,6 +166,84 @@ async fn cancel_aborts_in_flight_handler() {
     );
 }
 
+#[tokio::test]
+async fn in_flight_call_returns_cancelled_when_peer_closes() {
+    let (client_conduit, server_conduit) = message_conduit_pair();
+
+    let was_cancelled = Arc::new(AtomicBool::new(false));
+    let was_cancelled_check = was_cancelled.clone();
+
+    let server_task = moire::task::spawn(
+        async move {
+            let (mut server_session, server_handle, _sh) = acceptor(server_conduit)
+                .establish()
+                .await
+                .expect("server handshake failed");
+            let mut server_driver = Driver::new(
+                server_handle,
+                BlockingHandler { was_cancelled },
+                Parity::Even,
+            );
+            let session_task = moire::task::spawn(
+                async move { server_session.run().await }.named("server_session"),
+            );
+            let driver_task =
+                moire::task::spawn(async move { server_driver.run().await }.named("server_driver"));
+            (session_task, driver_task)
+        }
+        .named("server_setup"),
+    );
+
+    let (mut client_session, client_handle, _sh) = initiator(client_conduit)
+        .establish()
+        .await
+        .expect("client handshake failed");
+    let mut client_driver = Driver::new(client_handle, (), Parity::Odd);
+    let caller = client_driver.caller();
+    moire::task::spawn(async move { client_session.run().await }.named("client_session"));
+    moire::task::spawn(async move { client_driver.run().await }.named("client_driver"));
+
+    let (server_session_task, _server_driver_task) =
+        server_task.await.expect("server setup failed");
+
+    let call_task = moire::task::spawn(
+        async move {
+            caller
+                .call(RequestCall {
+                    method_id: MethodId(1),
+                    args: Payload::outgoing(&123_u32),
+                    channels: vec![],
+                    metadata: Default::default(),
+                })
+                .await
+        }
+        .named("client_call"),
+    );
+
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    server_session_task.abort();
+
+    let result = tokio::time::timeout(std::time::Duration::from_millis(500), call_task)
+        .await
+        .expect("timed out waiting for call to resolve after peer close")
+        .expect("call task join");
+    assert!(
+        matches!(result, Err(RoamError::Cancelled)),
+        "expected cancelled after peer close"
+    );
+
+    for _ in 0..20 {
+        if was_cancelled_check.load(Ordering::SeqCst) {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    assert!(
+        was_cancelled_check.load(Ordering::SeqCst),
+        "server handler should be cancelled when peer connection closes"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Virtual connection tests
 // ---------------------------------------------------------------------------

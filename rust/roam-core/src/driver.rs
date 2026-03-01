@@ -387,6 +387,11 @@ impl<H: Handler<DriverReplySink>> Driver<H> {
             }
         }
 
+        for (_, handle) in std::mem::take(&mut self.in_flight_handlers) {
+            handle.abort();
+        }
+        self.shared.pending_responses.lock().clear();
+
         // Connection is gone: drop channel runtime state so any registered Rx
         // receivers observe closure instead of hanging on recv().
         self.shared.channel_senders.lock().clear();
