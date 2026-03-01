@@ -178,3 +178,267 @@ pub unsafe fn bind_channels_callee_args(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+    use std::future::Future;
+    use std::pin::Pin;
+    use std::sync::{Arc, Mutex};
+
+    use facet::Facet;
+    use tokio::sync::mpsc;
+
+    use crate::channel::{ChannelSink, IncomingChannelMessage, RxError, TxError, channel};
+    use crate::{Backing, ChannelClose, ChannelId, Metadata, Payload, RpcPlan, SelfRef, Tx};
+
+    use super::{ChannelBinder, bind_channels_callee_args, bind_channels_caller_args};
+
+    #[derive(Default)]
+    struct TestSink;
+
+    impl ChannelSink for TestSink {
+        fn send_payload<'payload>(
+            &self,
+            _payload: Payload<'payload>,
+        ) -> Pin<Box<dyn Future<Output = Result<(), TxError>> + Send + 'payload>> {
+            Box::pin(async { Ok(()) })
+        }
+
+        fn close_channel(
+            &self,
+            _metadata: Metadata,
+        ) -> Pin<Box<dyn Future<Output = Result<(), TxError>> + Send + 'static>> {
+            Box::pin(async { Ok(()) })
+        }
+    }
+
+    #[derive(Default)]
+    struct TestBinder {
+        next_id: Mutex<u64>,
+        create_tx_credits: Mutex<Vec<u32>>,
+        bind_tx_calls: Mutex<Vec<(ChannelId, u32)>>,
+        register_rx_calls: Mutex<Vec<ChannelId>>,
+        rx_senders: Mutex<HashMap<u64, mpsc::Sender<IncomingChannelMessage>>>,
+    }
+
+    impl TestBinder {
+        fn new() -> Self {
+            Self {
+                next_id: Mutex::new(100),
+                ..Self::default()
+            }
+        }
+
+        fn alloc_id(&self) -> ChannelId {
+            let mut guard = self.next_id.lock().expect("next-id mutex poisoned");
+            let id = *guard;
+            *guard += 2;
+            ChannelId(id)
+        }
+
+        fn sender_for(&self, channel_id: ChannelId) -> mpsc::Sender<IncomingChannelMessage> {
+            self.rx_senders
+                .lock()
+                .expect("sender map mutex poisoned")
+                .get(&channel_id.0)
+                .cloned()
+                .expect("missing sender for channel id")
+        }
+    }
+
+    impl ChannelBinder for TestBinder {
+        fn create_tx(&self, initial_credit: u32) -> (ChannelId, Arc<dyn ChannelSink>) {
+            self.create_tx_credits
+                .lock()
+                .expect("create-tx mutex poisoned")
+                .push(initial_credit);
+            (self.alloc_id(), Arc::new(TestSink))
+        }
+
+        fn create_rx(&self) -> (ChannelId, mpsc::Receiver<IncomingChannelMessage>) {
+            let channel_id = self.alloc_id();
+            let (tx, rx) = mpsc::channel(8);
+            self.rx_senders
+                .lock()
+                .expect("sender map mutex poisoned")
+                .insert(channel_id.0, tx);
+            (channel_id, rx)
+        }
+
+        fn bind_tx(&self, channel_id: ChannelId, initial_credit: u32) -> Arc<dyn ChannelSink> {
+            self.bind_tx_calls
+                .lock()
+                .expect("bind-tx mutex poisoned")
+                .push((channel_id, initial_credit));
+            Arc::new(TestSink)
+        }
+
+        fn register_rx(&self, channel_id: ChannelId) -> mpsc::Receiver<IncomingChannelMessage> {
+            self.register_rx_calls
+                .lock()
+                .expect("register-rx mutex poisoned")
+                .push(channel_id);
+            let (tx, rx) = mpsc::channel(8);
+            self.rx_senders
+                .lock()
+                .expect("sender map mutex poisoned")
+                .insert(channel_id.0, tx);
+            rx
+        }
+    }
+
+    #[derive(Facet)]
+    struct CallerArgs {
+        tx: crate::Tx<u32, 16>,
+        rx: crate::Rx<u32, 16>,
+        maybe_tx: Option<crate::Tx<u32, 16>>,
+        maybe_rx: Option<crate::Rx<u32, 16>>,
+    }
+
+    #[derive(Facet)]
+    struct CalleeArgs {
+        tx: crate::Tx<u32, 16>,
+        rx: crate::Rx<u32, 16>,
+    }
+
+    #[tokio::test]
+    async fn bind_channels_caller_args_binds_paired_handles_and_skips_none_options() {
+        let (tx_arg, mut rx_peer) = channel::<u32>();
+        let (tx_peer, rx_arg) = channel::<u32>();
+        let mut args = CallerArgs {
+            tx: tx_arg,
+            rx: rx_arg,
+            maybe_tx: None,
+            maybe_rx: None,
+        };
+
+        let plan = RpcPlan::for_type::<CallerArgs>();
+        let binder = TestBinder::new();
+
+        let channel_ids = unsafe {
+            bind_channels_caller_args((&mut args as *mut CallerArgs).cast::<u8>(), plan, &binder)
+        };
+
+        assert_eq!(
+            channel_ids.len(),
+            2,
+            "only present channels should be bound"
+        );
+        assert_eq!(
+            binder
+                .create_tx_credits
+                .lock()
+                .expect("create-tx mutex poisoned")
+                .as_slice(),
+            &[16],
+            "Rx<T, N> in caller args should allocate sink with declared N credit"
+        );
+
+        tx_peer
+            .send(77)
+            .await
+            .expect("paired Tx should become bound via create_tx");
+
+        let close_ref = SelfRef::owning(
+            Backing::Boxed(Box::<[u8]>::default()),
+            ChannelClose {
+                metadata: Metadata::default(),
+            },
+        );
+        binder
+            .sender_for(channel_ids[0])
+            .send(IncomingChannelMessage::Close(close_ref))
+            .await
+            .expect("send close to paired Rx");
+        assert!(
+            rx_peer.recv().await.expect("recv close").is_none(),
+            "paired Rx should become bound via create_rx"
+        );
+    }
+
+    #[tokio::test]
+    async fn bind_channels_callee_args_binds_tx_and_rx_with_supplied_ids() {
+        let mut args = CalleeArgs {
+            tx: Tx::unbound(),
+            rx: crate::Rx::unbound(),
+        };
+        let plan = RpcPlan::for_type::<CalleeArgs>();
+        let binder = TestBinder::new();
+        let channel_ids = [ChannelId(41), ChannelId(43)];
+
+        unsafe {
+            bind_channels_callee_args(
+                (&mut args as *mut CalleeArgs).cast::<u8>(),
+                plan,
+                &channel_ids,
+                &binder,
+            )
+        };
+
+        args.tx
+            .send(5)
+            .await
+            .expect("callee-side Tx should be bound via bind_tx");
+
+        let close_ref = SelfRef::owning(
+            Backing::Boxed(Box::<[u8]>::default()),
+            ChannelClose {
+                metadata: Metadata::default(),
+            },
+        );
+        binder
+            .sender_for(ChannelId(43))
+            .send(IncomingChannelMessage::Close(close_ref))
+            .await
+            .expect("send close to bound callee Rx");
+        assert!(args.rx.recv().await.expect("recv close").is_none());
+
+        assert_eq!(
+            binder
+                .bind_tx_calls
+                .lock()
+                .expect("bind-tx mutex poisoned")
+                .as_slice(),
+            &[(ChannelId(41), 16)]
+        );
+        assert_eq!(
+            binder
+                .register_rx_calls
+                .lock()
+                .expect("register-rx mutex poisoned")
+                .as_slice(),
+            &[ChannelId(43)]
+        );
+    }
+
+    #[tokio::test]
+    async fn bind_channels_callee_args_stops_when_channel_ids_are_exhausted() {
+        let mut args = CalleeArgs {
+            tx: Tx::unbound(),
+            rx: crate::Rx::unbound(),
+        };
+        let plan = RpcPlan::for_type::<CalleeArgs>();
+        let binder = TestBinder::new();
+        let only_one_id = [ChannelId(51)];
+
+        unsafe {
+            bind_channels_callee_args(
+                (&mut args as *mut CalleeArgs).cast::<u8>(),
+                plan,
+                &only_one_id,
+                &binder,
+            )
+        };
+
+        args.tx
+            .send(1)
+            .await
+            .expect("first channel location should bind");
+        let recv = args.rx.recv().await;
+        assert!(
+            matches!(recv, Err(RxError::Unbound)),
+            "second channel location should remain unbound when IDs are exhausted"
+        );
+    }
+}

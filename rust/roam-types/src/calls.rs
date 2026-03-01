@@ -250,3 +250,150 @@ where
             .await;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{Arc, Mutex};
+
+    use crate::{Metadata, Payload, RequestCall, RequestResponse};
+
+    use super::{Call, Caller, Handler, ReplySink, ResponseParts};
+
+    struct RecordingCall<T, E> {
+        observed: Arc<Mutex<Option<Result<T, E>>>>,
+    }
+
+    impl<T, E> Call<T, E> for RecordingCall<T, E>
+    where
+        T: Send + 'static,
+        E: Send + 'static,
+    {
+        async fn reply(self, result: Result<T, E>) {
+            let mut guard = self.observed.lock().expect("recording mutex poisoned");
+            *guard = Some(result);
+        }
+    }
+
+    struct RecordingReplySink {
+        saw_send_reply: Arc<Mutex<bool>>,
+        saw_outgoing_payload: Arc<Mutex<bool>>,
+    }
+
+    impl ReplySink for RecordingReplySink {
+        async fn send_reply(self, response: RequestResponse<'_>) {
+            let mut saw_send_reply = self
+                .saw_send_reply
+                .lock()
+                .expect("send-reply mutex poisoned");
+            *saw_send_reply = true;
+
+            let mut saw_outgoing = self
+                .saw_outgoing_payload
+                .lock()
+                .expect("payload-kind mutex poisoned");
+            *saw_outgoing = matches!(response.ret, Payload::Outgoing { .. });
+        }
+    }
+
+    #[derive(Clone)]
+    struct NoopCaller;
+
+    impl Caller for NoopCaller {
+        async fn call<'a>(
+            &self,
+            _call: RequestCall<'a>,
+        ) -> Result<crate::SelfRef<RequestResponse<'static>>, crate::RoamError> {
+            unreachable!("NoopCaller::call is not used by this test")
+        }
+    }
+
+    #[tokio::test]
+    async fn call_ok_and_err_route_through_reply() {
+        let observed_ok: Arc<Mutex<Option<Result<u32, &'static str>>>> = Arc::new(Mutex::new(None));
+        RecordingCall {
+            observed: Arc::clone(&observed_ok),
+        }
+        .ok(7)
+        .await;
+        assert!(matches!(
+            *observed_ok.lock().expect("ok mutex poisoned"),
+            Some(Ok(7))
+        ));
+
+        let observed_err: Arc<Mutex<Option<Result<u32, &'static str>>>> =
+            Arc::new(Mutex::new(None));
+        RecordingCall {
+            observed: Arc::clone(&observed_err),
+        }
+        .err("boom")
+        .await;
+        assert!(matches!(
+            *observed_err.lock().expect("err mutex poisoned"),
+            Some(Err("boom"))
+        ));
+    }
+
+    #[tokio::test]
+    async fn reply_sink_send_error_uses_outgoing_payload_and_reply_path() {
+        let saw_send_reply = Arc::new(Mutex::new(false));
+        let saw_outgoing_payload = Arc::new(Mutex::new(false));
+        let sink = RecordingReplySink {
+            saw_send_reply: Arc::clone(&saw_send_reply),
+            saw_outgoing_payload: Arc::clone(&saw_outgoing_payload),
+        };
+
+        sink.send_error(crate::RoamError::<String>::Cancelled).await;
+
+        assert!(*saw_send_reply.lock().expect("send-reply mutex poisoned"));
+        assert!(
+            *saw_outgoing_payload
+                .lock()
+                .expect("payload-kind mutex poisoned")
+        );
+    }
+
+    #[tokio::test]
+    async fn unit_handler_is_noop() {
+        let req = crate::SelfRef::owning(
+            crate::Backing::Boxed(Box::<[u8]>::default()),
+            RequestCall {
+                method_id: crate::MethodId(1),
+                channels: vec![],
+                metadata: Metadata::default(),
+                args: Payload::Incoming(&[]),
+            },
+        );
+        ().handle(
+            req,
+            RecordingReplySink {
+                saw_send_reply: Arc::new(Mutex::new(false)),
+                saw_outgoing_payload: Arc::new(Mutex::new(false)),
+            },
+        )
+        .await;
+    }
+
+    #[test]
+    fn response_parts_deref_exposes_ret() {
+        let parts = ResponseParts {
+            ret: 42_u32,
+            metadata: Metadata::default(),
+        };
+        assert_eq!(*parts, 42);
+    }
+
+    #[test]
+    fn default_channel_binder_accessor_for_caller_returns_none() {
+        let caller = NoopCaller;
+        assert!(caller.channel_binder().is_none());
+    }
+
+    #[test]
+    fn default_channel_binder_accessor_for_reply_sink_returns_none() {
+        let sink = RecordingReplySink {
+            saw_send_reply: Arc::new(Mutex::new(false)),
+            saw_outgoing_payload: Arc::new(Mutex::new(false)),
+        };
+        assert!(sink.channel_binder().is_none());
+    }
+}

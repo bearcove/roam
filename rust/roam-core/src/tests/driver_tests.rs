@@ -274,6 +274,121 @@ async fn open_virtual_connection_and_call() {
     assert_eq!(result, 123);
 }
 
+#[tokio::test]
+async fn initiator_builder_customization_controls_allocated_connection_parity() {
+    let (client_conduit, server_conduit) = message_conduit_pair();
+
+    let server_task = moire::task::spawn(
+        async move {
+            let (mut server_session, server_handle, _sh) = acceptor(server_conduit)
+                .root_settings(ConnectionSettings {
+                    parity: Parity::Odd,
+                    max_concurrent_requests: 8,
+                })
+                .max_concurrent_requests(32)
+                .metadata(vec![])
+                .on_connection(EchoAcceptor)
+                .establish()
+                .await
+                .expect("server handshake failed");
+            let mut server_driver = Driver::new(server_handle, (), Parity::Even);
+            moire::task::spawn(async move { server_session.run().await }.named("server_session"));
+            moire::task::spawn(async move { server_driver.run().await }.named("server_driver"));
+        }
+        .named("server_setup"),
+    );
+
+    let (mut client_session, _client_handle, session_handle) = initiator(client_conduit)
+        .root_settings(ConnectionSettings {
+            parity: Parity::Odd,
+            max_concurrent_requests: 4,
+        })
+        .max_concurrent_requests(64)
+        .metadata(vec![])
+        .parity(Parity::Even)
+        .establish()
+        .await
+        .expect("client handshake failed");
+    moire::task::spawn(async move { client_session.run().await }.named("client_session"));
+
+    server_task.await.expect("server setup failed");
+
+    let vconn_handle = session_handle
+        .open_connection(
+            ConnectionSettings {
+                parity: Parity::Even,
+                max_concurrent_requests: 64,
+            },
+            vec![],
+        )
+        .await
+        .expect("open virtual connection");
+
+    let conn_id = vconn_handle.connection_id();
+    assert!(
+        conn_id.has_parity(Parity::Even),
+        "initiator parity should drive allocated connection ids"
+    );
+}
+
+#[tokio::test]
+async fn acceptor_builder_customization_supports_opening_connections() {
+    let (initiator_conduit, acceptor_conduit) = message_conduit_pair();
+
+    let initiator_task = moire::task::spawn(
+        async move {
+            let (mut initiator_session, initiator_handle, _initiator_session_handle) =
+                initiator(initiator_conduit)
+                    .parity(Parity::Even)
+                    .metadata(vec![])
+                    .on_connection(EchoAcceptor)
+                    .establish()
+                    .await
+                    .expect("initiator handshake failed");
+            let mut initiator_driver = Driver::new(initiator_handle, (), Parity::Even);
+            moire::task::spawn(
+                async move { initiator_session.run().await }.named("initiator_session"),
+            );
+            moire::task::spawn(
+                async move { initiator_driver.run().await }.named("initiator_driver"),
+            );
+        }
+        .named("initiator_setup"),
+    );
+
+    let (mut acceptor_session, _acceptor_handle, acceptor_session_handle) =
+        acceptor(acceptor_conduit)
+            .root_settings(ConnectionSettings {
+                parity: Parity::Even,
+                max_concurrent_requests: 2,
+            })
+            .max_concurrent_requests(32)
+            .metadata(vec![])
+            .establish()
+            .await
+            .expect("acceptor handshake failed");
+    moire::task::spawn(async move { acceptor_session.run().await }.named("acceptor_session"));
+
+    initiator_task.await.expect("initiator setup failed");
+
+    let vconn_handle = acceptor_session_handle
+        .open_connection(
+            ConnectionSettings {
+                parity: Parity::Odd,
+                max_concurrent_requests: 64,
+            },
+            vec![],
+        )
+        .await
+        .expect("acceptor opens virtual connection");
+
+    let conn_id = vconn_handle.connection_id();
+    assert!(
+        conn_id.has_parity(Parity::Odd),
+        "acceptor should allocate odd ids when peer initiator parity is even"
+    );
+}
+
 // r[verify connection.open.rejection]
 #[tokio::test]
 async fn reject_virtual_connection() {
@@ -315,6 +430,119 @@ async fn reject_virtual_connection() {
     assert!(
         matches!(result, Err(SessionError::Rejected(_))),
         "expected Rejected, got: {result:?}"
+    );
+}
+
+// r[verify connection.open.rejection]
+#[tokio::test]
+async fn open_virtual_connection_without_acceptor_is_rejected() {
+    let (client_conduit, server_conduit) = message_conduit_pair();
+
+    let server_task = moire::task::spawn(
+        async move {
+            let (mut server_session, server_handle, _sh) = acceptor(server_conduit)
+                .establish()
+                .await
+                .expect("server handshake failed");
+            let mut server_driver = Driver::new(server_handle, (), Parity::Even);
+            moire::task::spawn(async move { server_session.run().await }.named("server_session"));
+            moire::task::spawn(async move { server_driver.run().await }.named("server_driver"));
+        }
+        .named("server_setup"),
+    );
+
+    let (mut client_session, _client_handle, session_handle) = initiator(client_conduit)
+        .establish()
+        .await
+        .expect("client handshake failed");
+    moire::task::spawn(async move { client_session.run().await }.named("client_session"));
+
+    server_task.await.expect("server setup failed");
+
+    let result = session_handle
+        .open_connection(
+            ConnectionSettings {
+                parity: Parity::Odd,
+                max_concurrent_requests: 64,
+            },
+            vec![],
+        )
+        .await;
+
+    assert!(
+        matches!(result, Err(SessionError::Rejected(_))),
+        "expected Rejected, got: {result:?}"
+    );
+}
+
+// r[verify connection.close]
+#[tokio::test]
+async fn close_root_connection_is_rejected() {
+    let (client_conduit, server_conduit) = message_conduit_pair();
+
+    let server_task = moire::task::spawn(
+        async move {
+            let (mut server_session, server_handle, _sh) = acceptor(server_conduit)
+                .establish()
+                .await
+                .expect("server handshake failed");
+            let mut server_driver = Driver::new(server_handle, EchoHandler, Parity::Even);
+            moire::task::spawn(async move { server_session.run().await }.named("server_session"));
+            moire::task::spawn(async move { server_driver.run().await }.named("server_driver"));
+        }
+        .named("server_setup"),
+    );
+
+    let (mut client_session, _client_handle, session_handle) = initiator(client_conduit)
+        .establish()
+        .await
+        .expect("client handshake failed");
+    moire::task::spawn(async move { client_session.run().await }.named("client_session"));
+
+    server_task.await.expect("server setup failed");
+
+    let result = session_handle
+        .close_connection(roam_types::ConnectionId::ROOT, vec![])
+        .await;
+    assert!(
+        matches!(result, Err(SessionError::Protocol(ref msg)) if msg == "cannot close root connection"),
+        "expected root-close protocol error, got: {result:?}"
+    );
+}
+
+// r[verify connection.close]
+#[tokio::test]
+async fn close_unknown_virtual_connection_is_rejected() {
+    let (client_conduit, server_conduit) = message_conduit_pair();
+
+    let server_task = moire::task::spawn(
+        async move {
+            let (mut server_session, server_handle, _sh) = acceptor(server_conduit)
+                .establish()
+                .await
+                .expect("server handshake failed");
+            let mut server_driver = Driver::new(server_handle, EchoHandler, Parity::Even);
+            moire::task::spawn(async move { server_session.run().await }.named("server_session"));
+            moire::task::spawn(async move { server_driver.run().await }.named("server_driver"));
+        }
+        .named("server_setup"),
+    );
+
+    let (mut client_session, _client_handle, session_handle) = initiator(client_conduit)
+        .establish()
+        .await
+        .expect("client handshake failed");
+    moire::task::spawn(async move { client_session.run().await }.named("client_session"));
+
+    server_task.await.expect("server setup failed");
+
+    let missing_conn_id = roam_types::ConnectionId(1);
+    let result = session_handle
+        .close_connection(missing_conn_id, vec![])
+        .await;
+    assert!(
+        matches!(result, Err(SessionError::Protocol(ref msg)) if msg == "connection not found"),
+        "expected missing-connection protocol error, got: {result:?}"
     );
 }
 
