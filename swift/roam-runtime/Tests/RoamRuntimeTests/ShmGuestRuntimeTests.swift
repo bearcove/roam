@@ -260,7 +260,7 @@ struct ShmGuestLifecycleTests {
 
         let fixture = try makeSegmentFixture(path: path, classes: [ShmVarSlotClass(slotSize: 256, count: 4)])
 
-        let guest = try ShmGuestRuntime.attach(path: path, classes: fixture.classes)
+        let guest = try ShmGuestRuntime.attach(path: path)
         #expect(guest.peerId == 1)
         #expect(try guest.peerState() == .attached)
 
@@ -269,7 +269,7 @@ struct ShmGuestLifecycleTests {
 
         let badTicket = ShmBootstrapTicket(peerId: 1, hubPath: path, doorbellFd: -1)
         #expect(throws: ShmGuestAttachError.slotNotReserved) {
-            _ = try ShmGuestRuntime.attach(ticket: badTicket, classes: fixture.classes)
+            _ = try ShmGuestRuntime.attach(ticket: badTicket)
         }
 
         _ = fixture
@@ -293,7 +293,7 @@ struct ShmGuestLifecycleTests {
         }
 
         let ticket = ShmBootstrapTicket(peerId: 1, hubPath: path, doorbellFd: pair.guest)
-        let guest = try ShmGuestRuntime.attach(ticket: ticket, classes: fixture.classes)
+        let guest = try ShmGuestRuntime.attach(ticket: ticket)
         #expect(guest.peerId == 1)
         #expect(try guest.peerState() == .attached)
         _ = fixture
@@ -308,7 +308,7 @@ struct ShmGuestLifecycleTests {
 
         let ticket = ShmBootstrapTicket(peerId: 2, hubPath: path, doorbellFd: -1)
         #expect(throws: ShmGuestAttachError.invalidTicketPeer(2)) {
-            _ = try ShmGuestRuntime.attach(ticket: ticket, classes: fixture.classes)
+            _ = try ShmGuestRuntime.attach(ticket: ticket)
         }
         _ = fixture
     }
@@ -327,7 +327,7 @@ struct ShmGuestLifecycleTests {
         headerView.copyBytes(from: headerBytes)
 
         #expect(throws: ShmGuestAttachError.hostGoodbye) {
-            _ = try ShmGuestRuntime.attach(path: path, classes: fixture.classes)
+            _ = try ShmGuestRuntime.attach(path: path)
         }
     }
 }
@@ -364,8 +364,7 @@ struct ShmDoorbellAndPayloadTests {
         _ = fcntl(pair.host, F_SETFL, state | O_NONBLOCK)
 
         let guest = try ShmGuestRuntime.attach(
-            ticket: ShmBootstrapTicket(peerId: 1, hubPath: path, doorbellFd: pair.guest),
-            classes: fixture.classes
+            ticket: ShmBootstrapTicket(peerId: 1, hubPath: path, doorbellFd: pair.guest)
         )
 
         let ringOffset = try #require(fixture.ringOffsets[1])
@@ -467,8 +466,7 @@ struct ShmDoorbellAndPayloadTests {
                 hubPath: path,
                 doorbellFd: doorbell.guest,
                 mmapControlFd: control.guest
-            ),
-            classes: fixture.classes
+            )
         )
 
         let sendRc = roam_mmap_control_send(control.host, mmapFd, 7, 1, UInt64(mappingLen))
@@ -547,7 +545,7 @@ struct ShmGuestRemapTests {
         defer { try? FileManager.default.removeItem(atPath: path) }
 
         let fixture = try makeSegmentFixture(path: path, classes: [ShmVarSlotClass(slotSize: 256, count: 2)])
-        let transport = try ShmGuestTransport.attach(path: path, classes: fixture.classes)
+        let transport = try ShmGuestTransport.attach(path: path)
         try await transport.close()
 
         do {
@@ -576,8 +574,7 @@ struct ShmGuestRemapTests {
             reservedPeer: 1
         )
         let transport = try ShmGuestTransport.attach(
-            ticket: ShmBootstrapTicket(peerId: 1, hubPath: path, doorbellFd: pair.guest),
-            classes: fixture.classes
+            ticket: ShmBootstrapTicket(peerId: 1, hubPath: path, doorbellFd: pair.guest)
         )
 
         close(pair.host)
@@ -597,7 +594,7 @@ struct ShmGuestRemapTests {
         defer { try? FileManager.default.removeItem(atPath: path) }
 
         let fixture = try makeSegmentFixture(path: path, classes: [ShmVarSlotClass(slotSize: 256, count: 2)])
-        let guest = try ShmGuestRuntime.attach(path: path, classes: fixture.classes)
+        let guest = try ShmGuestRuntime.attach(path: path)
 
         let newSize = fixture.region.length + 4096
         try fixture.region.resize(newSize: newSize)
@@ -628,8 +625,7 @@ struct ShmGuestRemapTests {
             reservedPeer: 1
         )
         let guest = try ShmGuestRuntime.attach(
-            ticket: ShmBootstrapTicket(peerId: 1, hubPath: path, doorbellFd: pair.guest),
-            classes: fixture.classes
+            ticket: ShmBootstrapTicket(peerId: 1, hubPath: path, doorbellFd: pair.guest)
         )
 
         let newSize = fixture.region.length + 4096

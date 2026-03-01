@@ -414,25 +414,6 @@ public final class ShmGuestRuntime: @unchecked Sendable {
 
     // r[impl shm.guest.attach]
     // r[impl shm.guest.attach-failure]
-    public static func attach(path: String, classes: [ShmVarSlotClass]) throws -> ShmGuestRuntime {
-        let region = try ShmRegion.attach(path: path)
-        return try attach(region: region, ticket: nil, classes: classes)
-    }
-
-    // r[impl shm.guest.attach]
-    // r[impl shm.guest.attach-failure]
-    public static func attach(ticket: ShmBootstrapTicket, classes: [ShmVarSlotClass]) throws -> ShmGuestRuntime {
-        let region: ShmRegion
-        if ticket.shmFd >= 0 {
-            region = try ShmRegion.attach(fd: ticket.shmFd, pathHint: ticket.hubPath)
-        } else {
-            region = try ShmRegion.attach(path: ticket.hubPath)
-        }
-        return try attach(region: region, ticket: ticket, classes: classes)
-    }
-
-    // r[impl shm.guest.attach]
-    // r[impl shm.guest.attach-failure]
     /// Attach to an SHM segment, discovering var slot classes from the segment itself.
     public static func attach(ticket: ShmBootstrapTicket) throws -> ShmGuestRuntime {
         let region: ShmRegion
@@ -443,6 +424,15 @@ public final class ShmGuestRuntime: @unchecked Sendable {
         }
         let classes = try discoverClasses(from: region)
         return try attach(region: region, ticket: ticket, classes: classes)
+    }
+
+    // r[impl shm.guest.attach]
+    // r[impl shm.guest.attach-failure]
+    /// Attach to an SHM segment by path, discovering var slot classes from segment metadata.
+    public static func attach(path: String) throws -> ShmGuestRuntime {
+        let region = try ShmRegion.attach(path: path)
+        let classes = try discoverClasses(from: region)
+        return try attach(region: region, ticket: nil, classes: classes)
     }
 
     private static func discoverClasses(from region: ShmRegion) throws -> [ShmVarSlotClass] {

@@ -71,7 +71,6 @@ struct SpawnArgs {
     let doorbellFd: Int32
     let mmapControlFd: Int32
     let scenario: String
-    let classes: [ShmVarSlotClass]
     let iterations: Int?
 }
 
@@ -86,7 +85,6 @@ private func parseArgs(_ args: [String]) -> SpawnArgs {
     var doorbellFd: Int32?
     var mmapControlFd: Int32 = -1
     var scenario = "data-path"
-    var classes: [ShmVarSlotClass] = []
     var iterations: Int?
 
     for arg in args {
@@ -106,17 +104,6 @@ private func parseArgs(_ args: [String]) -> SpawnArgs {
             mmapControlFd = fd
         } else if let value = arg.split(separator: "=", maxSplits: 1).last, arg.hasPrefix("--scenario=") {
             scenario = String(value)
-        } else if let value = arg.split(separator: "=", maxSplits: 1).last, arg.hasPrefix("--size-class=") {
-            let fields = value.split(separator: ":", maxSplits: 1)
-            guard fields.count == 2,
-                  let slotSize = UInt32(fields[0]),
-                  let count = UInt32(fields[1]),
-                  slotSize > 0,
-                  count > 0
-            else {
-                fail("invalid --size-class value (expected SLOT_SIZE:COUNT)")
-            }
-            classes.append(ShmVarSlotClass(slotSize: slotSize, count: count))
         } else if let value = arg.split(separator: "=", maxSplits: 1).last, arg.hasPrefix("--iterations=") {
             guard let n = Int(value), n > 0 else {
                 fail("invalid --iterations value")
@@ -134,17 +121,12 @@ private func parseArgs(_ args: [String]) -> SpawnArgs {
     guard let doorbellFd else {
         fail("missing --doorbell-fd")
     }
-    guard !classes.isEmpty else {
-        fail("missing --size-class (repeatable, format SLOT_SIZE:COUNT)")
-    }
-
     return SpawnArgs(
         hubPath: hubPath,
         peerId: peerId,
         doorbellFd: doorbellFd,
         mmapControlFd: mmapControlFd,
         scenario: scenario,
-        classes: classes,
         iterations: iterations
     )
 }
@@ -163,7 +145,7 @@ struct ShmGuestClientMain {
         let guest: ShmGuestRuntime
 
         do {
-            guest = try ShmGuestRuntime.attach(ticket: ticket, classes: args.classes)
+            guest = try ShmGuestRuntime.attach(ticket: ticket)
         } catch {
             fail("attach failed: \(error)")
         }

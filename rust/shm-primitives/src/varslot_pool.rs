@@ -154,6 +154,45 @@ impl VarSlotPool {
         Self::layout(configs).total_size
     }
 
+    /// Discover size-class configs from the in-segment class headers.
+    ///
+    /// # Safety
+    ///
+    /// `region` must point to a valid mapped segment region and `base_offset`
+    /// must be the var-slot pool base from the segment header.
+    pub unsafe fn discover_configs(
+        region: Region,
+        base_offset: usize,
+        num_classes: u32,
+    ) -> Result<Vec<SizeClassConfig>, &'static str> {
+        if num_classes == 0 {
+            return Err("segment missing var-slot classes");
+        }
+
+        let headers_size = num_classes as usize * size_of::<SizeClassHeader>();
+        if base_offset
+            .checked_add(headers_size)
+            .is_none_or(|end| end > region.len())
+        {
+            return Err("var-slot class header table out of bounds");
+        }
+
+        let mut configs = Vec::with_capacity(num_classes as usize);
+        for class_idx in 0..num_classes as usize {
+            let header_off = base_offset + class_idx * size_of::<SizeClassHeader>();
+            let header = unsafe { region.get::<SizeClassHeader>(header_off) };
+            if header.slot_size == 0 || header.slot_count == 0 {
+                return Err("invalid var-slot class config in segment");
+            }
+            configs.push(SizeClassConfig {
+                slot_size: header.slot_size,
+                slot_count: header.slot_count,
+            });
+        }
+
+        Ok(configs)
+    }
+
     /// Initialize a new pool in `region` at `base_offset`.
     ///
     /// Writes all headers and builds the initial free lists. The region bytes

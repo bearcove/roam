@@ -77,6 +77,7 @@ fn main() {
             peer_table_offset: layout.peer_table_offset as u64,
             var_pool_offset: layout.var_pool_offset as u64,
             heartbeat_interval: config.heartbeat_interval,
+            num_var_slot_classes: size_classes.len() as u32,
         });
     }
 

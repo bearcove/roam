@@ -78,7 +78,7 @@ public struct ShmSegmentHeader: Sendable, Equatable {
                 varSlotPoolOffset: readU64LE(bytes, 48),
                 currentSize: readU64LE(bytes, 72),
                 guestAreasOffset: 0,
-                numVarSlotClasses: 0,
+                numVarSlotClasses: readU32LE(bytes, 68),
                 reserved: Array(bytes[80..<128])
             )
         }

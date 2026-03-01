@@ -151,6 +151,7 @@ impl Segment {
                 peer_table_offset: layout.peer_table_offset as u64,
                 var_pool_offset: layout.var_pool_offset as u64,
                 heartbeat_interval: config.heartbeat_interval,
+                num_var_slot_classes: config.size_classes.len() as u32,
             });
         }
 
@@ -188,10 +189,8 @@ impl Segment {
 
     /// Attach to an existing segment file at `path`.
     ///
-    /// `size_classes` must match exactly what the host used at creation time.
-    ///
     /// r[impl shm.guest.attach]
-    pub fn attach(path: &Path, size_classes: &[SizeClassConfig]) -> Result<Self, AttachError> {
+    pub fn attach(path: &Path) -> Result<Self, AttachError> {
         let mmap = MmapRegion::attach(path)?;
         let region = mmap.region();
 
@@ -205,9 +204,14 @@ impl Segment {
         let bipbuf_capacity = unsafe { (*header).bipbuf_capacity };
         let peer_table_offset = unsafe { (*header).peer_table_offset as usize };
         let var_pool_offset = unsafe { (*header).var_pool_offset as usize };
+        let num_var_slot_classes = unsafe { (*header).num_var_slot_classes };
+
+        let size_classes =
+            unsafe { VarSlotPool::discover_configs(region, var_pool_offset, num_var_slot_classes) }
+                .map_err(AttachError::BadHeader)?;
 
         let peer_table = unsafe { PeerTable::attach(region, peer_table_offset, max_guests) };
-        let var_pool = unsafe { VarSlotPool::attach(region, var_pool_offset, size_classes) };
+        let var_pool = unsafe { VarSlotPool::attach(region, var_pool_offset, &size_classes) };
 
         Ok(Self {
             mmap,
@@ -216,7 +220,7 @@ impl Segment {
             bipbuf_capacity,
             peer_table,
             var_pool,
-            size_classes: size_classes.to_vec(),
+            size_classes,
         })
     }
 

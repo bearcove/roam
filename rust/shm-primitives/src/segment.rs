@@ -22,6 +22,7 @@ pub struct SegmentHeaderInit {
     pub peer_table_offset: u64,
     pub var_pool_offset: u64,
     pub heartbeat_interval: u64,
+    pub num_var_slot_classes: u32,
 }
 
 /// The segment header lives at offset 0 of every roam SHM segment.
@@ -60,7 +61,8 @@ pub struct SegmentHeader {
     pub heartbeat_interval: u64,
     /// Set to non-zero by the host during orderly shutdown.
     pub host_goodbye: AtomicU32,
-    _pad: u32,
+    /// Number of var-slot size classes described at `var_pool_offset`.
+    pub num_var_slot_classes: u32,
     /// Current segment size in bytes. May grow if extents are appended.
     pub current_size: AtomicU64,
     _reserved: [u8; 48],
@@ -88,7 +90,7 @@ impl SegmentHeader {
         self.var_pool_offset = init.var_pool_offset;
         self.heartbeat_interval = init.heartbeat_interval;
         self.host_goodbye = AtomicU32::new(0);
-        self._pad = 0;
+        self.num_var_slot_classes = init.num_var_slot_classes;
         self.current_size = AtomicU64::new(init.total_size);
         self._reserved = [0u8; 48];
     }
@@ -107,6 +109,9 @@ impl SegmentHeader {
         }
         if self.header_size != SEGMENT_HEADER_SIZE as u32 {
             return Err("unexpected header_size");
+        }
+        if self.num_var_slot_classes == 0 {
+            return Err("segment missing var-slot classes");
         }
         Ok(())
     }
@@ -153,6 +158,7 @@ mod tests {
                 peer_table_offset: 128,
                 var_pool_offset: 4096,
                 heartbeat_interval: 0,
+                num_var_slot_classes: 1,
             });
         }
         (region, hdr)
@@ -171,6 +177,7 @@ mod tests {
         assert_eq!(hdr.bipbuf_capacity, 16384);
         assert_eq!(hdr.peer_table_offset, 128);
         assert_eq!(hdr.var_pool_offset, 4096);
+        assert_eq!(hdr.num_var_slot_classes, 1);
         assert_eq!(hdr.current_size(), 65536);
     }
 
