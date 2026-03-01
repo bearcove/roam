@@ -9,6 +9,7 @@ import CRoamShm
 private struct BootstrapServerHandle {
     let socketPath: String
     let thread: Thread
+    let done: DispatchSemaphore
 }
 
 private func makeUnixListener(path: String) throws -> Int32 {
@@ -140,12 +141,14 @@ private func startBootstrapServer(
     let socketPath = tmp + "/control.sock"
 
     let listener = try makeUnixListener(path: socketPath)
+    let done = DispatchSemaphore(value: 0)
 
     let thread = Thread {
         defer {
             close(listener)
             unlink(socketPath)
             removeTempDir(tmp)
+            done.signal()
         }
 
         var client: Int32
@@ -194,7 +197,7 @@ private func startBootstrapServer(
     }
     thread.start()
 
-    return BootstrapServerHandle(socketPath: socketPath, thread: thread)
+    return BootstrapServerHandle(socketPath: socketPath, thread: thread, done: done)
 }
 
 private func tempfile() throws -> String {
@@ -255,6 +258,7 @@ struct ShmBootstrapTests {
             #expect(shmFlags != -1)
             close(ticket.doorbellFd)
             close(ticket.shmFd)
+            server.done.wait()
         }
     }
 
@@ -270,7 +274,7 @@ struct ShmBootstrapTests {
             sendDoorbellFd: nil,
             sendShmFd: nil
         )
-        defer { server.thread.cancel() }
+        defer { server.done.wait() }
 
         do {
             _ = try requestShmBootstrapTicket(controlSocketPath: server.socketPath, sid: sid)
@@ -296,7 +300,7 @@ struct ShmBootstrapTests {
             sendDoorbellFd: nil,
             sendShmFd: nil
         )
-        defer { server.thread.cancel() }
+        defer { server.done.wait() }
 
         do {
             _ = try requestShmBootstrapTicket(controlSocketPath: server.socketPath, sid: sid)

@@ -200,7 +200,7 @@ jobs:
         run: swift build -c release --package-path swift/subject
 
       - name: Run RoamRuntime Swift tests
-        run: swift test -Xlinker -L$(pwd)/target/release
+        run: swift test --no-parallel -Xlinker -L$(pwd)/target/release
 
       - name: Run spec tests
         run: cargo nextest run -p spec-tests
@@ -234,7 +234,7 @@ jobs:
         run: swift build -c release --package-path swift/subject
 
       - name: Run RoamRuntime Swift tests
-        run: swift test -Xlinker -L$(pwd)/target/release
+        run: swift test --no-parallel -Xlinker -L$(pwd)/target/release
 
       - name: Run spec tests
         run: cargo nextest run -p spec-tests
@@ -255,6 +255,12 @@ jobs:
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
+
+      - name: Build Rust FFI staticlib
+        run: cargo build --release -p roam-shm-ffi
+
+      - name: Build Swift shm-guest-client
+        run: swift build -c debug --package-path swift/roam-runtime
 
       - name: Run SHM cross-language regression tests
         run: cargo nextest run -p roam-shm --test swift_guest_cross_language
