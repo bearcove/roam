@@ -165,7 +165,7 @@ private struct HelloHarness {
     }
 }
 
-private func withTimeout<T>(
+private func withTimeout<T: Sendable>(
     milliseconds: UInt64,
     operation: @escaping @Sendable () async throws -> T
 ) async throws -> T {
@@ -300,14 +300,13 @@ struct ServerAndDispatcherIntegrationTests {
         let harness = try HelloHarness.start()
         defer { harness.shutdown() }
 
-        let server = Server()
         let runResult: Result<Void, Error> = await SubjectEnvGate.shared.withEnvironment([
             ("PEER_ADDR", "127.0.0.1:\(harness.port)"),
             ("ACCEPT_CONNECTIONS", "1"),
         ]) {
             do {
                 try await withTimeout(milliseconds: 2_000) {
-                    try await server.runSubject(
+                    try await Server().runSubject(
                         dispatcher: TestbedDispatcherAdapter(handler: TestbedService())
                     )
                 }

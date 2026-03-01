@@ -88,6 +88,34 @@ cargo xtask fmt
 cargo xtask doc
 ```
 
+### Fuzzing
+
+```bash
+# List available fuzz targets
+just fuzz-targets
+
+# Build all fuzz targets
+just fuzz-build all
+
+# Build one target
+just fuzz-build protocol_decode
+
+# Run all targets for 60s each (build + run)
+just fuzz all 60
+
+# Run one target for 5 minutes (build + run)
+just fuzz testbed_mem_session 300
+
+# Run only (no build), useful for repeated local sessions
+just fuzz-run protocol_decode 300
+```
+
+Current targets:
+- `framing_peek` (SHM frame parser)
+- `shm_link_roundtrip` (SHM send/recv roundtrip)
+- `protocol_decode` (Roam wire message decode/encode)
+- `testbed_mem_session` (generated `spec-proto` RPC traffic over in-memory session/driver)
+
 ## Project Structure
 
 - `rust/` - Rust implementation (roam, roam-session, roam-codegen, etc.)
