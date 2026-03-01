@@ -59,8 +59,8 @@ private func nextConnectionCorrelationId() -> String {
 
 /// Parameters negotiated during handshake.
 ///
-/// r[impl message.hello.negotiation] - Effective limit is min of both peers.
-/// r[impl flow.channel.initial-credit] - Negotiated during handshake.
+/// r[impl session.handshake] - Effective limit is min of both peers.
+/// r[impl rpc.flow-control.credit.initial] - Negotiated during handshake.
 public struct Negotiated: Sendable {
     public let maxPayloadSize: UInt32
     public let initialCredit: UInt32
@@ -202,7 +202,7 @@ public final class ConnectionHandle: @unchecked Sendable {
 
     /// Make a raw RPC call.
     ///
-    /// r[impl flow.request.concurrent-limit] - Blocks if maxConcurrentRequests are in-flight.
+    /// r[impl rpc.flow-control.max-concurrent-requests] - Blocks if maxConcurrentRequests are in-flight.
     public func callRaw(
         methodId: UInt64,
         metadata: [MetadataEntryV7] = [],
@@ -414,9 +414,8 @@ private actor VirtualConnectionState {
 
 /// Bidirectional connection driver.
 ///
-/// r[impl call.pipelining.allowed] - Handle requests as they arrive.
-/// r[impl call.pipelining.independence] - Each request handled independently.
-/// r[impl transport.message.multiplexing] - channel_id field provides multiplexing.
+/// r[impl rpc.pipelining] - Handle requests as they arrive, each independently.
+/// r[impl rpc.request] - connection_id field provides multiplexing.
 ///
 /// Uses AsyncStream to multiplex between:
 /// - Incoming messages from transport
@@ -607,7 +606,7 @@ public final class Driver: @unchecked Sendable {
             guard responseContext.removed else {
                 return  // Already cancelled
             }
-            // r[impl flow.call.payload-limit] - Outgoing responses are also bounded
+            // r[impl rpc.flow-control.credit.exhaustion] - Outgoing responses are also bounded
             // by max_payload_size. If a handler produces a too-large response, send
             // a Cancelled error instead so the call doesn't hang.
             let checkedPayload: [UInt8]
@@ -802,9 +801,9 @@ public final class Driver: @unchecked Sendable {
 
     /// Handle an incoming message.
     ///
-    /// r[impl message.goodbye.receive] - Stop sending, close connection, fail in-flight.
-    /// r[impl call.lifecycle.ordering] - Request before Response in message sequence.
-    /// r[impl message.unknown-variant] - Unknown message variant triggers Goodbye.
+    /// r[impl connection.close.semantics] - Stop sending, close connection, fail in-flight.
+    /// r[impl rpc.request] - Request before Response in message sequence.
+    /// r[impl session.protocol-error] - Unknown message variant triggers Goodbye.
     private func handleMessage(_ msg: MessageV7) async throws {
         switch msg.payload {
         case .hello, .helloYourself:
@@ -885,9 +884,9 @@ public final class Driver: @unchecked Sendable {
         }
     }
 
-    /// r[impl flow.call.payload-limit] - Payloads bounded by max_payload_size.
-    /// r[impl message.hello.enforcement] - Exceeding limit requires Goodbye.
-    /// r[impl call.request-id.uniqueness] - Each request uses a unique ID.
+    /// r[impl rpc.flow-control.credit.exhaustion] - Payloads bounded by max_payload_size.
+    /// r[impl session.connection-settings.hello] - Exceeding limit requires Goodbye.
+    /// r[impl rpc.request.id-allocation] - Each request uses a unique ID.
     private func handleRequest(
         requestId: UInt64,
         methodId: UInt64,
@@ -905,10 +904,10 @@ public final class Driver: @unchecked Sendable {
             throw ConnectionError.protocolViolation(rule: "call.request-id.duplicate-detection")
         }
 
-        // r[impl flow.call.payload-limit]
+        // r[impl rpc.flow-control.credit.exhaustion]
         if payload.count > Int(negotiated.maxPayloadSize) {
-            try await sendProtocolError("flow.call.payload-limit")
-            throw ConnectionError.protocolViolation(rule: "flow.call.payload-limit")
+            try await sendProtocolError("rpc.flow-control.credit.exhaustion")
+            throw ConnectionError.protocolViolation(rule: "rpc.flow-control.credit.exhaustion")
         }
 
         // Pre-register channels BEFORE spawning the handler task.
@@ -936,14 +935,14 @@ public final class Driver: @unchecked Sendable {
         }
     }
 
-    /// r[impl channeling.id.zero-reserved] - Channel ID 0 is reserved.
-    /// r[impl channeling.unknown] - Unknown channel IDs cause Goodbye.
-    /// r[impl channeling.data] - Data messages routed by channel_id.
+    /// r[impl rpc.channel.allocation] - Channel ID 0 is reserved.
+    /// r[impl rpc.metadata.unknown] - Unknown channel IDs cause Goodbye.
+    /// r[impl rpc.channel.item] - Data messages routed by channel_id.
     private func handleData(channelId: UInt64, payload: [UInt8]) async throws {
-        // r[impl channeling.id.zero-reserved]
+        // r[impl rpc.channel.allocation]
         if channelId == 0 {
-            try await sendProtocolError("channeling.id.zero-reserved")
-            throw ConnectionError.protocolViolation(rule: "channeling.id.zero-reserved")
+            try await sendProtocolError("rpc.channel.allocation")
+            throw ConnectionError.protocolViolation(rule: "rpc.channel.allocation")
         }
 
         // Try server registry first, then client registry
@@ -953,21 +952,21 @@ public final class Driver: @unchecked Sendable {
                 channelId: channelId, payload: payload)
         }
 
-        // r[impl channeling.unknown]
+        // r[impl rpc.metadata.unknown]
         if !delivered {
-            try await sendProtocolError("channeling.unknown")
-            throw ConnectionError.protocolViolation(rule: "channeling.unknown")
+            try await sendProtocolError("rpc.metadata.unknown")
+            throw ConnectionError.protocolViolation(rule: "rpc.metadata.unknown")
         }
     }
 
-    /// r[impl channeling.id.zero-reserved] - Channel ID 0 is reserved.
-    /// r[impl channeling.unknown] - Unknown channel IDs cause Goodbye.
-    /// r[impl channeling.close] - Close terminates the channel.
+    /// r[impl rpc.channel.allocation] - Channel ID 0 is reserved.
+    /// r[impl rpc.metadata.unknown] - Unknown channel IDs cause Goodbye.
+    /// r[impl rpc.channel.close] - Close terminates the channel.
     private func handleClose(channelId: UInt64) async throws {
-        // r[impl channeling.id.zero-reserved]
+        // r[impl rpc.channel.allocation]
         if channelId == 0 {
-            try await sendProtocolError("channeling.id.zero-reserved")
-            throw ConnectionError.protocolViolation(rule: "channeling.id.zero-reserved")
+            try await sendProtocolError("rpc.channel.allocation")
+            throw ConnectionError.protocolViolation(rule: "rpc.channel.allocation")
         }
 
         var delivered = await serverRegistry.deliverClose(channelId: channelId)
@@ -975,15 +974,15 @@ public final class Driver: @unchecked Sendable {
             delivered = await handle.channelRegistry.deliverClose(channelId: channelId)
         }
 
-        // r[impl channeling.unknown]
+        // r[impl rpc.metadata.unknown]
         if !delivered {
-            try await sendProtocolError("channeling.unknown")
-            throw ConnectionError.protocolViolation(rule: "channeling.unknown")
+            try await sendProtocolError("rpc.metadata.unknown")
+            throw ConnectionError.protocolViolation(rule: "rpc.metadata.unknown")
         }
     }
 
-    /// r[impl message.goodbye.send] - Send Goodbye with rule ID before closing.
-    /// r[impl core.error.goodbye-reason] - Reason contains violated rule ID.
+    /// r[impl connection.close.semantics] - Send Goodbye with rule ID before closing.
+    /// r[impl session.protocol-error] - Reason contains violated rule ID.
     private func sendProtocolError(_ reason: String) async throws {
         try await transport.send(.protocolError(description: reason))
     }
@@ -1015,8 +1014,8 @@ public final class Driver: @unchecked Sendable {
 
 // MARK: - Connection Errors
 
-/// r[impl core.error.connection] - Connection-level errors terminate the connection.
-/// r[impl call.error.protocol] - Protocol errors are connection-fatal.
+/// r[impl connection] - Connection-level errors terminate the connection.
+/// r[impl session.protocol-error] - Protocol errors are connection-fatal.
 public enum ConnectionError: Error {
     case connectionClosed
     case timeout
@@ -1048,9 +1047,9 @@ public func establishShmGuest<D: ServiceDispatcher>(
 
 /// Establish a connection as initiator.
 ///
-/// r[impl message.hello.ordering] - Hello is the first message sent.
-/// r[impl message.hello.timing] - Send Hello immediately on connection.
-/// r[impl call.initiate] - Initiator can start calls after Hello exchange.
+/// r[impl session.message] - Hello is the first message sent.
+/// r[impl session.connection-settings] - Send Hello immediately on connection.
+/// r[impl rpc.request] - Initiator can start calls after Hello exchange.
 public func establishInitiator(
     transport: any MessageTransport,
     dispatcher: any ServiceDispatcher,
@@ -1114,8 +1113,8 @@ public func establishInitiator(
 
 /// Establish a connection as acceptor.
 ///
-/// r[impl message.hello.ordering] - Hello is the first message sent.
-/// r[impl message.hello.timing] - Send Hello immediately on connection.
+/// r[impl session.message] - Hello is the first message sent.
+/// r[impl session.connection-settings] - Send Hello immediately on connection.
 public func establishAcceptor(
     transport: any MessageTransport,
     dispatcher: any ServiceDispatcher,

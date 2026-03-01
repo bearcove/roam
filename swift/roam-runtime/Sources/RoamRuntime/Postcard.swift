@@ -2,7 +2,7 @@ import Foundation
 
 // MARK: - Encoding
 //
-// r[impl call.request.payload-encoding] - Payloads are Postcard-encoded.
+// r[impl rpc.channel.payload-encoding] - Payloads are Postcard-encoded.
 
 public func encodeBool(_ v: Bool) -> [UInt8] { [v ? 1 : 0] }
 public func encodeU8(_ v: UInt8) -> [UInt8] { [v] }
@@ -219,21 +219,21 @@ public enum PostcardError: Error {
 // MARK: - RPC Result Decoding
 
 /// RPC error codes matching the Roam spec.
-/// r[impl core.error.roam-error] - RoamError wraps call results.
-/// r[impl call.error.protocol] - Protocol errors use discriminants 1-3.
+/// r[impl rpc.fallible.roam-error] - RoamError wraps call results.
+/// r[impl session.protocol-error] - Protocol errors use discriminants 1-3.
 public enum RpcErrorCode: UInt8, Sendable {
     /// User-defined application error
     case user = 0
-    /// r[impl call.error.unknown-method] - Method ID not recognized
+    /// r[impl rpc.unknown-method] - Method ID not recognized
     case unknownMethod = 1
-    /// r[impl call.error.invalid-payload] - Request payload deserialization failed
+    /// r[impl rpc.error.scope] - Request payload deserialization failed
     case invalidPayload = 2
     /// Call was cancelled
     case cancelled = 3
 }
 
 /// RPC call error with structured error information.
-/// r[impl core.error.call-vs-connection] - Call errors affect only this call, not the connection.
+/// r[impl rpc.error.scope] - Call errors affect only this call, not the connection.
 public struct RpcCallError: Error {
     /// The error code discriminant
     public let code: RpcErrorCode

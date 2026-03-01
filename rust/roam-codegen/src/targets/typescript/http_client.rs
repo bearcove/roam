@@ -1,10 +1,10 @@
 //! TypeScript HTTP client generation.
 //!
 //! Generates a fetch()-based HTTP client for calling roam services via the HTTP bridge.
-//! r[bridge.url.methods] - Methods are called via POST /{service}/{method}
-//! r[bridge.request.body] - Arguments are sent as a JSON array
-//! r[bridge.json.channels-forbidden] - Methods with channels throw at runtime
-//! r[bridge.nonce.retry-safe] - Clients retrying requests should use the same nonce
+//! Methods are called via POST /{service}/{method}.
+//! Arguments are sent as a JSON array.
+//! Methods with channels throw at runtime (channels require WebSocket).
+//! Clients retrying requests should use the same nonce.
 
 use heck::{ToLowerCamelCase, ToUpperCamelCase};
 use roam_types::{ServiceDescriptor, is_rx, is_tx};
@@ -195,8 +195,8 @@ pub fn generate_http_client(service: &ServiceDescriptor) -> String {
         ));
 
         if has_channels {
-            // r[bridge.json.channels-forbidden]
-            out.push_str("    // r[bridge.json.channels-forbidden]\n");
+            // Channel methods are not supported over HTTP bridge
+            out.push_str("    // Channel methods require WebSocket transport\n");
             out.push_str(&format!(
                 "    throw new {service_name}HttpError(\"bridge\", \"Channel methods require WebSocket\");\n"
             ));

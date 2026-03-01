@@ -11,7 +11,7 @@ use super::types::{ts_type_server_arg, ts_type_server_return};
 
 /// Generate handler interface (for implementing the service).
 ///
-/// r[impl channeling.caller-pov] - Handler uses Rx for args, Tx for returns.
+/// r[impl rpc.channel.binding] - Handler uses Rx for args, Tx for returns.
 pub fn generate_handler_interface(service: &ServiceDescriptor) -> String {
     let mut out = String::new();
     let service_name = service.service_name.to_upper_camel_case();

@@ -36,7 +36,7 @@ fn format_doc_comment(doc: &str, indent: &str) -> String {
 
 /// Generate caller interface (for making calls to the service).
 ///
-/// r[impl channeling.caller-pov] - Caller uses Tx for args, Rx for returns.
+/// r[impl rpc.channel.binding] - Caller uses Tx for args, Rx for returns.
 pub fn generate_caller_interface(service: &ServiceDescriptor) -> String {
     let mut out = String::new();
     let service_name = service.service_name.to_upper_camel_case();

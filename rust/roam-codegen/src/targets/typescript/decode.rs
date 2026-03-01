@@ -17,14 +17,14 @@ fn generate_decode_stmt_with_channel_ids(
 ) -> String {
     match classify_shape(shape) {
         ShapeKind::Tx { inner } => {
-            // r[impl channeling.type] - Channel types decode as channel_id on wire.
+            // r[impl rpc.channel] - Channel types decode as channel_id on wire.
             let inner_type = ts_type_for_channel(inner);
             format!(
                 "const _{var_name}_r = pc.decodeU64(buf, {offset_var}); const {var_name} = {{ channelId: _{var_name}_r.value }} as Tx<{inner_type}>; {offset_var} = _{var_name}_r.next; /* TODO: create real Tx handle */"
             )
         }
         ShapeKind::Rx { inner } => {
-            // r[impl channeling.type] - Channel types decode as channel_id on wire.
+            // r[impl rpc.channel] - Channel types decode as channel_id on wire.
             let inner_type = ts_type_for_channel(inner);
             format!(
                 "const _{var_name}_r = pc.decodeU64(buf, {offset_var}); const {var_name} = {{ channelId: _{var_name}_r.value }} as Rx<{inner_type}>; {offset_var} = _{var_name}_r.next; /* TODO: create real Rx handle */"
