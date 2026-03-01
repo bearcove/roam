@@ -197,11 +197,11 @@ impl<R: ReplySink> Handler<R> for () {
     async fn handle(&self, _call: SelfRef<crate::RequestCall<'static>>, _reply: R) {}
 }
 
-/// A decoded response value paired with its response metadata.
+/// A decoded response value paired with response metadata.
 ///
-/// Returned by generated client methods. `Deref`s to `T` so existing
-/// field/method access works without changes; opt into metadata via
-/// `.metadata`.
+/// This helper is available for lower-level callers that need both the
+/// decoded value and metadata together. Generated Rust client methods do
+/// not expose response metadata in their return types.
 pub struct ResponseParts<'a, T> {
     /// The decoded return value.
     pub ret: T,

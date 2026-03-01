@@ -97,11 +97,7 @@ impl<C: ::roam::Caller> AdderClient<C> {
     pub fn new(caller: C) -> Self {
         Self { caller }
     }
-    pub async fn add(
-        &self,
-        a: i32,
-        b: i32,
-    ) -> Result<::roam::SelfRef<::roam::ResponseParts<'static, i32>>, ::roam::RoamError> {
+    pub async fn add(&self, a: i32, b: i32) -> Result<i32, ::roam::RoamError> {
         let method_id = adder_service_descriptor().methods[0usize].id;
         let args = (a, b);
         let channels = vec![];
@@ -123,20 +119,13 @@ impl<C: ::roam::Caller> AdderClient<C> {
             }
             ::roam::RoamError::User(never) => match never {},
         })?;
-        response.try_repack(|resp, _bytes| {
-            let ret_bytes = match &resp.ret {
-                ::roam::Payload::Incoming(bytes) => bytes,
-                _ => return Err(::roam::RoamError::<::core::convert::Infallible>::InvalidPayload),
-            };
-            let result: Result<i32, ::roam::RoamError<::core::convert::Infallible>> =
-                ::roam::facet_postcard::from_slice_borrowed(ret_bytes).map_err(|_| {
-                    ::roam::RoamError::<::core::convert::Infallible>::InvalidPayload
-                })?;
-            let ret = result?;
-            Ok(::roam::ResponseParts {
-                ret,
-                metadata: resp.metadata,
-            })
-        })
+        let ret_bytes = match &response.ret {
+            ::roam::Payload::Incoming(bytes) => bytes,
+            _ => return Err(::roam::RoamError::<::core::convert::Infallible>::InvalidPayload),
+        };
+        let result: Result<i32, ::roam::RoamError<::core::convert::Infallible>> =
+            ::roam::facet_postcard::from_slice(ret_bytes)
+                .map_err(|_| ::roam::RoamError::<::core::convert::Infallible>::InvalidPayload)?;
+        result
     }
 }

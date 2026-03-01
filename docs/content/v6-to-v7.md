@@ -12,7 +12,7 @@ This page maps the old v6 Rust API surface to the current v7 API.
 
 1. Service impls no longer receive `&Context`; they receive `call: impl roam::Call<T, E>`.
 2. Generated server trait name changed from `{Service}` to `{Service}Server`.
-3. Generated client calls now return `ResponseParts<T>` (with `ret` and `metadata`), not bare `T`.
+3. Generated client calls return `T` for owned returns, and `SelfRef<T>` for explicit `'roam` borrowed returns.
 4. `ConnectionHandle` is no longer a `Caller`; clients are built from `driver.caller()`.
 5. Session setup moved from `accept_framed` / `initiate_framed` to `session::acceptor` / `session::initiator` builders.
 6. Channels are now `Tx<T, N>` / `Rx<T, N>` with const-generic initial credit (`N`, default `16`).
@@ -63,12 +63,17 @@ let sum: i32 = client.add(3, 5).await?;
 In v7:
 
 ```rust
-let response = client.add(3, 5).await?;
-let sum = response.ret;
-let _metadata = response.metadata;
+let sum: i32 = client.add(3, 5).await?;
 ```
 
-`ResponseParts<T>` implements `Deref<Target = T>`, so many existing read-only usages continue to work.
+Borrowed return payloads use explicit `'roam` and are returned as `SelfRef<T>`:
+
+```rust
+// service method: async fn hash(&self, payload: Vec<u8>) -> &'roam [u8];
+let hash: roam::SelfRef<&'roam [u8]> = client.hash(bytes).await?;
+```
+
+Generated Rust clients do not expose response metadata in return types.
 
 ## Session and driver setup
 
@@ -137,7 +142,7 @@ Notes:
 1. Rename service impls to `{Service}Server`.
 2. Replace `&Context` parameters with `call: impl roam::Call<Ok, Err>`.
 3. Replace returned values with `call.ok(...)` / `call.err(...)`.
-4. Update client call sites to read `.ret` (and `.metadata` when needed).
+4. Update client call sites for `'roam`-borrowing methods to handle `SelfRef<T>`.
 5. Update bootstrap code to `session::{initiator,acceptor}` and instantiate `Driver`.
 6. Switch client construction from connection handles to `driver.caller()`.
 7. If needed, annotate channel credit explicitly with `Tx<T, N>` / `Rx<T, N>`.

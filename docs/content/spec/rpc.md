@@ -187,20 +187,23 @@ registered on the session builder; otherwise they are rejected.
 
 > r[rpc.fallible.caller-signature]
 >
-> On the caller side, the generated client wraps all return types in
-> `Result<ResponseParts<_>, RoamError<E>>`:
+> On the Rust caller side, generated client methods return `Result<_, RoamError<E>>`
+> and do not expose response metadata:
 >
 >   * Infallible `fn foo() -> T` becomes
->     `fn foo() -> Result<ResponseParts<T>, RoamError>`
+>     `fn foo() -> Result<R, RoamError>`
 >   * Fallible `fn foo() -> Result<T, E>` becomes
->     `fn foo() -> Result<ResponseParts<T>, RoamError<E>>`
+>     `fn foo() -> Result<R, RoamError<E>>`
 >
-> `ResponseParts<T>` contains:
+> Where `R` depends on whether return payload `T` borrows from response bytes:
 >
->   * `ret: T` — decoded return value
->   * `metadata` — response metadata
+>   * If `T` uses explicit `'roam` borrows, `R = SelfRef<T>`
+>   * Otherwise, `R = T`
 >
-> `ResponseParts<T>` dereferences to `T` for convenience.
+> Borrowed return payloads MUST use explicit `'roam`. Other lifetimes in return
+> payloads are rejected by the Rust service macro.
+>
+> For `Result<T, E>`, `E` MUST be owned (no lifetimes) in Rust generated clients.
 
 > r[rpc.fallible.roam-error]
 >

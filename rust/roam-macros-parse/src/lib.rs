@@ -221,6 +221,27 @@ impl GenericArgument {
         }
     }
 
+    pub fn has_named_lifetime(&self, name: &str) -> bool {
+        match self {
+            GenericArgument::Lifetime(lifetime) => lifetime.ident.to_string() == name,
+            GenericArgument::Type(ty) => ty.has_named_lifetime(name),
+        }
+    }
+
+    pub fn has_non_named_lifetime(&self, name: &str) -> bool {
+        match self {
+            GenericArgument::Lifetime(lifetime) => lifetime.ident.to_string() != name,
+            GenericArgument::Type(ty) => ty.has_non_named_lifetime(name),
+        }
+    }
+
+    pub fn has_elided_reference_lifetime(&self) -> bool {
+        match self {
+            GenericArgument::Lifetime(_) => false,
+            GenericArgument::Type(ty) => ty.has_elided_reference_lifetime(),
+        }
+    }
+
     pub fn contains_channel(&self) -> bool {
         match self {
             GenericArgument::Lifetime(_) => false,
@@ -261,6 +282,62 @@ impl Type {
                 args.iter().any(|t| t.value.has_lifetime())
             }
             Type::Tuple(TypeTuple(group)) => group.content.iter().any(|t| t.value.has_lifetime()),
+            Type::Path(_) => false,
+        }
+    }
+
+    /// Check if type contains the named lifetime anywhere in the tree.
+    pub fn has_named_lifetime(&self, name: &str) -> bool {
+        match self {
+            Type::Reference(TypeRef {
+                lifetime: Some(lifetime),
+                ..
+            }) => lifetime.second.to_string() == name,
+            Type::Reference(TypeRef { inner, .. }) => inner.has_named_lifetime(name),
+            Type::PathWithGenerics(PathWithGenerics { args, .. }) => {
+                args.iter().any(|t| t.value.has_named_lifetime(name))
+            }
+            Type::Tuple(TypeTuple(group)) => group
+                .content
+                .iter()
+                .any(|t| t.value.has_named_lifetime(name)),
+            Type::Path(_) => false,
+        }
+    }
+
+    /// Check if type contains any named lifetime other than `name`.
+    pub fn has_non_named_lifetime(&self, name: &str) -> bool {
+        match self {
+            Type::Reference(TypeRef {
+                lifetime: Some(lifetime),
+                ..
+            }) => lifetime.second.to_string() != name,
+            Type::Reference(TypeRef { inner, .. }) => inner.has_non_named_lifetime(name),
+            Type::PathWithGenerics(PathWithGenerics { args, .. }) => {
+                args.iter().any(|t| t.value.has_non_named_lifetime(name))
+            }
+            Type::Tuple(TypeTuple(group)) => group
+                .content
+                .iter()
+                .any(|t| t.value.has_non_named_lifetime(name)),
+            Type::Path(_) => false,
+        }
+    }
+
+    /// Check if type contains any `&T` reference without an explicit lifetime.
+    ///
+    /// We require explicit `'roam` for borrowed RPC return payloads.
+    pub fn has_elided_reference_lifetime(&self) -> bool {
+        match self {
+            Type::Reference(TypeRef { lifetime: None, .. }) => true,
+            Type::Reference(TypeRef { inner, .. }) => inner.has_elided_reference_lifetime(),
+            Type::PathWithGenerics(PathWithGenerics { args, .. }) => {
+                args.iter().any(|t| t.value.has_elided_reference_lifetime())
+            }
+            Type::Tuple(TypeTuple(group)) => group
+                .content
+                .iter()
+                .any(|t| t.value.has_elided_reference_lifetime()),
             Type::Path(_) => false,
         }
     }
@@ -521,6 +598,38 @@ mod tests {
         let (ok, err) = method_ok_and_err_types(&ret);
         assert!(ok.contains_channel());
         assert!(err.expect("result err type").contains_channel());
+    }
+
+    #[test]
+    fn type_helpers_detect_named_and_elided_lifetimes() {
+        let trait_def = parse(
+            r#"
+            trait Svc {
+                async fn borrowed(&self) -> Result<&'roam str, Error>;
+                async fn bad_lifetime(&self) -> Result<&'a str, Error>;
+                async fn elided(&self) -> Result<&str, Error>;
+            }
+            "#,
+        );
+        let mut methods = trait_def.methods();
+
+        let borrowed = methods.next().expect("borrowed method").return_type();
+        let (borrowed_ok, _) = method_ok_and_err_types(&borrowed);
+        assert!(borrowed_ok.has_named_lifetime("roam"));
+        assert!(!borrowed_ok.has_non_named_lifetime("roam"));
+        assert!(!borrowed_ok.has_elided_reference_lifetime());
+
+        let bad_lifetime = methods.next().expect("bad_lifetime method").return_type();
+        let (bad_ok, _) = method_ok_and_err_types(&bad_lifetime);
+        assert!(!bad_ok.has_named_lifetime("roam"));
+        assert!(bad_ok.has_non_named_lifetime("roam"));
+        assert!(!bad_ok.has_elided_reference_lifetime());
+
+        let elided = methods.next().expect("elided method").return_type();
+        let (elided_ok, _) = method_ok_and_err_types(&elided);
+        assert!(!elided_ok.has_named_lifetime("roam"));
+        assert!(!elided_ok.has_non_named_lifetime("roam"));
+        assert!(elided_ok.has_elided_reference_lifetime());
     }
 
     #[test]

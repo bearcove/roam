@@ -7,7 +7,7 @@
 
 use ::quote::{format_ident, quote};
 use heck::ToSnakeCase;
-use proc_macro2::TokenStream as TokenStream2;
+use proc_macro2::{Group, Ident, TokenStream as TokenStream2, TokenTree};
 
 pub mod crate_name;
 
@@ -60,6 +60,40 @@ pub fn roam_crate() -> TokenStream2 {
     }
 }
 
+fn rewrite_lifetime_tokens(stream: TokenStream2, from: &str, to: &str) -> TokenStream2 {
+    let mut out = TokenStream2::new();
+    let mut iter = stream.into_iter().peekable();
+    while let Some(tt) = iter.next() {
+        match tt {
+            TokenTree::Group(group) => {
+                let mut new_group = Group::new(
+                    group.delimiter(),
+                    rewrite_lifetime_tokens(group.stream(), from, to),
+                );
+                new_group.set_span(group.span());
+                out.extend([TokenTree::Group(new_group)]);
+            }
+            TokenTree::Punct(p) if p.as_char() == '\'' => {
+                if let Some(TokenTree::Ident(lifetime_ident)) = iter.peek() {
+                    if lifetime_ident.to_string() == from {
+                        let span = lifetime_ident.span();
+                        let _ = iter.next();
+                        out.extend([TokenTree::Punct(p), TokenTree::Ident(Ident::new(to, span))]);
+                        continue;
+                    }
+                }
+                out.extend([TokenTree::Punct(p)]);
+            }
+            other => out.extend([other]),
+        }
+    }
+    out
+}
+
+fn to_static_roam_type_tokens(ty: &Type) -> TokenStream2 {
+    rewrite_lifetime_tokens(ty.to_token_stream(), "roam", "static")
+}
+
 // r[service-macro.is-source-of-truth]
 // r[impl rpc]
 // r[impl rpc.service]
@@ -81,6 +115,37 @@ pub fn generate_service(parsed: &ServiceTrait, roam: &TokenStream2) -> Result<To
                     method.name()
                 ),
             ));
+        }
+
+        let (ok_ty, err_ty) = method_ok_and_err_types(&return_type);
+        if ok_ty.has_elided_reference_lifetime() {
+            return Err(Error::new(
+                proc_macro2::Span::call_site(),
+                format!(
+                    "method `{}` return type uses an elided reference lifetime; use explicit `'roam` (for example `&'roam str`)",
+                    method.name()
+                ),
+            ));
+        }
+        if ok_ty.has_non_named_lifetime("roam") {
+            return Err(Error::new(
+                proc_macro2::Span::call_site(),
+                format!(
+                    "method `{}` return type may only use lifetime `'roam` for borrowed response data",
+                    method.name()
+                ),
+            ));
+        }
+        if let Some(err_ty) = err_ty {
+            if err_ty.has_lifetime() || err_ty.has_elided_reference_lifetime() {
+                return Err(Error::new(
+                    proc_macro2::Span::call_site(),
+                    format!(
+                        "method `{}` error type must be owned (no lifetimes), because client errors are not wrapped in SelfRef",
+                        method.name()
+                    ),
+                ));
+            }
         }
     }
 
@@ -117,7 +182,7 @@ fn generate_service_descriptor_fn(parsed: &ServiceTrait, roam: &TokenStream2) ->
             let arg_name_strs: Vec<String> = m.args().map(|arg| arg.name().to_string()).collect();
 
             let return_type = m.return_type();
-            let return_ty_tokens = return_type.to_token_stream();
+            let return_ty_tokens = to_static_roam_type_tokens(&return_type);
 
             let method_doc_expr = match m.doc() {
                 Some(d) => quote! { Some(#d) },
@@ -188,12 +253,26 @@ fn generate_trait_method(method: &ServiceMethod, roam: &TokenStream2) -> TokenSt
     let method_doc = method.doc().map(|d| quote! { #[doc = #d] });
 
     let return_type = method.return_type();
-    let (ok_ty, err_ty) = if let Some((ok, err)) = return_type.as_result() {
-        (ok.to_token_stream(), err.to_token_stream())
+    let (ok_ty, err_ty, method_lifetime) = if let Some((ok, err)) = return_type.as_result() {
+        let ok_has_roam_lifetime = ok.has_named_lifetime("roam");
+        (
+            ok.to_token_stream(),
+            err.to_token_stream(),
+            if ok_has_roam_lifetime {
+                quote! { <'roam> }
+            } else {
+                quote! {}
+            },
+        )
     } else {
         (
             return_type.to_token_stream(),
             quote! { ::core::convert::Infallible },
+            if return_type.has_named_lifetime("roam") {
+                quote! { <'roam> }
+            } else {
+                quote! {}
+            },
         )
     };
 
@@ -208,7 +287,7 @@ fn generate_trait_method(method: &ServiceMethod, roam: &TokenStream2) -> TokenSt
 
     quote! {
         #method_doc
-        fn #method_name(&self, call: impl #roam::Call<#ok_ty, #err_ty>, #(#params),*) -> impl std::future::Future<Output = ()> + Send;
+        fn #method_name #method_lifetime (&self, call: impl #roam::Call<#ok_ty, #err_ty>, #(#params),*) -> impl std::future::Future<Output = ()> + Send;
     }
 }
 
@@ -460,20 +539,40 @@ fn generate_client_method(
     // r[impl rpc.fallible]
     // r[impl rpc.fallible.caller-signature]
     let return_type = method.return_type();
-    let (ok_ty, err_ty, client_return) = if let Some((ok, err)) = return_type.as_result() {
+    let (ok_type_for_lifetimes, _) = method_ok_and_err_types(&return_type);
+    let ok_uses_roam_lifetime = ok_type_for_lifetimes.has_named_lifetime("roam");
+    let (ok_ty_decode, err_ty, client_return) = if let Some((ok, err)) = return_type.as_result() {
         let ok_t = ok.to_token_stream();
+        let ok_t_static = to_static_roam_type_tokens(ok);
         let err_t = err.to_token_stream();
         (
-            ok_t.clone(),
+            if ok_uses_roam_lifetime {
+                ok_t_static.clone()
+            } else {
+                ok_t.clone()
+            },
             err_t.clone(),
-            quote! { Result<#roam::SelfRef<#roam::ResponseParts<'static, #ok_t>>, #roam::RoamError<#err_t>> },
+            if ok_uses_roam_lifetime {
+                quote! { Result<#roam::SelfRef<#ok_t_static>, #roam::RoamError<#err_t>> }
+            } else {
+                quote! { Result<#ok_t, #roam::RoamError<#err_t>> }
+            },
         )
     } else {
         let t = return_type.to_token_stream();
+        let t_static = to_static_roam_type_tokens(&return_type);
         (
-            t.clone(),
+            if ok_uses_roam_lifetime {
+                t_static.clone()
+            } else {
+                t.clone()
+            },
             quote! { ::core::convert::Infallible },
-            quote! { Result<#roam::SelfRef<#roam::ResponseParts<'static, #t>>, #roam::RoamError> },
+            if ok_uses_roam_lifetime {
+                quote! { Result<#roam::SelfRef<#t_static>, #roam::RoamError> }
+            } else {
+                quote! { Result<#t, #roam::RoamError> }
+            },
         )
     };
 
@@ -510,35 +609,66 @@ fn generate_client_method(
         )
     };
 
-    quote! {
-        #method_doc
-        pub async fn #method_name(&self, #(#params),*) -> #client_return {
-            let method_id = #descriptor_fn_name().methods[#idx].id;
-            #args_binding
-            #channel_binding
-            let req = #roam::RequestCall {
-                method_id,
-                args: #roam::Payload::outgoing(&args),
-                channels,
-                metadata: Default::default(),
-            };
-            let response = self.caller.call(req).await.map_err(|e| match e {
-                #roam::RoamError::UnknownMethod => #roam::RoamError::<#err_ty>::UnknownMethod,
-                #roam::RoamError::InvalidPayload => #roam::RoamError::<#err_ty>::InvalidPayload,
-                #roam::RoamError::Cancelled => #roam::RoamError::<#err_ty>::Cancelled,
-                #roam::RoamError::User(never) => match never {},
-            })?;
-            response.try_repack(|resp, _bytes| {
-                let ret_bytes = match &resp.ret {
+    if ok_uses_roam_lifetime {
+        quote! {
+            #method_doc
+            pub async fn #method_name(&self, #(#params),*) -> #client_return {
+                let method_id = #descriptor_fn_name().methods[#idx].id;
+                #args_binding
+                #channel_binding
+                let req = #roam::RequestCall {
+                    method_id,
+                    args: #roam::Payload::outgoing(&args),
+                    channels,
+                    metadata: Default::default(),
+                };
+                let response = self.caller.call(req).await.map_err(|e| match e {
+                    #roam::RoamError::UnknownMethod => #roam::RoamError::<#err_ty>::UnknownMethod,
+                    #roam::RoamError::InvalidPayload => #roam::RoamError::<#err_ty>::InvalidPayload,
+                    #roam::RoamError::Cancelled => #roam::RoamError::<#err_ty>::Cancelled,
+                    #roam::RoamError::User(never) => match never {},
+                })?;
+                response.try_repack(|resp, _bytes| {
+                    let ret_bytes = match &resp.ret {
+                        #roam::Payload::Incoming(bytes) => bytes,
+                        _ => return Err(#roam::RoamError::<#err_ty>::InvalidPayload),
+                    };
+                    let result: Result<#ok_ty_decode, #roam::RoamError<#err_ty>> =
+                        #roam::facet_postcard::from_slice_borrowed(ret_bytes)
+                            .map_err(|_| #roam::RoamError::<#err_ty>::InvalidPayload)?;
+                    let ret = result?;
+                    Ok(ret)
+                })
+            }
+        }
+    } else {
+        quote! {
+            #method_doc
+            pub async fn #method_name(&self, #(#params),*) -> #client_return {
+                let method_id = #descriptor_fn_name().methods[#idx].id;
+                #args_binding
+                #channel_binding
+                let req = #roam::RequestCall {
+                    method_id,
+                    args: #roam::Payload::outgoing(&args),
+                    channels,
+                    metadata: Default::default(),
+                };
+                let response = self.caller.call(req).await.map_err(|e| match e {
+                    #roam::RoamError::UnknownMethod => #roam::RoamError::<#err_ty>::UnknownMethod,
+                    #roam::RoamError::InvalidPayload => #roam::RoamError::<#err_ty>::InvalidPayload,
+                    #roam::RoamError::Cancelled => #roam::RoamError::<#err_ty>::Cancelled,
+                    #roam::RoamError::User(never) => match never {},
+                })?;
+                let ret_bytes = match &response.ret {
                     #roam::Payload::Incoming(bytes) => bytes,
                     _ => return Err(#roam::RoamError::<#err_ty>::InvalidPayload),
                 };
-                let result: Result<#ok_ty, #roam::RoamError<#err_ty>> =
-                    #roam::facet_postcard::from_slice_borrowed(ret_bytes)
+                let result: Result<#ok_ty_decode, #roam::RoamError<#err_ty>> =
+                    #roam::facet_postcard::from_slice(ret_bytes)
                         .map_err(|_| #roam::RoamError::<#err_ty>::InvalidPayload)?;
-                let ret = result?;
-                Ok(#roam::ResponseParts { ret, metadata: resp.metadata })
-            })
+                result
+            }
         }
     }
 }
@@ -630,5 +760,61 @@ mod tests {
             err.message,
             "method `stream` has Channel (Tx/Rx) in return type - channels are only allowed in method arguments"
         );
+    }
+
+    #[test]
+    fn rejects_non_roam_return_lifetime() {
+        let parsed = roam_macros_parse::parse_trait(&quote! {
+            trait Svc { async fn bad(&self) -> &'a str; }
+        })
+        .unwrap();
+        let roam = quote! { ::roam };
+        let err = crate::generate_service(&parsed, &roam).unwrap_err();
+        assert_eq!(
+            err.message,
+            "method `bad` return type may only use lifetime `'roam` for borrowed response data"
+        );
+    }
+
+    #[test]
+    fn rejects_elided_return_lifetime() {
+        let parsed = roam_macros_parse::parse_trait(&quote! {
+            trait Svc { async fn bad(&self) -> &str; }
+        })
+        .unwrap();
+        let roam = quote! { ::roam };
+        let err = crate::generate_service(&parsed, &roam).unwrap_err();
+        assert_eq!(
+            err.message,
+            "method `bad` return type uses an elided reference lifetime; use explicit `'roam` (for example `&'roam str`)"
+        );
+    }
+
+    #[test]
+    fn rejects_borrowed_error_type() {
+        let parsed = roam_macros_parse::parse_trait(&quote! {
+            trait Svc { async fn bad(&self) -> Result<u32, &'roam str>; }
+        })
+        .unwrap();
+        let roam = quote! { ::roam };
+        let err = crate::generate_service(&parsed, &roam).unwrap_err();
+        assert_eq!(
+            err.message,
+            "method `bad` error type must be owned (no lifetimes), because client errors are not wrapped in SelfRef"
+        );
+    }
+
+    #[test]
+    fn borrowed_roam_return_maps_to_selfref_static() {
+        let parsed = roam_macros_parse::parse_trait(&quote! {
+            trait Hasher { async fn hash(&self, payload: String) -> &'roam str; }
+        })
+        .unwrap();
+        let roam = quote! { ::roam };
+        let ts = crate::generate_service(&parsed, &roam).unwrap().to_string();
+        assert!(
+            ts.contains("Result < :: roam :: SelfRef < & ' static str > , :: roam :: RoamError >")
+        );
+        assert!(ts.contains("method_descriptor :: < (String ,) , & ' static str >"));
     }
 }

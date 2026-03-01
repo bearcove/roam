@@ -115,11 +115,7 @@ impl<C: ::roam::Caller> StreamerClient<C> {
     pub fn new(caller: C) -> Self {
         Self { caller }
     }
-    pub async fn count_up(
-        &self,
-        start: i32,
-        output: Tx<i32>,
-    ) -> Result<::roam::SelfRef<::roam::ResponseParts<'static, i32>>, ::roam::RoamError> {
+    pub async fn count_up(&self, start: i32, output: Tx<i32>) -> Result<i32, ::roam::RoamError> {
         let method_id = streamer_service_descriptor().methods[0usize].id;
         let mut args = (start, output);
         #[cfg(not(target_arch = "wasm32"))]
@@ -156,20 +152,13 @@ impl<C: ::roam::Caller> StreamerClient<C> {
             }
             ::roam::RoamError::User(never) => match never {},
         })?;
-        response.try_repack(|resp, _bytes| {
-            let ret_bytes = match &resp.ret {
-                ::roam::Payload::Incoming(bytes) => bytes,
-                _ => return Err(::roam::RoamError::<::core::convert::Infallible>::InvalidPayload),
-            };
-            let result: Result<i32, ::roam::RoamError<::core::convert::Infallible>> =
-                ::roam::facet_postcard::from_slice_borrowed(ret_bytes).map_err(|_| {
-                    ::roam::RoamError::<::core::convert::Infallible>::InvalidPayload
-                })?;
-            let ret = result?;
-            Ok(::roam::ResponseParts {
-                ret,
-                metadata: resp.metadata,
-            })
-        })
+        let ret_bytes = match &response.ret {
+            ::roam::Payload::Incoming(bytes) => bytes,
+            _ => return Err(::roam::RoamError::<::core::convert::Infallible>::InvalidPayload),
+        };
+        let result: Result<i32, ::roam::RoamError<::core::convert::Infallible>> =
+            ::roam::facet_postcard::from_slice(ret_bytes)
+                .map_err(|_| ::roam::RoamError::<::core::convert::Infallible>::InvalidPayload)?;
+        result
     }
 }
