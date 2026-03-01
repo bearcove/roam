@@ -19,6 +19,8 @@ use crate::mmap_registry::{
     create_in_process_mmap_channel,
 };
 
+#[cfg(unix)]
+pub mod bootstrap;
 pub mod framing;
 #[cfg(unix)]
 pub mod host;
@@ -35,13 +37,6 @@ pub use host::{
     AddPeerOptions, GuestSpawnTicket, HostHub, HostPeer, MultiPeerHostDriver, PreparedPeer,
     ShmHost, guest_link_from_raw, guest_link_from_ticket,
 };
-
-#[cfg(unix)]
-pub mod bootstrap {
-    pub use crate::host::{
-        GuestSpawnTicket, HostHub, PreparedPeer, guest_link_from_raw, guest_link_from_ticket,
-    };
-}
 
 #[cfg(unix)]
 pub mod driver {

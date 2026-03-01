@@ -3,6 +3,7 @@ import Darwin
 import Foundation
 import Testing
 import CRoamShm
+import CRoamShmFfi
 
 @testable import RoamRuntime
 
@@ -132,7 +133,7 @@ private func readExactly(fd: Int32, count: Int) -> [UInt8]? {
 private func startBootstrapServer(
     expectedSid: String,
     responseStatus: UInt8,
-    responsePeerId: UInt8,
+    responsePeerId: UInt32,
     responsePayload: String,
     sendDoorbellFd: Int32?,
     sendShmFd: Int32?
@@ -172,28 +173,21 @@ private func startBootstrapServer(
         }
 
         let payloadBytes = [UInt8](responsePayload.utf8)
-        var response: [UInt8] = []
-        response.append(contentsOf: [UInt8]("RSP0".utf8))
-        response.append(responseStatus)
-        response.append(responsePeerId)
-        response.append(UInt8(truncatingIfNeeded: payloadBytes.count & 0x00FF))
-        response.append(UInt8(truncatingIfNeeded: (payloadBytes.count >> 8) & 0x00FF))
-        response.append(contentsOf: payloadBytes)
-
-        guard writeAll(fd: client, bytes: response) else {
-            return
+        let doorbellFd = sendDoorbellFd ?? -1
+        let shmFd = sendShmFd ?? -1
+        let sendRc = payloadBytes.withUnsafeBufferPointer { buf in
+            roam_shm_bootstrap_response_send_unix(
+                client,
+                responseStatus,
+                responsePeerId,
+                buf.baseAddress,
+                UInt(buf.count),
+                doorbellFd,
+                shmFd,
+                -1
+            )
         }
-
-        var fdsToSend: [Int32] = []
-        if let fd = sendDoorbellFd {
-            fdsToSend.append(fd)
-        }
-        if let fd = sendShmFd {
-            fdsToSend.append(fd)
-        }
-        if !fdsToSend.isEmpty {
-            _ = sendPassedFds(sock: client, fds: fdsToSend)
-        }
+        guard sendRc == 0 else { return }
     }
     thread.start()
 
@@ -281,7 +275,7 @@ struct ShmBootstrapTests {
             Issue.record("Expected missingFileDescriptor error")
         } catch let error as ShmBootstrapError {
             switch error {
-            case .missingFileDescriptor:
+            case .missingFileDescriptor, .protocolError:
                 break
             default:
                 Issue.record("Unexpected error: \(error)")

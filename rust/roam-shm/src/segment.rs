@@ -226,6 +226,16 @@ impl Segment {
         unsafe { &*self.header }
     }
 
+    #[cfg(unix)]
+    pub fn as_raw_fd(&self) -> std::os::fd::RawFd {
+        self.mmap.as_raw_fd()
+    }
+
+    #[cfg(unix)]
+    pub fn path(&self) -> &Path {
+        self.mmap.path()
+    }
+
     /// Access the peer table.
     #[inline]
     pub fn peer_table(&self) -> &PeerTable {

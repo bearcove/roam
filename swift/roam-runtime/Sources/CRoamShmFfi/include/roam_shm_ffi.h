@@ -35,6 +35,12 @@ typedef struct RoamVarSlotHandle {
   uint32_t generation;
 } RoamVarSlotHandle;
 
+typedef struct RoamShmBootstrapResponseInfo {
+  uint8_t status;
+  uint32_t peer_id;
+  uint16_t payload_len;
+} RoamShmBootstrapResponseInfo;
+
 uint32_t roam_bipbuf_header_size(void);
 
 /**
@@ -288,6 +294,51 @@ uint64_t roam_var_slot_pool_calculate_size(const struct RoamSizeClass *classes,
  * not be used again.
  */
 void roam_var_slot_pool_destroy(struct RoamVarSlotPool *pool);
+
+int32_t roam_shm_bootstrap_request_encode(const uint8_t *sid_ptr,
+                                          uintptr_t sid_len,
+                                          uint8_t *out_buf,
+                                          uintptr_t out_buf_len,
+                                          uintptr_t *out_written);
+
+int32_t roam_shm_bootstrap_request_decode(const uint8_t *buf_ptr,
+                                          uintptr_t buf_len,
+                                          const uint8_t **out_sid_ptr,
+                                          uint16_t *out_sid_len);
+
+int32_t roam_shm_bootstrap_response_encode(uint8_t status,
+                                           uint32_t peer_id,
+                                           const uint8_t *payload_ptr,
+                                           uintptr_t payload_len,
+                                           uint8_t *out_buf,
+                                           uintptr_t out_buf_len,
+                                           uintptr_t *out_written);
+
+int32_t roam_shm_bootstrap_response_decode(const uint8_t *buf_ptr,
+                                           uintptr_t buf_len,
+                                           struct RoamShmBootstrapResponseInfo *out_info,
+                                           const uint8_t **out_payload_ptr);
+
+int32_t roam_shm_bootstrap_response_send_unix(int32_t control_fd,
+                                              uint8_t status,
+                                              uint32_t peer_id,
+                                              const uint8_t *payload_ptr,
+                                              uintptr_t payload_len,
+                                              int32_t doorbell_fd,
+                                              int32_t segment_fd,
+                                              int32_t mmap_control_fd);
+
+int32_t roam_shm_bootstrap_response_recv_unix(int32_t control_fd,
+                                              uint8_t *payload_buf,
+                                              uintptr_t payload_buf_len,
+                                              struct RoamShmBootstrapResponseInfo *out_info,
+                                              int32_t *out_doorbell_fd,
+                                              int32_t *out_segment_fd,
+                                              int32_t *out_mmap_control_fd);
+
+uint32_t roam_shm_bootstrap_request_header_size(void);
+
+uint32_t roam_shm_bootstrap_response_header_size(void);
 
 /**
  * Send one mmap attach message (fd + map metadata) over a Unix control socket.
