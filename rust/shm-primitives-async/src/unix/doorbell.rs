@@ -112,6 +112,10 @@ fn drain_fd(fd: RawFd, would_block_is_error: bool, eof_is_error: bool) -> io::Re
         }
 
         let err = io::Error::last_os_error();
+        if err.kind() == ErrorKind::Interrupted {
+            // Retry transparently on EINTR.
+            continue;
+        }
         if err.kind() == ErrorKind::WouldBlock {
             if drained {
                 return Ok(true);
@@ -379,7 +383,25 @@ pub fn clear_cloexec(fd: RawFd) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::fd::IntoRawFd;
     use std::os::unix::io::AsRawFd;
+    use std::sync::mpsc;
+    use std::thread;
+    use std::time::Duration;
+
+    fn create_blocking_socketpair() -> io::Result<(OwnedFd, OwnedFd)> {
+        let mut fds = [0i32; 2];
+        let ret =
+            unsafe { libc::socketpair(libc::AF_UNIX, libc::SOCK_STREAM, 0, fds.as_mut_ptr()) };
+        if ret < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let fd0 = unsafe { OwnedFd::from_raw_fd(fds[0]) };
+        let fd1 = unsafe { OwnedFd::from_raw_fd(fds[1]) };
+        Ok((fd0, fd1))
+    }
+
+    extern "C" fn noop_signal_handler(_sig: libc::c_int) {}
 
     #[test]
     fn wait_returns_broken_pipe_when_peer_closed() {
@@ -417,6 +439,57 @@ mod tests {
         drop(b2);
         let drained = drain_fd(a2.as_raw_fd(), false, false).expect("drain without eof error");
         assert!(!drained, "expected no drained bytes on clean EOF");
+    }
+
+    #[test]
+    fn drain_fd_retries_on_eintr() {
+        let (reader, writer) = create_blocking_socketpair().expect("create blocking socketpair");
+
+        let mut action: libc::sigaction = unsafe { std::mem::zeroed() };
+        action.sa_sigaction = noop_signal_handler as *const () as usize;
+        action.sa_flags = 0;
+        unsafe {
+            libc::sigemptyset(&mut action.sa_mask);
+        }
+        let mut old_action: libc::sigaction = unsafe { std::mem::zeroed() };
+        let rc = unsafe { libc::sigaction(libc::SIGUSR1, &action, &mut old_action) };
+        assert_eq!(rc, 0, "install SIGUSR1 handler");
+
+        let reader_fd = reader.into_raw_fd();
+        let writer_fd = writer.into_raw_fd();
+        let (tid_tx, tid_rx) = mpsc::channel();
+
+        let waiter = thread::spawn(move || {
+            let tid = unsafe { libc::pthread_self() };
+            tid_tx.send(tid).expect("send pthread id");
+            let result = drain_fd(reader_fd, false, false);
+            unsafe {
+                libc::close(reader_fd);
+            }
+            result
+        });
+
+        let tid = tid_rx.recv().expect("receive pthread id");
+        thread::sleep(Duration::from_millis(20));
+        let kill_rc = unsafe { libc::pthread_kill(tid, libc::SIGUSR1) };
+        assert_eq!(kill_rc, 0, "deliver SIGUSR1 to waiting thread");
+
+        let byte = [1_u8];
+        let write_rc = unsafe { libc::write(writer_fd, byte.as_ptr().cast::<libc::c_void>(), 1) };
+        assert_eq!(write_rc, 1, "write wake byte");
+        unsafe {
+            libc::close(writer_fd);
+        }
+
+        let drained = waiter
+            .join()
+            .expect("waiter thread panicked")
+            .expect("drain_fd should not fail on EINTR");
+        assert!(drained, "expected to drain at least one byte");
+
+        let restore_rc =
+            unsafe { libc::sigaction(libc::SIGUSR1, &old_action, std::ptr::null_mut()) };
+        assert_eq!(restore_rc, 0, "restore SIGUSR1 handler");
     }
 
     #[tokio::test]
