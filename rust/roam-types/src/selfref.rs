@@ -220,3 +220,121 @@ macro_rules! selfref_match {
         }
     }};
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    struct TestSharedBacking {
+        bytes: Vec<u8>,
+        dropped: Arc<AtomicBool>,
+    }
+
+    impl SharedBacking for TestSharedBacking {
+        fn as_bytes(&self) -> &[u8] {
+            &self.bytes
+        }
+    }
+
+    impl Drop for TestSharedBacking {
+        fn drop(&mut self) {
+            self.dropped.store(true, Ordering::Release);
+        }
+    }
+
+    struct DropOrderValue {
+        backing_dropped: Arc<AtomicBool>,
+        value_dropped_before_backing: Arc<AtomicBool>,
+    }
+
+    impl Drop for DropOrderValue {
+        fn drop(&mut self) {
+            let backing_is_dropped = self.backing_dropped.load(Ordering::Acquire);
+            self.value_dropped_before_backing
+                .store(!backing_is_dropped, Ordering::Release);
+        }
+    }
+
+    #[test]
+    fn try_new_builds_borrowing_value_from_backing() {
+        let backing = Backing::Boxed(Box::from([1_u8, 2, 3, 4]));
+        let sref = SelfRef::try_new(backing, |bytes| Ok::<_, ()>(&bytes[1..3]))
+            .expect("try_new should succeed");
+        assert_eq!(&**sref, &[2_u8, 3]);
+    }
+
+    #[test]
+    fn try_new_propagates_builder_error() {
+        let backing = Backing::Boxed(Box::from([9_u8, 8, 7]));
+        let err = match SelfRef::<u32>::try_new(backing, |_| Err::<u32, _>("boom")) {
+            Ok(_) => panic!("try_new should return builder error"),
+            Err(err) => err,
+        };
+        assert_eq!(err, "boom");
+    }
+
+    #[test]
+    fn try_map_and_try_repack_preserve_backing_and_transform_value() {
+        let backing = Backing::Boxed(Box::from(*b"hello"));
+        let sref = SelfRef::new(backing, |bytes| bytes);
+        let len_ref = sref
+            .try_map(|bytes| Ok::<_, ()>(bytes.len()))
+            .expect("try_map should succeed");
+        assert_eq!(*len_ref, 5);
+
+        let backing = Backing::Boxed(Box::from(*b"abcdef"));
+        let sref = SelfRef::new(backing, |_| 10_u32);
+        let repacked = sref
+            .try_repack(|value, bytes| Ok::<_, ()>((value + 1, bytes[0], bytes[5])))
+            .expect("try_repack should succeed");
+        assert_eq!(*repacked, (11_u32, b'a', b'f'));
+    }
+
+    #[test]
+    fn try_map_and_try_repack_propagate_errors() {
+        let backing = Backing::Boxed(Box::from([1_u8, 2, 3]));
+        let sref = SelfRef::new(backing, |_| 7_u8);
+        let err = match sref.try_map::<u8, _>(|_| Err::<u8, _>("nope")) {
+            Ok(_) => panic!("try_map error should propagate"),
+            Err(err) => err,
+        };
+        assert_eq!(err, "nope");
+
+        let backing = Backing::Boxed(Box::from([4_u8, 5, 6]));
+        let sref = SelfRef::new(backing, |_| 9_u8);
+        let err = match sref.try_repack::<u8, _>(|_, _| Err::<u8, _>("bad")) {
+            Ok(_) => panic!("try_repack error should propagate"),
+            Err(err) => err,
+        };
+        assert_eq!(err, "bad");
+    }
+
+    #[test]
+    fn drop_order_drops_value_before_backing() {
+        let backing_dropped = Arc::new(AtomicBool::new(false));
+        let value_dropped_before_backing = Arc::new(AtomicBool::new(false));
+
+        let shared = Arc::new(TestSharedBacking {
+            bytes: vec![1, 2, 3],
+            dropped: Arc::clone(&backing_dropped),
+        });
+
+        let value = DropOrderValue {
+            backing_dropped: Arc::clone(&backing_dropped),
+            value_dropped_before_backing: Arc::clone(&value_dropped_before_backing),
+        };
+
+        let sref = SelfRef::owning(Backing::shared(shared), value);
+        drop(sref);
+
+        assert!(
+            value_dropped_before_backing.load(Ordering::Acquire),
+            "value should drop before backing"
+        );
+        assert!(
+            backing_dropped.load(Ordering::Acquire),
+            "backing should eventually be dropped"
+        );
+    }
+}
