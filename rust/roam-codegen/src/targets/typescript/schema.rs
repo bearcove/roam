@@ -8,7 +8,7 @@
 //! - `args`: a tuple schema covering all arguments (decoded once before dispatch)
 //! - `result`: the full `Result<T, RoamError<E>>` enum schema for encoding responses
 //!
-//! The RoamError<E> schema always has four variants at fixed indices:
+//! The `RoamError<E>` schema always has four variants at fixed indices:
 //! - 0: User(E)        — user-defined error (null fields for infallible methods)
 //! - 1: UnknownMethod  — unit
 //! - 2: InvalidPayload — unit

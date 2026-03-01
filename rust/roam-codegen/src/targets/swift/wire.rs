@@ -129,7 +129,7 @@ fn generate_preamble() -> String {
 }
 
 /// Get the wire Swift type for a field's shape, taking the `WireType` list into account.
-fn swift_wire_type(shape: &'static Shape, field: Option<&Field>, types: &[WireType]) -> String {
+fn swift_wire_type(shape: &'static Shape, _field: Option<&Field>, types: &[WireType]) -> String {
     if is_bytes(shape) {
         return "[UInt8]".into();
     }
@@ -151,7 +151,7 @@ fn swift_wire_type(shape: &'static Shape, field: Option<&Field>, types: &[WireTy
         ShapeKind::Enum(EnumInfo {
             name: Some(name), ..
         }) => lookup_wire_name(name, types),
-        ShapeKind::Pointer { pointee } => swift_wire_type(pointee, field, types),
+        ShapeKind::Pointer { pointee } => swift_wire_type(pointee, _field, types),
         ShapeKind::Opaque => "OpaquePayloadV7".into(),
         ShapeKind::TupleStruct { fields } if fields.len() == 1 => {
             swift_wire_type(fields[0].shape(), None, types)
@@ -519,12 +519,12 @@ fn encode_scalar(scalar: ScalarType, value: &str) -> String {
         ScalarType::Char | ScalarType::Str | ScalarType::String | ScalarType::CowStr => {
             format!("encodeString({value})")
         }
-        _ => format!("[] /* unsupported scalar */"),
+        _ => "[] /* unsupported scalar */".to_string(),
     }
 }
 
 /// Generate an encode closure for use with encodeVec.
-fn encode_element_closure(shape: &'static Shape, types: &[WireType]) -> String {
+fn encode_element_closure(shape: &'static Shape, _types: &[WireType]) -> String {
     if is_bytes(shape) {
         return "{ encodeBytes($0) }".into();
     }
@@ -538,11 +538,11 @@ fn encode_element_closure(shape: &'static Shape, types: &[WireType]) -> String {
             "{ $0.encode() }".into()
         }
         ShapeKind::List { element } | ShapeKind::Slice { element } => {
-            let inner = encode_element_closure(element, types);
+            let inner = encode_element_closure(element, _types);
             format!("{{ encodeVec($0, encoder: {inner}) }}")
         }
         ShapeKind::Opaque => "{ $0.encode() }".into(),
-        ShapeKind::Pointer { pointee } => encode_element_closure(pointee, types),
+        ShapeKind::Pointer { pointee } => encode_element_closure(pointee, _types),
         _ => "{ _ in [] }".into(),
     }
 }
@@ -676,7 +676,7 @@ fn decode_scalar_with_params(scalar: ScalarType, data: &str, offset: &str) -> St
         ScalarType::Char | ScalarType::Str | ScalarType::String | ScalarType::CowStr => {
             format!("try decodeStringV7(from: {data}, offset: &{offset})")
         }
-        _ => format!("nil /* unsupported scalar */"),
+        _ => "nil /* unsupported scalar */".to_string(),
     }
 }
 
@@ -699,31 +699,28 @@ fn generate_factory_methods(types: &[WireType]) -> String {
 
     for v in variants {
         let variant_name = v.name.to_lower_camel_case();
-        match classify_variant(v) {
-            VariantKind::Newtype { inner } => {
-                let inner_swift = swift_wire_type(inner, None, types);
-                // Control messages (Hello, HelloYourself, ProtocolError) use connId=0
-                let is_control = matches!(v.name, "Hello" | "HelloYourself" | "ProtocolError");
+        if let VariantKind::Newtype { inner } = classify_variant(v) {
+            let inner_swift = swift_wire_type(inner, None, types);
+            // Control messages (Hello, HelloYourself, ProtocolError) use connId=0
+            let is_control = matches!(v.name, "Hello" | "HelloYourself" | "ProtocolError");
 
-                if is_control {
-                    out.push_str(&format!(
-                        "    static func {variant_name}(_ value: {inner_swift}) -> MessageV7 {{\n"
-                    ));
-                    out.push_str(&format!(
-                        "        MessageV7(connectionId: 0, payload: .{variant_name}(value))\n"
-                    ));
-                    out.push_str("    }\n\n");
-                } else {
-                    out.push_str(&format!(
-                        "    static func {variant_name}(connId: UInt64, _ value: {inner_swift}) -> MessageV7 {{\n"
-                    ));
-                    out.push_str(&format!(
-                        "        MessageV7(connectionId: connId, payload: .{variant_name}(value))\n"
-                    ));
-                    out.push_str("    }\n\n");
-                }
+            if is_control {
+                out.push_str(&format!(
+                    "    static func {variant_name}(_ value: {inner_swift}) -> MessageV7 {{\n"
+                ));
+                out.push_str(&format!(
+                    "        MessageV7(connectionId: 0, payload: .{variant_name}(value))\n"
+                ));
+                out.push_str("    }\n\n");
+            } else {
+                out.push_str(&format!(
+                    "    static func {variant_name}(connId: UInt64, _ value: {inner_swift}) -> MessageV7 {{\n"
+                ));
+                out.push_str(&format!(
+                    "        MessageV7(connectionId: connId, payload: .{variant_name}(value))\n"
+                ));
+                out.push_str("    }\n\n");
             }
-            _ => {}
         }
     }
 
