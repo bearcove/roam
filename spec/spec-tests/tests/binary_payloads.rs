@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use spec_proto::Message;
 use spec_tests::harness::{accept_subject, run_async};
 
@@ -5,6 +7,9 @@ fn payload_sizes() -> &'static [usize] {
     &[
         0,
         1,
+        247,
+        248,
+        249,
         31,
         32,
         63,
@@ -17,6 +22,9 @@ fn payload_sizes() -> &'static [usize] {
         511,
         512,
         1024,
+        4091,
+        4092,
+        4093,
         4095,
         4096,
         4097,
@@ -26,6 +34,10 @@ fn payload_sizes() -> &'static [usize] {
         900_000,
         1_000_000,
     ]
+}
+
+fn shm_cutover_payload_sizes() -> &'static [usize] {
+    &[247, 248, 249, 4091, 4092, 4093, 16 * 1024, 64 * 1024]
 }
 
 fn make_payload(size: usize) -> Vec<u8> {
@@ -43,6 +55,56 @@ fn subject_process_message_binary_payload_sizes() {
                 .process_message(Message::Data(payload.clone()))
                 .await
                 .map_err(|e| format!("process_message size={size}: {e:?}"))?;
+            let actual = match &resp.ret {
+                Message::Data(actual) => actual,
+                _ => {
+                    child.kill().await.ok();
+                    return Err(format!(
+                        "process_message size={size}: expected Data response, got different variant"
+                    ));
+                }
+            };
+            let mut expected = payload;
+            expected.reverse();
+            if actual != &expected {
+                child.kill().await.ok();
+                return Err(format!(
+                    "process_message size={size}: payload mismatch (len={})",
+                    actual.len()
+                ));
+            }
+        }
+
+        child.kill().await.ok();
+        Ok::<_, String>(())
+    })
+    .unwrap();
+}
+
+// r[verify transport.message.binary]
+// r[verify shm.framing.threshold]
+#[test]
+fn subject_process_message_binary_payload_shm_cutover_boundaries() {
+    if std::env::var("SPEC_TRANSPORT")
+        .ok()
+        .map(|v| v.eq_ignore_ascii_case("shm"))
+        != Some(true)
+    {
+        eprintln!("skipping SHM cutover boundary test (set SPEC_TRANSPORT=shm to enable)");
+        return;
+    }
+
+    run_async(async {
+        let (client, mut child) = accept_subject().await?;
+        for &size in shm_cutover_payload_sizes() {
+            let payload = make_payload(size);
+            let resp = tokio::time::timeout(
+                Duration::from_secs(3),
+                client.process_message(Message::Data(payload.clone())),
+            )
+            .await
+            .map_err(|_| format!("process_message size={size}: timed out after 3s"))?
+            .map_err(|e| format!("process_message size={size}: {e:?}"))?;
             let actual = match &resp.ret {
                 Message::Data(actual) => actual,
                 _ => {
