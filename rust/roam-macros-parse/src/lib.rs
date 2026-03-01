@@ -223,14 +223,14 @@ impl GenericArgument {
 
     pub fn has_named_lifetime(&self, name: &str) -> bool {
         match self {
-            GenericArgument::Lifetime(lifetime) => lifetime.ident.to_string() == name,
+            GenericArgument::Lifetime(lifetime) => lifetime.ident == name,
             GenericArgument::Type(ty) => ty.has_named_lifetime(name),
         }
     }
 
     pub fn has_non_named_lifetime(&self, name: &str) -> bool {
         match self {
-            GenericArgument::Lifetime(lifetime) => lifetime.ident.to_string() != name,
+            GenericArgument::Lifetime(lifetime) => lifetime.ident != name,
             GenericArgument::Type(ty) => ty.has_non_named_lifetime(name),
         }
     }
@@ -292,7 +292,7 @@ impl Type {
             Type::Reference(TypeRef {
                 lifetime: Some(lifetime),
                 ..
-            }) => lifetime.second.to_string() == name,
+            }) => lifetime.second == name,
             Type::Reference(TypeRef { inner, .. }) => inner.has_named_lifetime(name),
             Type::PathWithGenerics(PathWithGenerics { args, .. }) => {
                 args.iter().any(|t| t.value.has_named_lifetime(name))
@@ -311,7 +311,7 @@ impl Type {
             Type::Reference(TypeRef {
                 lifetime: Some(lifetime),
                 ..
-            }) => lifetime.second.to_string() != name,
+            }) => lifetime.second != name,
             Type::Reference(TypeRef { inner, .. }) => inner.has_non_named_lifetime(name),
             Type::PathWithGenerics(PathWithGenerics { args, .. }) => {
                 args.iter().any(|t| t.value.has_non_named_lifetime(name))

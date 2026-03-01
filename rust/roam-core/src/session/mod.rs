@@ -761,6 +761,37 @@ impl SessionCore {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+type BoxFuture<'a, T> = Pin<Box<dyn std::future::Future<Output = T> + Send + 'a>>;
+#[cfg(target_arch = "wasm32")]
+type BoxFuture<'a, T> = Pin<Box<dyn std::future::Future<Output = T> + 'a>>;
+
+#[cfg(not(target_arch = "wasm32"))]
+pub trait DynConduitTx: Send + Sync {
+    fn send_msg<'a>(&'a self, msg: Message<'a>) -> BoxFuture<'a, std::io::Result<()>>;
+}
+#[cfg(target_arch = "wasm32")]
+pub trait DynConduitTx {
+    fn send_msg<'a>(&'a self, msg: Message<'a>) -> BoxFuture<'a, std::io::Result<()>>;
+}
+
+// r[impl zerocopy.send]
+// r[impl zerocopy.framing.pipeline.outgoing]
+impl<T> DynConduitTx for T
+where
+    T: ConduitTx<Msg = MessageFamily> + MaybeSend + MaybeSync,
+    for<'p> <T as ConduitTx>::Permit<'p>: MaybeSend,
+{
+    fn send_msg<'a>(&'a self, msg: Message<'a>) -> BoxFuture<'a, std::io::Result<()>> {
+        Box::pin(async move {
+            let permit = self.reserve().await?;
+            permit
+                .send(msg)
+                .map_err(|e| std::io::Error::other(e.to_string()))
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use moire::sync::mpsc;
@@ -922,36 +953,5 @@ mod tests {
             open_result_rx.await.is_err(),
             "pending open result channel should be closed once the pending slot is removed"
         );
-    }
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-type BoxFuture<'a, T> = Pin<Box<dyn std::future::Future<Output = T> + Send + 'a>>;
-#[cfg(target_arch = "wasm32")]
-type BoxFuture<'a, T> = Pin<Box<dyn std::future::Future<Output = T> + 'a>>;
-
-#[cfg(not(target_arch = "wasm32"))]
-pub trait DynConduitTx: Send + Sync {
-    fn send_msg<'a>(&'a self, msg: Message<'a>) -> BoxFuture<'a, std::io::Result<()>>;
-}
-#[cfg(target_arch = "wasm32")]
-pub trait DynConduitTx {
-    fn send_msg<'a>(&'a self, msg: Message<'a>) -> BoxFuture<'a, std::io::Result<()>>;
-}
-
-// r[impl zerocopy.send]
-// r[impl zerocopy.framing.pipeline.outgoing]
-impl<T> DynConduitTx for T
-where
-    T: ConduitTx<Msg = MessageFamily> + MaybeSend + MaybeSync,
-    for<'p> <T as ConduitTx>::Permit<'p>: MaybeSend,
-{
-    fn send_msg<'a>(&'a self, msg: Message<'a>) -> BoxFuture<'a, std::io::Result<()>> {
-        Box::pin(async move {
-            let permit = self.reserve().await?;
-            permit
-                .send(msg)
-                .map_err(|e| std::io::Error::other(e.to_string()))
-        })
     }
 }

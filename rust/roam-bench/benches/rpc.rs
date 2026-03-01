@@ -106,7 +106,7 @@ fn roam_add(bencher: divan::Bencher) {
     bencher.bench_local(|| {
         TOKIO.block_on(async {
             let resp = client.add(3, 5).await.expect("roam add failed");
-            divan::black_box(resp.ret);
+            divan::black_box(resp);
         })
     });
 }
@@ -121,7 +121,7 @@ fn roam_echo(bencher: divan::Bencher, n: usize) {
                 .echo(payload.clone())
                 .await
                 .expect("roam echo failed");
-            divan::black_box(resp.ret.len());
+            divan::black_box(resp.len());
         })
     });
 }
@@ -214,7 +214,7 @@ fn roam_shm_add(bencher: divan::Bencher) {
     bencher.bench_local(|| {
         TOKIO.block_on(async {
             let resp = client.add(3, 5).await.expect("roam-shm add failed");
-            divan::black_box(resp.ret);
+            divan::black_box(resp);
         })
     });
 }
@@ -229,7 +229,7 @@ fn roam_shm_echo(bencher: divan::Bencher, n: usize) {
                 .echo(payload.clone())
                 .await
                 .expect("roam-shm echo failed");
-            divan::black_box(resp.ret.len());
+            divan::black_box(resp.len());
         })
     });
 }
@@ -320,7 +320,7 @@ fn roam_tcp_add(bencher: divan::Bencher) {
     bencher.bench_local(|| {
         TOKIO.block_on(async {
             let resp = client.add(3, 5).await.expect("roam-tcp add failed");
-            divan::black_box(resp.ret);
+            divan::black_box(resp);
         })
     });
 }
@@ -335,7 +335,7 @@ fn roam_tcp_echo(bencher: divan::Bencher, n: usize) {
                 .echo(payload.clone())
                 .await
                 .expect("roam-tcp echo failed");
-            divan::black_box(resp.ret.len());
+            divan::black_box(resp.len());
         })
     });
 }

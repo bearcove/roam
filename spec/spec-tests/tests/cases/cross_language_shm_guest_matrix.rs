@@ -449,7 +449,7 @@ pub fn run_mmap_ref_receive_case() {
         1,
         Instant::now() + Duration::from_secs(5),
     );
-    if payloads.len() < 1 {
+    if payloads.is_empty() {
         let mut child = child;
         let _ = child.kill();
         let output = child

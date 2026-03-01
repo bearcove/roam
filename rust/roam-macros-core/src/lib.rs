@@ -74,13 +74,13 @@ fn rewrite_lifetime_tokens(stream: TokenStream2, from: &str, to: &str) -> TokenS
                 out.extend([TokenTree::Group(new_group)]);
             }
             TokenTree::Punct(p) if p.as_char() == '\'' => {
-                if let Some(TokenTree::Ident(lifetime_ident)) = iter.peek() {
-                    if lifetime_ident.to_string() == from {
-                        let span = lifetime_ident.span();
-                        let _ = iter.next();
-                        out.extend([TokenTree::Punct(p), TokenTree::Ident(Ident::new(to, span))]);
-                        continue;
-                    }
+                if let Some(TokenTree::Ident(lifetime_ident)) = iter.peek()
+                    && *lifetime_ident == from
+                {
+                    let span = lifetime_ident.span();
+                    let _ = iter.next();
+                    out.extend([TokenTree::Punct(p), TokenTree::Ident(Ident::new(to, span))]);
+                    continue;
                 }
                 out.extend([TokenTree::Punct(p)]);
             }
@@ -136,16 +136,16 @@ pub fn generate_service(parsed: &ServiceTrait, roam: &TokenStream2) -> Result<To
                 ),
             ));
         }
-        if let Some(err_ty) = err_ty {
-            if err_ty.has_lifetime() || err_ty.has_elided_reference_lifetime() {
-                return Err(Error::new(
-                    proc_macro2::Span::call_site(),
-                    format!(
-                        "method `{}` error type must be owned (no lifetimes), because client errors are not wrapped in SelfRef",
-                        method.name()
-                    ),
-                ));
-            }
+        if let Some(err_ty) = err_ty
+            && (err_ty.has_lifetime() || err_ty.has_elided_reference_lifetime())
+        {
+            return Err(Error::new(
+                proc_macro2::Span::call_site(),
+                format!(
+                    "method `{}` error type must be owned (no lifetimes), because client errors are not wrapped in SelfRef",
+                    method.name()
+                ),
+            ));
         }
     }
 
