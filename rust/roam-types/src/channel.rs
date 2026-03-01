@@ -296,10 +296,10 @@ impl<T, const N: usize> Tx<T, N> {
             return Ok(sink.clone());
         }
         // Slow path: read from shared core (paired handle)
-        if let Some(core) = &self.core.inner {
-            if let Some(sink) = core.get_sink() {
-                return Ok(sink);
-            }
+        if let Some(core) = &self.core.inner
+            && let Some(sink) = core.get_sink()
+        {
+            return Ok(sink);
         }
         Err(TxError::Unbound)
     }
@@ -432,12 +432,11 @@ impl<T, const N: usize> Rx<T, N> {
         T: Facet<'static>,
     {
         // On first call, take receiver from shared core into local slot
-        if self.receiver.inner.is_none() {
-            if let Some(core) = &self.core.inner {
-                if let Some(rx) = core.take_receiver() {
-                    self.receiver.inner = Some(rx);
-                }
-            }
+        if self.receiver.inner.is_none()
+            && let Some(core) = &self.core.inner
+            && let Some(rx) = core.take_receiver()
+        {
+            self.receiver.inner = Some(rx);
         }
 
         let receiver = self.receiver.inner.as_mut().ok_or(RxError::Unbound)?;

@@ -183,7 +183,7 @@ structstruck::strike! {
                                     /// Arbitrary response metadata
                                     pub metadata: Metadata<'payload>,
 
-                                    /// Return value (Result<T, RoamError<E>>, where E could be Infallible depending on signature)
+                                    /// Return value (`Result<T, RoamError<E>>`, where E could be Infallible depending on signature)
                                     #[facet(trailing)]
                                     pub ret: Payload<'payload>,
                                 }),

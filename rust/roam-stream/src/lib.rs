@@ -1,6 +1,6 @@
 //! Byte-stream transport for roam.
 //!
-//! Implements [`Link`](roam_types::Link) over any `AsyncRead + AsyncWrite`
+//! Implements [`Link`] over any `AsyncRead + AsyncWrite`
 //! pair (TCP, Unix sockets, stdio) using 4-byte little-endian length-prefix
 //! framing.
 
@@ -12,7 +12,7 @@ use tokio::task::JoinHandle;
 
 use roam_types::{Backing, Link, LinkRx, LinkTx, LinkTxPermit, WriteSlot};
 
-/// A [`Link`](roam_types::Link) over a byte stream with length-prefix framing.
+/// A [`Link`] over a byte stream with length-prefix framing.
 ///
 /// Wraps an `AsyncRead + AsyncWrite` pair. Each message is framed as
 /// `[len: u32 LE][payload bytes]`.
