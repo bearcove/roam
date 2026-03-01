@@ -310,12 +310,17 @@ struct ShmGuestClientMain {
             let counter = InteropCounter()
             let dispatcher = InteropDispatcher(counter: counter)
             let transport = ShmGuestTransport(runtime: guest)
-            let (_, driver) = establishShmGuest(
-                transport: transport,
-                dispatcher: dispatcher,
-                role: .acceptor,
-                acceptConnections: true
-            )
+            let driver: Driver
+            do {
+                (_, driver) = try await establishShmGuest(
+                    transport: transport,
+                    dispatcher: dispatcher,
+                    role: .acceptor,
+                    acceptConnections: true
+                )
+            } catch {
+                fail("driver-interop handshake failed: \(error)")
+            }
 
             let runTask = Task {
                 do {
@@ -454,6 +459,17 @@ struct ShmGuestClientMain {
             }
 
             try? await transport.close()
+            print("ok")
+            exit(0)
+
+        case "closed-doorbell-peer-send":
+            let payload = Array("swift-doorbell".utf8)
+            do {
+                try guest.send(frame: ShmGuestFrame(payload: payload))
+            } catch {
+                fail("closed-doorbell-peer-send failed: \(error)")
+            }
+            guest.detach()
             print("ok")
             exit(0)
 

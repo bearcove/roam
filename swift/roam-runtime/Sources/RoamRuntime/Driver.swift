@@ -1027,22 +1027,31 @@ public enum ConnectionError: Error {
 
 // MARK: - Establish Connection
 
-/// Establish a SHM guest connection without Hello exchange.
+/// Establish a SHM guest connection as an initiator.
 ///
-/// SHM negotiated values are derived from the segment header at attach time.
+/// SHM is a transport; session establishment still performs the v7
+/// Hello/HelloYourself exchange.
 public func establishShmGuest<D: ServiceDispatcher>(
     transport: ShmGuestTransport,
     dispatcher: D,
     role: Role = .initiator,
     acceptConnections: Bool = false
-) -> (ConnectionHandle, Driver) {
-    makeDriverAndHandle(
-        transport: transport,
-        dispatcher: dispatcher,
-        role: role,
-        negotiated: transport.negotiated,
-        acceptConnections: acceptConnections
-    )
+) async throws -> (ConnectionHandle, Driver) {
+    switch role {
+    case .initiator:
+        return try await establishInitiator(
+            transport: transport,
+            dispatcher: dispatcher,
+            acceptConnections: acceptConnections,
+            maxPayloadSize: transport.negotiated.maxPayloadSize
+        )
+    case .acceptor:
+        return try await establishAcceptor(
+            transport: transport,
+            dispatcher: dispatcher,
+            acceptConnections: acceptConnections
+        )
+    }
 }
 
 /// Establish a connection as initiator.

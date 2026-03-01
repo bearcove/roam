@@ -29,6 +29,7 @@ swift *args:
     swift test --no-parallel -Xlinker -L$(pwd)/target/release
     swift build -c release --package-path swift/subject
     SUBJECT_CMD="sh swift/subject/subject-swift.sh" cargo nextest run -p spec-tests {{ quote(args) }}
+    SPEC_TRANSPORT=shm SUBJECT_CMD="sh swift/subject/subject-swift.sh" cargo nextest run -p spec-tests {{ quote(args) }}
 
 all *args:
     just rust {{ quote(args) }}

@@ -2734,9 +2734,12 @@ dependencies = [
  "moire",
  "roam",
  "roam-core",
+ "roam-shm",
  "roam-stream",
  "roam-types",
+ "shm-primitives",
  "spec-proto",
+ "tempfile",
  "tokio",
 ]
 

@@ -209,9 +209,10 @@ public final class ShmDoorbell: @unchecked Sendable {
 
     public func signal() throws {
         var byte: UInt8 = 1
+        let flags = Int32(MSG_DONTWAIT | MSG_NOSIGNAL)
         while true {
             let written = withUnsafePointer(to: &byte) { ptr in
-                send(fd, ptr, 1, MSG_DONTWAIT)
+                send(fd, ptr, 1, flags)
             }
             if written == 1 {
                 return

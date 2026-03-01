@@ -400,7 +400,7 @@ func runShmClient() async throws {
 
     let handler = TestbedService()
     let dispatcher = TestbedDispatcherAdapter(handler: handler)
-    let (handle, driver) = establishShmGuest(
+    let (handle, driver) = try await establishShmGuest(
         transport: transport,
         dispatcher: dispatcher
     )
@@ -419,6 +419,33 @@ func runShmClient() async throws {
 
     try await transport.close()
     _ = await driverTask.result
+}
+
+/// SHM mode equivalent of `runServer`: attach over SHM and only serve incoming RPC.
+func runShmServer() async throws {
+    guard let controlSock = ProcessInfo.processInfo.environment["SHM_CONTROL_SOCK"] else {
+        log("SHM_CONTROL_SOCK not set")
+        throw SubjectError.missingEnv
+    }
+    guard let sid = ProcessInfo.processInfo.environment["SHM_SESSION_ID"] else {
+        log("SHM_SESSION_ID not set")
+        throw SubjectError.missingEnv
+    }
+
+    let ticket = try requestShmBootstrapTicket(controlSocketPath: controlSock, sid: sid)
+    let transport = try ShmGuestTransport.attach(ticket: ticket)
+
+    let acceptConnections = ProcessInfo.processInfo.environment["ACCEPT_CONNECTIONS"] == "1"
+    let handler = TestbedService()
+    let dispatcher = TestbedDispatcherAdapter(handler: handler)
+
+    let (_, driver) = try await establishShmGuest(
+        transport: transport,
+        dispatcher: dispatcher,
+        role: .initiator,
+        acceptConnections: acceptConnections
+    )
+    try await driver.run()
 }
 
 // MARK: - Errors
@@ -446,6 +473,8 @@ struct SubjectMain {
                 try await runClient()
             case "shm-client":
                 try await runShmClient()
+            case "shm-server":
+                try await runShmServer()
             default:
                 log("unknown SUBJECT_MODE: \(mode)")
                 exit(1)

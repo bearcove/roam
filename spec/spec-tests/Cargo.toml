@@ -9,8 +9,10 @@ description = "Compliance tests for the canonical roam spec in docs/content/"
 [dependencies]
 roam = { workspace = true }
 roam-core = { workspace = true }
+roam-shm = { path = "../../rust/roam-shm" }
 roam-stream = { workspace = true }
 roam-types = { workspace = true }
+shm-primitives = { workspace = true }
 spec-proto = { path = "../spec-proto" }
 moire = { workspace = true }
 tokio = { workspace = true, features = [
@@ -19,3 +21,4 @@ tokio = { workspace = true, features = [
   "time",
   "process",
 ] }
+tempfile = "3.23"
