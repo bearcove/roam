@@ -372,8 +372,11 @@ impl<H: Handler<DriverReplySink>> Driver<H> {
                     // Clean up the handler tracking entry.
                     self.in_flight_handlers.remove(&req_id);
                     if self.shared.pending_responses.lock().remove(&req_id).is_none() {
-                        // Incoming call — handler failed to reply, send Cancelled back
-                        let error = RoamError::<core::convert::Infallible>::Cancelled;
+                        // Incoming call — handler failed to reply.
+                        // Wire format is always Result<T, RoamError<E>>, so encode
+                        // Cancelled as Err(...) in that envelope.
+                        let error: Result<(), RoamError<core::convert::Infallible>> =
+                            Err(RoamError::Cancelled);
                         let _ = self.sender.send_response(req_id, RequestResponse {
                             ret: Payload::outgoing(&error),
                             channels: vec![],

@@ -589,6 +589,7 @@ public final class Driver: @unchecked Sendable {
                     break
 
                 case .transportClosed:
+                    warnLog("transport reader closed (recv returned nil)")
                     await failAllPending()
                     eventContinuation.finish()
 
@@ -844,7 +845,9 @@ public final class Driver: @unchecked Sendable {
         case .connectionAccept, .connectionReject:
             break
         case .connectionClose:
+            warnLog("received ConnectionClose conn_id=\(msg.connectionId)")
             if msg.connectionId == 0 {
+                warnLog("received ConnectionClose for root connection; shutting down driver")
                 await failAllPending()
                 throw ConnectionError.connectionClosed
             }

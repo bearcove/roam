@@ -138,17 +138,18 @@ async fn cancel_aborts_in_flight_handler() {
         .await
         .expect("send cancel");
 
-    // The call should resolve with a response containing RoamError::Cancelled.
+    // The call should resolve with an Err(Cancelled) in the wire Result envelope.
     let result = call_task.await.expect("call task join");
     let response = result.expect("call should receive a response");
     let ret_bytes = match &response.ret {
         Payload::Incoming(bytes) => *bytes,
         _ => panic!("expected incoming payload in response"),
     };
-    let error: RoamError = facet_postcard::from_slice(ret_bytes).expect("deserialize response");
+    let error: Result<(), RoamError> =
+        facet_postcard::from_slice(ret_bytes).expect("deserialize response");
     assert!(
-        matches!(error, RoamError::Cancelled),
-        "expected RoamError::Cancelled in response payload"
+        matches!(error, Err(RoamError::Cancelled)),
+        "expected Err(RoamError::Cancelled) in response payload"
     );
 
     // Wait for the handler abort to propagate (drop guard sets the flag).

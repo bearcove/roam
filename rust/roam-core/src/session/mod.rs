@@ -7,6 +7,7 @@ use roam_types::{
     IdAllocator, MaybeSend, MaybeSync, Message, MessageFamily, MessagePayload, Metadata, Parity,
     RequestBody, RequestId, RequestMessage, RequestResponse, SelfRef, SessionRole,
 };
+use tracing::{debug, warn};
 
 mod builders;
 pub use builders::*;
@@ -484,7 +485,14 @@ where
                 msg = self.rx.recv() => {
                     match msg {
                         Ok(Some(msg)) => self.handle_message(msg).await,
-                        _ => break,
+                        Ok(None) => {
+                            warn!("session recv loop ended: conduit returned EOF");
+                            break;
+                        }
+                        Err(error) => {
+                            warn!(error = %error, "session recv loop ended: conduit recv error");
+                            break;
+                        }
                     }
                 }
                 Some(req) = self.open_rx.recv() => {
@@ -495,6 +503,7 @@ where
                 }
             }
         }
+        debug!("session recv loop exited");
     }
 
     async fn handle_message(&mut self, msg: SelfRef<Message<'static>>) {
@@ -502,6 +511,11 @@ where
         roam_types::selfref_match!(msg, payload {
             // r[impl connection.close.semantics]
             MessagePayload::ConnectionClose(_) => {
+                if conn_id.is_root() {
+                    warn!("received ConnectionClose for root connection");
+                } else {
+                    debug!(conn_id = conn_id.0, "received ConnectionClose for virtual connection");
+                }
                 // Remove the connection — dropping conn_tx causes the Driver's rx
                 // to return None, which exits its run loop. All in-flight handlers
                 // are dropped, triggering DriverReplySink::drop → Cancelled responses.

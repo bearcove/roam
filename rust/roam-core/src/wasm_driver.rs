@@ -137,7 +137,8 @@ impl<H: Handler<DriverReplySink>> Driver<H> {
                 Some((req_id, _reason)) = self.failures_rx.recv() => {
                     self.in_flight_handlers.remove(&req_id);
                     if self.shared.pending_responses.lock().remove(&req_id).is_none() {
-                        let error = RoamError::<core::convert::Infallible>::Cancelled;
+                        let error: Result<(), RoamError<core::convert::Infallible>> =
+                            Err(RoamError::Cancelled);
                         let _ = self.sender.send_response(req_id, RequestResponse {
                             ret: Payload::outgoing(&error),
                             channels: vec![],
