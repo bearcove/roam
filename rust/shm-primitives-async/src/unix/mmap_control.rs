@@ -413,6 +413,7 @@ fn nofile_limits() -> (u64, u64) {
     if rc != 0 {
         return (0, 0);
     }
+    #[allow(clippy::unnecessary_cast)]
     (limits.rlim_cur as u64, limits.rlim_max as u64)
 }
 
