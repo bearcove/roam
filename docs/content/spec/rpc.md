@@ -25,8 +25,15 @@ If you're coming from roam v6 APIs, see the
 >
 > Each method in a service is an async function. Its arguments and return
 > type must implement `Facet`. The `#[roam::service]` macro generates a
-> `{ServiceName}Server` handler trait whose methods receive
-> `call: impl roam::Call<Ok, Err>` plus decoded method arguments.
+> `{ServiceName}` trait. Method shape depends on whether the success return
+> type borrows with explicit `'roam`:
+>
+>   * Owned success return: method returns the value (`T` or `Result<T, E>`)
+>   * Borrowed `'roam` success return: method receives
+>     `call: impl roam::Call<Ok, Err>` and replies explicitly
+>
+> This preserves borrowed-reply support while keeping owned-return handlers
+> ergonomic.
 
 > r[rpc.method-id]
 >

@@ -1,5 +1,6 @@
 ---
 source: rust/roam-macros-core/src/lib.rs
+assertion_line: 755
 expression: "generate(quote! { trait Ping { async fn ping(&self) -> u64; } })"
 ---
 #[allow(non_snake_case, clippy::all)]
@@ -25,10 +26,7 @@ pub trait Ping
 where
     Self: Send + Sync,
 {
-    fn ping(
-        &self,
-        call: impl ::roam::Call<u64, ::core::convert::Infallible>,
-    ) -> impl std::future::Future<Output = ()> + Send;
+    fn ping(&self) -> impl std::future::Future<Output = u64> + Send;
 }
 #[doc = r" Dispatcher for this service."]
 #[doc = r""]
@@ -76,8 +74,9 @@ where
                 }
             };
             let () = args;
+            let value = self.handler.ping().await;
             let sink_call = ::roam::SinkCall::new(reply);
-            self.handler.ping(sink_call).await;
+            ::roam::Call::<u64, ::core::convert::Infallible>::ok(sink_call, value).await;
             return;
         }
         reply

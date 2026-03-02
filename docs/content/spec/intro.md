@@ -47,8 +47,8 @@ struct AdderHandler;
 
 impl Adder for AdderHandler {
     /// Add two numbers.
-    async fn add(&self, call: impl roam::Call<u32, core::convert::Infallible>, l: u32, r: u32) {
-        call.ok(l + r).await;
+    async fn add(&self, l: u32, r: u32) -> u32 {
+        l + r
     }
 }
 ```
@@ -61,7 +61,7 @@ same async methods:
 ```rust
 // Make a call
 let response = client.add(3, 5).await.unwrap();
-assert_eq!(response.ret, 8);
+assert_eq!(response, 8);
 ```
 
 But how do you obtain a client?

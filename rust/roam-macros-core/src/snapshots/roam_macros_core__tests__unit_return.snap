@@ -1,5 +1,6 @@
 ---
 source: rust/roam-macros-core/src/lib.rs
+assertion_line: 762
 expression: "generate(quote! { trait Notifier { async fn notify(&self, msg: String); } })"
 ---
 #[allow(non_snake_case, clippy::all)]
@@ -25,11 +26,7 @@ pub trait Notifier
 where
     Self: Send + Sync,
 {
-    fn notify(
-        &self,
-        call: impl ::roam::Call<(), ::core::convert::Infallible>,
-        msg: String,
-    ) -> impl std::future::Future<Output = ()> + Send;
+    fn notify(&self, msg: String) -> impl std::future::Future<Output = ()> + Send;
 }
 #[doc = r" Dispatcher for this service."]
 #[doc = r""]
@@ -77,8 +74,9 @@ where
                 }
             };
             let (msg,) = args;
+            let value = self.handler.notify(msg).await;
             let sink_call = ::roam::SinkCall::new(reply);
-            self.handler.notify(sink_call, msg).await;
+            ::roam::Call::<(), ::core::convert::Infallible>::ok(sink_call, value).await;
             return;
         }
         reply

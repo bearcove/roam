@@ -38,29 +38,19 @@ mod roam_bench {
     pub struct Handler;
 
     impl Bench for Handler {
-        async fn add(&self, call: impl roam::Call<i32, core::convert::Infallible>, a: i32, b: i32) {
-            call.ok(a + b).await;
+        async fn add(&self, a: i32, b: i32) -> i32 {
+            a + b
         }
 
-        async fn echo(
-            &self,
-            call: impl roam::Call<Vec<u8>, core::convert::Infallible>,
-            data: Vec<u8>,
-        ) {
-            call.ok(data).await;
+        async fn echo(&self, data: Vec<u8>) -> Vec<u8> {
+            data
         }
 
-        async fn generate(
-            &self,
-            call: impl roam::Call<(), core::convert::Infallible>,
-            count: u32,
-            output: roam::Tx<i32>,
-        ) {
+        async fn generate(&self, count: u32, output: roam::Tx<i32>) {
             for i in 0..count as i32 {
                 output.send(i).await.unwrap();
             }
             output.close(Default::default()).await.unwrap();
-            call.ok(()).await;
         }
     }
 

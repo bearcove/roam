@@ -13,15 +13,18 @@ use crate::{MaybeSend, MaybeSync, Metadata, RequestCall, RequestResponse, RoamEr
 //   async fn hash(&self, payload: &[u8]) -> Result<SelfRef<&[u8]>, RoamError<E>>;
 // }
 //
-// Would expand to a handler trait (what users implement):
+// Would expand to a service trait (what users implement):
 //
-// trait HashServer {
+// trait Hash {
 //   async fn hash(&self, call: impl Call<&[u8], E>, payload: &[u8]);
 // }
 //
-// And a HashDispatcher<S: HashServer> that implements Handler<R: ReplySink>:
+// And a HashDispatcher<S: Hash> that implements Handler<R: ReplySink>:
 // it deserializes args, constructs an ErasedCall<T, E> from the ReplySink,
-// and routes to the appropriate HashServer method by method ID.
+// and routes to the appropriate method by method ID.
+//
+// For owned success returns, generated methods return values directly and
+// the dispatcher sends replies on their behalf.
 //
 // HashDispatcher<S> implements Handler<R>, and can be stored as
 // Box<dyn Handler<R>> to erase both S and the service type.

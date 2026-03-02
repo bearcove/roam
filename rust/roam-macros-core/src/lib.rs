@@ -252,27 +252,12 @@ fn generate_trait_method(method: &ServiceMethod, roam: &TokenStream2) -> TokenSt
     let method_doc = method.doc().map(|d| quote! { #[doc = #d] });
 
     let return_type = method.return_type();
-    let (ok_ty, err_ty, method_lifetime) = if let Some((ok, err)) = return_type.as_result() {
-        let ok_has_roam_lifetime = ok.has_named_lifetime("roam");
-        (
-            ok.to_token_stream(),
-            err.to_token_stream(),
-            if ok_has_roam_lifetime {
-                quote! { <'roam> }
-            } else {
-                quote! {}
-            },
-        )
+    let (ok_ty_ref, err_ty_ref) = method_ok_and_err_types(&return_type);
+    let ok_has_roam_lifetime = ok_ty_ref.has_named_lifetime("roam");
+    let method_lifetime = if ok_has_roam_lifetime {
+        quote! { <'roam> }
     } else {
-        (
-            return_type.to_token_stream(),
-            quote! { ::core::convert::Infallible },
-            if return_type.has_named_lifetime("roam") {
-                quote! { <'roam> }
-            } else {
-                quote! {}
-            },
-        )
+        quote! {}
     };
 
     let params: Vec<TokenStream2> = method
@@ -284,9 +269,21 @@ fn generate_trait_method(method: &ServiceMethod, roam: &TokenStream2) -> TokenSt
         })
         .collect();
 
-    quote! {
-        #method_doc
-        fn #method_name #method_lifetime (&self, call: impl #roam::Call<#ok_ty, #err_ty>, #(#params),*) -> impl std::future::Future<Output = ()> + Send;
+    if ok_has_roam_lifetime {
+        let ok_ty = ok_ty_ref.to_token_stream();
+        let err_ty = err_ty_ref
+            .map(Type::to_token_stream)
+            .unwrap_or_else(|| quote! { ::core::convert::Infallible });
+        quote! {
+            #method_doc
+            fn #method_name #method_lifetime (&self, call: impl #roam::Call<#ok_ty, #err_ty>, #(#params),*) -> impl std::future::Future<Output = ()> + Send;
+        }
+    } else {
+        let output_ty = return_type.to_token_stream();
+        quote! {
+            #method_doc
+            fn #method_name (&self, #(#params),*) -> impl std::future::Future<Output = #output_ty> + Send;
+        }
     }
 }
 
@@ -431,6 +428,34 @@ fn generate_dispatch_arm(
         quote! { let args: #args_tuple_type }
     };
 
+    let return_type = method.return_type();
+    let (ok_ty_ref, err_ty_ref) = method_ok_and_err_types(&return_type);
+    let ok_has_roam_lifetime = ok_ty_ref.has_named_lifetime("roam");
+    let is_fallible = return_type.as_result().is_some();
+    let ok_ty = ok_ty_ref.to_token_stream();
+    let err_ty = err_ty_ref
+        .map(Type::to_token_stream)
+        .unwrap_or_else(|| quote! { ::core::convert::Infallible });
+
+    let invoke_and_reply = if ok_has_roam_lifetime {
+        quote! {
+            let sink_call = #roam::SinkCall::new(reply);
+            self.handler.#method_fn(sink_call, #(#arg_names),*).await;
+        }
+    } else if is_fallible {
+        quote! {
+            let result = self.handler.#method_fn(#(#arg_names),*).await;
+            let sink_call = #roam::SinkCall::new(reply);
+            #roam::Call::<#ok_ty, #err_ty>::reply(sink_call, result).await;
+        }
+    } else {
+        quote! {
+            let value = self.handler.#method_fn(#(#arg_names),*).await;
+            let sink_call = #roam::SinkCall::new(reply);
+            #roam::Call::<#ok_ty, #err_ty>::ok(sink_call, value).await;
+        }
+    };
+
     quote! {
         if method_id == #descriptor_fn_name().methods[#idx].id {
             #args_let = match #roam::facet_postcard::from_slice_borrowed(args_bytes) {
@@ -442,8 +467,7 @@ fn generate_dispatch_arm(
             };
             #channel_binding
             #destructure
-            let sink_call = #roam::SinkCall::new(reply);
-            self.handler.#method_fn(sink_call, #(#arg_names),*).await;
+            #invoke_and_reply
             return;
         }
     }
@@ -815,6 +839,19 @@ mod tests {
             ts.contains("Result < :: roam :: SelfRef < & ' static str > , :: roam :: RoamError >")
         );
         assert!(ts.contains("method_descriptor :: < (String ,) , & ' static str >"));
+    }
+
+    #[test]
+    fn borrowed_roam_return_keeps_call_style_handler_signature() {
+        let parsed = roam_macros_parse::parse_trait(&quote! {
+            trait Hasher { async fn hash(&self, payload: String) -> &'roam str; }
+        })
+        .unwrap();
+        let roam = quote! { ::roam };
+        let ts = crate::generate_service(&parsed, &roam).unwrap().to_string();
+        assert!(ts.contains("fn hash < 'roam >"));
+        assert!(ts.contains("self . handler . hash (sink_call , payload) . await ;"));
+        assert!(!ts.contains("let value = self.handler.hash(payload).await;"));
     }
 
     #[test]

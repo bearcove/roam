@@ -10,8 +10,10 @@ This page maps the old v6 Rust API surface to the current v7 API.
 
 ## High-level changes
 
-1. Service impls no longer receive `&Context`; they receive `call: impl roam::Call<T, E>`.
-2. Generated server trait name changed from `{Service}` to `{Service}Server`.
+1. Service impls no longer receive `&Context`; generated methods now:
+   - return values directly for owned success returns, or
+   - receive `call: impl roam::Call<T, E>` for explicit `'roam` borrowed success returns.
+2. The generated service trait is `{Service}`.
 3. Generated client calls return `T` for owned returns, and `SelfRef<T>` for explicit `'roam` borrowed returns.
 4. `ConnectionHandle` is no longer a `Caller`; clients are built from `driver.caller()`.
 5. Session setup moved from `accept_framed` / `initiate_framed` to `session::acceptor` / `session::initiator` builders.
@@ -35,7 +37,7 @@ impl Adder for MyAdder {
 }
 ```
 
-v7 style:
+v7 style (owned return):
 
 ```rust
 #[roam::service]
@@ -44,13 +46,14 @@ trait Adder {
 }
 
 impl Adder for MyAdder {
-    async fn add(&self, call: impl roam::Call<i32, core::convert::Infallible>, a: i32, b: i32) {
-        call.ok(a + b).await;
+    async fn add(&self, a: i32, b: i32) -> i32 {
+        a + b
     }
 }
 ```
 
-In v7, handlers reply explicitly with `call.ok(...)`, `call.err(...)`, or `call.reply(...)`.
+For explicit `'roam` borrowed success returns, v7 methods use `call` and reply
+explicitly with `call.ok(...)`, `call.err(...)`, or `call.reply(...)`.
 
 ## Client return type changes
 
@@ -129,8 +132,9 @@ Notes:
 
 | v6 | v7 | Notes |
 |---|---|---|
-| `impl MyService for Handler` | `impl MyService for Handler` | Generated server trait renamed |
-| `fn method(&self, cx: &Context, ...) -> T` | `fn method(&self, call: impl Call<T, E>, ...) -> Future<Output = ()>` | Explicit reply path |
+| `impl MyService for Handler` | `impl MyService for Handler` | Generated service trait remains `{Service}` |
+| `fn method(&self, cx: &Context, ...) -> T` | `fn method(&self, ...) -> Future<Output = T>` | Owned return path |
+| `fn method(&self, cx: &Context, ...) -> &'a U` | `fn method<'roam>(&self, call: impl Call<&'roam U, E>, ...) -> Future<Output = ()>` | Borrowed reply path |
 | `MyServiceClient::new(connection_handle)` | `MyServiceClient::new(driver.caller())` | `ConnectionHandle` is no longer a `Caller` |
 | `accept_framed` / `initiate_framed` | `session::acceptor` / `session::initiator` + `.establish()` | New session builders |
 | `Tx<T>` / `Rx<T>` | `Tx<T, N>` / `Rx<T, N>` | `N` is initial credit (default `16`) |
@@ -139,9 +143,11 @@ Notes:
 
 ## Migration checklist
 
-1. Rename service impls to `{Service}Server`.
-2. Replace `&Context` parameters with `call: impl roam::Call<Ok, Err>`.
-3. Replace returned values with `call.ok(...)` / `call.err(...)`.
+1. Keep service impls on `{Service}`.
+2. Replace `&Context` parameters:
+   - for owned returns, remove context and return values directly;
+   - for explicit `'roam` borrowed returns, use `call: impl roam::Call<Ok, Err>`.
+3. For borrowed-return methods, reply with `call.ok(...)` / `call.err(...)`.
 4. Update client call sites for `'roam`-borrowing methods to handle `SelfRef<T>`.
 5. Update bootstrap code to `session::{initiator,acceptor}` and instantiate `Driver`.
 6. Switch client construction from connection handles to `driver.caller()`.

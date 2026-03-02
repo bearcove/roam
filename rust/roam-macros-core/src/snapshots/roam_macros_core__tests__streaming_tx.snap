@@ -1,5 +1,6 @@
 ---
 source: rust/roam-macros-core/src/lib.rs
+assertion_line: 769
 expression: "generate(quote!\n{\n    trait Streamer\n    { async fn count_up(&self, start: i32, output: Tx<i32>) -> i32; }\n})"
 ---
 #[allow(non_snake_case, clippy::all)]
@@ -27,10 +28,9 @@ where
 {
     fn count_up(
         &self,
-        call: impl ::roam::Call<i32, ::core::convert::Infallible>,
         start: i32,
         output: Tx<i32>,
-    ) -> impl std::future::Future<Output = ()> + Send;
+    ) -> impl std::future::Future<Output = i32> + Send;
 }
 #[doc = r" Dispatcher for this service."]
 #[doc = r""]
@@ -96,8 +96,9 @@ where
                 }
             }
             let (start, output) = args;
+            let value = self.handler.count_up(start, output).await;
             let sink_call = ::roam::SinkCall::new(reply);
-            self.handler.count_up(sink_call, start, output).await;
+            ::roam::Call::<i32, ::core::convert::Infallible>::ok(sink_call, value).await;
             return;
         }
         reply

@@ -15,8 +15,8 @@ trait Adder {
 struct MyAdder;
 
 impl Adder for MyAdder {
-    async fn add(&self, call: impl roam::Call<i32, core::convert::Infallible>, a: i32, b: i32) {
-        call.ok(a + b).await;
+    async fn add(&self, a: i32, b: i32) -> i32 {
+        a + b
     }
 }
 

@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use roam::{Call, Rx, Tx};
+use roam::{Rx, Tx};
 use roam_core::{
     BareConduit, Driver, DriverCaller, DriverReplySink, acceptor, initiator, memory_link_pair,
 };
@@ -190,176 +190,122 @@ pub fn run_async<T>(f: impl Future<Output = T>) -> T {
 struct TestbedService;
 
 impl Testbed for TestbedService {
-    async fn echo(&self, call: impl Call<String, std::convert::Infallible>, message: String) {
-        call.ok(message).await;
+    async fn echo(&self, message: String) -> String {
+        message
     }
 
-    async fn reverse(&self, call: impl Call<String, std::convert::Infallible>, message: String) {
-        call.ok(message.chars().rev().collect()).await;
+    async fn reverse(&self, message: String) -> String {
+        message.chars().rev().collect()
     }
 
-    async fn divide(&self, call: impl Call<i64, MathError>, dividend: i64, divisor: i64) {
+    async fn divide(&self, dividend: i64, divisor: i64) -> Result<i64, MathError> {
         if divisor == 0 {
-            call.err(MathError::DivisionByZero).await;
+            Err(MathError::DivisionByZero)
         } else {
-            call.ok(dividend / divisor).await;
+            Ok(dividend / divisor)
         }
     }
 
-    async fn lookup(&self, call: impl Call<Person, LookupError>, id: u32) {
+    async fn lookup(&self, id: u32) -> Result<Person, LookupError> {
         match id {
-            1 => {
-                call.ok(Person {
-                    name: "Alice".to_string(),
-                    age: 30,
-                    email: Some("alice@example.com".to_string()),
-                })
-                .await
-            }
-            2 => {
-                call.ok(Person {
-                    name: "Bob".to_string(),
-                    age: 25,
-                    email: None,
-                })
-                .await
-            }
-            3 => {
-                call.ok(Person {
-                    name: "Charlie".to_string(),
-                    age: 35,
-                    email: Some("charlie@example.com".to_string()),
-                })
-                .await
-            }
-            _ => call.err(LookupError::NotFound).await,
+            1 => Ok(Person {
+                name: "Alice".to_string(),
+                age: 30,
+                email: Some("alice@example.com".to_string()),
+            }),
+            2 => Ok(Person {
+                name: "Bob".to_string(),
+                age: 25,
+                email: None,
+            }),
+            3 => Ok(Person {
+                name: "Charlie".to_string(),
+                age: 35,
+                email: Some("charlie@example.com".to_string()),
+            }),
+            _ => Err(LookupError::NotFound),
         }
     }
 
-    async fn sum(&self, call: impl Call<i64, std::convert::Infallible>, mut numbers: Rx<i32>) {
+    async fn sum(&self, mut numbers: Rx<i32>) -> i64 {
         let mut total: i64 = 0;
         while let Ok(Some(n)) = numbers.recv().await {
             total += *n as i64;
         }
-        call.ok(total).await;
+        total
     }
 
-    async fn generate(
-        &self,
-        call: impl Call<(), std::convert::Infallible>,
-        count: u32,
-        output: Tx<i32>,
-    ) {
+    async fn generate(&self, count: u32, output: Tx<i32>) {
         for i in 0..count as i32 {
             if output.send(i).await.is_err() {
                 break;
             }
         }
         output.close(Default::default()).await.ok();
-        call.ok(()).await;
     }
 
-    async fn transform(
-        &self,
-        call: impl Call<(), std::convert::Infallible>,
-        mut input: Rx<String>,
-        output: Tx<String>,
-    ) {
+    async fn transform(&self, mut input: Rx<String>, output: Tx<String>) {
         while let Ok(Some(s)) = input.recv().await {
             let _ = output.send(s.clone()).await;
         }
         output.close(Default::default()).await.ok();
-        call.ok(()).await;
     }
 
-    async fn echo_point(&self, call: impl Call<Point, std::convert::Infallible>, point: Point) {
-        call.ok(point).await;
+    async fn echo_point(&self, point: Point) -> Point {
+        point
     }
 
-    async fn create_person(
-        &self,
-        call: impl Call<Person, std::convert::Infallible>,
-        name: String,
-        age: u8,
-        email: Option<String>,
-    ) {
-        call.ok(Person { name, age, email }).await;
+    async fn create_person(&self, name: String, age: u8, email: Option<String>) -> Person {
+        Person { name, age, email }
     }
 
-    async fn rectangle_area(
-        &self,
-        call: impl Call<f64, std::convert::Infallible>,
-        rect: Rectangle,
-    ) {
+    async fn rectangle_area(&self, rect: Rectangle) -> f64 {
         let width = (rect.bottom_right.x - rect.top_left.x).abs() as f64;
         let height = (rect.bottom_right.y - rect.top_left.y).abs() as f64;
-        call.ok(width * height).await;
+        width * height
     }
 
-    async fn parse_color(
-        &self,
-        call: impl Call<Option<Color>, std::convert::Infallible>,
-        name: String,
-    ) {
-        let color = match name.to_lowercase().as_str() {
+    async fn parse_color(&self, name: String) -> Option<Color> {
+        match name.to_lowercase().as_str() {
             "red" => Some(Color::Red),
             "green" => Some(Color::Green),
             "blue" => Some(Color::Blue),
             _ => None,
-        };
-        call.ok(color).await;
+        }
     }
 
-    async fn shape_area(&self, call: impl Call<f64, std::convert::Infallible>, shape: Shape) {
-        let area = match shape {
+    async fn shape_area(&self, shape: Shape) -> f64 {
+        match shape {
             Shape::Circle { radius } => std::f64::consts::PI * radius * radius,
             Shape::Rectangle { width, height } => width * height,
             Shape::Point => 0.0,
-        };
-        call.ok(area).await;
+        }
     }
 
-    async fn create_canvas(
-        &self,
-        call: impl Call<Canvas, std::convert::Infallible>,
-        name: String,
-        shapes: Vec<Shape>,
-        background: Color,
-    ) {
-        call.ok(Canvas {
+    async fn create_canvas(&self, name: String, shapes: Vec<Shape>, background: Color) -> Canvas {
+        Canvas {
             name,
             shapes,
             background,
-        })
-        .await;
+        }
     }
 
-    async fn process_message(
-        &self,
-        call: impl Call<Message, std::convert::Infallible>,
-        msg: Message,
-    ) {
-        let response = match msg {
+    async fn process_message(&self, msg: Message) -> Message {
+        match msg {
             Message::Text(s) => Message::Text(format!("processed: {s}")),
             Message::Number(n) => Message::Number(n * 2),
             Message::Data(d) => Message::Data(d.into_iter().rev().collect()),
-        };
-        call.ok(response).await;
+        }
     }
 
-    async fn get_points(&self, call: impl Call<Vec<Point>, std::convert::Infallible>, count: u32) {
-        let points = (0..count as i32)
+    async fn get_points(&self, count: u32) -> Vec<Point> {
+        (0..count as i32)
             .map(|i| Point { x: i, y: i * 2 })
-            .collect();
-        call.ok(points).await;
+            .collect()
     }
 
-    async fn swap_pair(
-        &self,
-        call: impl Call<(String, i32), std::convert::Infallible>,
-        pair: (i32, String),
-    ) {
-        call.ok((pair.1, pair.0)).await;
+    async fn swap_pair(&self, pair: (i32, String)) -> (String, i32) {
+        (pair.1, pair.0)
     }
 }
 
