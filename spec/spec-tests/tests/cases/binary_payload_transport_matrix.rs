@@ -71,11 +71,13 @@ async fn run_for_transport(transport: RustTransport) -> Result<(), String> {
 async fn run_for_subject_transport(spec: SubjectSpec) -> Result<(), String> {
     let (client, mut child) = accept_subject_spec(spec).await?;
     for &size in payload_sizes() {
+        eprintln!("[test] sending size={size}");
         let payload = make_payload(size);
         let resp = client
             .process_message(Message::Data(payload.clone()))
             .await
             .map_err(|e| format!("subject spec={spec:?} size={size}: {e:?}"))?;
+        eprintln!("[test] got response size={size}");
         let actual = match &resp {
             Message::Data(actual) => actual,
             _ => {
@@ -95,7 +97,13 @@ async fn run_for_subject_transport(spec: SubjectSpec) -> Result<(), String> {
             ));
         }
     }
-    child.kill().await.ok();
+    eprintln!(
+        "[test] done. our pid={} child pid={:?}",
+        std::process::id(),
+        child.id()
+    );
+    child.start_kill().ok();
+    child.wait().await.ok();
     Ok(())
 }
 

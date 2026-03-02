@@ -10,6 +10,9 @@ slow-timeout = { period = "10s", terminate-after = 3 }
 [profile.patient]
 slow-timeout = { period = "30s", terminate-after = 4 }
 
+[profile.eternal]
+slow-timeout = { period = "3600s", terminate-after = 3600 }
+
 [profile.coverage]
 # Coverage-instrumented binaries are significantly slower, especially over SHM.
 slow-timeout = { period = "30s", terminate-after = 8 }

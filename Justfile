@@ -5,10 +5,10 @@ list:
 
 rust *args:
     cargo build --package subject-rust
-    cargo nextest run -p spec-tests {{ quote(args) }}
+    cargo nextest run -p spec-tests {{ args }}
 
 cov *args:
-    cargo llvm-cov nextest --summary-only {{ quote(args) }}
+    cargo llvm-cov nextest --summary-only {{ args }}
 
 rust-ffi:
     cargo build --release -p roam-shm-ffi

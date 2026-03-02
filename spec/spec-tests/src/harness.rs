@@ -817,15 +817,27 @@ async fn accept_subject_shm_subject_is_guest(
         }
     };
 
+    eprintln!("[harness] into_link...");
     let link = host_peer
         .into_link()
         .map_err(|e| format!("host peer to link: {e}"))?;
+    eprintln!("[harness] into_link ok");
+    #[cfg(windows)]
+    {
+        eprintln!("[harness] accept_doorbell...");
+        link.accept_doorbell()
+            .await
+            .map_err(|e| format!("accept doorbell: {e}"))?;
+        eprintln!("[harness] accept_doorbell ok");
+    }
     let conduit: BareConduit<MessageFamily, roam_shm::ShmLink> = BareConduit::new(link);
 
+    eprintln!("[harness] handshake...");
     let (mut session, handle, _sh) = acceptor(conduit)
         .establish()
         .await
         .map_err(|e| format!("handshake: {e}"))?;
+    eprintln!("[harness] handshake ok");
 
     let mut driver = Driver::new(handle, NoopHandler, Parity::Even);
     let caller = driver.caller();
