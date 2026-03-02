@@ -13,23 +13,22 @@
 //! r[impl shm.mmap.attach]
 //! r[impl shm.mmap.attach.windows]
 
-use std::ffi::OsString;
-use std::io::{self, ErrorKind, Read, Write};
-use std::os::windows::ffi::OsStringExt;
-use std::os::windows::io::{AsRawHandle, FromRawHandle, IntoRawHandle, RawHandle};
+use std::io::{self, ErrorKind};
+use std::os::windows::io::RawHandle;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, mpsc};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
 
 use windows_sys::Win32::Foundation::{
-    CloseHandle, HANDLE, INVALID_HANDLE_VALUE, TRUE, ERROR_PIPE_CONNECTED,
+    CloseHandle, ERROR_PIPE_CONNECTED, GENERIC_READ, GENERIC_WRITE, INVALID_HANDLE_VALUE,
 };
 use windows_sys::Win32::Storage::FileSystem::{
-    CreateFileW, FlushFileBuffers, ReadFile, WriteFile,
-    FILE_ATTRIBUTE_NORMAL, OPEN_EXISTING,
+    CreateFileW, ReadFile, WriteFile,
+    FILE_ATTRIBUTE_NORMAL, OPEN_EXISTING, PIPE_ACCESS_DUPLEX,
 };
 use windows_sys::Win32::System::Pipes::{
     ConnectNamedPipe, CreateNamedPipeW, PeekNamedPipe,
-    PIPE_ACCESS_DUPLEX, PIPE_READMODE_BYTE, PIPE_TYPE_BYTE, PIPE_WAIT,
+    PIPE_READMODE_BYTE, PIPE_TYPE_BYTE, PIPE_WAIT,
 };
 
 use super::MmapAttachMessage;
@@ -67,79 +66,52 @@ impl MmapControlHandle {
 
 /// Sender half of the mmap control channel (host side).
 ///
-/// The host creates a named pipe server.  On the first `send_path()` call
-/// it blocks (via a background thread) until the guest connects, then writes.
+/// Wraps a named pipe server handle.  On the first `send_path` call,
+/// `ConnectNamedPipe` is called to transition the server handle into the
+/// connected state.  If the client already connected (via `CreateFileW`),
+/// `ConnectNamedPipe` returns `ERROR_PIPE_CONNECTED` which is handled as
+/// success.
 pub struct MmapControlSender {
-    state: Mutex<SenderState>,
-}
-
-enum SenderState {
-    /// Pipe server created, waiting for a client to connect.
-    Listening {
-        handle: RawHandle,
-        /// Receives `()` when the background accept thread completes.
-        accept_rx: mpsc::Receiver<io::Result<()>>,
-    },
-    /// Client is connected and we can write.
-    Connected { handle: RawHandle },
-    /// Pipe is closed / invalid.
-    Closed,
+    handle: Mutex<Option<RawHandle>>,
+    connected: AtomicBool,
 }
 
 // SAFETY: The RawHandle is used exclusively behind a Mutex; only one thread
 // writes at a time.
-unsafe impl Send for SenderState {}
-unsafe impl Sync for SenderState {}
+unsafe impl Send for MmapControlSender {}
+unsafe impl Sync for MmapControlSender {}
 
 impl MmapControlSender {
     /// Send an mmap region's path + metadata to the receiver.
-    ///
-    /// On the first call this blocks until the guest connects to the pipe.
     pub fn send_path(&self, path: &Path, msg: &MmapAttachMessage) -> io::Result<()> {
-        let mut state = self.state.lock().unwrap();
-        // Ensure connected.
-        loop {
-            match &*state {
-                SenderState::Listening { accept_rx, .. } => {
-                    let result = accept_rx.recv().map_err(|_| {
-                        io::Error::new(ErrorKind::BrokenPipe, "accept thread dropped")
-                    })?;
-                    result?;
-                    // Transition to Connected.
-                    let old = std::mem::replace(&mut *state, SenderState::Closed);
-                    if let SenderState::Listening { handle, .. } = old {
-                        *state = SenderState::Connected { handle };
-                    }
-                }
-                SenderState::Connected { .. } => break,
-                SenderState::Closed => {
-                    return Err(io::Error::new(
-                        ErrorKind::BrokenPipe,
-                        "mmap control pipe closed",
-                    ));
+        let guard = self.handle.lock().unwrap();
+        let &raw_handle = guard.as_ref().ok_or_else(|| {
+            io::Error::new(ErrorKind::BrokenPipe, "mmap control pipe closed")
+        })?;
+
+        // Lazy connect: the first send transitions the server handle into the
+        // connected state.  If the client already called CreateFileW,
+        // ConnectNamedPipe returns FALSE with ERROR_PIPE_CONNECTED — that's OK.
+        if !self.connected.swap(true, Ordering::Relaxed) {
+            let ok = unsafe { ConnectNamedPipe(raw_handle as _, std::ptr::null_mut()) };
+            if ok == 0 {
+                let err = io::Error::last_os_error();
+                if err.raw_os_error() != Some(ERROR_PIPE_CONNECTED as i32) {
+                    self.connected.store(false, Ordering::Relaxed);
+                    return Err(err);
                 }
             }
         }
 
-        let handle = match &*state {
-            SenderState::Connected { handle } => *handle,
-            _ => unreachable!(),
-        };
-
-        write_message(handle, path, msg)
+        write_message(raw_handle, path, msg)
     }
 }
 
 impl Drop for MmapControlSender {
     fn drop(&mut self) {
-        let state = self.state.get_mut().unwrap();
-        let handle = match state {
-            SenderState::Listening { handle, .. } => *handle,
-            SenderState::Connected { handle } => *handle,
-            SenderState::Closed => return,
-        };
-        *state = SenderState::Closed;
-        unsafe { CloseHandle(handle as _) };
+        if let Some(handle) = self.handle.get_mut().unwrap().take() {
+            unsafe { CloseHandle(handle as _) };
+        }
     }
 }
 
@@ -162,8 +134,7 @@ impl MmapControlReceiver {
         let h = unsafe {
             CreateFileW(
                 wide.as_ptr(),
-                windows_sys::Win32::Storage::FileSystem::GENERIC_READ
-                    | windows_sys::Win32::Storage::FileSystem::GENERIC_WRITE,
+                GENERIC_READ | GENERIC_WRITE,
                 0,
                 std::ptr::null(),
                 OPEN_EXISTING,
@@ -236,7 +207,10 @@ fn write_message(handle: RawHandle, path: &Path, msg: &MmapAttachMessage) -> io:
     buf.extend_from_slice(&metadata);
 
     write_all_handle(handle, &buf)?;
-    unsafe { FlushFileBuffers(handle as _) };
+    // Note: do NOT call FlushFileBuffers here.  On a named pipe server,
+    // FlushFileBuffers blocks until the client reads all buffered data,
+    // which would deadlock single-threaded callers.  WriteFile on a
+    // synchronous byte-mode pipe already commits data to the pipe buffer.
     Ok(())
 }
 
@@ -346,28 +320,9 @@ pub fn create_mmap_control_pair() -> io::Result<(MmapControlSender, MmapControlH
     }
     let raw = h as RawHandle;
 
-    // Spawn a background thread to accept the client connection.
-    let (accept_tx, accept_rx) = mpsc::channel();
-    let accept_handle = raw as isize;
-    std::thread::spawn(move || {
-        let result = unsafe { ConnectNamedPipe(accept_handle as _, std::ptr::null_mut()) };
-        if result == 0 {
-            let err = io::Error::last_os_error();
-            // ERROR_PIPE_CONNECTED means client already connected before we called
-            // ConnectNamedPipe — that's fine.
-            if err.raw_os_error() != Some(ERROR_PIPE_CONNECTED as i32) {
-                let _ = accept_tx.send(Err(err));
-                return;
-            }
-        }
-        let _ = accept_tx.send(Ok(()));
-    });
-
     let sender = MmapControlSender {
-        state: Mutex::new(SenderState::Listening {
-            handle: raw,
-            accept_rx,
-        }),
+        handle: Mutex::new(Some(raw)),
+        connected: AtomicBool::new(false),
     };
     Ok((sender, MmapControlHandle(pipe_name)))
 }
@@ -379,7 +334,6 @@ pub fn create_mmap_control_pair_connected() -> io::Result<(MmapControlSender, Mm
 {
     let (sender, handle) = create_mmap_control_pair()?;
     let receiver = MmapControlReceiver::from_handle(handle)?;
-    // The accept thread will notice the client connected and send Ok(()).
     Ok((sender, receiver))
 }
 

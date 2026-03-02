@@ -8,6 +8,8 @@ publish = false
 afl = "0.15"
 roam-shm = { path = "../../rust/roam-shm" }
 roam-types = { path = "../../rust/roam-types" }
+shm-primitives = { path = "../../rust/shm-primitives" }
+tempfile = "3"
 tokio = { version = "1", features = ["rt"] }
 
 [[bin]]

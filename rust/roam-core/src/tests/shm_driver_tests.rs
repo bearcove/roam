@@ -1,23 +1,43 @@
+use std::sync::Arc;
+
 use moire::task::FutureExt;
-use roam_shm::ShmLink;
 use roam_shm::varslot::SizeClassConfig;
+use roam_shm::{Segment, SegmentConfig, ShmLink, create_test_link_pair};
 use roam_types::{
     Caller, Handler, MessageFamily, MethodId, Parity, Payload, ReplySink, RequestCall,
     RequestResponse, SelfRef,
 };
+use shm_primitives::FileCleanup;
 
 use crate::session::{acceptor, initiator};
 use crate::{BareConduit, Driver, DriverReplySink};
 
 type MessageConduit = BareConduit<MessageFamily, ShmLink>;
 
-fn message_conduit_pair() -> (MessageConduit, MessageConduit) {
+async fn message_conduit_pair() -> (MessageConduit, MessageConduit, tempfile::TempDir) {
     let classes = [SizeClassConfig {
         slot_size: 4096,
         slot_count: 16,
     }];
-    let (a, b) = ShmLink::heap_pair(1 << 16, 1 << 20, 256, &classes).unwrap();
-    (BareConduit::new(a), BareConduit::new(b))
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("shm-driver-test.shm");
+    let segment = Arc::new(
+        Segment::create(
+            &path,
+            SegmentConfig {
+                max_guests: 1,
+                bipbuf_capacity: 1 << 16,
+                max_payload_size: 1 << 20,
+                inline_threshold: 256,
+                heartbeat_interval: 0,
+                size_classes: &classes,
+            },
+            FileCleanup::Manual,
+        )
+        .expect("create segment"),
+    );
+    let (a, b) = create_test_link_pair(segment).await.expect("create_test_link_pair");
+    (BareConduit::new(a), BareConduit::new(b), dir)
 }
 
 struct EchoHandler;
@@ -42,7 +62,7 @@ impl Handler<DriverReplySink> for EchoHandler {
 
 #[tokio::test]
 async fn echo_call_across_shm_link() {
-    let (client_conduit, server_conduit) = message_conduit_pair();
+    let (client_conduit, server_conduit, _dir) = message_conduit_pair().await;
 
     let server_task = moire::task::spawn(
         async move {
@@ -109,7 +129,7 @@ impl Handler<DriverReplySink> for BlobEchoHandler {
 
 #[tokio::test]
 async fn echo_blob_stress_over_shm_link() {
-    let (client_conduit, server_conduit) = message_conduit_pair();
+    let (client_conduit, server_conduit, _dir) = message_conduit_pair().await;
 
     let server_task = moire::task::spawn(
         async move {

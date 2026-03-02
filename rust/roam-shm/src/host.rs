@@ -104,6 +104,7 @@ impl HostHub {
             // On Windows, mmap control uses named pipes (two separate unidirectional
             // channels).  Create a second pair for the guest→host direction.
             let (guest_mmap_tx, host_mmap_rx) = create_mmap_control_pair()?;
+            let mmap_tx_pipe = host_mmap_rx.pipe_name().to_string();
 
             let host = HostPeer {
                 segment: Arc::clone(&self.segment),
@@ -116,8 +117,8 @@ impl HostHub {
                 peer_id,
                 doorbell: guest_doorbell,
                 mmap_rx: guest_mmap_rx,
-                mmap_tx_pipe: guest_mmap_tx.pipe_name().to_string(),
-                _mmap_tx: guest_mmap_tx,
+                mmap_tx_pipe,
+                mmap_tx: guest_mmap_tx,
             };
             (host, guest)
         };
@@ -169,10 +170,10 @@ pub struct GuestSpawnTicket {
     /// Raw fd for the guest→host mmap control sender endpoint (Unix).
     #[cfg(unix)]
     pub mmap_tx_fd: RawFd,
-    /// Named pipe name for the guest→host mmap control sender (Windows).
-    /// We keep the sender alive so the pipe server doesn't close.
+    /// Guest→host mmap control sender (Windows).
+    /// The host's `into_link()` connects as client to this pipe server.
     #[cfg(windows)]
-    pub _mmap_tx: MmapControlSender,
+    pub mmap_tx: MmapControlSender,
     #[cfg(windows)]
     pub mmap_tx_pipe: String,
 }
@@ -383,10 +384,14 @@ pub fn guest_link_from_names(
     ))
 }
 
-/// Build a guest-side link from a host-generated ticket (Windows, in-process).
+/// Build a guest-side link from a host-generated ticket (Windows).
 ///
-/// This is the Windows equivalent of `guest_link_from_ticket` for use in tests
-/// where host and guest run in the same process.
+/// The ticket's `mmap_tx` is the named-pipe server created by `prepare_peer()`.
+/// The host's `into_link()` already connected as client to it, so the pipe is
+/// ready to use.
+///
+/// **Ordering:** `host_peer.into_link()` must be called before this function
+/// so that the host connects as client to the guest's mmap_tx pipe.
 #[cfg(windows)]
 pub fn guest_link_from_ticket_windows(
     segment: Arc<Segment>,
@@ -405,43 +410,38 @@ pub fn guest_link_from_ticket_windows(
     let doorbell = Doorbell::from_handle(ticket.doorbell)?;
     let mmap_rx = MmapControlReceiver::from_handle(ticket.mmap_rx)?;
 
-    // The guest's tx pipe name was stored; connect to it as a client.
-    let mmap_tx_handle = unsafe { MmapControlHandle::from_arg(&ticket.mmap_tx_pipe) }
-        .map_err(|e| io_other(format!("mmap_tx pipe: {e}")))?;
-    let mmap_tx_receiver = MmapControlReceiver::from_handle(mmap_tx_handle)?;
-    // We need a MmapControlSender, but from_handle gives a Receiver (client).
-    // For in-process use, the guest writes to the pipe and the host reads.
-    // The MmapControlSender on Windows holds the server HANDLE which was
-    // already created by the host's create_mmap_control_pair(). The guest
-    // instead connects as CLIENT and writes via WriteFile.
-    //
-    // We need the guest to have a SENDER that writes to the host's RECEIVER
-    // pipe. The simplest approach: use the MmapControlReceiver's handle as
-    // a write endpoint (since the pipe is duplex by default).
-    //
-    // For the in-process ticket path, we actually want the guest to use
-    // its own sender pipe that the host will read from. That sender was
-    // already created by prepare_peer() and stored as _mmap_tx.
-    // The guest just needs to connect to it.
-    drop(mmap_tx_receiver);
-
-    // For the in-process case, the guest side of the mmap tx channel was
-    // created as a named pipe server by prepare_peer(). The guest needs a
-    // client that connects to it. But the MmapControlSender type wraps a
-    // server handle, not a client handle. For Windows, we use a no-op
-    // placeholder sender since in-process mmap doesn't need cross-process
-    // pipe I/O — MmapChannelTx::InProcess handles this.
-    //
-    // Actually for the in-process case, we should use InProcess channels.
-    // Let's fall back to that.
-    let (in_tx, in_rx) = std::sync::mpsc::channel();
     Ok(ShmLink::for_guest(
         segment,
         ticket.peer_id,
         doorbell,
-        MmapChannelTx::InProcess(in_tx),
+        MmapChannelTx::Real(ticket.mmap_tx),
         MmapChannelRx::Real(mmap_rx),
     ))
+}
+
+/// Create a real SHM link pair for testing.
+///
+/// Uses a file-backed segment with real doorbells and real mmap control
+/// channels — no in-process fakes.
+///
+/// **Ordering note (Windows):** `host_peer.into_link()` is called before
+/// `guest_link_from_ticket_windows` so that the host connects as pipe client
+/// first, satisfying named-pipe `ConnectNamedPipe` ordering.
+pub async fn create_test_link_pair(segment: Arc<Segment>) -> io::Result<(ShmLink, ShmLink)> {
+    let hub = HostHub::new(Arc::clone(&segment));
+    let prepared = hub.prepare_peer()?;
+    let (host_peer, ticket) = prepared.into_parts();
+    // Host must build its link first (connects as pipe client on Windows).
+    let host_link = host_peer.into_link()?;
+    #[cfg(unix)]
+    let guest_link = unsafe { guest_link_from_ticket(segment, ticket, true) }?;
+    #[cfg(windows)]
+    let guest_link = guest_link_from_ticket_windows(segment, ticket, true)?;
+    // On Windows, the host doorbell (named pipe server) must call
+    // ConnectNamedPipe after the guest client connects.
+    #[cfg(windows)]
+    host_link.accept_doorbell().await?;
+    Ok((host_link, guest_link))
 }
 
 #[cfg(test)]
@@ -494,6 +494,10 @@ mod tests {
             guest_link_from_ticket_windows(Arc::clone(&segment), ticket, true)
                 .expect("build guest link")
         };
+
+        // On Windows, accept the doorbell connection after guest has connected.
+        #[cfg(windows)]
+        host_link.accept_doorbell().await.expect("accept doorbell");
 
         let (host_tx, mut host_rx) = host_link.split();
         let (guest_tx, mut guest_rx) = guest_link.split();

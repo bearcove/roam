@@ -366,11 +366,14 @@ fn roam_stream(bencher: divan::Bencher, n: usize) {
 // ============================================================================
 
 mod roam_shm_bench {
+    use std::sync::Arc;
+
     use moire::task::FutureExt;
     use roam_core::{BareConduit, Driver, acceptor, initiator};
-    use roam_shm::ShmLink;
     use roam_shm::varslot::SizeClassConfig;
+    use roam_shm::{Segment, SegmentConfig, ShmLink, create_test_link_pair};
     use roam_types::Parity;
+    use shm_primitives::FileCleanup;
 
     use super::roam_bench::{BenchClient, BenchDispatcher, Handler};
 
@@ -387,7 +390,26 @@ mod roam_shm_bench {
                 slot_count: 4,
             },
         ];
-        let (a, b) = ShmLink::heap_pair(1 << 16, 1 << 20, 256, &classes).unwrap();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("bench.shm");
+        let segment = Arc::new(
+            Segment::create(
+                &path,
+                SegmentConfig {
+                    max_guests: 1,
+                    bipbuf_capacity: 1 << 16,
+                    max_payload_size: 1 << 20,
+                    inline_threshold: 256,
+                    heartbeat_interval: 0,
+                    size_classes: &classes,
+                },
+                FileCleanup::Manual,
+            )
+            .expect("create segment"),
+        );
+        let (a, b) = create_test_link_pair(segment).await.expect("create_test_link_pair");
+        // Leak the tempdir so the segment file lives for the entire benchmark run.
+        std::mem::forget(dir);
         let client_conduit: MessageConduit = BareConduit::new(a);
         let server_conduit: MessageConduit = BareConduit::new(b);
 

@@ -1,4 +1,5 @@
 use std::future::Future;
+#[cfg(unix)]
 use std::io::Write as _;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
@@ -485,8 +486,28 @@ pub async fn accept_rust_inproc(
                 slot_size: 4096,
                 slot_count: 64,
             }];
-            let (a, b) = ShmLink::heap_pair(1 << 16, 1 << 20, 256, &classes)
-                .map_err(|e| format!("shm heap_pair: {e}"))?;
+            let dir = tempfile::tempdir().map_err(|e| format!("tempdir: {e}"))?;
+            let path = dir.path().join("spec-test.shm");
+            let segment = Arc::new(
+                Segment::create(
+                    &path,
+                    SegmentConfig {
+                        max_guests: 1,
+                        bipbuf_capacity: 1 << 16,
+                        max_payload_size: 1 << 20,
+                        inline_threshold: 256,
+                        heartbeat_interval: 0,
+                        size_classes: &classes,
+                    },
+                    FileCleanup::Manual,
+                )
+                .map_err(|e| format!("shm segment create: {e}"))?,
+            );
+            let (a, b) = roam_shm::create_test_link_pair(segment)
+                .await
+                .map_err(|e| format!("shm create_test_link_pair: {e}"))?;
+            // Keep the temp dir alive for the test duration by leaking it.
+            std::mem::forget(dir);
             accept_rust_inproc_with_conduits(BareConduit::new(a), BareConduit::new(b)).await
         }
     }
@@ -963,7 +984,7 @@ async fn accept_subject_shm_subject_is_host(
 
         // Send the bootstrap request and receive the response.
         #[cfg(unix)]
-        let (response_status, response_peer_id, response_payload) = {
+        let link: ShmLink = {
             stream
                 .write_all(&request)
                 .map_err(|e| format!("send bootstrap request: {e}"))?;
@@ -1014,12 +1035,11 @@ async fn accept_subject_shm_subject_is_host(
             }
             .map_err(|e| format!("guest_link_from_raw: {e}"))?;
 
-            // Return values needed for the conduit below.
-            (received.response.status, link, ())
+            link
         };
 
         #[cfg(windows)]
-        let (response_status, response_peer_id, response_payload) = {
+        let link: ShmLink = {
             use roam_shm::bootstrap::{
                 BootstrapSuccessNames, BOOTSTRAP_RESPONSE_HEADER_LEN, decode_response,
             };
@@ -1090,14 +1110,11 @@ async fn accept_subject_shm_subject_is_host(
             )
             .map_err(|e| format!("guest_link_from_names: {e}"))?;
 
-            (response_ref.status, link, ())
+            link
         };
 
-        let _ = response_status;
-        let _ = response_payload;
-
         let conduit: BareConduit<MessageFamily, roam_shm::ShmLink> =
-            BareConduit::new(response_peer_id);
+            BareConduit::new(link);
 
         let (mut session, handle, _sh) = initiator(conduit)
             .establish()

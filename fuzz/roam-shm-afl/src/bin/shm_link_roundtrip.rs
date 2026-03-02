@@ -1,7 +1,10 @@
+use std::sync::Arc;
+
 use afl::fuzz;
-use roam_shm::ShmLink;
 use roam_shm::varslot::SizeClassConfig;
+use roam_shm::{Segment, SegmentConfig, create_test_link_pair};
 use roam_types::{Link, LinkRx, LinkTx, LinkTxPermit, WriteSlot};
+use shm_primitives::FileCleanup;
 
 fn main() {
     fuzz!(|data: &[u8]| {
@@ -22,7 +25,23 @@ fn main() {
                 slot_size: 512,
                 slot_count: 4,
             }];
-            let Ok((a, b)) = ShmLink::heap_pair(4096, 4096, 64, &classes) else {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let path = dir.path().join("fuzz.shm");
+            let Ok(segment) = Segment::create(
+                &path,
+                SegmentConfig {
+                    max_guests: 1,
+                    bipbuf_capacity: 4096,
+                    max_payload_size: 4096,
+                    inline_threshold: 64,
+                    heartbeat_interval: 0,
+                    size_classes: &classes,
+                },
+                FileCleanup::Manual,
+            ) else {
+                return;
+            };
+            let Ok((a, b)) = create_test_link_pair(Arc::new(segment)).await else {
                 return;
             };
             let (a_tx, _a_rx) = a.split();

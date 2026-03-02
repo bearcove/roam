@@ -77,6 +77,9 @@ pub struct Doorbell {
     pipe_name: String,
     /// Whether we've already logged that the peer is dead (to avoid spam).
     peer_dead_logged: AtomicBool,
+    /// Whether the server pipe has called ConnectNamedPipe.
+    /// Always true for client pipes.
+    server_connected: AtomicBool,
 }
 
 enum DoorbellPipe {
@@ -134,6 +137,7 @@ impl Doorbell {
                 pipe: DoorbellPipe::Server(server),
                 pipe_name: pipe_name.clone(),
                 peer_dead_logged: AtomicBool::new(false),
+                server_connected: AtomicBool::new(false),
             },
             DoorbellHandle(pipe_name),
         ))
@@ -158,6 +162,7 @@ impl Doorbell {
             pipe: DoorbellPipe::Client(client),
             pipe_name: pipe_name.to_string(),
             peer_dead_logged: AtomicBool::new(false),
+            server_connected: AtomicBool::new(true), // client is always connected
         })
     }
 
@@ -180,6 +185,16 @@ impl Doorbell {
 
     /// Wait for a signal from the other side.
     pub async fn wait(&self) -> io::Result<()> {
+        // Lazy connect: on Windows, the server pipe must call ConnectNamedPipe
+        // before I/O works.  If the client already connected (in-process test),
+        // this returns immediately with ERROR_PIPE_CONNECTED.
+        if !self.server_connected.load(Ordering::Acquire) {
+            if let DoorbellPipe::Server(server) = &self.pipe {
+                server.connect().await?;
+                self.server_connected.store(true, Ordering::Release);
+            }
+        }
+
         if self.try_drain() {
             return Ok(());
         }
@@ -259,6 +274,7 @@ impl Doorbell {
         match &self.pipe {
             DoorbellPipe::Server(server) => {
                 server.connect().await?;
+                self.server_connected.store(true, Ordering::Release);
                 Ok(())
             }
             DoorbellPipe::Client(_) => {
@@ -352,10 +368,8 @@ mod tests {
             Doorbell::from_handle(guest_handle)
         });
 
-        // Server needs to wait for connection
-        if let DoorbellPipe::Server(ref server) = host_doorbell.pipe {
-            server.connect().await.unwrap();
-        }
+        // Server needs to accept the client connection
+        host_doorbell.accept().await.unwrap();
 
         let guest_doorbell = connect_handle.await.unwrap().unwrap();
 
