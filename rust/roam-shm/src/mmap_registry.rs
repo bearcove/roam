@@ -215,6 +215,7 @@ impl MmapChannelTx {
 pub struct MmapAttachments {
     mappings: HashMap<(u32, u32), Arc<AttachedMapping>>,
     channel: MmapChannelRx,
+    terminal_error: Option<String>,
 }
 
 /// A single attached mmap region on the receiver side.
@@ -234,11 +235,23 @@ impl MmapAttachments {
         Self {
             mappings: HashMap::new(),
             channel,
+            terminal_error: None,
         }
+    }
+
+    fn terminal_error(&self) -> Option<MmapResolveError> {
+        self.terminal_error
+            .as_ref()
+            .map(|message| MmapResolveError::ControlChannelFailure {
+                message: message.clone(),
+            })
     }
 
     /// Drain all pending control messages, attaching new regions.
     pub fn drain_control(&mut self) {
+        if self.terminal_error.is_some() {
+            return;
+        }
         loop {
             match &mut self.channel {
                 #[cfg(unix)]
@@ -281,13 +294,17 @@ impl MmapAttachments {
                             "failed to recv mmap attach from control channel"
                         );
                         match error_kind {
-                            io::ErrorKind::WouldBlock
-                            | io::ErrorKind::UnexpectedEof
-                            | io::ErrorKind::BrokenPipe
-                            | io::ErrorKind::ConnectionAborted
-                            | io::ErrorKind::ConnectionReset
-                            | io::ErrorKind::NotConnected => break,
-                            _ => continue,
+                            io::ErrorKind::WouldBlock => break,
+                            io::ErrorKind::Interrupted => continue,
+                            // r[impl shm.mmap.attach.protocol-error]
+                            _ => {
+                                let message = format!(
+                                    "fatal mmap control channel receive error ({error_kind:?}): {error}"
+                                );
+                                warn!("{message}");
+                                self.terminal_error = Some(message);
+                                break;
+                            }
                         }
                     }
                 },
@@ -345,6 +362,9 @@ impl MmapAttachments {
         map_offset: u64,
         payload_len: u32,
     ) -> Result<Arc<AttachedMapping>, MmapResolveError> {
+        if let Some(error) = self.terminal_error() {
+            return Err(error);
+        }
         let key = (map_id, map_generation);
         let mapping = self
             .mappings
@@ -389,7 +409,13 @@ impl MmapAttachments {
         map_offset: u64,
         payload_len: u32,
     ) -> Result<Arc<AttachedMapping>, MmapResolveError> {
+        if let Some(error) = self.terminal_error() {
+            return Err(error);
+        }
         self.drain_control();
+        if let Some(error) = self.terminal_error() {
+            return Err(error);
+        }
         match self.resolve(map_id, map_generation, map_offset, payload_len) {
             Ok(mapping) => return Ok(mapping),
             Err(MmapResolveError::UnknownMapping { .. }) => {}
@@ -406,6 +432,9 @@ impl MmapAttachments {
         for _ in 0..GRACE_ATTEMPTS {
             std::thread::sleep(GRACE_SLEEP);
             self.drain_control();
+            if let Some(error) = self.terminal_error() {
+                return Err(error);
+            }
             match self.resolve(map_id, map_generation, map_offset, payload_len) {
                 Ok(mapping) => return Ok(mapping),
                 Err(MmapResolveError::UnknownMapping { .. }) => {}
@@ -443,6 +472,9 @@ impl MmapAttachments {
 
 #[derive(Debug)]
 pub enum MmapResolveError {
+    ControlChannelFailure {
+        message: String,
+    },
     UnknownMapping {
         map_id: u32,
         map_generation: u32,
@@ -465,6 +497,9 @@ pub enum MmapResolveError {
 impl std::fmt::Display for MmapResolveError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            MmapResolveError::ControlChannelFailure { message } => {
+                write!(f, "mmap control channel failure: {message}")
+            }
             MmapResolveError::UnknownMapping {
                 map_id,
                 map_generation,
@@ -667,7 +702,8 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
-    async fn drain_control_continues_after_malformed_real_packet() {
+    // r[verify shm.mmap.attach.protocol-error]
+    async fn drain_control_marks_channel_terminal_after_malformed_real_packet() {
         use shm_primitives::FileCleanup;
         use shm_primitives_async::create_mmap_control_pair_connected;
 
@@ -710,9 +746,19 @@ mod tests {
         let mut attachments = MmapAttachments::new(MmapChannelRx::Real(receiver));
         attachments.drain_control();
 
-        let mapping = attachments
-            .resolve(42, 1, 0, 1)
-            .expect("valid attach should still be processed");
-        assert_eq!(mapping.mapping_length, 4096);
+        let err = match attachments.resolve(42, 1, 0, 1) {
+            Ok(_) => panic!("malformed packet must poison control channel"),
+            Err(err) => err,
+        };
+        match err {
+            MmapResolveError::ControlChannelFailure { message } => {
+                assert!(
+                    message.contains("no fd received")
+                        || message.contains("invalid mmap control payload length"),
+                    "unexpected terminal error message: {message}"
+                );
+            }
+            other => panic!("expected terminal control-channel failure, got {other:?}"),
+        }
     }
 }

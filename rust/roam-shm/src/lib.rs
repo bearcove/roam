@@ -951,6 +951,7 @@ impl LinkRx for ShmLinkRx {
                                     error = %error,
                                     "shm rx mmap-ref resolve failed"
                                 );
+                                // r[impl shm.mmap.attach.protocol-error]
                                 return Err(ShmLinkRxError::MmapResolve(error));
                             }
                         };
@@ -1050,6 +1051,7 @@ impl SharedBacking for ShmMmapBacking {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
     use std::time::Duration;
 
     use roam_types::{LinkRx as _, LinkTx as _, LinkTxPermit as _};
@@ -1393,9 +1395,11 @@ mod tests {
             mapping_length,
         };
 
+        let control_tx = Arc::new(control_tx);
+        let delayed_tx = Arc::clone(&control_tx);
         std::thread::spawn(move || {
             std::thread::sleep(Duration::from_millis(150));
-            control_tx.send(region.as_raw_fd(), &attach).unwrap();
+            delayed_tx.send(region.as_raw_fd(), &attach).unwrap();
         });
 
         let backing = timeout(Duration::from_secs(1), b_rx.recv())

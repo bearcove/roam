@@ -571,6 +571,15 @@ Each guest has two BipBuffers (bipartite circular buffers):
 > metadata in `r[shm.mmap.attach.message]`. The receiver MUST treat an
 > fd/control-body mismatch as a protocol error.
 
+> r[shm.mmap.attach.protocol-error]
+>
+> A malformed mapping-control message is a terminal protocol error for
+> that SHM link. After detecting malformed mapping-control input
+> (including invalid body length, truncated control data, or missing/invalid
+> transferred handle), the receiver MUST fail the link immediately and
+> MUST NOT continue draining mapping-control messages or resolving
+> subsequent `MMAP_REF` frames on that link.
+
 > r[shm.mmap.attach.windows]
 >
 > On Windows, the host MUST duplicate the mapping handle into the guest

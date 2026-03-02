@@ -14,6 +14,11 @@ use tokio::io::unix::AsyncFd;
 
 use super::doorbell::set_nonblocking;
 
+const MMAP_CONTROL_EXPECTED_PAYLOAD_LEN: usize = 16;
+const MMAP_CONTROL_SNIFF_BYTES: usize = 256;
+const MMAP_CONTROL_DUMP_BYTES: usize = 32;
+const MMAP_CONTROL_OVERSIZE_CAPTURE_MAX: usize = 64 * 1024;
+
 /// 16-byte metadata sent alongside each file descriptor.
 ///
 /// r[impl shm.mmap.attach.message]
@@ -152,14 +157,16 @@ fn send_fd_with_metadata(sock_fd: RawFd, fd: RawFd, msg: &MmapAttachMessage) -> 
         std::ptr::copy_nonoverlapping(fds.as_ptr(), data_ptr, 1);
     }
 
-    let n = sendmsg_no_sigpipe(sock_fd, &msghdr)?;
-    if n < 0 {
-        return Err(io::Error::last_os_error());
-    }
+    let n = sendmsg_no_sigpipe(sock_fd, &msghdr).map_err(|error| {
+        io::Error::new(
+            error.kind(),
+            format!("mmap control sendmsg failed: {error} {}", fd_telemetry()),
+        )
+    })?;
     if n == 0 {
         return Err(io::Error::new(
             ErrorKind::WriteZero,
-            "sendmsg wrote 0 bytes",
+            format!("sendmsg wrote 0 bytes {}", fd_telemetry()),
         ));
     }
     Ok(())
@@ -203,7 +210,7 @@ fn ensure_socket_no_sigpipe(fd: RawFd) -> io::Result<()> {
 
 /// Receive one fd + 16-byte metadata using SCM_RIGHTS.
 fn recv_fd_with_metadata(sock_fd: RawFd) -> io::Result<(OwnedFd, MmapAttachMessage)> {
-    let mut payload = [0u8; 16];
+    let mut payload = [0u8; MMAP_CONTROL_SNIFF_BYTES];
     let mut iov = libc::iovec {
         iov_base: payload.as_mut_ptr().cast(),
         iov_len: payload.len(),
@@ -219,23 +226,67 @@ fn recv_fd_with_metadata(sock_fd: RawFd) -> io::Result<(OwnedFd, MmapAttachMessa
     msghdr.msg_control = control.as_mut_ptr().cast();
     msghdr.msg_controllen = control.len() as _;
 
-    let n = unsafe { libc::recvmsg(sock_fd, &mut msghdr, 0) };
+    let n = unsafe { libc::recvmsg(sock_fd, &mut msghdr, libc::MSG_TRUNC) };
     if n < 0 {
-        return Err(io::Error::last_os_error());
-    }
-    if n == 0 {
-        return Err(io::Error::new(ErrorKind::UnexpectedEof, "peer closed"));
-    }
-    if (n as usize) < 16 {
+        let error = io::Error::last_os_error();
+        if error.raw_os_error() == Some(libc::EMSGSIZE) {
+            let diagnostic = diagnose_oversized_mmap_control_datagram(sock_fd);
+            return Err(io::Error::new(
+                ErrorKind::InvalidData,
+                format!(
+                    "invalid mmap control payload length: recvmsg returned EMSGSIZE (expected={}) {diagnostic} {}",
+                    MMAP_CONTROL_EXPECTED_PAYLOAD_LEN,
+                    fd_telemetry(),
+                ),
+            ));
+        }
         return Err(io::Error::new(
-            ErrorKind::InvalidData,
-            "short read on mmap control socket",
+            error.kind(),
+            format!("mmap control recvmsg failed: {error} {}", fd_telemetry()),
         ));
     }
+    if n == 0 {
+        return Err(io::Error::new(
+            ErrorKind::UnexpectedEof,
+            format!("peer closed {}", fd_telemetry()),
+        ));
+    }
+    if (n as usize) < MMAP_CONTROL_EXPECTED_PAYLOAD_LEN {
+        return Err(io::Error::new(
+            ErrorKind::InvalidData,
+            format!(
+                "short mmap control payload: got={} expected={} payload_prefix={} {}",
+                n,
+                MMAP_CONTROL_EXPECTED_PAYLOAD_LEN,
+                hex_prefix(&payload, n as usize),
+                fd_telemetry(),
+            ),
+        ));
+    }
+    // r[impl shm.mmap.attach.protocol-error]
+    if (n as usize) != MMAP_CONTROL_EXPECTED_PAYLOAD_LEN {
+        return Err(io::Error::new(
+            ErrorKind::InvalidData,
+            format!(
+                "invalid mmap control payload length: got={} expected={} msg_flags=0x{:x} payload_prefix={} {}",
+                n,
+                MMAP_CONTROL_EXPECTED_PAYLOAD_LEN,
+                msghdr.msg_flags,
+                hex_prefix(&payload, n as usize),
+                fd_telemetry(),
+            ),
+        ));
+    }
+    // r[impl shm.mmap.attach.protocol-error]
     if (msghdr.msg_flags & libc::MSG_CTRUNC) != 0 {
         return Err(io::Error::new(
             ErrorKind::InvalidData,
-            "control message truncated",
+            format!(
+                "mmap control cmsg truncated: msg_flags=0x{:x} payload_prefix={} {}",
+                msghdr.msg_flags,
+                hex_prefix(&payload, n as usize),
+                fd_telemetry(),
+            ),
         ));
     }
 
@@ -255,13 +306,114 @@ fn recv_fd_with_metadata(sock_fd: RawFd) -> io::Result<(OwnedFd, MmapAttachMessa
         }
     }
 
+    // r[impl shm.mmap.attach.protocol-error]
     let raw_fd = received_fd.ok_or_else(|| {
-        io::Error::new(ErrorKind::InvalidData, "no fd received in control message")
+        io::Error::new(
+            ErrorKind::InvalidData,
+            format!(
+                "no fd received in mmap control message: msg_flags=0x{:x} payload_prefix={} {}",
+                msghdr.msg_flags,
+                hex_prefix(&payload, n as usize),
+                fd_telemetry(),
+            ),
+        )
     })?;
 
     let owned_fd = unsafe { OwnedFd::from_raw_fd(raw_fd) };
-    let msg = MmapAttachMessage::from_le_bytes(payload);
+    let msg = MmapAttachMessage::from_le_bytes(
+        payload[..MMAP_CONTROL_EXPECTED_PAYLOAD_LEN]
+            .try_into()
+            .expect("slice length checked above"),
+    );
     Ok((owned_fd, msg))
+}
+
+fn diagnose_oversized_mmap_control_datagram(sock_fd: RawFd) -> String {
+    let capture_cap = pending_datagram_len(sock_fd)
+        .ok()
+        .filter(|len| *len > 0)
+        .unwrap_or(MMAP_CONTROL_OVERSIZE_CAPTURE_MAX)
+        .min(MMAP_CONTROL_OVERSIZE_CAPTURE_MAX);
+
+    let mut payload = vec![0u8; capture_cap.max(1)];
+    let mut iov = libc::iovec {
+        iov_base: payload.as_mut_ptr().cast(),
+        iov_len: payload.len(),
+    };
+
+    let data_len = std::mem::size_of::<RawFd>();
+    let cmsg_space = unsafe { libc::CMSG_SPACE(data_len as u32) as usize };
+    let mut control = vec![0u8; cmsg_space];
+
+    let mut msghdr: libc::msghdr = unsafe { std::mem::zeroed() };
+    msghdr.msg_iov = &mut iov;
+    msghdr.msg_iovlen = 1;
+    msghdr.msg_control = control.as_mut_ptr().cast();
+    msghdr.msg_controllen = control.len() as _;
+
+    let n = unsafe { libc::recvmsg(sock_fd, &mut msghdr, libc::MSG_DONTWAIT | libc::MSG_TRUNC) };
+    if n < 0 {
+        return format!(
+            "drain_diag=unavailable error={}",
+            io::Error::last_os_error()
+        );
+    }
+
+    let observed = n as usize;
+    let dump = hex_prefix(&payload, observed);
+    format!(
+        "observed={} capture_cap={} msg_flags=0x{:x} payload_prefix={}",
+        observed, capture_cap, msghdr.msg_flags, dump
+    )
+}
+
+fn pending_datagram_len(sock_fd: RawFd) -> io::Result<usize> {
+    let mut pending: libc::c_int = 0;
+    let rc = unsafe { libc::ioctl(sock_fd, libc::FIONREAD, &mut pending) };
+    if rc < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(pending as usize)
+}
+
+fn hex_prefix(bytes: &[u8], observed_len: usize) -> String {
+    let take = observed_len.min(bytes.len()).min(MMAP_CONTROL_DUMP_BYTES);
+    let mut out = String::with_capacity(take.saturating_mul(3) + 16);
+    for (idx, byte) in bytes.iter().take(take).enumerate() {
+        if idx > 0 {
+            out.push(' ');
+        }
+        out.push_str(&format!("{byte:02x}"));
+    }
+    if observed_len > take {
+        out.push_str(&format!(" ... (+{} bytes)", observed_len - take));
+    }
+    out
+}
+
+fn fd_telemetry() -> String {
+    let open = open_fd_count()
+        .map(|count| count.to_string())
+        .unwrap_or_else(|error| format!("error:{error}"));
+    let (soft, hard) = nofile_limits();
+    format!("fd_usage(open={open}, soft_limit={soft}, hard_limit={hard})")
+}
+
+fn open_fd_count() -> io::Result<usize> {
+    #[cfg(target_os = "linux")]
+    let path = "/proc/self/fd";
+    #[cfg(not(target_os = "linux"))]
+    let path = "/dev/fd";
+    Ok(std::fs::read_dir(path)?.count())
+}
+
+fn nofile_limits() -> (u64, u64) {
+    let mut limits: libc::rlimit = unsafe { std::mem::zeroed() };
+    let rc = unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut limits) };
+    if rc != 0 {
+        return (0, 0);
+    }
+    (limits.rlim_cur as u64, limits.rlim_max as u64)
 }
 
 impl MmapControlSender {
@@ -485,6 +637,7 @@ mod tests {
     }
 
     #[test]
+    // r[verify shm.mmap.attach.protocol-error]
     fn recv_rejects_payload_without_fd_control_message() {
         let (sender_fd, receiver_fd) = create_dgram_pair().expect("create pair");
         let payload = MmapAttachMessage {
@@ -504,9 +657,14 @@ mod tests {
             ErrorKind::InvalidData,
             "expected InvalidData for missing fd control message, got {err:?}"
         );
+        assert!(
+            err.to_string().contains("payload_prefix="),
+            "expected diagnostic payload dump in error, got {err:?}"
+        );
     }
 
     #[test]
+    // r[verify shm.mmap.attach.protocol-error]
     fn recv_rejects_truncated_control_message() {
         let (sender_fd, receiver_fd) = create_dgram_pair().expect("create pair");
         let tmp_a = tempfile::NamedTempFile::new().expect("tmp file a");
@@ -567,5 +725,27 @@ mod tests {
             .await
             .expect("receiver should recover and accept valid packet");
         assert_eq!(msg, good);
+    }
+
+    #[test]
+    // r[verify shm.mmap.attach.protocol-error]
+    fn recv_rejects_oversized_payload_with_diagnostics() {
+        let (sender_fd, receiver_fd) = create_dgram_pair().expect("create pair");
+        let oversized = [0xAAu8; 96];
+        send_raw_payload_without_fd(sender_fd.as_raw_fd(), &oversized)
+            .expect("send oversized malformed packet");
+
+        let err = recv_fd_with_metadata(receiver_fd.as_raw_fd())
+            .expect_err("receiver should reject oversized payload");
+        assert_eq!(err.kind(), ErrorKind::InvalidData);
+        let msg = err.to_string();
+        assert!(
+            msg.contains("invalid mmap control payload length"),
+            "expected length diagnostic in error, got {msg}"
+        );
+        assert!(
+            msg.contains("payload_prefix="),
+            "expected payload prefix dump in error, got {msg}"
+        );
     }
 }

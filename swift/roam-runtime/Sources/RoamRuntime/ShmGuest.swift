@@ -353,6 +353,14 @@ public enum ShmGuestReceiveError: Error, Equatable {
     case payloadTooLarge
 }
 
+private struct OutboundMmapRegion {
+    let region: ShmRegion
+    let mapId: UInt32
+    let mapGeneration: UInt32
+    let mappingLength: Int
+    var nextOffset: Int
+}
+
 // r[impl shm.mmap.attach]
 // r[impl shm.mmap.bounds]
 // r[impl shm.mmap.aba]
@@ -419,6 +427,8 @@ public final class ShmGuestRuntime: @unchecked Sendable {
     private let mmapControlFd: Int32
     private let maxVarSlotPayload: UInt32
     private var nextMmapId: UInt32 = 1
+    private var outboundMmapRegion: OutboundMmapRegion?
+    private var retiredOutboundMmapRegions: [ShmRegion] = []
     private var fatalError = false
 
     // r[impl shm.guest.attach]
@@ -668,40 +678,19 @@ public final class ShmGuestRuntime: @unchecked Sendable {
         }
 
         let payloadCount = Int(payloadLen)
-        let pageSize = max(Int(getpagesize()), 4096)
-        let mappingLength = max(((payloadCount + pageSize - 1) / pageSize) * pageSize, payloadCount)
-        let mmapPath = "\(NSTemporaryDirectory())roam-swift-mmap-\(UUID().uuidString).bin"
-        let mapping: ShmRegion
-        do {
-            mapping = try ShmRegion.create(path: mmapPath, size: mappingLength, cleanup: .auto)
-        } catch {
-            throw ShmGuestSendError.mmapAllocationFailed
-        }
+        let allocation = try allocateOutboundMmapSlice(payloadCount: payloadCount)
 
         frame.payload.withUnsafeBytes { raw in
             if let base = raw.baseAddress {
-                memcpy(mapping.basePointer(), base, raw.count)
+                memcpy(allocation.region.basePointer().advanced(by: allocation.mapOffset), base, raw.count)
             }
-        }
-
-        let mapId = allocateMmapId()
-        let mapGeneration: UInt32 = 1
-        let sendRc = roam_mmap_control_send(
-            mmapControlFd,
-            mapping.rawFd,
-            mapId,
-            mapGeneration,
-            UInt64(mappingLength)
-        )
-        guard sendRc == 0 else {
-            throw ShmGuestSendError.mmapControlError
         }
 
         let mmapFrame = encodeShmMmapRefFrame(
             mmapRef: ShmMmapRef(
-                mapId: mapId,
-                mapGeneration: mapGeneration,
-                mapOffset: 0,
+                mapId: allocation.mapId,
+                mapGeneration: allocation.mapGeneration,
+                mapOffset: UInt64(allocation.mapOffset),
                 payloadLen: payloadLen
             )
         )
@@ -717,6 +706,53 @@ public final class ShmGuestRuntime: @unchecked Sendable {
             nextMmapId = 1
         }
         return mapId
+    }
+
+    private func allocateOutboundMmapSlice(payloadCount: Int) throws
+        -> (region: ShmRegion, mapId: UInt32, mapGeneration: UInt32, mapOffset: Int)
+    {
+        if var active = outboundMmapRegion, active.nextOffset + payloadCount <= active.mappingLength {
+            let offset = active.nextOffset
+            active.nextOffset += payloadCount
+            outboundMmapRegion = active
+            return (active.region, active.mapId, active.mapGeneration, offset)
+        }
+
+        let pageSize = max(Int(getpagesize()), 4096)
+        let minRegionSize = 4 * 1024 * 1024
+        let regionSize = alignUp(max(payloadCount, minRegionSize), pageSize)
+        let mmapPath = "\(NSTemporaryDirectory())roam-swift-mmap-\(UUID().uuidString).bin"
+        let region: ShmRegion
+        do {
+            region = try ShmRegion.create(path: mmapPath, size: regionSize, cleanup: .auto)
+        } catch {
+            throw ShmGuestSendError.mmapAllocationFailed
+        }
+
+        let mapId = allocateMmapId()
+        let mapGeneration: UInt32 = 1
+        let sendRc = roam_mmap_control_send(
+            mmapControlFd,
+            region.rawFd,
+            mapId,
+            mapGeneration,
+            UInt64(regionSize)
+        )
+        guard sendRc == 0 else {
+            throw ShmGuestSendError.mmapControlError
+        }
+
+        if let previous = outboundMmapRegion {
+            retiredOutboundMmapRegions.append(previous.region)
+        }
+        outboundMmapRegion = OutboundMmapRegion(
+            region: region,
+            mapId: mapId,
+            mapGeneration: mapGeneration,
+            mappingLength: regionSize,
+            nextOffset: payloadCount
+        )
+        return (region, mapId, mapGeneration, 0)
     }
 
     // r[impl zerocopy.recv.shm.inline]
@@ -890,4 +926,9 @@ private func readU32LE(_ bytes: [UInt8], _ at: Int) -> UInt32 {
         | (UInt32(bytes[at + 1]) << 8)
         | (UInt32(bytes[at + 2]) << 16)
         | (UInt32(bytes[at + 3]) << 24)
+}
+
+@inline(__always)
+private func alignUp(_ value: Int, _ alignment: Int) -> Int {
+    ((value + alignment - 1) / alignment) * alignment
 }
