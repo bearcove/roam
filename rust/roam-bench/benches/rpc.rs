@@ -111,7 +111,7 @@ mod roam_zerocopy_bench {
                 slot_count: 2,
             },
         ];
-        let (a, b) = ShmLink::heap_pair(1 << 17, 1 << 24, 256, &classes).unwrap();
+        let (a, b) = ShmLink::heap_pair(1 << 17, 1 << 30, 256, &classes).unwrap();
         let client_conduit: ShmConduit = BareConduit::new(a);
         let server_conduit: ShmConduit = BareConduit::new(b);
 
