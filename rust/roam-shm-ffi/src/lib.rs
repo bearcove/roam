@@ -1077,13 +1077,14 @@ fn send_mmap_attach(
     let fds = [mapping_fd];
     let cmsg_space = unsafe { libc::CMSG_SPACE(core::mem::size_of_val(&fds) as u32) as usize };
     let mut control = vec![0_u8; cmsg_space];
+    let cmsg_len = unsafe { libc::CMSG_LEN(core::mem::size_of_val(&fds) as u32) as usize };
 
     // SAFETY: zeroed msghdr is valid before field initialization.
     let mut msghdr: libc::msghdr = unsafe { core::mem::zeroed() };
     msghdr.msg_iov = &mut iov;
     msghdr.msg_iovlen = 1;
     msghdr.msg_control = control.as_mut_ptr().cast();
-    msghdr.msg_controllen = control.len() as _;
+    msghdr.msg_controllen = cmsg_len as _;
 
     // SAFETY: cmsg buffer belongs to this stack frame and is sized via CMSG_SPACE.
     let cmsg = unsafe { libc::CMSG_FIRSTHDR(&msghdr) };
@@ -1097,7 +1098,7 @@ fn send_mmap_attach(
     unsafe {
         (*cmsg).cmsg_level = libc::SOL_SOCKET;
         (*cmsg).cmsg_type = libc::SCM_RIGHTS;
-        (*cmsg).cmsg_len = libc::CMSG_LEN(core::mem::size_of_val(&fds) as u32) as _;
+        (*cmsg).cmsg_len = cmsg_len as _;
         let data_ptr = libc::CMSG_DATA(cmsg).cast::<RawFd>();
         core::ptr::copy_nonoverlapping(fds.as_ptr(), data_ptr, 1);
     }

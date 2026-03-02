@@ -324,10 +324,11 @@ pub fn send_response_unix(
         let fd_count = fds.len();
         let data_len = fd_count * std::mem::size_of::<std::os::fd::RawFd>();
         let cmsg_space = unsafe { libc::CMSG_SPACE(data_len as u32) as usize };
+        let cmsg_len = unsafe { libc::CMSG_LEN(data_len as u32) as usize };
         control_buf.resize(cmsg_space, 0);
 
         msghdr.msg_control = control_buf.as_mut_ptr().cast();
-        msghdr.msg_controllen = control_buf.len() as _;
+        msghdr.msg_controllen = cmsg_len as _;
 
         // SAFETY: control buffer sized with CMSG_SPACE and owned here.
         let cmsg = unsafe { libc::CMSG_FIRSTHDR(&msghdr) };
@@ -342,7 +343,7 @@ pub fn send_response_unix(
         unsafe {
             (*cmsg).cmsg_level = libc::SOL_SOCKET;
             (*cmsg).cmsg_type = libc::SCM_RIGHTS;
-            (*cmsg).cmsg_len = libc::CMSG_LEN(data_len as u32) as _;
+            (*cmsg).cmsg_len = cmsg_len as _;
             std::ptr::copy_nonoverlapping(
                 fds.as_ptr(),
                 libc::CMSG_DATA(cmsg).cast::<std::os::fd::RawFd>(),

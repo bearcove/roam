@@ -105,7 +105,7 @@ fn drain_fd(fd: RawFd, would_block_is_error: bool, eof_is_error: bool) -> io::Re
             if eof_is_error {
                 return Err(io::Error::new(
                     ErrorKind::BrokenPipe,
-                    "doorbell peer closed",
+                    "doorbell peer closed (recv returned 0)",
                 ));
             }
             return Ok(drained);

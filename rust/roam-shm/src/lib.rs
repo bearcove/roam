@@ -425,6 +425,11 @@ impl LinkTx for ShmLinkTx {
                     .stats
                     .doorbell_wait_errors
                     .fetch_add(1, AtomicOrdering::Relaxed);
+                warn!(
+                    error = %err,
+                    raw_os_error = ?err.raw_os_error(),
+                    "shm tx doorbell wait failed"
+                );
                 return Err(io::Error::new(
                     io::ErrorKind::BrokenPipe,
                     format!("shm doorbell wait failed: {err}"),
@@ -708,7 +713,14 @@ impl std::fmt::Display for ShmLinkRxError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ShmLinkRxError::MmapResolve(err) => write!(f, "mmap resolve failed: {err}"),
-            ShmLinkRxError::DoorbellWait(err) => write!(f, "doorbell wait failed: {err}"),
+            ShmLinkRxError::DoorbellWait(err) => {
+                write!(
+                    f,
+                    "doorbell wait failed: {} (raw_os_error={:?})",
+                    err,
+                    err.raw_os_error()
+                )
+            }
             ShmLinkRxError::MalformedSlotRefLength {
                 slot_bytes,
                 payload_len,
@@ -878,7 +890,11 @@ impl LinkRx for ShmLinkRx {
                 self.stats
                     .doorbell_wait_errors
                     .fetch_add(1, AtomicOrdering::Relaxed);
-                warn!(error = %err, "shm rx doorbell wait failed");
+                warn!(
+                    error = %err,
+                    raw_os_error = ?err.raw_os_error(),
+                    "shm rx doorbell wait failed"
+                );
                 return Err(ShmLinkRxError::DoorbellWait(err));
             }
             trace!("shm rx woke from doorbell wait");
