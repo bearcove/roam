@@ -26,10 +26,11 @@ const ZEROCOPY_PAYLOAD_SIZES: &[usize] = &[
 mod roam_zerocopy_bench {
     use moire::task::FutureExt;
     use roam_core::{BareConduit, Driver, acceptor, initiator, memory_link_pair};
-    use roam_shm::ShmLink;
     use roam_shm::varslot::SizeClassConfig;
+    use roam_shm::{Segment, SegmentConfig, ShmLink, create_test_link_pair};
     use roam_stream::StreamLink;
     use roam_types::Parity;
+    use shm_primitives::FileCleanup;
     use tokio::net::TcpListener;
 
     type MemoryConduit = BareConduit<roam_types::MessageFamily, roam_core::MemoryLink>;
@@ -111,8 +112,27 @@ mod roam_zerocopy_bench {
                 slot_count: 2,
             },
         ];
-        // FIXME: heap_pair disappeared, we need two processes for this.
-        let (a, b) = ShmLink::heap_pair(1 << 17, 1 << 30, 256, &classes).unwrap();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("zerocopy-bench.shm");
+        let segment = std::sync::Arc::new(
+            Segment::create(
+                &path,
+                SegmentConfig {
+                    max_guests: 1,
+                    bipbuf_capacity: 1 << 17,
+                    max_payload_size: 1 << 30,
+                    inline_threshold: 256,
+                    heartbeat_interval: 0,
+                    size_classes: &classes,
+                },
+                FileCleanup::Manual,
+            )
+            .expect("create segment"),
+        );
+        let (a, b) = create_test_link_pair(segment)
+            .await
+            .expect("create_test_link_pair");
+        std::mem::forget(dir);
         let client_conduit: ShmConduit = BareConduit::new(a);
         let server_conduit: ShmConduit = BareConduit::new(b);
 
