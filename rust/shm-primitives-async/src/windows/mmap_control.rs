@@ -149,8 +149,6 @@ impl Drop for MmapControlSender {
 /// constructed via [`create_mmap_control_receiver_server`]).
 pub struct MmapControlReceiver {
     handle: RawHandle,
-    /// `true` when this is a server-side handle that hasn't accepted a client yet.
-    needs_connect: AtomicBool,
 }
 
 // SAFETY: handle is used exclusively by this struct.
@@ -180,28 +178,16 @@ impl MmapControlReceiver {
         }
         Ok(Self {
             handle: h as RawHandle,
-            needs_connect: AtomicBool::new(false),
         })
     }
 
-    /// If this is a server-side handle, accept the client connection.
-    fn ensure_connected(&self) -> io::Result<()> {
-        if self.needs_connect.swap(false, Ordering::Relaxed) {
-            let ok = unsafe { ConnectNamedPipe(self.handle as _, std::ptr::null_mut()) };
-            if ok == 0 {
-                let err = io::Error::last_os_error();
-                if err.raw_os_error() != Some(ERROR_PIPE_CONNECTED as i32) {
-                    self.needs_connect.store(true, Ordering::Relaxed);
-                    return Err(err);
-                }
-            }
-        }
-        Ok(())
-    }
-
     /// Non-blocking receive of one (path, metadata) pair.
+    ///
+    /// For server-side handles (from [`create_mmap_control_receiver_server`]),
+    /// no explicit `ConnectNamedPipe` is needed: `PeekNamedPipe` returns an
+    /// error (treated as "no data yet") until the client connects, then works
+    /// normally once connected.
     pub fn try_recv_path(&self) -> io::Result<Option<(PathBuf, MmapAttachMessage)>> {
-        self.ensure_connected()?;
         // Check if data is available without blocking.
         let mut bytes_available: u32 = 0;
         let ok = unsafe {
@@ -416,10 +402,7 @@ pub fn create_mmap_control_receiver_server() -> io::Result<(MmapControlReceiver,
     if h == INVALID_HANDLE_VALUE {
         return Err(io::Error::last_os_error());
     }
-    Ok((MmapControlReceiver {
-        handle: h as RawHandle,
-        needs_connect: AtomicBool::new(true),
-    }, pipe_name))
+    Ok((MmapControlReceiver { handle: h as RawHandle }, pipe_name))
 }
 
 /// No-op on Windows (Unix `clear_cloexec` equivalent).
