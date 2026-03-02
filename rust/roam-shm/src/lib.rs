@@ -10,9 +10,7 @@ use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use std::sync::{Arc, Mutex};
 
 use roam_types::{Backing, Link, LinkRx, LinkTx, LinkTxPermit, SharedBacking, WriteSlot};
-#[cfg(unix)]
-use shm_primitives::BIPBUF_HEADER_SIZE;
-use shm_primitives::{BipBuf, HeapRegion, PeerId};
+use shm_primitives::{BIPBUF_HEADER_SIZE, BipBuf, HeapRegion, PeerId};
 use shm_primitives_async::{Doorbell, SignalResult};
 use tracing::{debug, trace, warn};
 
@@ -21,10 +19,8 @@ use crate::mmap_registry::{
     MmapAllocation, MmapAttachments, MmapChannelRx, MmapChannelTx, MmapRegistry,
 };
 
-#[cfg(unix)]
 pub mod bootstrap;
 pub mod framing;
-#[cfg(unix)]
 pub mod host;
 pub mod mmap_registry;
 pub mod peer_table;
@@ -34,13 +30,15 @@ pub mod varslot;
 pub use segment::{AttachError, Segment, SegmentConfig, SegmentLayout};
 pub use varslot::{SizeClassConfig, SlotRef, VarSlotPool};
 
-#[cfg(unix)]
 pub use host::{
     AddPeerOptions, GuestSpawnTicket, HostHub, HostPeer, MultiPeerHostDriver, PreparedPeer,
-    ShmHost, guest_link_from_raw, guest_link_from_ticket,
+    ShmHost,
 };
-
 #[cfg(unix)]
+pub use host::{guest_link_from_raw, guest_link_from_ticket};
+#[cfg(windows)]
+pub use host::guest_link_from_names;
+
 pub mod driver {
     pub use crate::host::{AddPeerOptions, MultiPeerHostDriver, ShmHost};
 }

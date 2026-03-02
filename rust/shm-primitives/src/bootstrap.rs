@@ -511,6 +511,144 @@ pub fn recv_response_unix(
     }
 }
 
+// ---------------------------------------------------------------------------
+// Stream-based send/recv (Windows and cross-platform)
+// ---------------------------------------------------------------------------
+
+/// Names carried in a successful bootstrap response on platforms without
+/// fd-passing (e.g. Windows).
+///
+/// The payload is encoded as three `\0`-separated UTF-8 strings:
+/// `{segment_path}\0{doorbell_name}\0{mmap_ctrl_name}`.
+#[derive(Debug, Clone)]
+pub struct BootstrapSuccessNames {
+    pub segment_path: String,
+    pub doorbell_name: String,
+    pub mmap_ctrl_name: String,
+}
+
+/// Result of receiving a bootstrap response over a byte stream.
+#[derive(Debug)]
+pub struct ReceivedBootstrapResponseStream {
+    pub response: BootstrapResponseOwned,
+    pub names: Option<BootstrapSuccessNames>,
+}
+
+impl BootstrapSuccessNames {
+    /// Encode the three names into a `\0`-separated payload.
+    pub fn encode(&self) -> Vec<u8> {
+        let mut out = Vec::new();
+        out.extend_from_slice(self.segment_path.as_bytes());
+        out.push(0);
+        out.extend_from_slice(self.doorbell_name.as_bytes());
+        out.push(0);
+        out.extend_from_slice(self.mmap_ctrl_name.as_bytes());
+        out
+    }
+
+    /// Decode from a `\0`-separated payload.
+    pub fn decode(payload: &[u8]) -> Result<Self, BootstrapError> {
+        let parts: Vec<&[u8]> = payload.splitn(3, |&b| b == 0).collect();
+        if parts.len() != 3 {
+            return Err(BootstrapError::Io(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "bootstrap success payload: expected 3 null-separated fields, got {}",
+                    parts.len()
+                ),
+            )));
+        }
+        let segment_path = String::from_utf8(parts[0].to_vec()).map_err(|e| {
+            BootstrapError::Io(io::Error::new(io::ErrorKind::InvalidData, e.to_string()))
+        })?;
+        let doorbell_name = String::from_utf8(parts[1].to_vec()).map_err(|e| {
+            BootstrapError::Io(io::Error::new(io::ErrorKind::InvalidData, e.to_string()))
+        })?;
+        let mmap_ctrl_name = String::from_utf8(parts[2].to_vec()).map_err(|e| {
+            BootstrapError::Io(io::Error::new(io::ErrorKind::InvalidData, e.to_string()))
+        })?;
+        Ok(Self {
+            segment_path,
+            doorbell_name,
+            mmap_ctrl_name,
+        })
+    }
+}
+
+/// Send a bootstrap response over a byte stream (no fd-passing).
+///
+/// r[impl shm.bootstrap.success]
+/// r[impl shm.bootstrap.error]
+pub fn send_response_stream(
+    stream: &mut impl io::Write,
+    status: BootstrapStatus,
+    peer_id: u32,
+    payload: &[u8],
+) -> Result<(), BootstrapError> {
+    let frame = encode_response(status, peer_id, payload)?;
+    stream.write_all(&frame)?;
+    stream.flush()?;
+    Ok(())
+}
+
+/// Receive a bootstrap response from a byte stream (no fd-passing).
+///
+/// On success, parses the payload as `\0`-separated names.
+///
+/// r[impl shm.bootstrap.success]
+/// r[impl shm.bootstrap.error]
+pub fn recv_response_stream(
+    stream: &mut impl io::Read,
+) -> Result<ReceivedBootstrapResponseStream, BootstrapError> {
+    // Read the fixed header first.
+    let mut header = [0u8; BOOTSTRAP_RESPONSE_HEADER_LEN];
+    stream.read_exact(&mut header)?;
+
+    let mut found_magic = [0u8; 4];
+    found_magic.copy_from_slice(&header[0..4]);
+    if found_magic != BOOTSTRAP_RESPONSE_MAGIC {
+        return Err(BootstrapError::InvalidMagic {
+            context: "bootstrap response",
+            expected: BOOTSTRAP_RESPONSE_MAGIC,
+            found: found_magic,
+        });
+    }
+
+    let status = BootstrapStatus::try_from(header[4])?;
+    let peer_id = u32::from_le_bytes([header[5], header[6], header[7], header[8]]);
+    let payload_len = u16::from_le_bytes([header[9], header[10]]) as usize;
+
+    if status == BootstrapStatus::Error && peer_id != 0 {
+        return Err(BootstrapError::InvalidErrorPeerId(peer_id));
+    }
+
+    // Read the variable-length payload.
+    let mut payload = vec![0u8; payload_len];
+    if payload_len > 0 {
+        stream.read_exact(&mut payload)?;
+    }
+
+    let response = BootstrapResponseOwned {
+        status,
+        peer_id,
+        payload: payload.clone(),
+    };
+
+    match status {
+        BootstrapStatus::Success => {
+            let names = BootstrapSuccessNames::decode(&payload)?;
+            Ok(ReceivedBootstrapResponseStream {
+                response,
+                names: Some(names),
+            })
+        }
+        BootstrapStatus::Error => Ok(ReceivedBootstrapResponseStream {
+            response,
+            names: None,
+        }),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -630,5 +768,51 @@ mod tests {
         assert_eq!(got.response.peer_id, 0);
         assert_eq!(got.response.payload, b"no slot");
         assert!(got.fds.is_none());
+    }
+
+    #[test]
+    fn stream_response_roundtrip_success() {
+        let names = BootstrapSuccessNames {
+            segment_path: "/tmp/test.shm".to_string(),
+            doorbell_name: r"\\.\pipe\roam-db-1234".to_string(),
+            mmap_ctrl_name: r"\\.\pipe\roam-mc-5678".to_string(),
+        };
+        let payload = names.encode();
+
+        let mut buf = Vec::new();
+        send_response_stream(
+            &mut buf,
+            BootstrapStatus::Success,
+            3,
+            &payload,
+        )
+        .expect("send stream response");
+
+        let mut cursor = io::Cursor::new(buf);
+        let got = recv_response_stream(&mut cursor).expect("recv stream response");
+        assert_eq!(got.response.status, BootstrapStatus::Success);
+        assert_eq!(got.response.peer_id, 3);
+        let got_names = got.names.expect("success must have names");
+        assert_eq!(got_names.segment_path, "/tmp/test.shm");
+        assert_eq!(got_names.doorbell_name, r"\\.\pipe\roam-db-1234");
+        assert_eq!(got_names.mmap_ctrl_name, r"\\.\pipe\roam-mc-5678");
+    }
+
+    #[test]
+    fn stream_response_roundtrip_error() {
+        let mut buf = Vec::new();
+        send_response_stream(
+            &mut buf,
+            BootstrapStatus::Error,
+            0,
+            b"rejected",
+        )
+        .expect("send stream error");
+
+        let mut cursor = io::Cursor::new(buf);
+        let got = recv_response_stream(&mut cursor).expect("recv stream error");
+        assert_eq!(got.response.status, BootstrapStatus::Error);
+        assert_eq!(got.response.peer_id, 0);
+        assert!(got.names.is_none());
     }
 }

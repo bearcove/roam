@@ -377,8 +377,5 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
 
-      - name: Test shm-primitives
-        run: cargo test -p shm-primitives
-
-      - name: Test roam-shm
-        run: cargo test -p roam-shm
+      - name: Test workspace
+        run: cargo test --workspace

@@ -1,20 +1,23 @@
 use std::future::Future;
 use std::io::Write as _;
-use std::os::fd::{AsRawFd, IntoRawFd};
-use std::os::unix::ffi::OsStrExt;
-use std::os::unix::net::UnixStream as StdUnixStream;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use roam::{Rx, Tx};
+#[cfg(unix)]
+use std::os::fd::{AsRawFd, IntoRawFd};
+
+use roam::{Call, Rx, Tx};
 use roam_core::{
     BareConduit, Driver, DriverCaller, DriverReplySink, acceptor, initiator, memory_link_pair,
 };
 use roam_shm::HostHub;
 use roam_shm::ShmLink;
 use roam_shm::bootstrap::{BootstrapStatus, decode_request, encode_request};
+#[cfg(unix)]
 use roam_shm::guest_link_from_raw;
+#[cfg(windows)]
+use roam_shm::guest_link_from_names;
 use roam_shm::segment::{Segment, SegmentConfig};
 use roam_shm::varslot::SizeClassConfig as RoamShmSizeClassConfig;
 use roam_stream::StreamLink;
@@ -627,21 +630,41 @@ async fn accept_subject_shm_subject_is_guest(
     );
     let hub = Arc::new(HostHub::new(Arc::clone(&segment)));
 
-    let listener = tokio::net::UnixListener::bind(&control_sock_path)
-        .map_err(|e| format!("unix bind {}: {e}", control_sock_path.display()))?;
+    // Bind the control listener.
+    #[cfg(unix)]
+    let mut listener = roam_local::LocalListener::bind(&control_sock_path)
+        .map_err(|e| format!("bind {}: {e}", control_sock_path.display()))?;
+    #[cfg(windows)]
+    let mut listener = {
+        let endpoint = roam_local::path_to_pipe_name(&control_sock_path);
+        roam_local::LocalListener::bind(&endpoint)
+            .map_err(|e| format!("bind control pipe: {e}"))?
+    };
 
-    let hub_path_bytes = shm_path.as_os_str().as_bytes().to_vec();
+    let hub_path_str = shm_path
+        .to_str()
+        .ok_or_else(|| format!("invalid shm path: {}", shm_path.display()))?;
+    let hub_path_bytes = hub_path_str.as_bytes().to_vec();
     let prepared = hub
         .prepare_bootstrap_success(&hub_path_bytes)
         .map_err(|e| format!("prepare bootstrap success: {e}"))?;
-    let mmap_tx_fd_env = prepared.guest_ticket.mmap_tx_fd.to_string();
+    let mmap_tx_arg_env = prepared.guest_ticket.mmap_tx_arg();
+
+    // Determine the control socket string and mmap env var for the subject.
+    #[cfg(unix)]
+    let control_sock = control_sock_path
+        .to_str()
+        .ok_or_else(|| format!("invalid socket path: {}", control_sock_path.display()))?
+        .to_string();
+    #[cfg(windows)]
+    let control_sock = roam_local::path_to_pipe_name(&control_sock_path);
 
     let (peer_tx, peer_rx) = oneshot::channel();
     let sid_for_task = sid.clone();
     let segment_for_task = Arc::clone(&segment);
     tokio::spawn(async move {
         let result: Result<roam_shm::host::HostPeer, String> = async {
-            let (mut stream, _) = listener
+            let mut stream = listener
                 .accept()
                 .await
                 .map_err(|e| format!("accept: {e}"))?;
@@ -662,31 +685,64 @@ async fn accept_subject_shm_subject_is_guest(
                     "sid mismatch: expected {sid_for_task}, got {got_sid}"
                 ));
             }
-            prepared
-                .send_success_unix(stream.as_raw_fd(), &segment_for_task)
-                .map_err(|e| format!("send bootstrap success: {e}"))?;
+
+            #[cfg(unix)]
+            {
+                prepared
+                    .send_success_unix(stream.as_raw_fd(), &segment_for_task)
+                    .map_err(|e| format!("send bootstrap success: {e}"))?;
+            }
+            #[cfg(windows)]
+            {
+                use roam_shm::bootstrap::{
+                    BootstrapSuccessNames, BootstrapStatus, encode_response,
+                };
+                use tokio::io::AsyncWriteExt;
+                let names = BootstrapSuccessNames {
+                    segment_path: segment_for_task
+                        .path()
+                        .to_str()
+                        .unwrap()
+                        .to_string(),
+                    doorbell_name: prepared.guest_ticket.doorbell_arg(),
+                    mmap_ctrl_name: prepared.guest_ticket.mmap_rx_arg(),
+                };
+                let payload = names.encode();
+                let frame = encode_response(
+                    BootstrapStatus::Success,
+                    prepared.guest_ticket.peer_id.get() as u32,
+                    &payload,
+                )
+                .map_err(|e| format!("encode bootstrap response: {e}"))?;
+                stream
+                    .write_all(&frame)
+                    .await
+                    .map_err(|e| format!("send bootstrap success: {e}"))?;
+            }
+
             Ok(prepared.host_peer)
         }
         .await;
         let _ = peer_tx.send(result);
     });
 
-    let control_sock = control_sock_path
-        .to_str()
-        .ok_or_else(|| format!("invalid socket path: {}", control_sock_path.display()))?
-        .to_string();
+    // Build the env vars for the subject process.
+    #[cfg(unix)]
+    let extra_env: Vec<(&str, &str)> = vec![
+        ("SUBJECT_MODE", "shm-server"),
+        ("SHM_CONTROL_SOCK", &control_sock),
+        ("SHM_SESSION_ID", &sid),
+        ("SHM_MMAP_TX_FD", &mmap_tx_arg_env),
+    ];
+    #[cfg(windows)]
+    let extra_env: Vec<(&str, &str)> = vec![
+        ("SUBJECT_MODE", "shm-server"),
+        ("SHM_CONTROL_SOCK", &control_sock),
+        ("SHM_SESSION_ID", &sid),
+        ("SHM_MMAP_TX_PIPE", &mmap_tx_arg_env),
+    ];
 
-    let mut child = spawn_subject_cmd_with_env(
-        cmd,
-        "",
-        &[
-            ("SUBJECT_MODE", "shm-server"),
-            ("SHM_CONTROL_SOCK", &control_sock),
-            ("SHM_SESSION_ID", &sid),
-            ("SHM_MMAP_TX_FD", &mmap_tx_fd_env),
-        ],
-    )
-    .await?;
+    let mut child = spawn_subject_cmd_with_env(cmd, "", &extra_env).await?;
 
     let mut peer_rx = peer_rx;
     let pid = child.id().unwrap_or_default();
@@ -761,10 +817,15 @@ async fn accept_subject_shm_subject_is_host(
     let sid = sid_hex_32();
     let control_sock_path = dir.path().join("bootstrap.sock");
     let shm_path = dir.path().join("subject.shm");
+
+    #[cfg(unix)]
     let control_sock = control_sock_path
         .to_str()
         .ok_or_else(|| format!("invalid socket path: {}", control_sock_path.display()))?
         .to_string();
+    #[cfg(windows)]
+    let control_sock = roam_local::path_to_pipe_name(&control_sock_path);
+
     let shm_path_str = shm_path
         .to_str()
         .ok_or_else(|| format!("invalid shm path: {}", shm_path.display()))?
@@ -793,47 +854,105 @@ async fn accept_subject_shm_subject_is_host(
         let mut heartbeat = tokio::time::interval(SUBJECT_WAIT_HEARTBEAT);
         heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         heartbeat.tick().await;
-        let mut stream = loop {
-            if let Some(status) = child
-                .try_wait()
-                .map_err(|e| format!("try_wait on subject process: {e}"))?
-            {
-                return Err(format!(
-                    "subject exited before bootstrap handshake: {status}"
-                ));
-            }
-            match StdUnixStream::connect(&control_sock_path) {
-                Ok(stream) => {
-                    eprintln!(
-                        "[subject:{pid}] connected to bootstrap socket {}",
-                        control_sock_path.display()
-                    );
-                    break stream
+
+        // Connect to the subject's bootstrap socket.
+        #[cfg(unix)]
+        let mut stream = {
+            use std::os::unix::net::UnixStream as StdUnixStream;
+            let sync_stream = loop {
+                if let Some(status) = child
+                    .try_wait()
+                    .map_err(|e| format!("try_wait on subject process: {e}"))?
+                {
+                    return Err(format!(
+                        "subject exited before bootstrap handshake: {status}"
+                    ));
                 }
-                Err(e) => {
-                    if tokio::time::Instant::now() >= deadline {
-                        return Err(format!(
-                            "connect bootstrap socket {} failed after {:?}: {e}",
-                            control_sock_path.display(),
-                            connect_started.elapsed()
-                        ));
+                match StdUnixStream::connect(&control_sock_path) {
+                    Ok(stream) => {
+                        eprintln!(
+                            "[subject:{pid}] connected to bootstrap socket {}",
+                            control_sock_path.display()
+                        );
+                        break stream;
                     }
-                    tokio::select! {
-                        _ = tokio::time::sleep(Duration::from_millis(10)) => {}
-                        _ = heartbeat.tick() => {
-                            if let Some(status) = child
-                                .try_wait()
-                                .map_err(|e| format!("try_wait on subject process: {e}"))?
-                            {
-                                return Err(format!(
-                                    "subject exited while waiting for bootstrap socket: {status}"
-                                ));
-                            }
-                            eprintln!(
-                                "[subject:{pid}] waiting for bootstrap socket {} (elapsed={:?}, latest_error={e})",
+                    Err(e) => {
+                        if tokio::time::Instant::now() >= deadline {
+                            return Err(format!(
+                                "connect bootstrap socket {} failed after {:?}: {e}",
                                 control_sock_path.display(),
                                 connect_started.elapsed()
-                            );
+                            ));
+                        }
+                        tokio::select! {
+                            _ = tokio::time::sleep(Duration::from_millis(10)) => {}
+                            _ = heartbeat.tick() => {
+                                if let Some(status) = child
+                                    .try_wait()
+                                    .map_err(|e| format!("try_wait on subject process: {e}"))?
+                                {
+                                    return Err(format!(
+                                        "subject exited while waiting for bootstrap socket: {status}"
+                                    ));
+                                }
+                                eprintln!(
+                                    "[subject:{pid}] waiting for bootstrap socket {} (elapsed={:?}, latest_error={e})",
+                                    control_sock_path.display(),
+                                    connect_started.elapsed()
+                                );
+                            }
+                        }
+                    }
+                }
+            };
+            sync_stream
+        };
+
+        #[cfg(windows)]
+        let mut stream = {
+            let pipe_name = roam_local::path_to_pipe_name(&control_sock_path);
+            loop {
+                if let Some(status) = child
+                    .try_wait()
+                    .map_err(|e| format!("try_wait on subject process: {e}"))?
+                {
+                    return Err(format!(
+                        "subject exited before bootstrap handshake: {status}"
+                    ));
+                }
+                match roam_local::connect(&pipe_name).await {
+                    Ok(client) => {
+                        eprintln!(
+                            "[subject:{pid}] connected to bootstrap pipe {}",
+                            control_sock_path.display()
+                        );
+                        break client;
+                    }
+                    Err(e) => {
+                        if tokio::time::Instant::now() >= deadline {
+                            return Err(format!(
+                                "connect bootstrap pipe {} failed after {:?}: {e}",
+                                control_sock_path.display(),
+                                connect_started.elapsed()
+                            ));
+                        }
+                        tokio::select! {
+                            _ = tokio::time::sleep(Duration::from_millis(10)) => {}
+                            _ = heartbeat.tick() => {
+                                if let Some(status) = child
+                                    .try_wait()
+                                    .map_err(|e| format!("try_wait on subject process: {e}"))?
+                                {
+                                    return Err(format!(
+                                        "subject exited while waiting for bootstrap pipe: {status}"
+                                    ));
+                                }
+                                eprintln!(
+                                    "[subject:{pid}] waiting for bootstrap pipe {} (elapsed={:?}, latest_error={e})",
+                                    control_sock_path.display(),
+                                    connect_started.elapsed()
+                                );
+                            }
                         }
                     }
                 }
@@ -841,56 +960,144 @@ async fn accept_subject_shm_subject_is_host(
         };
 
         let request = encode_request(sid.as_bytes()).map_err(|e| format!("encode request: {e}"))?;
-        stream
-            .write_all(&request)
-            .map_err(|e| format!("send bootstrap request: {e}"))?;
-        eprintln!("[subject:{pid}] sent bootstrap request");
 
-        stream
-            .set_read_timeout(Some(Duration::from_secs(5)))
-            .map_err(|e| format!("set bootstrap socket read timeout: {e}"))?;
+        // Send the bootstrap request and receive the response.
+        #[cfg(unix)]
+        let (response_status, response_peer_id, response_payload) = {
+            stream
+                .write_all(&request)
+                .map_err(|e| format!("send bootstrap request: {e}"))?;
+            eprintln!("[subject:{pid}] sent bootstrap request");
 
-        let recv_fd = stream.as_raw_fd();
-        let received = tokio::task::spawn_blocking(move || {
-            shm_primitives::bootstrap::recv_response_unix(recv_fd)
-        })
-        .await
-        .map_err(|e| format!("bootstrap recv task join: {e}"))?
-        .map_err(|e| format!("recv bootstrap response: {e}"))?;
-        eprintln!("[subject:{pid}] received bootstrap response");
-        if received.response.status != BootstrapStatus::Success {
-            return Err(format!(
-                "bootstrap failed: status={:?}, payload={}",
-                received.response.status,
-                String::from_utf8_lossy(&received.response.payload)
-            ));
-        }
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .map_err(|e| format!("set bootstrap socket read timeout: {e}"))?;
 
-        let fds = received
-            .fds
-            .ok_or_else(|| "missing bootstrap success fds".to_string())?;
-        let hub_path = std::str::from_utf8(&received.response.payload)
-            .map_err(|e| format!("bootstrap payload is not utf-8 path: {e}"))?;
-        let segment = Arc::new(
-            Segment::attach(std::path::Path::new(hub_path))
-                .map_err(|e| format!("attach segment at {hub_path}: {e}"))?,
-        );
-        let peer_id = shm_primitives::PeerId::new(received.response.peer_id as u8)
-            .ok_or_else(|| format!("invalid peer id {}", received.response.peer_id))?;
+            let recv_fd = stream.as_raw_fd();
+            let received = tokio::task::spawn_blocking(move || {
+                shm_primitives::bootstrap::recv_response_unix(recv_fd)
+            })
+            .await
+            .map_err(|e| format!("bootstrap recv task join: {e}"))?
+            .map_err(|e| format!("recv bootstrap response: {e}"))?;
+            eprintln!("[subject:{pid}] received bootstrap response");
+            if received.response.status != BootstrapStatus::Success {
+                return Err(format!(
+                    "bootstrap failed: status={:?}, payload={}",
+                    received.response.status,
+                    String::from_utf8_lossy(&received.response.payload)
+                ));
+            }
 
-        let doorbell_fd = fds.doorbell_fd.into_raw_fd();
-        let mmap_rx_owned = fds.mmap_control_fd;
-        let mmap_tx_owned = mmap_rx_owned
-            .try_clone()
-            .map_err(|e| format!("clone mmap control fd: {e}"))?;
-        let mmap_rx_fd = mmap_rx_owned.into_raw_fd();
-        let mmap_tx_fd = mmap_tx_owned.into_raw_fd();
+            let fds = received
+                .fds
+                .ok_or_else(|| "missing bootstrap success fds".to_string())?;
+            let hub_path = std::str::from_utf8(&received.response.payload)
+                .map_err(|e| format!("bootstrap payload is not utf-8 path: {e}"))?;
+            let segment = Arc::new(
+                Segment::attach(std::path::Path::new(hub_path))
+                    .map_err(|e| format!("attach segment at {hub_path}: {e}"))?,
+            );
+            let peer_id = shm_primitives::PeerId::new(received.response.peer_id as u8)
+                .ok_or_else(|| format!("invalid peer id {}", received.response.peer_id))?;
 
-        let link = unsafe {
-            guest_link_from_raw(segment, peer_id, doorbell_fd, mmap_rx_fd, mmap_tx_fd, true)
-        }
-        .map_err(|e| format!("guest_link_from_raw: {e}"))?;
-        let conduit: BareConduit<MessageFamily, roam_shm::ShmLink> = BareConduit::new(link);
+            let doorbell_fd = fds.doorbell_fd.into_raw_fd();
+            let mmap_rx_owned = fds.mmap_control_fd;
+            let mmap_tx_owned = mmap_rx_owned
+                .try_clone()
+                .map_err(|e| format!("clone mmap control fd: {e}"))?;
+            let mmap_rx_fd = mmap_rx_owned.into_raw_fd();
+            let mmap_tx_fd = mmap_tx_owned.into_raw_fd();
+
+            let link = unsafe {
+                guest_link_from_raw(segment, peer_id, doorbell_fd, mmap_rx_fd, mmap_tx_fd, true)
+            }
+            .map_err(|e| format!("guest_link_from_raw: {e}"))?;
+
+            // Return values needed for the conduit below.
+            (received.response.status, link, ())
+        };
+
+        #[cfg(windows)]
+        let (response_status, response_peer_id, response_payload) = {
+            use roam_shm::bootstrap::{
+                BootstrapSuccessNames, BOOTSTRAP_RESPONSE_HEADER_LEN, decode_response,
+            };
+            use tokio::io::AsyncWriteExt;
+
+            stream
+                .write_all(&request)
+                .await
+                .map_err(|e| format!("send bootstrap request: {e}"))?;
+            eprintln!("[subject:{pid}] sent bootstrap request");
+
+            // Read bootstrap response header.
+            let mut header = [0u8; BOOTSTRAP_RESPONSE_HEADER_LEN];
+            stream
+                .read_exact(&mut header)
+                .await
+                .map_err(|e| format!("read bootstrap response header: {e}"))?;
+
+            // Parse payload length from header (bytes 9-10 = payload_len as u16 LE).
+            let payload_len = u16::from_le_bytes([header[9], header[10]]) as usize;
+            let mut payload = vec![0u8; payload_len];
+            if payload_len > 0 {
+                stream
+                    .read_exact(&mut payload)
+                    .await
+                    .map_err(|e| format!("read bootstrap response payload: {e}"))?;
+            }
+            eprintln!("[subject:{pid}] received bootstrap response");
+
+            // Combine into full frame for decode_response.
+            let mut frame = Vec::with_capacity(BOOTSTRAP_RESPONSE_HEADER_LEN + payload_len);
+            frame.extend_from_slice(&header);
+            frame.extend_from_slice(&payload);
+            let response_ref =
+                decode_response(&frame).map_err(|e| format!("decode bootstrap response: {e}"))?;
+
+            if response_ref.status != BootstrapStatus::Success {
+                return Err(format!(
+                    "bootstrap failed: status={:?}, payload={}",
+                    response_ref.status,
+                    String::from_utf8_lossy(response_ref.payload)
+                ));
+            }
+
+            let names = BootstrapSuccessNames::decode(response_ref.payload)
+                .map_err(|e| format!("decode bootstrap names: {e}"))?;
+            let segment = Arc::new(
+                Segment::attach(std::path::Path::new(&names.segment_path))
+                    .map_err(|e| format!("attach segment at {}: {e}", names.segment_path))?,
+            );
+            let peer_id = shm_primitives::PeerId::new(response_ref.peer_id as u8)
+                .ok_or_else(|| format!("invalid peer id {}", response_ref.peer_id))?;
+
+            // On Windows there are no inherited fds. The subject told us
+            // the mmap_tx pipe in the env; read it from the harness env.
+            // For SHM-host mode the *subject* is the host that sent us pipe names,
+            // and we read the mmap_tx_pipe from the env.
+            let mmap_tx_pipe = std::env::var("SHM_MMAP_TX_PIPE")
+                .unwrap_or_default();
+
+            let link = guest_link_from_names(
+                segment,
+                peer_id,
+                &names.doorbell_name,
+                &names.mmap_ctrl_name,
+                &mmap_tx_pipe,
+                true,
+            )
+            .map_err(|e| format!("guest_link_from_names: {e}"))?;
+
+            (response_ref.status, link, ())
+        };
+
+        let _ = response_status;
+        let _ = response_payload;
+
+        let conduit: BareConduit<MessageFamily, roam_shm::ShmLink> =
+            BareConduit::new(response_peer_id);
 
         let (mut session, handle, _sh) = initiator(conduit)
             .establish()

@@ -175,32 +175,24 @@ fn create_mmap_region(size: usize) -> io::Result<MmapRegion> {
 pub enum MmapChannelTx {
     #[cfg(unix)]
     Real(shm_primitives_async::MmapControlSender),
+    #[cfg(windows)]
+    Real(shm_primitives_async::MmapControlSender),
+    InProcess(mpsc::Sender<(Arc<MmapRegion>, MmapAttachMessage)>),
 }
 
 /// Receiver half of the mmap control channel.
 pub enum MmapChannelRx {
     #[cfg(unix)]
     Real(shm_primitives_async::MmapControlReceiver),
+    #[cfg(windows)]
+    Real(shm_primitives_async::MmapControlReceiver),
     InProcess(mpsc::Receiver<(Arc<MmapRegion>, MmapAttachMessage)>),
 }
 
-// On Windows, MmapChannelTx is an empty (uninhabited) enum. The method must
-// still exist so callers in alloc() type-check, but it can never be invoked.
-#[cfg(windows)]
-impl MmapChannelTx {
-    fn send_region(
-        &self,
-        _region: &Arc<MmapRegion>,
-        _msg: &MmapAttachMessage,
-    ) -> io::Result<()> {
-        unreachable!("MmapChannelTx is uninhabited on Windows")
-    }
-}
-
-#[cfg(unix)]
 impl MmapChannelTx {
     fn send_region(&self, region: &Arc<MmapRegion>, msg: &MmapAttachMessage) -> io::Result<()> {
         match self {
+            #[cfg(unix)]
             MmapChannelTx::Real(sender) => {
                 if let Err(error) = sender.send(region.as_raw_fd(), msg) {
                     warn!(
@@ -213,6 +205,28 @@ impl MmapChannelTx {
                     return Err(error);
                 }
                 Ok(())
+            }
+            #[cfg(windows)]
+            MmapChannelTx::Real(sender) => {
+                if let Err(error) = sender.send_path(region.path(), msg) {
+                    warn!(
+                        map_id = msg.map_id,
+                        map_generation = msg.map_generation,
+                        mapping_length = msg.mapping_length,
+                        error = %error,
+                        "failed to send mmap attach over control channel"
+                    );
+                    return Err(error);
+                }
+                Ok(())
+            }
+            MmapChannelTx::InProcess(sender) => {
+                sender.send((Arc::clone(region), *msg)).map_err(|_| {
+                    io::Error::new(
+                        io::ErrorKind::BrokenPipe,
+                        "in-process mmap channel receiver dropped",
+                    )
+                })
             }
         }
     }
@@ -306,6 +320,60 @@ impl MmapAttachments {
                             io::ErrorKind::WouldBlock => break,
                             io::ErrorKind::Interrupted => continue,
                             // r[impl shm.mmap.attach.protocol-error]
+                            _ => {
+                                let message = format!(
+                                    "fatal mmap control channel receive error ({error_kind:?}): {error}"
+                                );
+                                warn!("{message}");
+                                self.terminal_error = Some(message);
+                                break;
+                            }
+                        }
+                    }
+                },
+                #[cfg(windows)]
+                MmapChannelRx::Real(receiver) => match receiver.try_recv_path() {
+                    Ok(Some((path, msg))) => {
+                        let key = (msg.map_id, msg.map_generation);
+                        if self.mappings.contains_key(&key) {
+                            continue;
+                        }
+                        match MmapRegion::attach(&path) {
+                            Ok(region) => {
+                                self.mappings.insert(
+                                    key,
+                                    Arc::new(AttachedMapping {
+                                        region,
+                                        map_id: msg.map_id,
+                                        map_generation: msg.map_generation,
+                                        mapping_length: msg.mapping_length,
+                                    }),
+                                );
+                            }
+                            Err(error) => {
+                                warn!(
+                                    map_id = msg.map_id,
+                                    map_generation = msg.map_generation,
+                                    mapping_length = msg.mapping_length,
+                                    path = %path.display(),
+                                    error = %error,
+                                    "failed to attach mmap region from control channel"
+                                );
+                                continue;
+                            }
+                        }
+                    }
+                    Ok(None) => break,
+                    Err(error) => {
+                        let error_kind = error.kind();
+                        warn!(
+                            error = %error,
+                            error_kind = ?error_kind,
+                            "failed to recv mmap attach from control channel"
+                        );
+                        match error_kind {
+                            io::ErrorKind::WouldBlock => break,
+                            io::ErrorKind::Interrupted => continue,
                             _ => {
                                 let message = format!(
                                     "fatal mmap control channel receive error ({error_kind:?}): {error}"
