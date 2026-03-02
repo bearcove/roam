@@ -2531,6 +2531,7 @@ dependencies = [
  "shm-primitives-async",
  "tempfile",
  "tokio",
+ "tracing",
  "zerocopy",
 ]
 

@@ -12,6 +12,7 @@ use std::sync::{Arc, Mutex};
 use roam_types::{Backing, Link, LinkRx, LinkTx, LinkTxPermit, SharedBacking, WriteSlot};
 use shm_primitives::{BIPBUF_HEADER_SIZE, BipBuf, HeapRegion, PeerId};
 use shm_primitives_async::{Doorbell, SignalResult};
+use tracing::{debug, trace, warn};
 
 use crate::framing::{DEFAULT_INLINE_THRESHOLD, MmapRef, OwnedFrame};
 use crate::mmap_registry::{
@@ -817,31 +818,44 @@ impl LinkRx for ShmLinkRx {
                     // r[impl zerocopy.recv.shm.inline]
                     // r[impl zerocopy.backing.bipbuf]
                     OwnedFrame::Inline(bytes) => {
+                        trace!(len = bytes.len(), "shm rx received inline frame");
                         self.stats
                             .inline_recvs
                             .fetch_add(1, AtomicOrdering::Relaxed);
                         if matches!(self.doorbell.signal_now(), SignalResult::PeerDead) {
-                            self.peer_closed.store(true, Ordering::Release);
+                            let was_closed = self.peer_closed.swap(true, Ordering::AcqRel);
                             self.stats
                                 .doorbell_peer_dead
                                 .fetch_add(1, AtomicOrdering::Relaxed);
+                            if !was_closed {
+                                debug!("shm rx observed peer dead while draining inline frame");
+                            }
                         }
                         Ok(Some(Backing::Boxed(bytes.into_boxed_slice())))
                     }
                     // r[impl zerocopy.recv.shm.slotref]
                     OwnedFrame::SlotRef(slot_ref) => {
+                        trace!(slot_ref = ?slot_ref, "shm rx received slot-ref frame");
                         self.stats
                             .slot_ref_recvs
                             .fetch_add(1, AtomicOrdering::Relaxed);
                         if matches!(self.doorbell.signal_now(), SignalResult::PeerDead) {
-                            self.peer_closed.store(true, Ordering::Release);
+                            let was_closed = self.peer_closed.swap(true, Ordering::AcqRel);
                             self.stats
                                 .doorbell_peer_dead
                                 .fetch_add(1, AtomicOrdering::Relaxed);
+                            if !was_closed {
+                                debug!("shm rx observed peer dead while draining slot-ref frame");
+                            }
                         }
                         let slot = unsafe { self.backend.slot_data(&slot_ref) };
                         if slot.len() < SLOT_LEN_PREFIX_SIZE {
                             self.backend.free_slot(slot_ref);
+                            warn!(
+                                slot_ref = ?slot_ref,
+                                slot_bytes = slot.len(),
+                                "shm rx malformed slot-ref: missing payload length prefix"
+                            );
                             return Err(ShmLinkRxError::MalformedSlotRefLength {
                                 slot_bytes: slot.len(),
                                 payload_len: 0,
@@ -852,11 +866,23 @@ impl LinkRx for ShmLinkRx {
                             u32::from_le_bytes([slot[0], slot[1], slot[2], slot[3]]) as usize;
                         if payload_len > slot.len().saturating_sub(SLOT_LEN_PREFIX_SIZE) {
                             self.backend.free_slot(slot_ref);
+                            warn!(
+                                slot_ref = ?slot_ref,
+                                slot_bytes = slot.len(),
+                                payload_len,
+                                "shm rx malformed slot-ref: payload length exceeds slot size"
+                            );
                             return Err(ShmLinkRxError::MalformedSlotRefLength {
                                 slot_bytes: slot.len(),
                                 payload_len,
                             });
                         }
+                        trace!(
+                            slot_ref = ?slot_ref,
+                            slot_bytes = slot.len(),
+                            payload_len,
+                            "shm rx slot-ref frame decoded"
+                        );
 
                         Ok(Some(Backing::shared(Arc::new(ShmVarSlotBacking {
                             backend: self.backend.clone(),
@@ -869,30 +895,57 @@ impl LinkRx for ShmLinkRx {
                     }
                     // r[impl zerocopy.recv.shm.mmap]
                     OwnedFrame::MmapRef(mmap_ref) => {
+                        trace!(
+                            map_id = mmap_ref.map_id,
+                            map_generation = mmap_ref.map_generation,
+                            map_offset = mmap_ref.map_offset,
+                            payload_len = mmap_ref.payload_len,
+                            "shm rx received mmap-ref frame"
+                        );
                         self.stats
                             .mmap_ref_recvs
                             .fetch_add(1, AtomicOrdering::Relaxed);
                         if matches!(self.doorbell.signal_now(), SignalResult::PeerDead) {
-                            self.peer_closed.store(true, Ordering::Release);
+                            let was_closed = self.peer_closed.swap(true, Ordering::AcqRel);
                             self.stats
                                 .doorbell_peer_dead
                                 .fetch_add(1, AtomicOrdering::Relaxed);
+                            if !was_closed {
+                                debug!("shm rx observed peer dead while draining mmap-ref frame");
+                            }
                         }
 
                         // Drain any newly delivered fds before resolving
                         self.mmap_attachments.drain_control();
 
-                        let mapping = self
-                            .mmap_attachments
-                            .resolve(
-                                mmap_ref.map_id,
-                                mmap_ref.map_generation,
-                                mmap_ref.map_offset,
-                                mmap_ref.payload_len,
-                            )
-                            .map_err(ShmLinkRxError::MmapResolve)?;
+                        let mapping = match self.mmap_attachments.resolve(
+                            mmap_ref.map_id,
+                            mmap_ref.map_generation,
+                            mmap_ref.map_offset,
+                            mmap_ref.payload_len,
+                        ) {
+                            Ok(mapping) => mapping,
+                            Err(error) => {
+                                warn!(
+                                    map_id = mmap_ref.map_id,
+                                    map_generation = mmap_ref.map_generation,
+                                    map_offset = mmap_ref.map_offset,
+                                    payload_len = mmap_ref.payload_len,
+                                    error = %error,
+                                    "shm rx mmap-ref resolve failed"
+                                );
+                                return Err(ShmLinkRxError::MmapResolve(error));
+                            }
+                        };
 
                         // r[impl zerocopy.backing.mmap]
+                        trace!(
+                            map_id = mmap_ref.map_id,
+                            map_generation = mmap_ref.map_generation,
+                            map_offset = mmap_ref.map_offset,
+                            payload_len = mmap_ref.payload_len,
+                            "shm rx mmap-ref resolved"
+                        );
                         Ok(Some(Backing::shared(Arc::new(ShmMmapBacking {
                             mapping,
                             offset: mmap_ref.map_offset as usize,
@@ -903,15 +956,19 @@ impl LinkRx for ShmLinkRx {
             }
 
             if self.peer_closed.load(Ordering::Acquire) && self.rx_bipbuf.inner().is_empty() {
+                debug!("shm rx returning EOF: peer closed and rx bipbuf is empty");
                 return Ok(None);
             }
 
+            trace!("shm rx waiting on doorbell");
             if let Err(err) = self.doorbell.wait().await {
                 self.stats
                     .doorbell_wait_errors
                     .fetch_add(1, AtomicOrdering::Relaxed);
+                warn!(error = %err, "shm rx doorbell wait failed");
                 return Err(ShmLinkRxError::DoorbellWait(err));
             }
+            trace!("shm rx woke from doorbell wait");
         }
     }
 }
