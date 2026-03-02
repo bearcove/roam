@@ -21,7 +21,7 @@ pub fn adder_service_descriptor() -> &'static ::roam::session::ServiceDescriptor
         }))
     })
 }
-pub trait AdderServer
+pub trait Adder
 where
     Self: Send + Sync,
 {
@@ -42,7 +42,7 @@ pub struct AdderDispatcher<H> {
 }
 impl<H> AdderDispatcher<H>
 where
-    H: AdderServer + Clone + Send + Sync + 'static,
+    H: Adder + Clone + Send + Sync + 'static,
 {
     #[doc = r" Create a new dispatcher wrapping the given handler."]
     pub fn new(handler: H) -> Self {
@@ -51,7 +51,7 @@ where
 }
 impl<H, R> ::roam::Handler<R> for AdderDispatcher<H>
 where
-    H: AdderServer + Clone + Send + Sync + 'static,
+    H: Adder + Clone + Send + Sync + 'static,
     R: ::roam::ReplySink,
 {
     async fn handle(&self, call: ::roam::SelfRef<::roam::RequestCall<'static>>, reply: R) {

@@ -19,7 +19,7 @@ pub fn calc_service_descriptor() -> &'static ::roam::session::ServiceDescriptor 
         }))
     })
 }
-pub trait CalcServer
+pub trait Calc
 where
     Self: Send + Sync,
 {
@@ -40,7 +40,7 @@ pub struct CalcDispatcher<H> {
 }
 impl<H> CalcDispatcher<H>
 where
-    H: CalcServer + Clone + Send + Sync + 'static,
+    H: Calc + Clone + Send + Sync + 'static,
 {
     #[doc = r" Create a new dispatcher wrapping the given handler."]
     pub fn new(handler: H) -> Self {
@@ -49,7 +49,7 @@ where
 }
 impl<H, R> ::roam::Handler<R> for CalcDispatcher<H>
 where
-    H: CalcServer + Clone + Send + Sync + 'static,
+    H: Calc + Clone + Send + Sync + 'static,
     R: ::roam::ReplySink,
 {
     async fn handle(&self, call: ::roam::SelfRef<::roam::RequestCall<'static>>, reply: R) {

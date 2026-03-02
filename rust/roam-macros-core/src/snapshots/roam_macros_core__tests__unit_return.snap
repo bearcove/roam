@@ -21,7 +21,7 @@ pub fn notifier_service_descriptor() -> &'static ::roam::session::ServiceDescrip
         }))
     })
 }
-pub trait NotifierServer
+pub trait Notifier
 where
     Self: Send + Sync,
 {
@@ -41,7 +41,7 @@ pub struct NotifierDispatcher<H> {
 }
 impl<H> NotifierDispatcher<H>
 where
-    H: NotifierServer + Clone + Send + Sync + 'static,
+    H: Notifier + Clone + Send + Sync + 'static,
 {
     #[doc = r" Create a new dispatcher wrapping the given handler."]
     pub fn new(handler: H) -> Self {
@@ -50,7 +50,7 @@ where
 }
 impl<H, R> ::roam::Handler<R> for NotifierDispatcher<H>
 where
-    H: NotifierServer + Clone + Send + Sync + 'static,
+    H: Notifier + Clone + Send + Sync + 'static,
     R: ::roam::ReplySink,
 {
     async fn handle(&self, call: ::roam::SelfRef<::roam::RequestCall<'static>>, reply: R) {

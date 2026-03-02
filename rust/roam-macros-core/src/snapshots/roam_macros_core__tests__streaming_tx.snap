@@ -21,7 +21,7 @@ pub fn streamer_service_descriptor() -> &'static ::roam::session::ServiceDescrip
         }))
     })
 }
-pub trait StreamerServer
+pub trait Streamer
 where
     Self: Send + Sync,
 {
@@ -42,7 +42,7 @@ pub struct StreamerDispatcher<H> {
 }
 impl<H> StreamerDispatcher<H>
 where
-    H: StreamerServer + Clone + Send + Sync + 'static,
+    H: Streamer + Clone + Send + Sync + 'static,
 {
     #[doc = r" Create a new dispatcher wrapping the given handler."]
     pub fn new(handler: H) -> Self {
@@ -51,7 +51,7 @@ where
 }
 impl<H, R> ::roam::Handler<R> for StreamerDispatcher<H>
 where
-    H: StreamerServer + Clone + Send + Sync + 'static,
+    H: Streamer + Clone + Send + Sync + 'static,
     R: ::roam::ReplySink,
 {
     async fn handle(&self, call: ::roam::SelfRef<::roam::RequestCall<'static>>, reply: R) {

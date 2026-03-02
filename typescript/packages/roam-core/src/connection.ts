@@ -18,6 +18,7 @@ import {
   parityOdd,
   messageHello,
   messageHelloYourself,
+  messagePong,
   messageProtocolError,
   messageRequest,
   messageResponse,
@@ -363,6 +364,15 @@ export class Connection<T extends MessageTransport = MessageTransport> {
             return;
           }
 
+          if (msgTag(msg) === "Ping") {
+            await this.io.send(encodeMessage(messagePong(msg.payload.value.nonce)));
+            continue;
+          }
+
+          if (msgTag(msg) === "Pong") {
+            continue;
+          }
+
           // Handle channel messages
           if (msgTag(msg) === "ChannelMessage" && msg.payload.value.body.tag === "Item") {
             try {
@@ -631,6 +641,15 @@ export class Connection<T extends MessageTransport = MessageTransport> {
       return undefined; // Duplicate Hello after exchange - ignore
     }
 
+    if (tag === "Ping") {
+      this.io.send(encodeMessage(messagePong(msg.payload.value.nonce)));
+      return undefined;
+    }
+
+    if (tag === "Pong") {
+      return undefined;
+    }
+
     if (tag === "ConnectionOpen") {
       const connId = msg.connection_id;
       if (this._acceptConnections) {
@@ -842,6 +861,15 @@ export class Connection<T extends MessageTransport = MessageTransport> {
 
     if (tag === "Hello") {
       // Duplicate Hello after exchange - ignore
+      return;
+    }
+
+    if (tag === "Ping") {
+      await this.io.send(encodeMessage(messagePong(msg.payload.value.nonce)));
+      return;
+    }
+
+    if (tag === "Pong") {
       return;
     }
 

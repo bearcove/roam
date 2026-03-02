@@ -23,6 +23,14 @@ export interface ProtocolError {
   description: string;
 }
 
+export interface Ping {
+  nonce: bigint;
+}
+
+export interface Pong {
+  nonce: bigint;
+}
+
 // Metadata
 export interface MetadataValueString {
   tag: "String";
@@ -137,6 +145,8 @@ export type MessagePayload =
   | { tag: "Hello"; value: Hello }
   | { tag: "HelloYourself"; value: HelloYourself }
   | { tag: "ProtocolError"; value: ProtocolError }
+  | { tag: "Ping"; value: Ping }
+  | { tag: "Pong"; value: Pong }
   | { tag: "ConnectionOpen"; value: ConnectionOpen }
   | { tag: "ConnectionAccept"; value: ConnectionAccept }
   | { tag: "ConnectionReject"; value: ConnectionReject }
@@ -155,6 +165,12 @@ export type MessageHelloYourself = Message & {
 };
 export type MessageProtocolError = Message & {
   payload: { tag: "ProtocolError"; value: ProtocolError };
+};
+export type MessagePing = Message & {
+  payload: { tag: "Ping"; value: Ping };
+};
+export type MessagePong = Message & {
+  payload: { tag: "Pong"; value: Pong };
 };
 export type MessageConnect = Message & { payload: { tag: "ConnectionOpen"; value: ConnectionOpen } };
 export type MessageAccept = Message & {
@@ -213,6 +229,8 @@ export const MessageDiscriminant = {
   ConnectionClose: 6,
   RequestMessage: 7,
   ChannelMessage: 8,
+  Ping: 9,
+  Pong: 10,
 } as const;
 
 export const MetadataValueDiscriminant = {
@@ -297,6 +315,20 @@ export function messageProtocolError(description: string): Message {
   return {
     connection_id: 0n,
     payload: { tag: "ProtocolError", value: { description } },
+  };
+}
+
+export function messagePing(nonce: bigint): Message {
+  return {
+    connection_id: 0n,
+    payload: { tag: "Ping", value: { nonce } },
+  };
+}
+
+export function messagePong(nonce: bigint): Message {
+  return {
+    connection_id: 0n,
+    payload: { tag: "Pong", value: { nonce } },
   };
 }
 
@@ -475,4 +507,3 @@ export function messageCredit(channelId: bigint, bytes: number, connId: bigint =
     },
   };
 }
-

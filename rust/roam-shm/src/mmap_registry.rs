@@ -175,7 +175,6 @@ fn create_mmap_region(size: usize) -> io::Result<MmapRegion> {
 pub enum MmapChannelTx {
     #[cfg(unix)]
     Real(shm_primitives_async::MmapControlSender),
-    InProcess(mpsc::Sender<(Arc<MmapRegion>, MmapAttachMessage)>),
 }
 
 /// Receiver half of the mmap control channel.
@@ -202,9 +201,6 @@ impl MmapChannelTx {
                 }
                 Ok(())
             }
-            MmapChannelTx::InProcess(sender) => sender.send((region.clone(), *msg)).map_err(|_| {
-                io::Error::new(io::ErrorKind::BrokenPipe, "mmap control channel closed")
-            }),
         }
     }
 }
@@ -539,12 +535,6 @@ impl std::fmt::Display for MmapResolveError {
 }
 
 impl std::error::Error for MmapResolveError {}
-
-/// Create an in-process mmap channel pair for testing.
-pub fn create_in_process_mmap_channel() -> (MmapChannelTx, MmapChannelRx) {
-    let (tx, rx) = mpsc::channel();
-    (MmapChannelTx::InProcess(tx), MmapChannelRx::InProcess(rx))
-}
 
 #[cfg(test)]
 mod tests {

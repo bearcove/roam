@@ -16,6 +16,8 @@ import {
   metadataU64,
   metadataEntry,
   messageHello,
+  messagePing,
+  messagePong,
   messageGoodbye,
   messageRequest,
   messageResponse,
@@ -43,6 +45,8 @@ describe("wire discriminants", () => {
     expect(MessageDiscriminant.ConnectionClose).toBe(6);
     expect(MessageDiscriminant.RequestMessage).toBe(7);
     expect(MessageDiscriminant.ChannelMessage).toBe(8);
+    expect(MessageDiscriminant.Ping).toBe(9);
+    expect(MessageDiscriminant.Pong).toBe(10);
   });
 
   it("has correct metadata and hello discriminants", () => {
@@ -86,8 +90,12 @@ describe("factory helpers", () => {
     expect(credit.payload.tag).toBe("ChannelMessage");
 
     const hello = messageHello(helloV7(parityOdd(), 64, meta));
+    const ping = messagePing(123n);
+    const pong = messagePong(123n);
     const goodbye = messageGoodbye(2n, meta);
     expect(hello.payload.tag).toBe("Hello");
+    expect(ping.payload.tag).toBe("Ping");
+    expect(pong.payload.tag).toBe("Pong");
     expect(goodbye.payload.tag).toBe("ConnectionClose");
   });
 });
@@ -113,6 +121,8 @@ describe("schema-driven codec", () => {
   it("roundtrips multiple messages individually", () => {
     const messages: Message[] = [
       messageHello(helloV7(parityOdd(), 64)),
+      messagePing(7n),
+      messagePong(7n),
       messageGoodbye(2n, []),
       messageData(3n, new Uint8Array([0x4d]), 2n),
     ];
