@@ -19,6 +19,7 @@ use std::time::Duration;
 
 use shm_primitives::MmapRegion;
 use shm_primitives_async::MmapAttachMessage;
+use tracing::warn;
 
 /// r[impl shm.mmap]
 /// r[impl shm.mmap.registry]
@@ -247,7 +248,16 @@ impl MmapAttachments {
                                     }),
                                 );
                             }
-                            Err(_) => continue,
+                            Err(error) => {
+                                warn!(
+                                    map_id = msg.map_id,
+                                    map_generation = msg.map_generation,
+                                    mapping_length = msg.mapping_length,
+                                    error = %error,
+                                    "failed to attach mmap fd from control channel"
+                                );
+                                continue;
+                            }
                         }
                     }
                     Ok(None) => break,
@@ -362,7 +372,7 @@ impl MmapAttachments {
         //
         // In loaded runs (many concurrent virtual sessions), control-plane attach
         // delivery can lag well past a few scheduler quanta.
-        const GRACE_ATTEMPTS: usize = 512;
+        const GRACE_ATTEMPTS: usize = 2000;
         const GRACE_SLEEP: Duration = Duration::from_millis(1);
 
         for _ in 0..GRACE_ATTEMPTS {
@@ -375,7 +385,31 @@ impl MmapAttachments {
             }
         }
 
-        self.resolve(map_id, map_generation, map_offset, payload_len)
+        let final_result = self.resolve(map_id, map_generation, map_offset, payload_len);
+        if let Err(MmapResolveError::UnknownMapping { .. }) = &final_result {
+            let mut known_generations = self
+                .mappings
+                .keys()
+                .filter_map(|(known_map_id, known_generation)| {
+                    if *known_map_id == map_id {
+                        Some(*known_generation)
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Vec<u32>>();
+            known_generations.sort_unstable();
+            warn!(
+                map_id,
+                map_generation,
+                map_offset,
+                payload_len,
+                known_generations = ?known_generations,
+                known_mapping_count = self.mappings.len(),
+                "mmap resolve still unknown after grace window"
+            );
+        }
+        final_result
     }
 }
 
