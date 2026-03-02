@@ -212,7 +212,7 @@ jobs:
 
       - name: Run TypeScript TCP subject matrix tests
         run: >
-          cargo nextest run -p spec-tests --test spec_matrix --include-ignored -E 'test(lang_typescript_transport_tcp::)'
+          cargo nextest run -p spec-tests --test spec_matrix --run-ignored all -E 'test(lang_typescript_transport_tcp::)'
 
   swift-conformance:
     name: Conformance / Swift
@@ -254,17 +254,17 @@ jobs:
 
       - name: Run Swift TCP subject matrix tests
         run: >
-          cargo nextest run -p spec-tests --test spec_matrix --include-ignored
+          cargo nextest run -p spec-tests --test spec_matrix --run-ignored all
           -E 'test(lang_swift_transport_tcp::)'
 
       - name: Run Swift SHM guest subject matrix tests
         run: >
-          cargo nextest run -p spec-tests --test spec_matrix --include-ignored
+          cargo nextest run -p spec-tests --test spec_matrix --run-ignored all
           -E 'test(lang_swift_transport_shm_guest_mode::)'
 
       - name: Run Swift SHM host subject matrix tests
         run: >
-          cargo nextest run -p spec-tests --test spec_matrix --include-ignored
+          cargo nextest run -p spec-tests --test spec_matrix --run-ignored all
           -E 'test(lang_swift_transport_shm_host_mode::)'
 
   swift-linux:
@@ -298,12 +298,12 @@ jobs:
 
       - name: Run Swift TCP subject matrix tests
         run: >
-          cargo nextest run -p spec-tests --test spec_matrix --include-ignored
+          cargo nextest run -p spec-tests --test spec_matrix --run-ignored all
           -E 'test(lang_swift_transport_tcp::)'
 
       - name: Run Swift SHM guest subject matrix tests
         run: >
-          cargo nextest run -p spec-tests --test spec_matrix --include-ignored
+          cargo nextest run -p spec-tests --test spec_matrix --run-ignored all
           -E 'test(lang_swift_transport_shm_guest_mode::)'
 
   rust-wasm:
