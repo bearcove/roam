@@ -3,13 +3,15 @@
 //! Exposes BipBuffer operations, VarSlotPool management, and atomic helpers
 //! through a C ABI so that Swift (and other FFI consumers) can use the Rust
 //! implementations as the single source of truth.
+//!
+//! This crate is Unix-only; on other platforms it compiles to an empty library.
+#![cfg(unix)]
 
 use core::ffi::c_void;
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::collections::HashMap;
 use std::sync::Mutex;
 
-#[cfg(unix)]
 use shm_primitives::MmapRegion;
 use shm_primitives::Region;
 use shm_primitives::bipbuf::{BIPBUF_HEADER_SIZE, BipBufHeader, BipBufRaw};
@@ -17,11 +19,8 @@ use shm_primitives::bootstrap::{
     self, BOOTSTRAP_REQUEST_HEADER_LEN, BOOTSTRAP_RESPONSE_HEADER_LEN, BootstrapStatus,
 };
 use shm_primitives::{SizeClassConfig, SlotRef, VarSlotPool};
-#[cfg(unix)]
 use std::io::ErrorKind;
-#[cfg(unix)]
 use std::io::{self, Error};
-#[cfg(unix)]
 use std::os::fd::{FromRawFd, IntoRawFd, OwnedFd, RawFd};
 
 // ─── FFI types ──────────────────────────────────────────────────────────────
@@ -61,7 +60,6 @@ struct RoamMmapAttachment {
 }
 
 /// Guest-side mmap attachments resolved by (map_id, map_generation).
-#[cfg(unix)]
 pub struct RoamMmapAttachments {
     control_fd: RawFd,
     mappings: Mutex<HashMap<(u32, u32), RoamMmapAttachment>>,
@@ -1212,25 +1210,16 @@ pub unsafe extern "C" fn roam_mmap_control_send(
 /// caller for at least as long as the returned attachments object lives.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn roam_mmap_attachments_create(control_fd: i32) -> *mut RoamMmapAttachments {
-    #[cfg(unix)]
-    {
-        if control_fd < 0 {
-            return core::ptr::null_mut();
-        }
-        if set_nonblocking(control_fd) != 0 {
-            return core::ptr::null_mut();
-        }
-        Box::into_raw(Box::new(RoamMmapAttachments {
-            control_fd,
-            mappings: Mutex::new(HashMap::new()),
-        }))
+    if control_fd < 0 {
+        return core::ptr::null_mut();
     }
-
-    #[cfg(not(unix))]
-    {
-        let _ = control_fd;
-        core::ptr::null_mut()
+    if set_nonblocking(control_fd) != 0 {
+        return core::ptr::null_mut();
     }
+    Box::into_raw(Box::new(RoamMmapAttachments {
+        control_fd,
+        mappings: Mutex::new(HashMap::new()),
+    }))
 }
 
 /// Drain all pending mmap attach messages from the control socket.
@@ -1244,47 +1233,38 @@ pub unsafe extern "C" fn roam_mmap_attachments_create(control_fd: i32) -> *mut R
 pub unsafe extern "C" fn roam_mmap_attachments_drain_control(
     attachments: *mut RoamMmapAttachments,
 ) -> i32 {
-    #[cfg(unix)]
-    {
-        if attachments.is_null() {
-            return -1;
-        }
+    if attachments.is_null() {
+        return -1;
+    }
 
-        let attachments = unsafe { &*attachments };
-        let mut attached_count = 0_i32;
+    let attachments = unsafe { &*attachments };
+    let mut attached_count = 0_i32;
 
-        loop {
-            let result = recv_mmap_attach(attachments.control_fd);
-            match result {
-                Ok(Some((fd, msg))) => {
-                    let mapping_len = msg.mapping_length as usize;
-                    let region = match MmapRegion::attach_fd(fd, mapping_len) {
-                        Ok(region) => region,
-                        Err(_) => return -1,
-                    };
-                    let mut mappings = match attachments.mappings.lock() {
-                        Ok(mappings) => mappings,
-                        Err(_) => return -1,
-                    };
-                    mappings.insert(
-                        (msg.map_id, msg.map_generation),
-                        RoamMmapAttachment { region },
-                    );
-                    attached_count += 1;
-                }
-                Ok(None) => break,
-                Err(_) => return -1,
+    loop {
+        let result = recv_mmap_attach(attachments.control_fd);
+        match result {
+            Ok(Some((fd, msg))) => {
+                let mapping_len = msg.mapping_length as usize;
+                let region = match MmapRegion::attach_fd(fd, mapping_len) {
+                    Ok(region) => region,
+                    Err(_) => return -1,
+                };
+                let mut mappings = match attachments.mappings.lock() {
+                    Ok(mappings) => mappings,
+                    Err(_) => return -1,
+                };
+                mappings.insert(
+                    (msg.map_id, msg.map_generation),
+                    RoamMmapAttachment { region },
+                );
+                attached_count += 1;
             }
+            Ok(None) => break,
+            Err(_) => return -1,
         }
-
-        attached_count
     }
 
-    #[cfg(not(unix))]
-    {
-        let _ = attachments;
-        -1
-    }
+    attached_count
 }
 
 /// Resolve an mmap-ref tuple to a direct payload pointer.
@@ -1309,47 +1289,31 @@ pub unsafe extern "C" fn roam_mmap_attachments_resolve_ptr(
     payload_len: u32,
     out_ptr: *mut *const u8,
 ) -> i32 {
-    #[cfg(unix)]
-    {
-        if attachments.is_null() || out_ptr.is_null() {
-            return -1;
-        }
-
-        let attachments = unsafe { &*attachments };
-        let mappings = match attachments.mappings.lock() {
-            Ok(mappings) => mappings,
-            Err(_) => return -1,
-        };
-        let Some(mapping) = mappings.get(&(map_id, map_generation)) else {
-            return -2;
-        };
-
-        let start = map_offset as usize;
-        let Some(end) = start.checked_add(payload_len as usize) else {
-            return -3;
-        };
-        if end > mapping.region.len() {
-            return -4;
-        }
-
-        // SAFETY: bounds checked against mapping length above.
-        let ptr = unsafe { mapping.region.region().as_ptr().add(start) } as *const u8;
-        unsafe { *out_ptr = ptr };
-        0
+    if attachments.is_null() || out_ptr.is_null() {
+        return -1;
     }
 
-    #[cfg(not(unix))]
-    {
-        let _ = (
-            attachments,
-            map_id,
-            map_generation,
-            map_offset,
-            payload_len,
-            out_ptr,
-        );
-        -1
+    let attachments = unsafe { &*attachments };
+    let mappings = match attachments.mappings.lock() {
+        Ok(mappings) => mappings,
+        Err(_) => return -1,
+    };
+    let Some(mapping) = mappings.get(&(map_id, map_generation)) else {
+        return -2;
+    };
+
+    let start = map_offset as usize;
+    let Some(end) = start.checked_add(payload_len as usize) else {
+        return -3;
+    };
+    if end > mapping.region.len() {
+        return -4;
     }
+
+    // SAFETY: bounds checked against mapping length above.
+    let ptr = unsafe { mapping.region.region().as_ptr().add(start) } as *const u8;
+    unsafe { *out_ptr = ptr };
+    0
 }
 
 /// Destroy mmap attachments and free all attached mapping resources.
@@ -1360,16 +1324,8 @@ pub unsafe extern "C" fn roam_mmap_attachments_resolve_ptr(
 /// `roam_mmap_attachments_create`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn roam_mmap_attachments_destroy(attachments: *mut RoamMmapAttachments) {
-    #[cfg(unix)]
-    {
-        if !attachments.is_null() {
-            drop(unsafe { Box::from_raw(attachments) });
-        }
-    }
-
-    #[cfg(not(unix))]
-    {
-        let _ = attachments;
+    if !attachments.is_null() {
+        drop(unsafe { Box::from_raw(attachments) });
     }
 }
 

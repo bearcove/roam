@@ -1,4 +1,4 @@
-name: CI
+﻿name: CI
 
 on:
   push:
@@ -365,20 +365,20 @@ jobs:
       - name: Run Wasm browser tests
         run: cd typescript/tests/playwright && pnpm exec playwright test wasm.spec.ts
 
-  # rust-windows:
-  #   name: Rust / Windows
-  #   runs-on: depot-windows-2025-16
-  #   steps:
-  #     - uses: actions/checkout@v6
-  #
-  #     - name: Install Rust
-  #       uses: dtolnay/rust-toolchain@stable
-  #
-  #     - name: Cache cargo
-  #       uses: Swatinem/rust-cache@v2
-  #
-  #     - name: Test shm-primitives
-  #       run: cargo test -p shm-primitives
-  #
-  #     - name: Test roam-shm
-  #       run: cargo test -p roam-shm
+  rust-windows:
+    name: Rust / Windows
+    runs-on: depot-windows-2025-32
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Test workspace
+        run: cargo nextest run --workspace

@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use std::sync::{Arc, Mutex};
 
 use roam_types::{Backing, Link, LinkRx, LinkTx, LinkTxPermit, SharedBacking, WriteSlot};
-use shm_primitives::{BIPBUF_HEADER_SIZE, BipBuf, HeapRegion, PeerId};
+use shm_primitives::{BipBuf, PeerId};
 use shm_primitives_async::{Doorbell, SignalResult};
 use tracing::{debug, trace, warn};
 
@@ -19,10 +19,8 @@ use crate::mmap_registry::{
     MmapAllocation, MmapAttachments, MmapChannelRx, MmapChannelTx, MmapRegistry,
 };
 
-#[cfg(unix)]
 pub mod bootstrap;
 pub mod framing;
-#[cfg(unix)]
 pub mod host;
 pub mod mmap_registry;
 pub mod peer_table;
@@ -32,13 +30,16 @@ pub mod varslot;
 pub use segment::{AttachError, Segment, SegmentConfig, SegmentLayout};
 pub use varslot::{SizeClassConfig, SlotRef, VarSlotPool};
 
-#[cfg(unix)]
 pub use host::{
     AddPeerOptions, GuestSpawnTicket, HostHub, HostPeer, MultiPeerHostDriver, PreparedPeer,
-    ShmHost, guest_link_from_raw, guest_link_from_ticket,
+    ShmHost,
 };
-
 #[cfg(unix)]
+pub use host::{guest_link_from_raw, guest_link_from_ticket};
+#[cfg(windows)]
+pub use host::{guest_link_from_names, guest_link_from_ticket_windows};
+pub use host::create_test_link_pair;
+
 pub mod driver {
     pub use crate::host::{AddPeerOptions, MultiPeerHostDriver, ShmHost};
 }
@@ -46,54 +47,27 @@ pub mod driver {
 const SLOT_LEN_PREFIX_SIZE: usize = 4;
 
 #[derive(Clone)]
-enum Backend {
-    Segment(Arc<Segment>),
-    Heap(Arc<HeapBackend>),
-}
-
-struct HeapBackend {
-    _region: Arc<HeapRegion>,
-    var_pool: VarSlotPool,
-}
+struct Backend(Arc<Segment>);
 
 impl Backend {
     fn allocate_slot(&self, size: u32, owner_peer: u8) -> Option<SlotRef> {
-        match self {
-            Backend::Segment(segment) => segment.var_pool().allocate(size, owner_peer),
-            Backend::Heap(heap) => heap.var_pool.allocate(size, owner_peer),
-        }
+        self.0.var_pool().allocate(size, owner_peer)
     }
 
     fn free_slot(&self, slot_ref: SlotRef) {
-        match self {
-            Backend::Segment(segment) => {
-                let _ = segment.var_pool().free(slot_ref);
-            }
-            Backend::Heap(heap) => {
-                let _ = heap.var_pool.free(slot_ref);
-            }
-        }
+        let _ = self.0.var_pool().free(slot_ref);
     }
 
     unsafe fn slot_data<'a>(&self, slot_ref: &SlotRef) -> &'a [u8] {
-        match self {
-            Backend::Segment(segment) => unsafe { segment.var_pool().slot_data(slot_ref) },
-            Backend::Heap(heap) => unsafe { heap.var_pool.slot_data(slot_ref) },
-        }
+        unsafe { self.0.var_pool().slot_data(slot_ref) }
     }
 
     unsafe fn slot_data_mut<'a>(&self, slot_ref: &SlotRef) -> &'a mut [u8] {
-        match self {
-            Backend::Segment(segment) => unsafe { segment.var_pool().slot_data_mut(slot_ref) },
-            Backend::Heap(heap) => unsafe { heap.var_pool.slot_data_mut(slot_ref) },
-        }
+        unsafe { self.0.var_pool().slot_data_mut(slot_ref) }
     }
 
     fn max_slot_size(&self) -> Option<u32> {
-        let pool = match self {
-            Backend::Segment(segment) => segment.var_pool(),
-            Backend::Heap(heap) => &heap.var_pool,
-        };
+        let pool = self.0.var_pool();
         let class_count = pool.class_count();
         if class_count == 0 {
             return None;
@@ -262,7 +236,7 @@ impl ShmLink {
     ) -> Self {
         let tx_bipbuf = Arc::new(segment.g2h_bipbuf(peer_id));
         let rx_bipbuf = Arc::new(segment.h2g_bipbuf(peer_id));
-        let backend = Backend::Segment(segment.clone());
+        let backend = Backend(segment.clone());
 
         Self::from_parts(
             tx_bipbuf,
@@ -289,7 +263,7 @@ impl ShmLink {
     ) -> Self {
         let tx_bipbuf = Arc::new(segment.h2g_bipbuf(peer_id));
         let rx_bipbuf = Arc::new(segment.g2h_bipbuf(peer_id));
-        let backend = Backend::Segment(segment.clone());
+        let backend = Backend(segment.clone());
 
         Self::from_parts(
             tx_bipbuf,
@@ -306,94 +280,16 @@ impl ShmLink {
         )
     }
 
-    /// Build an in-process SHM link pair over a heap-backed region.
-    pub fn heap_pair(
-        bipbuf_capacity: u32,
-        max_payload_size: u32,
-        inline_threshold: u32,
-        size_classes: &[SizeClassConfig],
-    ) -> io::Result<(Self, Self)> {
-        #[cfg(not(unix))]
-        {
-            let _ = (
-                bipbuf_capacity,
-                max_payload_size,
-                inline_threshold,
-                size_classes,
-            );
-            return Err(io::Error::new(
-                io::ErrorKind::Unsupported,
-                "heap_pair requires unix mmap control channels",
-            ));
-        }
-
-        fn align_up(n: usize, align: usize) -> usize {
-            (n + align - 1) & !(align - 1)
-        }
-
-        let first_size = BIPBUF_HEADER_SIZE + bipbuf_capacity as usize;
-        let second_offset = align_up(first_size, 64);
-        let second_size = BIPBUF_HEADER_SIZE + bipbuf_capacity as usize;
-        let pair_bytes = second_offset + second_size;
-        let var_pool_offset = align_up(pair_bytes, 64);
-        let var_pool_size = VarSlotPool::required_size(size_classes);
-        let total_size = var_pool_offset + var_pool_size;
-
-        let region = Arc::new(HeapRegion::new_zeroed(total_size));
-        let g2h = Arc::new(unsafe { BipBuf::init(region.region(), 0, bipbuf_capacity) });
-        let h2g =
-            Arc::new(unsafe { BipBuf::init(region.region(), second_offset, bipbuf_capacity) });
-
-        let var_pool = unsafe { VarSlotPool::init(region.region(), var_pool_offset, size_classes) };
-        let backend = Backend::Heap(Arc::new(HeapBackend {
-            _region: region,
-            var_pool,
-        }));
-        let (a_doorbell, b_handle) = Doorbell::create_pair()?;
-        let b_doorbell = Doorbell::from_handle(b_handle)?;
-
-        let a_closed = Arc::new(AtomicBool::new(false));
-        let b_closed = Arc::new(AtomicBool::new(false));
-
-        // a sends to b via a_mmap_tx → b_mmap_rx
-        let (a_mmap_tx, b_mmap_rx) = {
-            let (tx, rx) = shm_primitives_async::create_mmap_control_pair_connected()?;
-            (MmapChannelTx::Real(tx), MmapChannelRx::Real(rx))
-        };
-
-        // b sends to a via b_mmap_tx → a_mmap_rx
-        let (b_mmap_tx, a_mmap_rx) = {
-            let (tx, rx) = shm_primitives_async::create_mmap_control_pair_connected()?;
-            (MmapChannelTx::Real(tx), MmapChannelRx::Real(rx))
-        };
-
-        let a = Self::from_parts(
-            g2h.clone(),
-            h2g.clone(),
-            backend.clone(),
-            Arc::new(a_doorbell),
-            1,
-            max_payload_size,
-            inline_threshold,
-            a_closed.clone(),
-            b_closed.clone(),
-            a_mmap_tx,
-            a_mmap_rx,
-        );
-        let b = Self::from_parts(
-            h2g,
-            g2h,
-            backend,
-            Arc::new(b_doorbell),
-            2,
-            max_payload_size,
-            inline_threshold,
-            b_closed,
-            a_closed,
-            b_mmap_tx,
-            b_mmap_rx,
-        );
-        Ok((a, b))
+    /// Accept the doorbell connection (Windows only).
+    ///
+    /// On Windows, the named pipe server must call `ConnectNamedPipe` before
+    /// data can flow.  Call this on the **host** link after the guest has
+    /// connected (i.e., after `Doorbell::from_handle` on the guest side).
+    ///
+    /// No-op on Unix.
+    #[cfg(windows)]
+    pub async fn accept_doorbell(&self) -> std::io::Result<()> {
+        self.tx_shared.doorbell.accept().await
     }
 }
 
@@ -1055,11 +951,40 @@ mod tests {
     use std::time::Duration;
 
     use roam_types::{LinkRx as _, LinkTx as _, LinkTxPermit as _};
-    use shm_primitives::{FileCleanup, MmapRegion};
-    use shm_primitives_async::MmapAttachMessage;
+    use shm_primitives::FileCleanup;
     use tokio::time::timeout;
 
     use super::*;
+    use crate::host::create_test_link_pair;
+    use crate::segment::SegmentConfig;
+
+    /// Create a real segment-backed test link pair.
+    async fn make_test_pair(
+        bipbuf_capacity: u32,
+        max_payload_size: u32,
+        inline_threshold: u32,
+        size_classes: &[SizeClassConfig],
+    ) -> (ShmLink, ShmLink, tempfile::TempDir) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("test.shm");
+        let segment = Arc::new(
+            Segment::create(
+                &path,
+                SegmentConfig {
+                    max_guests: 1,
+                    bipbuf_capacity,
+                    max_payload_size,
+                    inline_threshold,
+                    heartbeat_interval: 0,
+                    size_classes,
+                },
+                FileCleanup::Manual,
+            )
+            .expect("create segment"),
+        );
+        let (a, b) = create_test_link_pair(segment).await.expect("create_test_link_pair");
+        (a, b, dir)
+    }
 
     const CLASSES: &[SizeClassConfig] = &[SizeClassConfig {
         slot_size: 256,
@@ -1068,7 +993,7 @@ mod tests {
 
     #[tokio::test]
     async fn inline_payload_roundtrip_is_boxed() {
-        let (a, b) = ShmLink::heap_pair(4096, 1024, 128, CLASSES).unwrap();
+        let (a, b, _dir) = make_test_pair(4096, 1024, 128, CLASSES).await;
         let (a_tx, _a_rx) = a.split();
         let (_b_tx, mut b_rx) = b.split();
 
@@ -1087,7 +1012,7 @@ mod tests {
 
     #[tokio::test]
     async fn slot_ref_payload_is_zero_copy_shared_backing() {
-        let (a, b) = ShmLink::heap_pair(4096, 1024, 64, CLASSES).unwrap();
+        let (a, b, _dir) = make_test_pair(4096, 1024, 64, CLASSES).await;
         let (a_tx, _a_rx) = a.split();
         let (_b_tx, mut b_rx) = b.split();
 
@@ -1106,7 +1031,7 @@ mod tests {
 
     #[tokio::test]
     async fn shared_backing_drop_releases_slot() {
-        let (a, b) = ShmLink::heap_pair(4096, 1024, 64, CLASSES).unwrap();
+        let (a, b, _dir) = make_test_pair(4096, 1024, 64, CLASSES).await;
         let (a_tx, _a_rx) = a.split();
         let (_b_tx, mut b_rx) = b.split();
 
@@ -1139,7 +1064,7 @@ mod tests {
             slot_size: 4096,
             slot_count: 32,
         }];
-        let (a, b) = ShmLink::heap_pair(1 << 16, 1 << 20, 256, &classes).unwrap();
+        let (a, b, _dir) = make_test_pair(1 << 16, 1 << 20, 256, &classes).await;
         let (a_tx, _a_rx) = a.split();
         let (_b_tx, mut b_rx) = b.split();
 
@@ -1158,7 +1083,7 @@ mod tests {
 
     #[tokio::test]
     async fn reserve_waits_until_rx_frees_ring_space() {
-        let (a, b) = ShmLink::heap_pair(32, 1024, 256, CLASSES).unwrap();
+        let (a, b, _dir) = make_test_pair(32, 1024, 256, CLASSES).await;
         let (a_tx, _a_rx) = a.split();
         let (_b_tx, mut b_rx) = b.split();
 
@@ -1187,7 +1112,7 @@ mod tests {
 
     #[tokio::test]
     async fn transport_stats_track_send_recv_and_exhaustion() {
-        let (a, b) = ShmLink::heap_pair(4096, 1024, 64, CLASSES).unwrap();
+        let (a, b, _dir) = make_test_pair(4096, 1024, 64, CLASSES).await;
         let (a_tx, _a_rx) = a.split();
         let (_b_tx, mut b_rx) = b.split();
 
@@ -1236,7 +1161,7 @@ mod tests {
 
     #[tokio::test]
     async fn mmap_large_payload_roundtrip() {
-        let (a, b) = ShmLink::heap_pair(4096, 1 << 20, 32, SMALL_CLASSES).unwrap();
+        let (a, b, _dir) = make_test_pair(4096, 1 << 20, 32, SMALL_CLASSES).await;
         let (a_tx, _a_rx) = a.split();
         let (_b_tx, mut b_rx) = b.split();
 
@@ -1261,7 +1186,7 @@ mod tests {
 
     #[tokio::test]
     async fn mmap_multiple_payloads_share_region() {
-        let (a, b) = ShmLink::heap_pair(4096, 1 << 20, 32, SMALL_CLASSES).unwrap();
+        let (a, b, _dir) = make_test_pair(4096, 1 << 20, 32, SMALL_CLASSES).await;
         let (a_tx, _a_rx) = a.split();
         let (_b_tx, mut b_rx) = b.split();
 
@@ -1285,7 +1210,7 @@ mod tests {
 
     #[tokio::test]
     async fn mmap_mixed_with_inline_and_varslot() {
-        let (a, b) = ShmLink::heap_pair(4096, 1 << 20, 32, SMALL_CLASSES).unwrap();
+        let (a, b, _dir) = make_test_pair(4096, 1 << 20, 32, SMALL_CLASSES).await;
         let (a_tx, _a_rx) = a.split();
         let (_b_tx, mut b_rx) = b.split();
 
@@ -1327,7 +1252,7 @@ mod tests {
 
     #[tokio::test]
     async fn mmap_backing_survives_rx_drop_and_peer_teardown() {
-        let (a, b) = ShmLink::heap_pair(4096, 1 << 20, 32, SMALL_CLASSES).unwrap();
+        let (a, b, _dir) = make_test_pair(4096, 1 << 20, 32, SMALL_CLASSES).await;
         let (a_tx, _a_rx) = a.split();
         let (_b_tx, mut b_rx) = b.split();
 
@@ -1351,9 +1276,10 @@ mod tests {
         assert_eq!(shared.as_bytes(), payload.as_slice());
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn mmap_ref_can_arrive_before_attach_control_message() {
-        let (_a, b) = ShmLink::heap_pair(4096, 1 << 20, 32, SMALL_CLASSES).unwrap();
+        let (_a, b, _dir) = make_test_pair(4096, 1 << 20, 32, SMALL_CLASSES).await;
         let (_b_tx, mut b_rx) = b.split();
 
         // Replace the default control channel so this test can
@@ -1380,8 +1306,12 @@ mod tests {
         // Build the mapping and schedule attach delivery shortly after recv starts.
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("late-attach.shm");
-        let region =
-            MmapRegion::create(&path, mapping_length as usize, FileCleanup::Manual).unwrap();
+        let region = shm_primitives::MmapRegion::create(
+            &path,
+            mapping_length as usize,
+            FileCleanup::Manual,
+        )
+        .unwrap();
         unsafe {
             std::ptr::copy_nonoverlapping(
                 payload.as_ptr(),
@@ -1389,7 +1319,7 @@ mod tests {
                 payload.len(),
             );
         }
-        let attach = MmapAttachMessage {
+        let attach = shm_primitives_async::MmapAttachMessage {
             map_id,
             map_generation,
             mapping_length,

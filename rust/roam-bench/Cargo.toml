@@ -9,6 +9,17 @@ publish = false
 [package.metadata."docs.rs"]
 rustdoc-args = ["--html-in-header", "arborium-header.html"]
 
+[features]
+protobuf = [
+    "dep:tonic",
+    "dep:tonic-prost",
+    "dep:prost",
+    "dep:hyper-util",
+    "dep:tower",
+    "dep:tokio-stream",
+    "dep:tonic-prost-build",
+]
+
 [dependencies]
 roam.workspace = true
 roam-core.workspace = true
@@ -21,17 +32,19 @@ futures-util.workspace = true
 
 tarpc.workspace = true
 serde.workspace = true
-tonic.workspace = true
-tonic-prost.workspace = true
-prost.workspace = true
-hyper-util.workspace = true
-tower.workspace = true
-tokio-stream.workspace = true
+tonic = { workspace = true, optional = true }
+tonic-prost = { workspace = true, optional = true }
+prost = { workspace = true, optional = true }
+hyper-util = { workspace = true, optional = true }
+tower = { workspace = true, optional = true }
+tokio-stream = { workspace = true, optional = true }
 
+shm-primitives.workspace = true
+tempfile = "3"
 divan.workspace = true
 
 [build-dependencies]
-tonic-prost-build.workspace = true
+tonic-prost-build = { workspace = true, optional = true }
 
 [[bench]]
 name = "rpc"

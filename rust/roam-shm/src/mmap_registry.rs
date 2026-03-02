@@ -14,7 +14,6 @@ use std::collections::HashMap;
 use std::io;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::mpsc;
 use std::time::Duration;
 
 use shm_primitives::MmapRegion;
@@ -175,13 +174,16 @@ fn create_mmap_region(size: usize) -> io::Result<MmapRegion> {
 pub enum MmapChannelTx {
     #[cfg(unix)]
     Real(shm_primitives_async::MmapControlSender),
+    #[cfg(windows)]
+    Real(shm_primitives_async::MmapControlSender),
 }
 
 /// Receiver half of the mmap control channel.
 pub enum MmapChannelRx {
     #[cfg(unix)]
     Real(shm_primitives_async::MmapControlReceiver),
-    InProcess(mpsc::Receiver<(Arc<MmapRegion>, MmapAttachMessage)>),
+    #[cfg(windows)]
+    Real(shm_primitives_async::MmapControlReceiver),
 }
 
 impl MmapChannelTx {
@@ -190,6 +192,20 @@ impl MmapChannelTx {
             #[cfg(unix)]
             MmapChannelTx::Real(sender) => {
                 if let Err(error) = sender.send(region.as_raw_fd(), msg) {
+                    warn!(
+                        map_id = msg.map_id,
+                        map_generation = msg.map_generation,
+                        mapping_length = msg.mapping_length,
+                        error = %error,
+                        "failed to send mmap attach over control channel"
+                    );
+                    return Err(error);
+                }
+                Ok(())
+            }
+            #[cfg(windows)]
+            MmapChannelTx::Real(sender) => {
+                if let Err(error) = sender.send_path(region.path(), msg) {
                     warn!(
                         map_id = msg.map_id,
                         map_generation = msg.map_generation,
@@ -304,46 +320,61 @@ impl MmapAttachments {
                         }
                     }
                 },
-                MmapChannelRx::InProcess(receiver) => match receiver.try_recv() {
-                    Ok((region, msg)) => {
+                #[cfg(windows)]
+                MmapChannelRx::Real(receiver) => match receiver.try_recv_path() {
+                    Ok(Some((path, msg))) => {
                         let key = (msg.map_id, msg.map_generation);
                         if self.mappings.contains_key(&key) {
                             continue;
                         }
-                        self.attach_in_process(&region, msg, key);
+                        match MmapRegion::attach(&path) {
+                            Ok(region) => {
+                                self.mappings.insert(
+                                    key,
+                                    Arc::new(AttachedMapping {
+                                        region,
+                                        map_id: msg.map_id,
+                                        map_generation: msg.map_generation,
+                                        mapping_length: msg.mapping_length,
+                                    }),
+                                );
+                            }
+                            Err(error) => {
+                                warn!(
+                                    map_id = msg.map_id,
+                                    map_generation = msg.map_generation,
+                                    mapping_length = msg.mapping_length,
+                                    path = %path.display(),
+                                    error = %error,
+                                    "failed to attach mmap region from control channel"
+                                );
+                                continue;
+                            }
+                        }
                     }
-                    Err(mpsc::TryRecvError::Empty) => break,
-                    Err(mpsc::TryRecvError::Disconnected) => break,
+                    Ok(None) => break,
+                    Err(error) => {
+                        let error_kind = error.kind();
+                        warn!(
+                            error = %error,
+                            error_kind = ?error_kind,
+                            "failed to recv mmap attach from control channel"
+                        );
+                        match error_kind {
+                            io::ErrorKind::WouldBlock => break,
+                            io::ErrorKind::Interrupted => continue,
+                            _ => {
+                                let message = format!(
+                                    "fatal mmap control channel receive error ({error_kind:?}): {error}"
+                                );
+                                warn!("{message}");
+                                self.terminal_error = Some(message);
+                                break;
+                            }
+                        }
+                    }
                 },
             }
-        }
-    }
-
-    #[cfg(unix)]
-    fn attach_in_process(
-        &mut self,
-        region: &Arc<MmapRegion>,
-        msg: MmapAttachMessage,
-        key: (u32, u32),
-    ) {
-        use std::os::unix::io::{FromRawFd, OwnedFd};
-
-        let raw = region.as_raw_fd();
-        let duped = unsafe { libc::dup(raw) };
-        if duped < 0 {
-            return;
-        }
-        let owned_fd = unsafe { OwnedFd::from_raw_fd(duped) };
-        if let Ok(attached_region) = MmapRegion::attach_fd(owned_fd, msg.mapping_length as usize) {
-            self.mappings.insert(
-                key,
-                Arc::new(AttachedMapping {
-                    region: attached_region,
-                    map_id: msg.map_id,
-                    map_generation: msg.map_generation,
-                    mapping_length: msg.mapping_length,
-                }),
-            );
         }
     }
 
@@ -541,32 +572,66 @@ mod tests {
     use super::*;
     use std::sync::atomic::Ordering;
 
-    #[cfg(unix)]
     fn create_real_channel() -> (MmapChannelTx, MmapChannelRx) {
-        let (sender, receiver) = shm_primitives_async::create_mmap_control_pair_connected()
-            .expect("create control pair");
+        let (sender, handle) =
+            shm_primitives_async::create_mmap_control_pair().expect("create control pair");
+        let receiver = shm_primitives_async::MmapControlReceiver::from_handle(handle)
+            .expect("connect control pair");
         (MmapChannelTx::Real(sender), MmapChannelRx::Real(receiver))
     }
 
-    #[cfg(unix)]
-    fn recv_real_message(rx: &mut MmapChannelRx) -> (std::os::fd::OwnedFd, MmapAttachMessage) {
+    /// Receive one attach message, discarding the fd/path.
+    fn recv_message(rx: &mut MmapChannelRx) -> MmapAttachMessage {
         match rx {
-            MmapChannelRx::Real(inner) => inner
-                .try_recv()
-                .expect("recv should not fail")
-                .expect("expected mmap attach message"),
-            MmapChannelRx::InProcess(_) => panic!("expected real channel"),
+            #[cfg(unix)]
+            MmapChannelRx::Real(inner) => {
+                inner
+                    .try_recv()
+                    .expect("recv should not fail")
+                    .expect("expected mmap attach message")
+                    .1
+            }
+            #[cfg(windows)]
+            MmapChannelRx::Real(inner) => {
+                inner
+                    .try_recv_path()
+                    .expect("recv should not fail")
+                    .expect("expected mmap attach message")
+                    .1
+            }
         }
     }
 
-    #[cfg(unix)]
+    /// Check that no pending message is available.
+    fn try_recv_is_none(rx: &mut MmapChannelRx) {
+        match rx {
+            #[cfg(unix)]
+            MmapChannelRx::Real(inner) => {
+                assert!(
+                    inner.try_recv().expect("recv should not fail").is_none(),
+                    "expected no pending message"
+                );
+            }
+            #[cfg(windows)]
+            MmapChannelRx::Real(inner) => {
+                assert!(
+                    inner
+                        .try_recv_path()
+                        .expect("recv should not fail")
+                        .is_none(),
+                    "expected no pending message"
+                );
+            }
+        }
+    }
+
     #[tokio::test]
     async fn alloc_reuses_existing_slot_and_delivers_attach_once() {
         let (tx, mut rx) = create_real_channel();
         let mut registry = MmapRegistry::new(tx, 64);
 
         let first = registry.alloc(8).expect("first alloc");
-        let (_first_fd, first_msg) = recv_real_message(&mut rx);
+        let first_msg = recv_message(&mut rx);
         assert_eq!(first_msg.map_id, first.map_id);
         assert_eq!(first_msg.map_generation, first.map_generation);
         assert_eq!(first.map_offset, 0);
@@ -576,38 +641,28 @@ mod tests {
         assert_eq!(second.map_generation, first.map_generation);
         assert_eq!(second.map_offset, 8);
 
-        match &mut rx {
-            MmapChannelRx::Real(inner) => {
-                assert!(
-                    inner.try_recv().expect("recv should not fail").is_none(),
-                    "slot reuse should not redeliver attach message"
-                );
-            }
-            MmapChannelRx::InProcess(_) => panic!("expected real channel"),
-        }
+        try_recv_is_none(&mut rx);
 
         assert!(first_msg.mapping_length >= 64);
     }
 
-    #[cfg(unix)]
     #[tokio::test]
     async fn alloc_creates_new_slot_when_existing_region_is_full() {
         let (tx, mut rx) = create_real_channel();
         let mut registry = MmapRegistry::new(tx, 16);
 
         let first = registry.alloc(16).expect("first alloc fills region");
-        let (_, first_msg) = recv_real_message(&mut rx);
+        let first_msg = recv_message(&mut rx);
         assert_eq!(first_msg.map_id, 0);
 
         let second = registry
             .alloc(1)
             .expect("second alloc should create another slot");
-        let (_, second_msg) = recv_real_message(&mut rx);
+        let second_msg = recv_message(&mut rx);
         assert_eq!(second_msg.map_id, 1);
         assert_ne!(second.map_id, first.map_id);
     }
 
-    #[cfg(unix)]
     #[tokio::test]
     async fn reclaim_drops_fully_consumed_slot_without_leases() {
         let (tx, _rx) = create_real_channel();
@@ -624,7 +679,6 @@ mod tests {
         );
     }
 
-    #[cfg(unix)]
     #[tokio::test]
     async fn payload_mut_roundtrip_and_attachment_resolve_success() {
         let (tx, rx) = create_real_channel();
@@ -654,7 +708,6 @@ mod tests {
         assert_eq!(got, bytes);
     }
 
-    #[cfg(unix)]
     #[tokio::test]
     async fn resolve_reports_unknown_out_of_bounds_and_overflow() {
         let (_tx, rx) = create_real_channel();

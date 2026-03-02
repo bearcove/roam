@@ -14,12 +14,20 @@ use shm_primitives::{BipBuf, PeerEntry, PeerId, Region};
 /// Size of one peer entry in shared memory.
 pub const PEER_ENTRY_SIZE: usize = size_of::<PeerEntry>();
 
+/// Aligned size of a single BipBuffer (header + data), rounded up to 64-byte
+/// alignment so that the *next* BipBuffer header starts 64-byte aligned.
+#[inline]
+pub fn bipbuf_single_stride(bipbuf_capacity: u32) -> usize {
+    let raw = shm_primitives::BIPBUF_HEADER_SIZE + bipbuf_capacity as usize;
+    (raw + 63) & !63
+}
+
 /// Size of the BipBuffer pair (G→H + H→G) for one guest.
 ///
 /// r[impl shm.bipbuf.layout]
 #[inline]
 pub fn bipbuf_pair_size(bipbuf_capacity: u32) -> usize {
-    2 * (shm_primitives::BIPBUF_HEADER_SIZE + bipbuf_capacity as usize)
+    2 * bipbuf_single_stride(bipbuf_capacity)
 }
 
 /// In-process view of the peer table.
@@ -77,8 +85,7 @@ impl PeerTable {
 
             // Init BipBuffer pair: G→H then H→G
             let g2h_offset = ring_base_offset + i * stride;
-            let h2g_offset =
-                g2h_offset + shm_primitives::BIPBUF_HEADER_SIZE + bipbuf_capacity as usize;
+            let h2g_offset = g2h_offset + bipbuf_single_stride(bipbuf_capacity);
 
             unsafe {
                 BipBuf::init(region, g2h_offset, bipbuf_capacity);

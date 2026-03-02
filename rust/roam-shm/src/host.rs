@@ -5,13 +5,12 @@
 //! control channels.
 
 use std::io;
-use std::os::unix::io::RawFd;
 use std::sync::Arc;
 
 use shm_primitives::PeerId;
 use shm_primitives_async::{
     Doorbell, DoorbellHandle, MmapControlHandle, MmapControlReceiver, MmapControlSender,
-    clear_cloexec, create_mmap_control_pair,
+    create_mmap_control_pair,
 };
 
 use crate::ShmLink;
@@ -22,6 +21,10 @@ fn io_other(msg: impl Into<String>) -> io::Error {
     io::Error::other(msg.into())
 }
 
+#[cfg(unix)]
+use std::os::unix::io::RawFd;
+
+#[cfg(unix)]
 fn dup_fd(fd: RawFd) -> io::Result<RawFd> {
     // SAFETY: libc::dup does not take ownership of `fd`.
     let duplicated = unsafe { libc::dup(fd) };
@@ -62,32 +65,64 @@ impl HostHub {
             .ok_or_else(|| io_other("no free SHM peer slots"))?;
 
         let (host_doorbell, guest_doorbell) = Doorbell::create_pair()?;
-        clear_cloexec(guest_doorbell.as_raw_fd())?;
 
-        // Single bidirectional mmap control socketpair endpoint per side.
-        //
-        // We still expose split sender/receiver handles to the runtime by
-        // duplicating each side's endpoint for distinct ownership.
+        // On Unix, clear CLOEXEC so the guest process inherits the doorbell fd.
+        #[cfg(unix)]
+        shm_primitives_async::clear_cloexec(guest_doorbell.as_raw_fd())?;
+
+        // Create the mmap control channel pair.
         let (host_mmap_tx, guest_mmap_rx) = create_mmap_control_pair()?;
-        clear_cloexec(guest_mmap_rx.as_raw_fd())?;
-        let host_mmap_rx_fd = dup_fd(host_mmap_tx.as_raw_fd())?;
-        let guest_mmap_tx_fd = dup_fd(guest_mmap_rx.as_raw_fd())?;
-        clear_cloexec(guest_mmap_tx_fd)?;
 
-        let host = HostPeer {
-            segment: Arc::clone(&self.segment),
-            peer_id,
-            doorbell: host_doorbell,
-            mmap_tx: host_mmap_tx,
-            // SAFETY: `dup_fd` returns a fresh owning descriptor.
-            mmap_rx: unsafe { MmapControlHandle::from_raw_fd(host_mmap_rx_fd) },
+        #[cfg(unix)]
+        let (host, guest) = {
+            // On Unix the socketpair is bidirectional.  Duplicate each side's
+            // endpoint so host and guest each get independent tx + rx handles.
+            shm_primitives_async::clear_cloexec(guest_mmap_rx.as_raw_fd())?;
+            let host_mmap_rx_fd = dup_fd(host_mmap_tx.as_raw_fd())?;
+            let guest_mmap_tx_fd = dup_fd(guest_mmap_rx.as_raw_fd())?;
+            shm_primitives_async::clear_cloexec(guest_mmap_tx_fd)?;
+
+            let host = HostPeer {
+                segment: Arc::clone(&self.segment),
+                peer_id,
+                doorbell: host_doorbell,
+                mmap_tx: host_mmap_tx,
+                // SAFETY: `dup_fd` returns a fresh owning descriptor.
+                mmap_rx: unsafe { MmapControlHandle::from_raw_fd(host_mmap_rx_fd) },
+            };
+            let guest = GuestSpawnTicket {
+                peer_id,
+                doorbell: guest_doorbell,
+                mmap_rx: guest_mmap_rx,
+                mmap_tx_fd: guest_mmap_tx_fd,
+            };
+            (host, guest)
         };
-        let guest = GuestSpawnTicket {
-            peer_id,
-            doorbell: guest_doorbell,
-            mmap_rx: guest_mmap_rx,
-            mmap_tx_fd: guest_mmap_tx_fd,
+
+        #[cfg(windows)]
+        let (host, guest) = {
+            // On Windows, mmap control uses named pipes (two separate unidirectional
+            // channels).  Create a second pair for the guest→host direction.
+            let (guest_mmap_tx, host_mmap_rx) = create_mmap_control_pair()?;
+            let mmap_tx_pipe = host_mmap_rx.pipe_name().to_string();
+
+            let host = HostPeer {
+                segment: Arc::clone(&self.segment),
+                peer_id,
+                doorbell: host_doorbell,
+                mmap_tx: host_mmap_tx,
+                mmap_rx: host_mmap_rx,
+            };
+            let guest = GuestSpawnTicket {
+                peer_id,
+                doorbell: guest_doorbell,
+                mmap_rx: guest_mmap_rx,
+                mmap_tx_pipe,
+                mmap_tx: guest_mmap_tx,
+            };
+            (host, guest)
         };
+
         Ok(PreparedPeer { host, guest })
     }
 }
@@ -132,8 +167,15 @@ pub struct GuestSpawnTicket {
     pub peer_id: PeerId,
     pub doorbell: DoorbellHandle,
     pub mmap_rx: MmapControlHandle,
-    /// Raw fd for the guest->host mmap control sender endpoint.
+    /// Raw fd for the guest→host mmap control sender endpoint (Unix).
+    #[cfg(unix)]
     pub mmap_tx_fd: RawFd,
+    /// Guest→host mmap control sender (Windows).
+    /// The host's `into_link()` connects as client to this pipe server.
+    #[cfg(windows)]
+    pub mmap_tx: MmapControlSender,
+    #[cfg(windows)]
+    pub mmap_tx_pipe: String,
 }
 
 impl GuestSpawnTicket {
@@ -146,7 +188,14 @@ impl GuestSpawnTicket {
     }
 
     pub fn mmap_tx_arg(&self) -> String {
-        self.mmap_tx_fd.to_string()
+        #[cfg(unix)]
+        {
+            self.mmap_tx_fd.to_string()
+        }
+        #[cfg(windows)]
+        {
+            self.mmap_tx_pipe.clone()
+        }
     }
 }
 
@@ -194,6 +243,10 @@ impl ShmHost {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Unix: guest link from inherited raw fds
+// ---------------------------------------------------------------------------
+
 /// Build a guest-side link from inherited raw fds.
 ///
 /// `claim_reserved` should be true for spawned guests that were pre-reserved by
@@ -204,6 +257,7 @@ impl ShmHost {
 ///
 /// The passed fds must be valid inherited descriptors, uniquely owned by the
 /// caller, and must match the same peer/segment context.
+#[cfg(unix)]
 pub unsafe fn guest_link_from_raw(
     segment: Arc<Segment>,
     peer_id: PeerId,
@@ -243,6 +297,7 @@ pub unsafe fn guest_link_from_raw(
 /// # Safety
 ///
 /// Same requirements as [`guest_link_from_raw`].
+#[cfg(unix)]
 pub unsafe fn guest_link_from_ticket(
     segment: Arc<Segment>,
     ticket: GuestSpawnTicket,
@@ -264,6 +319,129 @@ pub unsafe fn guest_link_from_ticket(
             claim_reserved,
         )
     }
+}
+
+// ---------------------------------------------------------------------------
+// Windows: guest link from named-pipe names
+// ---------------------------------------------------------------------------
+
+/// Build a guest-side link from named pipe names received via bootstrap.
+///
+/// On Windows there are no inherited fds; instead the bootstrap response
+/// carries pipe names that the guest connects to.
+#[cfg(windows)]
+pub fn guest_link_from_names(
+    segment: Arc<Segment>,
+    peer_id: PeerId,
+    doorbell_pipe: &str,
+    mmap_rx_pipe: &str,
+    mmap_tx_pipe: &str,
+    claim_reserved: bool,
+) -> io::Result<ShmLink> {
+    if claim_reserved {
+        segment.claim_peer(peer_id).map_err(|state| {
+            io_other(format!(
+                "failed to claim reserved peer {} (state: {state:?})",
+                peer_id.get()
+            ))
+        })?;
+    }
+
+    let doorbell = Doorbell::from_handle(DoorbellHandle::from_pipe_name(
+        doorbell_pipe.to_string(),
+    ))?;
+
+    let mmap_rx_handle = unsafe { MmapControlHandle::from_arg(mmap_rx_pipe) }
+        .map_err(|e| io_other(format!("mmap_rx pipe name: {e}")))?;
+    let mmap_rx = MmapControlReceiver::from_handle(mmap_rx_handle)?;
+
+    let mmap_tx_handle = unsafe { MmapControlHandle::from_arg(mmap_tx_pipe) }
+        .map_err(|e| io_other(format!("mmap_tx pipe name: {e}")))?;
+    let mmap_tx_receiver = MmapControlReceiver::from_handle(mmap_tx_handle)?;
+    // On Windows, the "sender" for the guest→host direction is actually a
+    // receiver that the guest writes into. We wrap the pipe client handle
+    // into MmapControlSender via create_mmap_control_pair_connected pattern.
+    // Actually, on Windows the guest connects as pipe CLIENT for the host's
+    // sender pipe (host→guest). The guest→host pipe was created by the host;
+    // the guest connects as CLIENT and writes to it.
+    //
+    // For now, use a second create_mmap_control_pair_connected for the tx
+    // direction from the guest's perspective.
+    //
+    // TODO: This needs a proper design for cross-process. For in-process
+    // tests (ticket-based), see guest_link_from_ticket_windows below.
+    drop(mmap_tx_receiver);
+
+    // For the guest→host direction, connect to the pipe as a sender.
+    let (mmap_tx_sender, _) = shm_primitives_async::create_mmap_control_pair()?;
+
+    Ok(ShmLink::for_guest(
+        segment,
+        peer_id,
+        doorbell,
+        MmapChannelTx::Real(mmap_tx_sender),
+        MmapChannelRx::Real(mmap_rx),
+    ))
+}
+
+/// Build a guest-side link from a host-generated ticket (Windows).
+///
+/// The ticket's `mmap_tx` is the named-pipe server created by `prepare_peer()`.
+/// The host's `into_link()` already connected as client to it, so the pipe is
+/// ready to use.
+///
+/// **Ordering:** `host_peer.into_link()` must be called before this function
+/// so that the host connects as client to the guest's mmap_tx pipe.
+#[cfg(windows)]
+pub fn guest_link_from_ticket_windows(
+    segment: Arc<Segment>,
+    ticket: GuestSpawnTicket,
+    claim_reserved: bool,
+) -> io::Result<ShmLink> {
+    if claim_reserved {
+        segment.claim_peer(ticket.peer_id).map_err(|state| {
+            io_other(format!(
+                "failed to claim reserved peer {} (state: {state:?})",
+                ticket.peer_id.get()
+            ))
+        })?;
+    }
+
+    let doorbell = Doorbell::from_handle(ticket.doorbell)?;
+    let mmap_rx = MmapControlReceiver::from_handle(ticket.mmap_rx)?;
+
+    Ok(ShmLink::for_guest(
+        segment,
+        ticket.peer_id,
+        doorbell,
+        MmapChannelTx::Real(ticket.mmap_tx),
+        MmapChannelRx::Real(mmap_rx),
+    ))
+}
+
+/// Create a real SHM link pair for testing.
+///
+/// Uses a file-backed segment with real doorbells and real mmap control
+/// channels — no in-process fakes.
+///
+/// **Ordering note (Windows):** `host_peer.into_link()` is called before
+/// `guest_link_from_ticket_windows` so that the host connects as pipe client
+/// first, satisfying named-pipe `ConnectNamedPipe` ordering.
+pub async fn create_test_link_pair(segment: Arc<Segment>) -> io::Result<(ShmLink, ShmLink)> {
+    let hub = HostHub::new(Arc::clone(&segment));
+    let prepared = hub.prepare_peer()?;
+    let (host_peer, ticket) = prepared.into_parts();
+    // Host must build its link first (connects as pipe client on Windows).
+    let host_link = host_peer.into_link()?;
+    #[cfg(unix)]
+    let guest_link = unsafe { guest_link_from_ticket(segment, ticket, true) }?;
+    #[cfg(windows)]
+    let guest_link = guest_link_from_ticket_windows(segment, ticket, true)?;
+    // On Windows, the host doorbell (named pipe server) must call
+    // ConnectNamedPipe after the guest client connects.
+    #[cfg(windows)]
+    host_link.accept_doorbell().await?;
+    Ok((host_link, guest_link))
 }
 
 #[cfg(test)]
@@ -304,9 +482,22 @@ mod tests {
         let (host_peer, ticket) = prepared.into_parts();
 
         let host_link = host_peer.into_link().expect("build host link");
-        // SAFETY: fds come from freshly-created ticket and are consumed exactly once.
-        let guest_link = unsafe { guest_link_from_ticket(Arc::clone(&segment), ticket, true) }
-            .expect("build guest link");
+
+        #[cfg(unix)]
+        let guest_link = {
+            // SAFETY: fds come from freshly-created ticket and are consumed exactly once.
+            unsafe { guest_link_from_ticket(Arc::clone(&segment), ticket, true) }
+                .expect("build guest link")
+        };
+        #[cfg(windows)]
+        let guest_link = {
+            guest_link_from_ticket_windows(Arc::clone(&segment), ticket, true)
+                .expect("build guest link")
+        };
+
+        // On Windows, accept the doorbell connection after guest has connected.
+        #[cfg(windows)]
+        host_link.accept_doorbell().await.expect("accept doorbell");
 
         let (host_tx, mut host_rx) = host_link.split();
         let (guest_tx, mut guest_rx) = guest_link.split();

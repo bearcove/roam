@@ -3,7 +3,6 @@
 use roam::{Rx, Tx};
 use roam_core::{BareConduit, Driver, initiator};
 use roam_shm::bootstrap::{BootstrapStatus, encode_request};
-use roam_shm::guest_link_from_raw;
 use roam_shm::segment::Segment;
 use roam_stream::StreamLink;
 use roam_types::{MessageFamily, Parity};
@@ -11,8 +10,15 @@ use spec_proto::{
     Canvas, Color, LookupError, MathError, Message, Person, Point, Rectangle, Shape, Testbed,
     TestbedDispatcher,
 };
-use std::os::fd::AsRawFd;
+use std::convert::Infallible;
 use tracing::{debug, error, info, instrument};
+
+#[cfg(unix)]
+use std::os::fd::AsRawFd;
+#[cfg(unix)]
+use roam_shm::guest_link_from_raw;
+#[cfg(windows)]
+use roam_shm::guest_link_from_names;
 
 type TcpConduit = BareConduit<
     MessageFamily,
@@ -212,45 +218,125 @@ async fn connect_and_serve_shm() -> Result<(), String> {
         .map_err(|_| "SHM_CONTROL_SOCK env var not set".to_string())?;
     let sid = std::env::var("SHM_SESSION_ID")
         .map_err(|_| "SHM_SESSION_ID env var not set".to_string())?;
-    let mmap_tx_fd: i32 = std::env::var("SHM_MMAP_TX_FD")
-        .map_err(|_| "SHM_MMAP_TX_FD env var not set".to_string())?
-        .parse()
-        .map_err(|e| format!("invalid SHM_MMAP_TX_FD: {e}"))?;
 
-    let mut stream = std::os::unix::net::UnixStream::connect(&control_sock)
-        .map_err(|e| format!("connect bootstrap socket: {e}"))?;
     let request = encode_request(sid.as_bytes()).map_err(|e| format!("encode request: {e}"))?;
-    std::io::Write::write_all(&mut stream, &request)
-        .map_err(|e| format!("send bootstrap request: {e}"))?;
 
-    let received = shm_primitives::bootstrap::recv_response_unix(stream.as_raw_fd())
-        .map_err(|e| format!("recv bootstrap response: {e}"))?;
-    if received.response.status != BootstrapStatus::Success {
-        return Err(format!(
-            "bootstrap failed: status={:?}, payload={}",
-            received.response.status,
-            String::from_utf8_lossy(&received.response.payload)
-        ));
-    }
-    let fds = received
-        .fds
-        .ok_or_else(|| "missing bootstrap success fds".to_string())?;
-    let hub_path = std::str::from_utf8(&received.response.payload)
-        .map_err(|e| format!("bootstrap payload is not utf-8 path: {e}"))?;
-    let segment = std::sync::Arc::new(
-        Segment::attach(std::path::Path::new(hub_path))
-            .map_err(|e| format!("attach segment at {hub_path}: {e}"))?,
-    );
-    let peer_id = shm_primitives::PeerId::new(received.response.peer_id as u8)
-        .ok_or_else(|| format!("invalid peer id {}", received.response.peer_id))?;
+    // Connect to the control socket, send the bootstrap request, and receive the
+    // bootstrap response. The response carries fds on Unix and names on Windows.
+    #[cfg(unix)]
+    let link = {
+        let mmap_tx_fd: i32 = std::env::var("SHM_MMAP_TX_FD")
+            .map_err(|_| "SHM_MMAP_TX_FD env var not set".to_string())?
+            .parse()
+            .map_err(|e| format!("invalid SHM_MMAP_TX_FD: {e}"))?;
 
-    use std::os::fd::IntoRawFd;
-    let doorbell_fd = fds.doorbell_fd.into_raw_fd();
-    let mmap_rx_fd = fds.mmap_control_fd.into_raw_fd();
+        let mut stream = std::os::unix::net::UnixStream::connect(&control_sock)
+            .map_err(|e| format!("connect bootstrap socket: {e}"))?;
+        std::io::Write::write_all(&mut stream, &request)
+            .map_err(|e| format!("send bootstrap request: {e}"))?;
 
-    let link =
-        unsafe { guest_link_from_raw(segment, peer_id, doorbell_fd, mmap_rx_fd, mmap_tx_fd, true) }
-            .map_err(|e| format!("guest_link_from_raw: {e}"))?;
+        let received = shm_primitives::bootstrap::recv_response_unix(stream.as_raw_fd())
+            .map_err(|e| format!("recv bootstrap response: {e}"))?;
+        if received.response.status != BootstrapStatus::Success {
+            return Err(format!(
+                "bootstrap failed: status={:?}, payload={}",
+                received.response.status,
+                String::from_utf8_lossy(&received.response.payload)
+            ));
+        }
+        let fds = received
+            .fds
+            .ok_or_else(|| "missing bootstrap success fds".to_string())?;
+        let hub_path = std::str::from_utf8(&received.response.payload)
+            .map_err(|e| format!("bootstrap payload is not utf-8 path: {e}"))?;
+        let segment = std::sync::Arc::new(
+            Segment::attach(std::path::Path::new(hub_path))
+                .map_err(|e| format!("attach segment at {hub_path}: {e}"))?,
+        );
+        let peer_id = shm_primitives::PeerId::new(received.response.peer_id as u8)
+            .ok_or_else(|| format!("invalid peer id {}", received.response.peer_id))?;
+
+        use std::os::fd::IntoRawFd;
+        let doorbell_fd = fds.doorbell_fd.into_raw_fd();
+        let mmap_rx_fd = fds.mmap_control_fd.into_raw_fd();
+
+        unsafe {
+            guest_link_from_raw(segment, peer_id, doorbell_fd, mmap_rx_fd, mmap_tx_fd, true)
+        }
+        .map_err(|e| format!("guest_link_from_raw: {e}"))?
+    };
+
+    #[cfg(windows)]
+    let link = {
+        use roam_shm::bootstrap::{
+            BootstrapSuccessNames, BOOTSTRAP_RESPONSE_HEADER_LEN, decode_response,
+        };
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let mmap_tx_pipe = std::env::var("SHM_MMAP_TX_PIPE")
+            .map_err(|_| "SHM_MMAP_TX_PIPE env var not set".to_string())?;
+
+        // On Windows, SHM_CONTROL_SOCK is a named pipe path.
+        let mut stream = roam_local::connect(&control_sock)
+            .await
+            .map_err(|e| format!("connect bootstrap pipe: {e}"))?;
+        stream
+            .write_all(&request)
+            .await
+            .map_err(|e| format!("send bootstrap request: {e}"))?;
+
+        // Read the bootstrap response header.
+        let mut header = [0u8; BOOTSTRAP_RESPONSE_HEADER_LEN];
+        stream
+            .read_exact(&mut header)
+            .await
+            .map_err(|e| format!("read bootstrap response header: {e}"))?;
+
+        // Parse payload length from header (bytes 9-10 = payload_len as u16 LE).
+        let payload_len = u16::from_le_bytes([header[9], header[10]]) as usize;
+        let mut payload = vec![0u8; payload_len];
+        if payload_len > 0 {
+            stream
+                .read_exact(&mut payload)
+                .await
+                .map_err(|e| format!("read bootstrap response payload: {e}"))?;
+        }
+
+        // Combine into full frame for decode_response.
+        let mut frame = Vec::with_capacity(BOOTSTRAP_RESPONSE_HEADER_LEN + payload_len);
+        frame.extend_from_slice(&header);
+        frame.extend_from_slice(&payload);
+        let response_ref =
+            decode_response(&frame).map_err(|e| format!("decode bootstrap response: {e}"))?;
+
+        if response_ref.status != BootstrapStatus::Success {
+            return Err(format!(
+                "bootstrap failed: status={:?}, payload={}",
+                response_ref.status,
+                String::from_utf8_lossy(response_ref.payload)
+            ));
+        }
+
+        let names = BootstrapSuccessNames::decode(response_ref.payload)
+            .map_err(|e| format!("decode bootstrap names: {e}"))?;
+        let segment = std::sync::Arc::new(
+            Segment::attach(std::path::Path::new(&names.segment_path))
+                .map_err(|e| format!("attach segment at {}: {e}", names.segment_path))?,
+        );
+        let peer_id = shm_primitives::PeerId::new(response_ref.peer_id as u8)
+            .ok_or_else(|| format!("invalid peer id {}", response_ref.peer_id))?;
+
+        guest_link_from_names(
+            segment,
+            peer_id,
+            &names.doorbell_name,
+            &names.mmap_ctrl_name,
+            &mmap_tx_pipe,
+            true,
+        )
+        .map_err(|e| format!("guest_link_from_names: {e}"))?
+    };
+
     let conduit: ShmConduit = BareConduit::new(link);
 
     let (mut session, handle, _sh) = initiator(conduit)

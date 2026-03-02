@@ -247,7 +247,6 @@ impl Segment {
         self.mmap.as_raw_fd()
     }
 
-    #[cfg(unix)]
     pub fn path(&self) -> &Path {
         self.mmap.path()
     }
@@ -436,8 +435,7 @@ impl Segment {
     pub fn h2g_bipbuf(&self, peer_id: PeerId) -> BipBuf {
         let entry = self.peer_table.entry(peer_id);
         let g2h_offset = entry.ring_offset as usize;
-        let h2g_offset =
-            g2h_offset + shm_primitives::BIPBUF_HEADER_SIZE + self.bipbuf_capacity as usize;
+        let h2g_offset = g2h_offset + crate::peer_table::bipbuf_single_stride(self.bipbuf_capacity);
         let region = self.mmap.region();
         unsafe { BipBuf::attach(region, h2g_offset) }
     }

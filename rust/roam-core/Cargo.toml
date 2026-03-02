@@ -37,3 +37,4 @@ roam.workspace = true
 facet-postcard.workspace = true
 shm-primitives.workspace = true
 roam-shm = { path = "../roam-shm" }
+tempfile = "3"

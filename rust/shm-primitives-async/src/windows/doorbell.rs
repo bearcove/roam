@@ -3,8 +3,14 @@
 //! Uses Windows named pipes for bidirectional signaling between processes
 //! sharing memory. The host creates a named pipe server, and guests connect
 //! as clients using the pipe name.
+//!
+//! **Important:** Synchronous operations (`signal_now`, `try_drain`) use raw
+//! Win32 `WriteFile`/`PeekNamedPipe`/`ReadFile` instead of tokio's
+//! `try_write`/`try_read`, because tokio's methods require prior async
+//! readiness polling which is unavailable in sync contexts.
 
 use std::io::{self, ErrorKind};
+use std::os::windows::io::AsRawHandle;
 use std::string::String;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -13,7 +19,11 @@ use tokio::net::windows::named_pipe::{
     ClientOptions, NamedPipeClient, NamedPipeServer, ServerOptions,
 };
 
-use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE};
+use windows_sys::Win32::Foundation::{
+    CloseHandle, ERROR_BROKEN_PIPE, ERROR_NO_DATA, HANDLE, INVALID_HANDLE_VALUE,
+};
+use windows_sys::Win32::Storage::FileSystem::WriteFile;
+use windows_sys::Win32::System::Pipes::PeekNamedPipe;
 
 use std::format;
 use std::string::ToString;
@@ -77,6 +87,9 @@ pub struct Doorbell {
     pipe_name: String,
     /// Whether we've already logged that the peer is dead (to avoid spam).
     peer_dead_logged: AtomicBool,
+    /// Whether the server pipe has called ConnectNamedPipe.
+    /// Always true for client pipes.
+    server_connected: AtomicBool,
 }
 
 enum DoorbellPipe {
@@ -85,34 +98,78 @@ enum DoorbellPipe {
 }
 
 impl Doorbell {
-    /// Signal the other side without awaiting readiness.
+    /// Get the raw OS handle for the pipe.
+    fn raw_handle(&self) -> HANDLE {
+        match &self.pipe {
+            DoorbellPipe::Server(s) => s.as_raw_handle() as HANDLE,
+            DoorbellPipe::Client(c) => c.as_raw_handle() as HANDLE,
+        }
+    }
+
+    /// Write a signal byte using raw Win32 WriteFile.
     ///
-    /// Performs a single non-blocking write attempt and returns immediately.
-    pub fn signal_now(&self) -> SignalResult {
+    /// This bypasses tokio's readiness tracking, which is necessary because
+    /// tokio's `try_write()` returns WouldBlock unless `ready(WRITABLE)` was
+    /// previously awaited — impossible from a sync context.
+    fn raw_write_signal(&self) -> SignalResult {
+        let handle = self.raw_handle();
         let buf = [1u8];
-
-        // Drain first to reduce self-deadlock risk with bounded pipe buffers.
-        self.try_drain();
-
-        let result = match &self.pipe {
-            DoorbellPipe::Server(server) => server.try_write(&buf),
-            DoorbellPipe::Client(client) => client.try_write(&buf),
+        let mut written: u32 = 0;
+        let ok = unsafe {
+            WriteFile(
+                handle,
+                buf.as_ptr(),
+                1,
+                &mut written,
+                std::ptr::null_mut(),
+            )
         };
-
-        match result {
-            Ok(_) => SignalResult::Sent,
-            Err(ref e) if e.kind() == ErrorKind::WouldBlock => SignalResult::BufferFull,
-            Err(ref e) if e.kind() == ErrorKind::BrokenPipe => SignalResult::PeerDead,
-            Err(ref e) if e.kind() == ErrorKind::NotConnected => SignalResult::PeerDead,
-            Err(ref e) if e.raw_os_error() == Some(232) => SignalResult::PeerDead,
-            Err(ref e) if e.raw_os_error() == Some(233) => SignalResult::PeerDead,
-            Err(e) => {
+        if ok != 0 && written == 1 {
+            return SignalResult::Sent;
+        }
+        let err = io::Error::last_os_error();
+        match err.raw_os_error() {
+            Some(e) if e == ERROR_BROKEN_PIPE as i32 => SignalResult::PeerDead,
+            Some(e) if e == ERROR_NO_DATA as i32 => SignalResult::PeerDead,
+            Some(232) => SignalResult::PeerDead, // ERROR_NO_DATA (pipe closing)
+            Some(233) => SignalResult::PeerDead, // ERROR_PIPE_NOT_CONNECTED
+            _ => {
                 if !self.peer_dead_logged.swap(true, Ordering::Relaxed) {
-                    tracing::debug!(pipe = %self.pipe_name, error = %e, "doorbell signal failed");
+                    tracing::debug!(pipe = %self.pipe_name, error = %err, "doorbell raw write signal failed");
                 }
                 SignalResult::PeerDead
             }
         }
+    }
+
+    /// Check if signal bytes are pending using raw Win32 PeekNamedPipe.
+    ///
+    /// Returns true if at least one byte is available to read.
+    /// Does NOT consume the bytes — that's left to tokio's `try_read` in
+    /// the `wait()` readiness loop where it works reliably.
+    fn raw_has_pending(&self) -> bool {
+        let handle = self.raw_handle();
+        let mut total_available: u32 = 0;
+
+        let ok = unsafe {
+            PeekNamedPipe(
+                handle,
+                std::ptr::null_mut(),
+                0,
+                std::ptr::null_mut(),
+                &mut total_available,
+                std::ptr::null_mut(),
+            )
+        };
+        ok != 0 && total_available > 0
+    }
+
+    /// Signal the other side without awaiting readiness.
+    ///
+    /// Performs a single non-blocking write attempt and returns immediately.
+    /// Uses raw Win32 `WriteFile` to bypass tokio's readiness tracking.
+    pub fn signal_now(&self) -> SignalResult {
+        self.raw_write_signal()
     }
 
     /// Create a named pipe server and return (host_doorbell, guest_handle).
@@ -134,6 +191,7 @@ impl Doorbell {
                 pipe: DoorbellPipe::Server(server),
                 pipe_name: pipe_name.clone(),
                 peer_dead_logged: AtomicBool::new(false),
+                server_connected: AtomicBool::new(false),
             },
             DoorbellHandle(pipe_name),
         ))
@@ -158,6 +216,7 @@ impl Doorbell {
             pipe: DoorbellPipe::Client(client),
             pipe_name: pipe_name.to_string(),
             peer_dead_logged: AtomicBool::new(false),
+            server_connected: AtomicBool::new(true), // client is always connected
         })
     }
 
@@ -180,19 +239,41 @@ impl Doorbell {
 
     /// Wait for a signal from the other side.
     pub async fn wait(&self) -> io::Result<()> {
-        if self.try_drain() {
-            return Ok(());
+        // Lazy connect: on Windows, the server pipe must call ConnectNamedPipe
+        // before I/O works.  If the client already connected (in-process test),
+        // this returns immediately with ERROR_PIPE_CONNECTED.
+        if !self.server_connected.load(Ordering::Acquire) {
+            if let DoorbellPipe::Server(server) = &self.pipe {
+                server.connect().await?;
+                self.server_connected.store(true, Ordering::Release);
+            }
+        }
+
+        // Fast path: check if signal bytes are already pending via raw
+        // PeekNamedPipe (bypasses tokio readiness, always non-blocking).
+        if self.raw_has_pending() {
+            // Data IS available.  We need to actually consume it so the pipe
+            // buffer doesn't fill up.  Use tokio's try_read — it may return
+            // WouldBlock if tokio's readiness state is stale, in which case
+            // we fall through to the readiness loop below which will handle it.
+            if let Ok(true) = self.try_drain_tokio(false) {
+                return Ok(());
+            }
+            // Tokio readiness not set yet but data is there — the readiness
+            // loop below will pick it up promptly.
         }
 
         loop {
-            // Wait for readability
+            // Wait for readability using tokio's async reactor.
             let ready = match &self.pipe {
                 DoorbellPipe::Server(server) => server.ready(Interest::READABLE).await?,
                 DoorbellPipe::Client(client) => client.ready(Interest::READABLE).await?,
             };
 
             if ready.is_readable() {
-                match self.try_drain_inner(true) {
+                // After tokio signals readability, use tokio's try_read (readiness
+                // is guaranteed after ready() returns).
+                match self.try_drain_tokio(true) {
                     Ok(true) => return Ok(()),
                     Ok(false) => continue, // spurious wakeup
                     Err(e) if e.kind() == ErrorKind::WouldBlock => continue,
@@ -202,17 +283,8 @@ impl Doorbell {
         }
     }
 
-    fn try_drain(&self) -> bool {
-        match self.try_drain_inner(false) {
-            Ok(drained) => drained,
-            Err(err) => {
-                tracing::warn!(pipe = %self.pipe_name, error = %err, "doorbell drain failed");
-                false
-            }
-        }
-    }
-
-    fn try_drain_inner(&self, would_block_is_error: bool) -> io::Result<bool> {
+    /// Drain using tokio's try_read — only valid after `ready()` has been awaited.
+    fn try_drain_tokio(&self, would_block_is_error: bool) -> io::Result<bool> {
         let mut buf = [0u8; 64];
         let mut drained = false;
 
@@ -244,8 +316,14 @@ impl Doorbell {
     }
 
     /// Drain any pending signals without blocking.
+    ///
+    /// Note: On Windows, this only checks if data is pending (via
+    /// PeekNamedPipe). Actual consumption happens in the `wait()` loop
+    /// via tokio's try_read. The practical effect is the same — the bytes
+    /// will be consumed on the next `wait()` call.
     pub fn drain(&self) {
-        self.try_drain();
+        // Best-effort: try tokio's try_read, which works if readiness is set.
+        let _ = self.try_drain_tokio(false);
     }
 
     /// Accept an incoming connection (required on Windows).
@@ -259,6 +337,7 @@ impl Doorbell {
         match &self.pipe {
             DoorbellPipe::Server(server) => {
                 server.connect().await?;
+                self.server_connected.store(true, Ordering::Release);
                 Ok(())
             }
             DoorbellPipe::Client(_) => {
@@ -352,10 +431,8 @@ mod tests {
             Doorbell::from_handle(guest_handle)
         });
 
-        // Server needs to wait for connection
-        if let DoorbellPipe::Server(ref server) = host_doorbell.pipe {
-            server.connect().await.unwrap();
-        }
+        // Server needs to accept the client connection
+        host_doorbell.accept().await.unwrap();
 
         let guest_doorbell = connect_handle.await.unwrap().unwrap();
 
@@ -366,5 +443,49 @@ mod tests {
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
 
         guest_doorbell.drain();
+    }
+
+    #[tokio::test]
+    async fn test_bidirectional_signal_and_wait() {
+        let (host_doorbell, guest_handle) = Doorbell::create_pair().unwrap();
+
+        let connect_handle = tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            Doorbell::from_handle(guest_handle)
+        });
+
+        host_doorbell.accept().await.unwrap();
+        let guest_doorbell = connect_handle.await.unwrap().unwrap();
+
+        // Host signals, guest waits
+        assert_eq!(host_doorbell.signal_now(), SignalResult::Sent);
+        guest_doorbell.wait().await.unwrap();
+
+        // Guest signals, host waits
+        assert_eq!(guest_doorbell.signal_now(), SignalResult::Sent);
+        host_doorbell.wait().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_cross_task_signal_and_wait() {
+        let (host_doorbell, guest_handle) = Doorbell::create_pair().unwrap();
+        let connect_handle = tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            Doorbell::from_handle(guest_handle)
+        });
+        host_doorbell.accept().await.unwrap();
+        let guest_doorbell = std::sync::Arc::new(connect_handle.await.unwrap().unwrap());
+        let host_doorbell = std::sync::Arc::new(host_doorbell);
+
+        // Spawn a task that waits, then signals from the other side
+        let hd = host_doorbell.clone();
+        let gd = guest_doorbell.clone();
+        let waiter = tokio::spawn(async move {
+            hd.wait().await.unwrap();
+        });
+        // Small delay so waiter enters wait() first
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        assert_eq!(gd.signal_now(), SignalResult::Sent);
+        waiter.await.unwrap();
     }
 }
