@@ -73,6 +73,17 @@ public struct Negotiated: Sendable {
     }
 }
 
+/// Driver-level protocol keepalive configuration.
+public struct DriverKeepaliveConfig: Sendable {
+    public let pingInterval: TimeInterval
+    public let pongTimeout: TimeInterval
+
+    public init(pingInterval: TimeInterval, pongTimeout: TimeInterval) {
+        self.pingInterval = pingInterval
+        self.pongTimeout = pongTimeout
+    }
+}
+
 // MARK: - Service Dispatcher Protocol
 
 /// Protocol for dispatching incoming requests.
@@ -450,12 +461,22 @@ public final class Driver: @unchecked Sendable {
         let timeout: TimeInterval?
     }
 
+    private struct KeepaliveRuntime {
+        let pingIntervalNs: UInt64
+        let pongTimeoutNs: UInt64
+        var nextPingAtNs: UInt64
+        var waitingPongNonce: UInt64?
+        var pongDeadlineNs: UInt64
+        var nextPingNonce: UInt64
+    }
+
     private let transport: any MessageTransport
     private let dispatcher: any ServiceDispatcher
     private let role: Role
     private let negotiated: Negotiated
     private let handle: ConnectionHandle
     private let acceptConnections: Bool
+    private let keepalive: DriverKeepaliveConfig?
 
     private let serverRegistry: ChannelRegistry
     private let state: DriverState
@@ -473,7 +494,8 @@ public final class Driver: @unchecked Sendable {
         role: Role,
         negotiated: Negotiated,
         handle: ConnectionHandle,
-        acceptConnections: Bool = false
+        acceptConnections: Bool = false,
+        keepalive: DriverKeepaliveConfig? = nil
     ) {
         self.transport = transport
         self.dispatcher = dispatcher
@@ -481,6 +503,7 @@ public final class Driver: @unchecked Sendable {
         self.negotiated = negotiated
         self.handle = handle
         self.acceptConnections = acceptConnections
+        self.keepalive = keepalive
         self.serverRegistry = ChannelRegistry()
         self.state = DriverState()
         self.virtualConnState = VirtualConnectionState()
@@ -501,6 +524,7 @@ public final class Driver: @unchecked Sendable {
         negotiated: Negotiated,
         handle: ConnectionHandle,
         acceptConnections: Bool,
+        keepalive: DriverKeepaliveConfig?,
         eventStream: AsyncStream<DriverEvent>,
         eventContinuation: AsyncStream<DriverEvent>.Continuation
     ) {
@@ -510,6 +534,7 @@ public final class Driver: @unchecked Sendable {
         self.negotiated = negotiated
         self.handle = handle
         self.acceptConnections = acceptConnections
+        self.keepalive = keepalive
         self.serverRegistry = ChannelRegistry()
         self.state = DriverState()
         self.virtualConnState = VirtualConnectionState()
@@ -540,6 +565,8 @@ public final class Driver: @unchecked Sendable {
 
     /// Run the driver until connection closes.
     public func run() async throws {
+        var keepaliveRuntime = makeKeepaliveRuntime()
+
         // Start transport reader task
         let cont = eventContinuation
         let transport = self.transport
@@ -577,7 +604,7 @@ public final class Driver: @unchecked Sendable {
                 try await flushPendingCalls()
                 switch event {
                 case .incomingMessage(let msg):
-                    try await handleMessage(msg)
+                    try await handleMessage(msg, keepaliveRuntime: &keepaliveRuntime)
 
                 case .taskMessage(let msg):
                     try await handleTaskMessage(msg)
@@ -586,6 +613,7 @@ public final class Driver: @unchecked Sendable {
                     await handleCommand(cmd)
 
                 case .retryTick:
+                    try await handleKeepaliveTick(keepaliveRuntime: &keepaliveRuntime)
                     break
 
                 case .transportClosed:
@@ -822,11 +850,22 @@ public final class Driver: @unchecked Sendable {
     /// r[impl connection.close.semantics] - Stop sending, close connection, fail in-flight.
     /// r[impl rpc.request] - Request before Response in message sequence.
     /// r[impl session.protocol-error] - Unknown message variant triggers Goodbye.
-    private func handleMessage(_ msg: MessageV7) async throws {
+    private func handleMessage(
+        _ msg: MessageV7,
+        keepaliveRuntime: inout KeepaliveRuntime?
+    ) async throws {
         switch msg.payload {
         case .hello, .helloYourself:
             // Duplicate handshake message, ignore once connected.
             break
+        case .ping(let ping):
+            do {
+                try await transport.send(.pong(.init(nonce: ping.nonce)))
+            } catch TransportError.wouldBlock {
+                pendingTaskMessages.append(QueuedTaskMessage(message: .pong(.init(nonce: ping.nonce))))
+            }
+        case .pong(let pong):
+            handlePong(nonce: pong.nonce, keepaliveRuntime: &keepaliveRuntime)
         case .protocolError(let error):
             await failAllPending()
             throw ConnectionError.protocolViolation(rule: error.description)
@@ -903,6 +942,85 @@ public final class Driver: @unchecked Sendable {
                 await handle.channelRegistry.deliverCredit(channelId: channel.id, bytes: credit.additional)
             }
         }
+    }
+
+    private func makeKeepaliveRuntime() -> KeepaliveRuntime? {
+        guard let keepalive else {
+            return nil
+        }
+        let pingIntervalNs = Self.timeoutToNanoseconds(keepalive.pingInterval)
+        let pongTimeoutNs = Self.timeoutToNanoseconds(keepalive.pongTimeout)
+        if pingIntervalNs == 0 || pongTimeoutNs == 0 {
+            warnLog("keepalive disabled due to non-positive interval/timeout")
+            return nil
+        }
+        let now = DispatchTime.now().uptimeNanoseconds
+        return KeepaliveRuntime(
+            pingIntervalNs: pingIntervalNs,
+            pongTimeoutNs: pongTimeoutNs,
+            nextPingAtNs: Self.saturatingAdd(now, pingIntervalNs),
+            waitingPongNonce: nil,
+            pongDeadlineNs: 0,
+            nextPingNonce: 1
+        )
+    }
+
+    private func handlePong(nonce: UInt64, keepaliveRuntime: inout KeepaliveRuntime?) {
+        guard var runtime = keepaliveRuntime else {
+            return
+        }
+        guard runtime.waitingPongNonce == nonce else {
+            return
+        }
+        runtime.waitingPongNonce = nil
+        runtime.pongDeadlineNs = 0
+        runtime.nextPingAtNs = Self.saturatingAdd(
+            DispatchTime.now().uptimeNanoseconds,
+            runtime.pingIntervalNs
+        )
+        keepaliveRuntime = runtime
+    }
+
+    private func handleKeepaliveTick(keepaliveRuntime: inout KeepaliveRuntime?) async throws {
+        guard var runtime = keepaliveRuntime else {
+            return
+        }
+        let now = DispatchTime.now().uptimeNanoseconds
+
+        if let waitingNonce = runtime.waitingPongNonce,
+            now >= runtime.pongDeadlineNs
+        {
+            warnLog(
+                "keepalive timeout waiting for pong nonce=\(waitingNonce) "
+                    + "timeout_ns=\(runtime.pongTimeoutNs)"
+            )
+            await failAllPending()
+            throw ConnectionError.connectionClosed
+        }
+
+        guard runtime.waitingPongNonce == nil else {
+            keepaliveRuntime = runtime
+            return
+        }
+        guard now >= runtime.nextPingAtNs else {
+            keepaliveRuntime = runtime
+            return
+        }
+
+        let nonce = runtime.nextPingNonce
+        do {
+            try await transport.send(.ping(.init(nonce: nonce)))
+            runtime.waitingPongNonce = nonce
+            runtime.pongDeadlineNs = Self.saturatingAdd(now, runtime.pongTimeoutNs)
+            runtime.nextPingAtNs = Self.saturatingAdd(now, runtime.pingIntervalNs)
+            runtime.nextPingNonce = nonce &+ 1
+        } catch TransportError.wouldBlock {
+            // Retry on the next tick without starting the pong deadline.
+        } catch {
+            throw error
+        }
+
+        keepaliveRuntime = runtime
     }
 
     /// r[impl rpc.flow-control.credit.exhaustion] - Payloads bounded by max_payload_size.
@@ -1033,6 +1151,13 @@ public final class Driver: @unchecked Sendable {
         }
         return UInt64(nanoseconds)
     }
+
+    private static func saturatingAdd(_ lhs: UInt64, _ rhs: UInt64) -> UInt64 {
+        if lhs > UInt64.max - rhs {
+            return UInt64.max
+        }
+        return lhs + rhs
+    }
 }
 
 // MARK: - Connection Errors
@@ -1058,7 +1183,8 @@ public func establishShmGuest<D: ServiceDispatcher>(
     transport: ShmGuestTransport,
     dispatcher: D,
     role: Role = .initiator,
-    acceptConnections: Bool = false
+    acceptConnections: Bool = false,
+    keepalive: DriverKeepaliveConfig? = nil
 ) async throws -> (ConnectionHandle, Driver) {
     switch role {
     case .initiator:
@@ -1066,13 +1192,15 @@ public func establishShmGuest<D: ServiceDispatcher>(
             transport: transport,
             dispatcher: dispatcher,
             acceptConnections: acceptConnections,
-            maxPayloadSize: transport.negotiated.maxPayloadSize
+            maxPayloadSize: transport.negotiated.maxPayloadSize,
+            keepalive: keepalive
         )
     case .acceptor:
         return try await establishAcceptor(
             transport: transport,
             dispatcher: dispatcher,
-            acceptConnections: acceptConnections
+            acceptConnections: acceptConnections,
+            keepalive: keepalive
         )
     }
 }
@@ -1086,7 +1214,8 @@ public func establishInitiator(
     transport: any MessageTransport,
     dispatcher: any ServiceDispatcher,
     acceptConnections: Bool = false,
-    maxPayloadSize: UInt32? = nil
+    maxPayloadSize: UInt32? = nil,
+    keepalive: DriverKeepaliveConfig? = nil
 ) async throws -> (ConnectionHandle, Driver) {
     let ourMaxPayload = maxPayloadSize ?? (1024 * 1024)
     let ourInitialCredit: UInt32 = 64 * 1024
@@ -1139,7 +1268,8 @@ public func establishInitiator(
         dispatcher: dispatcher,
         role: .initiator,
         negotiated: negotiated,
-        acceptConnections: acceptConnections
+        acceptConnections: acceptConnections,
+        keepalive: keepalive
     )
 }
 
@@ -1151,7 +1281,8 @@ public func establishAcceptor(
     transport: any MessageTransport,
     dispatcher: any ServiceDispatcher,
     acceptConnections: Bool = false,
-    maxPayloadSize: UInt32? = nil
+    maxPayloadSize: UInt32? = nil,
+    keepalive: DriverKeepaliveConfig? = nil
 ) async throws -> (ConnectionHandle, Driver) {
     let ourMaxPayload = maxPayloadSize ?? (1024 * 1024)
     let ourInitialCredit: UInt32 = 64 * 1024
@@ -1203,7 +1334,8 @@ public func establishAcceptor(
         dispatcher: dispatcher,
         role: .acceptor,
         negotiated: negotiated,
-        acceptConnections: acceptConnections
+        acceptConnections: acceptConnections,
+        keepalive: keepalive
     )
 }
 
@@ -1213,7 +1345,8 @@ func makeDriverAndHandle(
     dispatcher: any ServiceDispatcher,
     role: Role,
     negotiated: Negotiated,
-    acceptConnections: Bool
+    acceptConnections: Bool,
+    keepalive: DriverKeepaliveConfig? = nil
 ) -> (ConnectionHandle, Driver) {
     // Create the event stream that will be shared
     var continuation: AsyncStream<DriverEvent>.Continuation!
@@ -1255,6 +1388,7 @@ func makeDriverAndHandle(
         negotiated: negotiated,
         handle: handle,
         acceptConnections: acceptConnections,
+        keepalive: keepalive,
         eventStream: eventStream,
         eventContinuation: continuation
     )

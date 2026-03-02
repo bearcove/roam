@@ -14,7 +14,7 @@ trait Adder {
 #[derive(Clone)]
 struct MyAdder;
 
-impl AdderServer for MyAdder {
+impl Adder for MyAdder {
     async fn add(&self, call: impl roam::Call<i32, core::convert::Infallible>, a: i32, b: i32) {
         call.ok(a + b).await;
     }

@@ -9,14 +9,14 @@ use roam_core::{BareConduit, Driver, acceptor};
 use roam_types::{MessageFamily, Parity};
 use roam_websocket::WsLink;
 use spec_proto::{Canvas, Color, LookupError, MathError, Message, Person, Point, Rectangle, Shape};
-use spec_proto::{TestbedDispatcher, TestbedServer};
+use spec_proto::{Testbed, TestbedDispatcher};
 use std::env;
 use tokio::net::TcpListener;
 
 #[derive(Clone)]
 struct TestbedService;
 
-impl TestbedServer for TestbedService {
+impl Testbed for TestbedService {
     async fn echo(
         &self,
         call: impl roam::Call<String, core::convert::Infallible>,

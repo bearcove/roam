@@ -437,6 +437,8 @@ fn codegen_swift_wire(workspace_root: &std::path::Path) -> Result<(), Box<dyn st
         wire_type!("HelloV7", rt::Hello<'static>),
         wire_type!("HelloYourselfV7", rt::HelloYourself<'static>),
         wire_type!("ProtocolErrorV7", rt::ProtocolError<'static>),
+        wire_type!("PingV7", rt::Ping),
+        wire_type!("PongV7", rt::Pong),
         wire_type!("ConnectionOpenV7", rt::ConnectionOpen<'static>),
         wire_type!("ConnectionAcceptV7", rt::ConnectionAccept<'static>),
         wire_type!("ConnectionRejectV7", rt::ConnectionReject<'static>),

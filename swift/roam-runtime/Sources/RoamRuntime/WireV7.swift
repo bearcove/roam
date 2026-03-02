@@ -249,6 +249,40 @@ public struct ProtocolErrorV7: Sendable, Equatable {
     }
 }
 
+public struct PingV7: Sendable, Equatable {
+    public var nonce: UInt64
+
+    public init(nonce: UInt64) {
+        self.nonce = nonce
+    }
+
+    func encode() -> [UInt8] {
+        encodeVarint(nonce)
+    }
+
+    static func decode(from data: Data, offset: inout Int) throws -> Self {
+        let nonce = try decodeVarint(from: data, offset: &offset)
+        return .init(nonce: nonce)
+    }
+}
+
+public struct PongV7: Sendable, Equatable {
+    public var nonce: UInt64
+
+    public init(nonce: UInt64) {
+        self.nonce = nonce
+    }
+
+    func encode() -> [UInt8] {
+        encodeVarint(nonce)
+    }
+
+    static func decode(from data: Data, offset: inout Int) throws -> Self {
+        let nonce = try decodeVarint(from: data, offset: &offset)
+        return .init(nonce: nonce)
+    }
+}
+
 public struct ConnectionOpenV7: Sendable, Equatable {
     public var connectionSettings: ConnectionSettingsV7
     public var metadata: [MetadataEntryV7]
@@ -595,6 +629,8 @@ public enum MessagePayloadV7: Sendable, Equatable {
     case connectionClose(ConnectionCloseV7)
     case requestMessage(RequestMessageV7)
     case channelMessage(ChannelMessageV7)
+    case ping(PingV7)
+    case pong(PongV7)
 
     func encode() -> [UInt8] {
         switch self {
@@ -616,6 +652,10 @@ public enum MessagePayloadV7: Sendable, Equatable {
             return encodeVarint(UInt64(7)) + val.encode()
         case .channelMessage(let val):
             return encodeVarint(UInt64(8)) + val.encode()
+        case .ping(let val):
+            return encodeVarint(UInt64(9)) + val.encode()
+        case .pong(let val):
+            return encodeVarint(UInt64(10)) + val.encode()
         }
     }
 
@@ -640,6 +680,10 @@ public enum MessagePayloadV7: Sendable, Equatable {
             return .requestMessage(try RequestMessageV7.decode(from: data, offset: &offset))
         case 8:
             return .channelMessage(try ChannelMessageV7.decode(from: data, offset: &offset))
+        case 9:
+            return .ping(try PingV7.decode(from: data, offset: &offset))
+        case 10:
+            return .pong(try PongV7.decode(from: data, offset: &offset))
         default:
             throw WireV7Error.unknownVariant(disc)
         }
@@ -713,6 +757,14 @@ public extension MessageV7 {
 
     static func channelMessage(connId: UInt64, _ value: ChannelMessageV7) -> MessageV7 {
         MessageV7(connectionId: connId, payload: .channelMessage(value))
+    }
+
+    static func ping(_ value: PingV7) -> MessageV7 {
+        MessageV7(connectionId: 0, payload: .ping(value))
+    }
+
+    static func pong(_ value: PongV7) -> MessageV7 {
+        MessageV7(connectionId: 0, payload: .pong(value))
     }
 
     static func protocolError(description: String) -> MessageV7 {

@@ -43,7 +43,7 @@ trait Adder {
     async fn add(&self, a: i32, b: i32) -> i32;
 }
 
-impl AdderServer for MyAdder {
+impl Adder for MyAdder {
     async fn add(&self, call: impl roam::Call<i32, core::convert::Infallible>, a: i32, b: i32) {
         call.ok(a + b).await;
     }
@@ -129,7 +129,7 @@ Notes:
 
 | v6 | v7 | Notes |
 |---|---|---|
-| `impl MyService for Handler` | `impl MyServiceServer for Handler` | Generated server trait renamed |
+| `impl MyService for Handler` | `impl MyService for Handler` | Generated server trait renamed |
 | `fn method(&self, cx: &Context, ...) -> T` | `fn method(&self, call: impl Call<T, E>, ...) -> Future<Output = ()>` | Explicit reply path |
 | `MyServiceClient::new(connection_handle)` | `MyServiceClient::new(driver.caller())` | `ConnectionHandle` is no longer a `Caller` |
 | `accept_framed` / `initiate_framed` | `session::acceptor` / `session::initiator` + `.establish()` | New session builders |

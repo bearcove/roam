@@ -31,7 +31,7 @@ use crate::{MaybeSend, MaybeSync, Metadata, RequestCall, RequestResponse, RoamEr
 //
 // For example:
 //
-// impl HashServer for MyHasher {
+// impl Hash for MyHasher {
 //   async fn hash(&self, call: impl Call<&[u8], E>, payload: &[u8]) {
 //     let result: [u8; 16] = compute_hash(payload);
 //     call.ok(&result).await;

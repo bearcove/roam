@@ -242,6 +242,25 @@ structstruck::strike! {
                     }
                 ),
 
+                // ========================================================================
+                // Keepalive
+                // ========================================================================
+                //
+                // NOTE: these variants are intentionally appended to preserve
+                // existing discriminants for earlier message payload variants.
+
+                /// Liveness probe for dead-peer detection.
+                Ping(pub struct Ping {
+                    /// Opaque nonce echoed by the Pong response.
+                    pub nonce: u64,
+                }),
+
+                /// Reply to a keepalive Ping.
+                Pong(pub struct Pong {
+                    /// Echo of the received ping nonce.
+                    pub nonce: u64,
+                }),
+
             },
     }
 

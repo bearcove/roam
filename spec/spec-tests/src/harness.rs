@@ -22,8 +22,8 @@ use roam_types::{MessageFamily, Parity, RequestCall, SelfRef};
 use shm_primitives::FileCleanup;
 use shm_primitives::SizeClassConfig;
 use spec_proto::{
-    Canvas, Color, LookupError, MathError, Message, Person, Point, Rectangle, Shape, TestbedClient,
-    TestbedDispatcher, TestbedServer,
+    Canvas, Color, LookupError, MathError, Message, Person, Point, Rectangle, Shape, Testbed,
+    TestbedClient, TestbedDispatcher,
 };
 use std::process::Stdio;
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, BufReader};
@@ -189,7 +189,7 @@ pub fn run_async<T>(f: impl Future<Output = T>) -> T {
 #[derive(Clone)]
 struct TestbedService;
 
-impl TestbedServer for TestbedService {
+impl Testbed for TestbedService {
     async fn echo(&self, call: impl Call<String, std::convert::Infallible>, message: String) {
         call.ok(message).await;
     }

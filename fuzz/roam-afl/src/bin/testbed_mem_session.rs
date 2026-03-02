@@ -21,7 +21,7 @@ impl Handler<DriverReplySink> for NoopHandler {
 #[derive(Clone)]
 struct FuzzService;
 
-impl TestbedServer for FuzzService {
+impl Testbed for FuzzService {
     async fn echo(&self, call: impl Call<String, Infallible>, message: String) {
         call.ok(message).await;
     }

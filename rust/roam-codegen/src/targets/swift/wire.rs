@@ -701,8 +701,11 @@ fn generate_factory_methods(types: &[WireType]) -> String {
         let variant_name = v.name.to_lower_camel_case();
         if let VariantKind::Newtype { inner } = classify_variant(v) {
             let inner_swift = swift_wire_type(inner, None, types);
-            // Control messages (Hello, HelloYourself, ProtocolError) use connId=0
-            let is_control = matches!(v.name, "Hello" | "HelloYourself" | "ProtocolError");
+            // Control messages use connId=0.
+            let is_control = matches!(
+                v.name,
+                "Hello" | "HelloYourself" | "ProtocolError" | "Ping" | "Pong"
+            );
 
             if is_control {
                 out.push_str(&format!(

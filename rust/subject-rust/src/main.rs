@@ -8,8 +8,8 @@ use roam_shm::segment::Segment;
 use roam_stream::StreamLink;
 use roam_types::{MessageFamily, Parity};
 use spec_proto::{
-    Canvas, Color, LookupError, MathError, Message, Person, Point, Rectangle, Shape,
-    TestbedDispatcher, TestbedServer,
+    Canvas, Color, LookupError, MathError, Message, Person, Point, Rectangle, Shape, Testbed,
+    TestbedDispatcher,
 };
 use std::convert::Infallible;
 use std::os::fd::AsRawFd;
@@ -24,7 +24,7 @@ type ShmConduit = BareConduit<MessageFamily, roam_shm::ShmLink>;
 #[derive(Clone)]
 struct TestbedService;
 
-impl TestbedServer for TestbedService {
+impl Testbed for TestbedService {
     #[instrument(skip(self, call))]
     async fn echo(&self, call: impl Call<String, Infallible>, message: String) {
         info!("echo called");

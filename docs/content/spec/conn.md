@@ -225,8 +225,8 @@ documentation for more information.
 >
 > Every message is composed of a connection identifier and a payload. The
 > connection ID is meaningful for every message type except for the handshake
-> (`Hello` and `HelloYourself`) and `ProtocolError`, all of which MUST use
-> connection ID 0.
+> (`Hello` and `HelloYourself`), `ProtocolError`, and keepalive
+> (`Ping`/`Pong`), all of which MUST use connection ID 0.
 
 > r[session.message.payloads]
 >
@@ -235,6 +235,8 @@ documentation for more information.
 >   * Hello
 >   * HelloYourself
 >   * ProtocolError
+>   * Ping
+>   * Pong
 >   * OpenConnection
 >   * AcceptConnection
 >   * RejectConnection
@@ -304,6 +306,19 @@ documentation for more information.
 > a protocol error. Any live channel MUST be put in a state where any attempt to
 > send or recv from them MUST return an error indicating that there's been a protocol
 > error.
+
+> r[session.keepalive]
+>
+> Peers MAY use protocol keepalive on connection ID 0 to detect half-open or
+> otherwise dead peers. Keepalive uses:
+>
+>   * `Ping { nonce: u64 }`
+>   * `Pong { nonce: u64 }`
+>
+> A peer receiving `Ping` MUST reply with `Pong` carrying the same nonce.
+> Implementations MAY periodically send `Ping` and treat missing `Pong` as a
+> connection failure, in which case they MUST tear down the session and fail all
+> pending requests with a connection-closed style error.
 
 # Connections
 

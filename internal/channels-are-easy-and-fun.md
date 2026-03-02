@@ -12,7 +12,7 @@ trait Adder {
 Generated handler trait:
 
 ```rust
-trait AdderServer {
+trait Adder {
     async fn sum(&self, call: impl Call<i64, Infallible>, numbers: Rx<i32>);
 }
 ```

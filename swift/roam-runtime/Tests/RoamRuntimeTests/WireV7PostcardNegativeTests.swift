@@ -63,8 +63,8 @@ struct WireV7PostcardNegativeTests {
     // r[verify session.message]
     // r[verify session.message.payloads]
     @Test func wireDecodeRejectsUnknownPayloadVariant() {
-        expectWireError(.unknownVariant(9)) {
-            _ = try MessageV7.decode(from: Data([0, 9]))
+        expectWireError(.unknownVariant(11)) {
+            _ = try MessageV7.decode(from: Data([0, 11]))
         }
     }
 

@@ -39,13 +39,13 @@ All types that occur as arguments or in return position must implement the
 ## Implementing a service
 
 Given an `Adder` trait, the `roam::service` proc macro generates an
-`AdderServer` trait:
+`Adder` trait:
 
 ```rust
 #[derive(Clone)]
 struct AdderHandler;
 
-impl AdderServer for AdderHandler {
+impl Adder for AdderHandler {
     /// Add two numbers.
     async fn add(&self, call: impl roam::Call<u32, core::convert::Infallible>, l: u32, r: u32) {
         call.ok(l + r).await;

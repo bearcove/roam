@@ -37,7 +37,7 @@ mod roam_bench {
     #[derive(Clone)]
     pub struct Handler;
 
-    impl BenchServer for Handler {
+    impl Bench for Handler {
         async fn add(&self, call: impl roam::Call<i32, core::convert::Infallible>, a: i32, b: i32) {
             call.ok(a + b).await;
         }

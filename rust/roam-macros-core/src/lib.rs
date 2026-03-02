@@ -228,8 +228,7 @@ fn generate_service_descriptor_fn(parsed: &ServiceTrait, roam: &TokenStream2) ->
 // ============================================================================
 
 fn generate_service_trait(parsed: &ServiceTrait, roam: &TokenStream2) -> TokenStream2 {
-    let trait_name = format_ident!("{}Server", parsed.name());
-
+    let trait_name = parsed.name.clone();
     let trait_doc = parsed.doc().map(|d| quote! { #[doc = #d] });
 
     let methods: Vec<TokenStream2> = parsed
@@ -296,7 +295,7 @@ fn generate_trait_method(method: &ServiceMethod, roam: &TokenStream2) -> TokenSt
 // ============================================================================
 
 fn generate_dispatcher(parsed: &ServiceTrait, roam: &TokenStream2) -> TokenStream2 {
-    let trait_name = format_ident!("{}Server", parsed.name());
+    let trait_name = parsed.name.clone();
     let dispatcher_name = format_ident!("{}Dispatcher", parsed.name());
     let descriptor_fn_name = format_ident!("{}_service_descriptor", parsed.name().to_snake_case());
 

@@ -548,6 +548,18 @@ where
                     self.conns.remove(&conn_id);
                 }
             }
+            MessagePayload::Ping(ping) => {
+                let _ = self
+                    .sess_core
+                    .send(Message {
+                        connection_id: conn_id,
+                        payload: MessagePayload::Pong(roam_types::Pong { nonce: ping.nonce }),
+                    })
+                    .await;
+            }
+            MessagePayload::Pong(_) => {
+                // Keepalive responses are handled by peers that actively probe.
+            }
             // Hello, HelloYourself, ProtocolError: not valid post-handshake, drop.
         })
     }
