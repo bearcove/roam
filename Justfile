@@ -5,7 +5,7 @@ list:
 
 rust *args:
     cargo build --package subject-rust
-    SUBJECT_CMD="./target/debug/subject-rust" cargo nextest run -p spec-tests {{ quote(args) }}
+    cargo nextest run -p spec-tests {{ quote(args) }}
 
 cov *args:
     cargo llvm-cov nextest --summary-only {{ quote(args) }}

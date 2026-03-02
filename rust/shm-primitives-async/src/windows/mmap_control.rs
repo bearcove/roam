@@ -81,6 +81,34 @@ unsafe impl Send for MmapControlSender {}
 unsafe impl Sync for MmapControlSender {}
 
 impl MmapControlSender {
+    /// Connect to an existing pipe server as a client-side sender.
+    ///
+    /// The server should have been created with
+    /// [`create_mmap_control_receiver_server`].  This is the cross-process
+    /// counterpart: the remote process passes the pipe name and the local
+    /// process opens it for writing.
+    pub fn connect(pipe_name: &str) -> io::Result<Self> {
+        let wide: Vec<u16> = pipe_name.encode_utf16().chain(std::iter::once(0)).collect();
+        let h = unsafe {
+            CreateFileW(
+                wide.as_ptr(),
+                GENERIC_READ | GENERIC_WRITE,
+                0,
+                std::ptr::null(),
+                OPEN_EXISTING,
+                FILE_ATTRIBUTE_NORMAL,
+                std::ptr::null_mut() as _,
+            )
+        };
+        if h == INVALID_HANDLE_VALUE {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(Self {
+            handle: Mutex::new(Some(h as RawHandle)),
+            connected: AtomicBool::new(true), // already connected as client
+        })
+    }
+
     /// Send an mmap region's path + metadata to the receiver.
     pub fn send_path(&self, path: &Path, msg: &MmapAttachMessage) -> io::Result<()> {
         let guard = self.handle.lock().unwrap();
@@ -114,11 +142,15 @@ impl Drop for MmapControlSender {
     }
 }
 
-/// Receiver half of the mmap control channel (guest side).
+/// Receiver half of the mmap control channel.
 ///
-/// Holds a connected named pipe client handle.
+/// May hold either a pipe client handle (when constructed via
+/// [`from_handle`](Self::from_handle)) or a pipe server handle (when
+/// constructed via [`create_mmap_control_receiver_server`]).
 pub struct MmapControlReceiver {
     handle: RawHandle,
+    /// `true` when this is a server-side handle that hasn't accepted a client yet.
+    needs_connect: AtomicBool,
 }
 
 // SAFETY: handle is used exclusively by this struct.
@@ -127,6 +159,8 @@ unsafe impl Sync for MmapControlReceiver {}
 
 impl MmapControlReceiver {
     /// Reconstruct a receiver from a handle (in the peer process).
+    ///
+    /// Connects as a pipe client.
     pub fn from_handle(handle: MmapControlHandle) -> io::Result<Self> {
         let pipe_name = handle.0;
         let wide: Vec<u16> = pipe_name.encode_utf16().chain(std::iter::once(0)).collect();
@@ -146,11 +180,28 @@ impl MmapControlReceiver {
         }
         Ok(Self {
             handle: h as RawHandle,
+            needs_connect: AtomicBool::new(false),
         })
+    }
+
+    /// If this is a server-side handle, accept the client connection.
+    fn ensure_connected(&self) -> io::Result<()> {
+        if self.needs_connect.swap(false, Ordering::Relaxed) {
+            let ok = unsafe { ConnectNamedPipe(self.handle as _, std::ptr::null_mut()) };
+            if ok == 0 {
+                let err = io::Error::last_os_error();
+                if err.raw_os_error() != Some(ERROR_PIPE_CONNECTED as i32) {
+                    self.needs_connect.store(true, Ordering::Relaxed);
+                    return Err(err);
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Non-blocking receive of one (path, metadata) pair.
     pub fn try_recv_path(&self) -> io::Result<Option<(PathBuf, MmapAttachMessage)>> {
+        self.ensure_connected()?;
         // Check if data is available without blocking.
         let mut bytes_available: u32 = 0;
         let ok = unsafe {
@@ -334,6 +385,41 @@ pub fn create_mmap_control_pair_connected() -> io::Result<(MmapControlSender, Mm
     let (sender, handle) = create_mmap_control_pair()?;
     let receiver = MmapControlReceiver::from_handle(handle)?;
     Ok((sender, receiver))
+}
+
+/// Create a pipe server intended for the **receiver** (reader) side.
+///
+/// Returns `(receiver, pipe_name)`.  The pipe name should be passed to the
+/// remote process which calls [`MmapControlSender::connect`] to open the
+/// client (writer) end.
+///
+/// This is the inverse of [`create_mmap_control_pair`]: the server handle
+/// lives with the *reader* instead of the writer, which is needed for the
+/// guest→host mmap direction in cross-process setups (the host keeps the
+/// server handle).
+pub fn create_mmap_control_receiver_server() -> io::Result<(MmapControlReceiver, String)> {
+    let pipe_name = unique_pipe_name();
+    let wide: Vec<u16> = pipe_name.encode_utf16().chain(std::iter::once(0)).collect();
+
+    let h = unsafe {
+        CreateNamedPipeW(
+            wide.as_ptr(),
+            PIPE_ACCESS_DUPLEX,
+            PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
+            1, // max instances
+            PIPE_BUFFER_SIZE,
+            PIPE_BUFFER_SIZE,
+            0, // default timeout
+            std::ptr::null(),
+        )
+    };
+    if h == INVALID_HANDLE_VALUE {
+        return Err(io::Error::last_os_error());
+    }
+    Ok((MmapControlReceiver {
+        handle: h as RawHandle,
+        needs_connect: AtomicBool::new(true),
+    }, pipe_name))
 }
 
 /// No-op on Windows (Unix `clear_cloexec` equivalent).

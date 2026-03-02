@@ -12,6 +12,8 @@ use shm_primitives_async::{
     Doorbell, DoorbellHandle, MmapControlHandle, MmapControlReceiver, MmapControlSender,
     create_mmap_control_pair,
 };
+#[cfg(windows)]
+use shm_primitives_async::create_mmap_control_receiver_server;
 
 use crate::ShmLink;
 use crate::mmap_registry::{MmapChannelRx, MmapChannelTx};
@@ -101,10 +103,14 @@ impl HostHub {
 
         #[cfg(windows)]
         let (host, guest) = {
-            // On Windows, mmap control uses named pipes (two separate unidirectional
-            // channels).  Create a second pair for the guest→host direction.
-            let (guest_mmap_tx, host_mmap_rx) = create_mmap_control_pair()?;
-            let mmap_tx_pipe = host_mmap_rx.pipe_name().to_string();
+            // On Windows, mmap control uses named pipes.  Two separate
+            // unidirectional channels, one per direction.
+            //
+            // host→guest: host keeps the server/sender, guest connects as
+            //   client/receiver (via pipe name in bootstrap response).
+            // guest→host: host keeps the server/receiver, guest connects as
+            //   client/sender (via SHM_MMAP_TX_PIPE env var).
+            let (host_mmap_rx, mmap_tx_pipe) = create_mmap_control_receiver_server()?;
 
             let host = HostPeer {
                 segment: Arc::clone(&self.segment),
@@ -118,7 +124,6 @@ impl HostHub {
                 doorbell: guest_doorbell,
                 mmap_rx: guest_mmap_rx,
                 mmap_tx_pipe,
-                mmap_tx: guest_mmap_tx,
             };
             (host, guest)
         };
@@ -133,7 +138,12 @@ pub struct HostPeer {
     peer_id: PeerId,
     doorbell: Doorbell,
     mmap_tx: MmapControlSender,
+    /// On Unix: pipe name handle (client connects later in `into_link`).
+    /// On Windows: already-constructed receiver (host keeps the server handle).
+    #[cfg(unix)]
     mmap_rx: MmapControlHandle,
+    #[cfg(windows)]
+    mmap_rx: MmapControlReceiver,
 }
 
 impl HostPeer {
@@ -144,7 +154,10 @@ impl HostPeer {
 
     /// Build a host-side [`ShmLink`] for this peer.
     pub fn into_link(self) -> io::Result<ShmLink> {
+        #[cfg(unix)]
         let mmap_rx = MmapControlReceiver::from_handle(self.mmap_rx)?;
+        #[cfg(windows)]
+        let mmap_rx = self.mmap_rx;
         Ok(ShmLink::for_host(
             self.segment,
             self.peer_id,
@@ -170,10 +183,9 @@ pub struct GuestSpawnTicket {
     /// Raw fd for the guest→host mmap control sender endpoint (Unix).
     #[cfg(unix)]
     pub mmap_tx_fd: RawFd,
-    /// Guest→host mmap control sender (Windows).
-    /// The host's `into_link()` connects as client to this pipe server.
-    #[cfg(windows)]
-    pub mmap_tx: MmapControlSender,
+    /// Pipe name for the guest→host mmap control channel (Windows).
+    /// The guest calls `MmapControlSender::connect()` on this name;
+    /// the host keeps the server handle in `HostPeer.mmap_rx`.
     #[cfg(windows)]
     pub mmap_tx_pipe: String,
 }
@@ -354,25 +366,8 @@ pub fn guest_link_from_names(
         .map_err(|e| io_other(format!("mmap_rx pipe name: {e}")))?;
     let mmap_rx = MmapControlReceiver::from_handle(mmap_rx_handle)?;
 
-    let mmap_tx_handle = unsafe { MmapControlHandle::from_arg(mmap_tx_pipe) }
-        .map_err(|e| io_other(format!("mmap_tx pipe name: {e}")))?;
-    let mmap_tx_receiver = MmapControlReceiver::from_handle(mmap_tx_handle)?;
-    // On Windows, the "sender" for the guest→host direction is actually a
-    // receiver that the guest writes into. We wrap the pipe client handle
-    // into MmapControlSender via create_mmap_control_pair_connected pattern.
-    // Actually, on Windows the guest connects as pipe CLIENT for the host's
-    // sender pipe (host→guest). The guest→host pipe was created by the host;
-    // the guest connects as CLIENT and writes to it.
-    //
-    // For now, use a second create_mmap_control_pair_connected for the tx
-    // direction from the guest's perspective.
-    //
-    // TODO: This needs a proper design for cross-process. For in-process
-    // tests (ticket-based), see guest_link_from_ticket_windows below.
-    drop(mmap_tx_receiver);
-
-    // For the guest→host direction, connect to the pipe as a sender.
-    let (mmap_tx_sender, _) = shm_primitives_async::create_mmap_control_pair()?;
+    // Guest→host direction: connect as client/sender to the host's pipe server.
+    let mmap_tx_sender = MmapControlSender::connect(mmap_tx_pipe)?;
 
     Ok(ShmLink::for_guest(
         segment,
@@ -385,12 +380,8 @@ pub fn guest_link_from_names(
 
 /// Build a guest-side link from a host-generated ticket (Windows).
 ///
-/// The ticket's `mmap_tx` is the named-pipe server created by `prepare_peer()`.
-/// The host's `into_link()` already connected as client to it, so the pipe is
-/// ready to use.
-///
-/// **Ordering:** `host_peer.into_link()` must be called before this function
-/// so that the host connects as client to the guest's mmap_tx pipe.
+/// The guest connects as pipe client/sender to the host's receiver server
+/// pipe named in `ticket.mmap_tx_pipe`.
 #[cfg(windows)]
 pub fn guest_link_from_ticket_windows(
     segment: Arc<Segment>,
@@ -408,12 +399,13 @@ pub fn guest_link_from_ticket_windows(
 
     let doorbell = Doorbell::from_handle(ticket.doorbell)?;
     let mmap_rx = MmapControlReceiver::from_handle(ticket.mmap_rx)?;
+    let mmap_tx = MmapControlSender::connect(&ticket.mmap_tx_pipe)?;
 
     Ok(ShmLink::for_guest(
         segment,
         ticket.peer_id,
         doorbell,
-        MmapChannelTx::Real(ticket.mmap_tx),
+        MmapChannelTx::Real(mmap_tx),
         MmapChannelRx::Real(mmap_rx),
     ))
 }

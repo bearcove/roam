@@ -7,7 +7,7 @@ pub use doorbell::{
 
 pub use mmap_control::{
     MmapControlHandle, MmapControlReceiver, MmapControlSender, create_mmap_control_pair,
-    create_mmap_control_pair_connected,
+    create_mmap_control_pair_connected, create_mmap_control_receiver_server,
 };
 
 /// No-op on Windows (equivalent of Unix `clear_cloexec`).
