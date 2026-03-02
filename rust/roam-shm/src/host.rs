@@ -8,12 +8,12 @@ use std::io;
 use std::sync::Arc;
 
 use shm_primitives::PeerId;
+#[cfg(windows)]
+use shm_primitives_async::create_mmap_control_receiver_server;
 use shm_primitives_async::{
     Doorbell, DoorbellHandle, MmapControlHandle, MmapControlReceiver, MmapControlSender,
     create_mmap_control_pair,
 };
-#[cfg(windows)]
-use shm_primitives_async::create_mmap_control_receiver_server;
 
 use crate::ShmLink;
 use crate::mmap_registry::{MmapChannelRx, MmapChannelTx};

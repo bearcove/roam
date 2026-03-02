@@ -402,7 +402,12 @@ pub fn create_mmap_control_receiver_server() -> io::Result<(MmapControlReceiver,
     if h == INVALID_HANDLE_VALUE {
         return Err(io::Error::last_os_error());
     }
-    Ok((MmapControlReceiver { handle: h as RawHandle }, pipe_name))
+    Ok((
+        MmapControlReceiver {
+            handle: h as RawHandle,
+        },
+        pipe_name,
+    ))
 }
 
 /// No-op on Windows (Unix `clear_cloexec` equivalent).

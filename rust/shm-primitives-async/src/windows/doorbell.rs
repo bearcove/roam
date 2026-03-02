@@ -9,15 +9,15 @@
 //! busy-loop that starved the tokio runtime.
 
 use std::io::{self, ErrorKind};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use windows_sys::Win32::Foundation::{
     CloseHandle, HANDLE, INVALID_HANDLE_VALUE, WAIT_EVENT, WAIT_OBJECT_0,
 };
 use windows_sys::Win32::System::Threading::{
-    CreateEventW, OpenEventW, SetEvent, WaitForMultipleObjects, WaitForSingleObject,
-    EVENT_ALL_ACCESS, INFINITE,
+    CreateEventW, EVENT_ALL_ACCESS, INFINITE, OpenEventW, SetEvent, WaitForMultipleObjects,
+    WaitForSingleObject,
 };
 
 use std::format;
@@ -154,7 +154,9 @@ impl Doorbell {
         let g2h_name = to_wide(&format!("Local\\roam-doorbell-{uuid}-g2h"));
         let g2h = unsafe { CreateEventW(std::ptr::null(), 0, 0, g2h_name.as_ptr()) };
         if g2h.is_null() || g2h == INVALID_HANDLE_VALUE {
-            unsafe { CloseHandle(h2g); }
+            unsafe {
+                CloseHandle(h2g);
+            }
             return Err(io::Error::last_os_error());
         }
 
@@ -171,8 +173,8 @@ impl Doorbell {
         Ok((
             Self {
                 inner: Arc::new(DoorbellInner {
-                    tx_event: h2g,  // host signals h2g
-                    rx_event: g2h,  // host waits on g2h
+                    tx_event: h2g, // host signals h2g
+                    rx_event: g2h, // host waits on g2h
                     cancel_event: cancel,
                     name_prefix: uuid.clone(),
                     peer_dead_logged: AtomicBool::new(false),
@@ -206,7 +208,9 @@ impl Doorbell {
         let g2h_name = to_wide(&format!("Local\\roam-doorbell-{name}-g2h"));
         let g2h = unsafe { OpenEventW(EVENT_ALL_ACCESS, 0, g2h_name.as_ptr()) };
         if g2h.is_null() || g2h == INVALID_HANDLE_VALUE {
-            unsafe { CloseHandle(h2g); }
+            unsafe {
+                CloseHandle(h2g);
+            }
             return Err(io::Error::last_os_error());
         }
 
@@ -222,8 +226,8 @@ impl Doorbell {
 
         Ok(Self {
             inner: Arc::new(DoorbellInner {
-                tx_event: g2h,  // guest signals g2h
-                rx_event: h2g,  // guest waits on h2g
+                tx_event: g2h, // guest signals g2h
+                rx_event: h2g, // guest waits on h2g
                 cancel_event: cancel,
                 name_prefix: name.to_string(),
                 peer_dead_logged: AtomicBool::new(false),
@@ -259,10 +263,9 @@ impl Doorbell {
                 unsafe { WaitForMultipleObjects(2, handles.as_ptr(), 0, INFINITE) };
             match result {
                 WAIT_OBJECT_0 => Ok(()),
-                v if v == WAIT_OBJECT_0 + 1 => Err(io::Error::new(
-                    ErrorKind::Interrupted,
-                    "doorbell cancelled",
-                )),
+                v if v == WAIT_OBJECT_0 + 1 => {
+                    Err(io::Error::new(ErrorKind::Interrupted, "doorbell cancelled"))
+                }
                 _ => Err(io::Error::last_os_error()),
             }
         })
