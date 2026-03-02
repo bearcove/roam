@@ -11,6 +11,8 @@ export {
   HelloSchema,
   HelloYourselfSchema,
   ProtocolErrorSchema,
+  PingSchema,
+  PongSchema,
   ConnectionOpenSchema,
   ConnectionAcceptSchema,
   ConnectionRejectSchema,

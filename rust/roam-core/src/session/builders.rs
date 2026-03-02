@@ -5,7 +5,7 @@ use roam_types::{
 
 use super::{
     CloseRequest, ConnectionAcceptor, ConnectionHandle, OpenRequest, Session, SessionError,
-    SessionHandle,
+    SessionHandle, SessionKeepaliveConfig,
 };
 
 // r[impl rpc.session-setup]
@@ -24,6 +24,7 @@ pub struct SessionInitiatorBuilder<'a, C> {
     root_settings: ConnectionSettings,
     metadata: Metadata<'a>,
     on_connection: Option<Box<dyn ConnectionAcceptor>>,
+    keepalive: Option<SessionKeepaliveConfig>,
 }
 
 impl<'a, C> SessionInitiatorBuilder<'a, C> {
@@ -36,6 +37,7 @@ impl<'a, C> SessionInitiatorBuilder<'a, C> {
             },
             metadata: vec![],
             on_connection: None,
+            keepalive: None,
         }
     }
 
@@ -64,6 +66,11 @@ impl<'a, C> SessionInitiatorBuilder<'a, C> {
         self
     }
 
+    pub fn keepalive(mut self, keepalive: SessionKeepaliveConfig) -> Self {
+        self.keepalive = Some(keepalive);
+        self
+    }
+
     pub async fn establish(
         self,
     ) -> Result<(Session<C>, ConnectionHandle, SessionHandle), SessionError>
@@ -76,7 +83,14 @@ impl<'a, C> SessionInitiatorBuilder<'a, C> {
         let (tx, rx) = self.conduit.split();
         let (open_tx, open_rx) = mpsc::channel::<OpenRequest>("session.open", 4);
         let (close_tx, close_rx) = mpsc::channel::<CloseRequest>("session.close", 4);
-        let mut session = Session::pre_handshake(tx, rx, self.on_connection, open_rx, close_rx);
+        let mut session = Session::pre_handshake(
+            tx,
+            rx,
+            self.on_connection,
+            open_rx,
+            close_rx,
+            self.keepalive,
+        );
         let handle = session
             .establish_as_initiator(self.root_settings, self.metadata)
             .await?;
@@ -90,6 +104,7 @@ pub struct SessionAcceptorBuilder<'a, C> {
     root_settings: ConnectionSettings,
     metadata: Metadata<'a>,
     on_connection: Option<Box<dyn ConnectionAcceptor>>,
+    keepalive: Option<SessionKeepaliveConfig>,
 }
 
 impl<'a, C> SessionAcceptorBuilder<'a, C> {
@@ -102,6 +117,7 @@ impl<'a, C> SessionAcceptorBuilder<'a, C> {
             },
             metadata: vec![],
             on_connection: None,
+            keepalive: None,
         }
     }
 
@@ -125,6 +141,11 @@ impl<'a, C> SessionAcceptorBuilder<'a, C> {
         self
     }
 
+    pub fn keepalive(mut self, keepalive: SessionKeepaliveConfig) -> Self {
+        self.keepalive = Some(keepalive);
+        self
+    }
+
     #[moire::instrument]
     pub async fn establish(
         self,
@@ -138,7 +159,14 @@ impl<'a, C> SessionAcceptorBuilder<'a, C> {
         let (tx, rx) = self.conduit.split();
         let (open_tx, open_rx) = mpsc::channel::<OpenRequest>("session.open", 4);
         let (close_tx, close_rx) = mpsc::channel::<CloseRequest>("session.close", 4);
-        let mut session = Session::pre_handshake(tx, rx, self.on_connection, open_rx, close_rx);
+        let mut session = Session::pre_handshake(
+            tx,
+            rx,
+            self.on_connection,
+            open_rx,
+            close_rx,
+            self.keepalive,
+        );
         let handle = session
             .establish_as_acceptor(self.root_settings, self.metadata)
             .await?;

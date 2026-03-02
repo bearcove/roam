@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, pin::Pin, sync::Arc};
+use std::{collections::BTreeMap, pin::Pin, sync::Arc, time::Duration};
 
 use moire::sync::mpsc;
 use roam_types::{
@@ -15,6 +15,13 @@ pub use builders::*;
 // r[impl session.handshake]
 /// Current roam session protocol version.
 pub const PROTOCOL_VERSION: u32 = 7;
+
+/// Session-level protocol keepalive configuration.
+#[derive(Debug, Clone, Copy)]
+pub struct SessionKeepaliveConfig {
+    pub ping_interval: Duration,
+    pub pong_timeout: Duration,
+}
 
 // ---------------------------------------------------------------------------
 // Connection acceptor trait
@@ -166,6 +173,19 @@ pub struct Session<C: Conduit> {
 
     /// Receiver for close requests from SessionHandle.
     close_rx: mpsc::Receiver<CloseRequest>,
+
+    /// Optional proactive keepalive runtime config for connection ID 0.
+    keepalive: Option<SessionKeepaliveConfig>,
+}
+
+#[derive(Debug)]
+struct KeepaliveRuntime {
+    ping_interval: Duration,
+    pong_timeout: Duration,
+    next_ping_at: tokio::time::Instant,
+    waiting_pong_nonce: Option<u64>,
+    pong_deadline: tokio::time::Instant,
+    next_ping_nonce: u64,
 }
 
 // r[impl connection]
@@ -305,6 +325,7 @@ where
         on_connection: Option<Box<dyn ConnectionAcceptor>>,
         open_rx: mpsc::Receiver<OpenRequest>,
         close_rx: mpsc::Receiver<CloseRequest>,
+        keepalive: Option<SessionKeepaliveConfig>,
     ) -> Self {
         let sess_core = Arc::new(SessionCore { tx: Box::new(tx) });
         Session {
@@ -317,6 +338,7 @@ where
             on_connection,
             open_rx,
             close_rx,
+            keepalive,
         }
     }
 
@@ -480,11 +502,18 @@ where
     /// open/close requests from the SessionHandle.
     // r[impl zerocopy.framing.pipeline.incoming]
     pub async fn run(&mut self) {
+        let mut keepalive_runtime = self.make_keepalive_runtime();
+        let mut keepalive_tick = keepalive_runtime.as_ref().map(|_| {
+            let mut interval = tokio::time::interval(Duration::from_millis(10));
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            interval
+        });
+
         loop {
             tokio::select! {
                 msg = self.rx.recv() => {
                     match msg {
-                        Ok(Some(msg)) => self.handle_message(msg).await,
+                        Ok(Some(msg)) => self.handle_message(msg, &mut keepalive_runtime).await,
                         Ok(None) => {
                             warn!("session recv loop ended: conduit returned EOF");
                             break;
@@ -501,12 +530,28 @@ where
                 Some(req) = self.close_rx.recv() => {
                     self.handle_close_request(req).await;
                 }
+                _ = async {
+                    if let Some(interval) = keepalive_tick.as_mut() {
+                        interval.tick().await;
+                    }
+                }, if keepalive_tick.is_some() => {
+                    if !self.handle_keepalive_tick(&mut keepalive_runtime).await {
+                        break;
+                    }
+                }
             }
         }
+
+        // Drop all connection slots so per-connection drivers exit immediately.
+        self.conns.clear();
         debug!("session recv loop exited");
     }
 
-    async fn handle_message(&mut self, msg: SelfRef<Message<'static>>) {
+    async fn handle_message(
+        &mut self,
+        msg: SelfRef<Message<'static>>,
+        keepalive_runtime: &mut Option<KeepaliveRuntime>,
+    ) {
         let conn_id = msg.connection_id;
         roam_types::selfref_match!(msg, payload {
             // r[impl connection.close.semantics]
@@ -557,11 +602,89 @@ where
                     })
                     .await;
             }
-            MessagePayload::Pong(_) => {
-                // Keepalive responses are handled by peers that actively probe.
+            MessagePayload::Pong(pong) => {
+                if conn_id.is_root() {
+                    self.handle_keepalive_pong(pong.nonce, keepalive_runtime);
+                }
             }
             // Hello, HelloYourself, ProtocolError: not valid post-handshake, drop.
         })
+    }
+
+    fn make_keepalive_runtime(&self) -> Option<KeepaliveRuntime> {
+        let Some(config) = self.keepalive else {
+            return None;
+        };
+        if config.ping_interval.is_zero() || config.pong_timeout.is_zero() {
+            warn!("keepalive disabled due to non-positive interval/timeout");
+            return None;
+        }
+        let now = tokio::time::Instant::now();
+        Some(KeepaliveRuntime {
+            ping_interval: config.ping_interval,
+            pong_timeout: config.pong_timeout,
+            next_ping_at: now + config.ping_interval,
+            waiting_pong_nonce: None,
+            pong_deadline: now,
+            next_ping_nonce: 1,
+        })
+    }
+
+    fn handle_keepalive_pong(&self, nonce: u64, keepalive_runtime: &mut Option<KeepaliveRuntime>) {
+        let Some(runtime) = keepalive_runtime.as_mut() else {
+            return;
+        };
+        if runtime.waiting_pong_nonce != Some(nonce) {
+            return;
+        }
+        runtime.waiting_pong_nonce = None;
+        runtime.next_ping_at = tokio::time::Instant::now() + runtime.ping_interval;
+    }
+
+    async fn handle_keepalive_tick(
+        &mut self,
+        keepalive_runtime: &mut Option<KeepaliveRuntime>,
+    ) -> bool {
+        let Some(runtime) = keepalive_runtime.as_mut() else {
+            return true;
+        };
+        let now = tokio::time::Instant::now();
+
+        if let Some(waiting_nonce) = runtime.waiting_pong_nonce {
+            if now >= runtime.pong_deadline {
+                warn!(
+                    nonce = waiting_nonce,
+                    timeout_ms = runtime.pong_timeout.as_millis(),
+                    "keepalive timeout waiting for pong"
+                );
+                return false;
+            }
+            return true;
+        }
+
+        if now < runtime.next_ping_at {
+            return true;
+        }
+
+        let nonce = runtime.next_ping_nonce;
+        if self
+            .sess_core
+            .send(Message {
+                connection_id: ConnectionId::ROOT,
+                payload: MessagePayload::Ping(roam_types::Ping { nonce }),
+            })
+            .await
+            .is_err()
+        {
+            warn!("failed to send keepalive ping");
+            return false;
+        }
+
+        runtime.waiting_pong_nonce = Some(nonce);
+        runtime.pong_deadline = now + runtime.pong_timeout;
+        runtime.next_ping_at = now + runtime.ping_interval;
+        runtime.next_ping_nonce = runtime.next_ping_nonce.wrapping_add(1);
+        true
     }
 
     async fn handle_inbound_open(
@@ -837,7 +960,7 @@ mod tests {
         let (tx, rx) = conduit.split();
         let (_open_tx, open_rx) = mpsc::channel::<OpenRequest>("session.open.test", 4);
         let (_close_tx, close_rx) = mpsc::channel::<CloseRequest>("session.close.test", 4);
-        Session::pre_handshake(tx, rx, None, open_rx, close_rx)
+        Session::pre_handshake(tx, rx, None, open_rx, close_rx, None)
     }
 
     fn accept_ref() -> SelfRef<ConnectionAccept<'static>> {

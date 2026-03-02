@@ -16,6 +16,7 @@ import {
   helloYourself,
   parityEven,
   parityOdd,
+  messagePing,
   messageHello,
   messageHelloYourself,
   messagePong,
@@ -62,6 +63,21 @@ export interface Negotiated {
   initialCredit: number;
   /** Maximum concurrent in-flight requests (min of both peers). */
   maxConcurrentRequests: number;
+}
+
+/** Optional proactive protocol keepalive settings. */
+export interface KeepaliveConfig {
+  pingIntervalMs: number;
+  pongTimeoutMs: number;
+}
+
+interface KeepaliveRuntime {
+  pingIntervalMs: number;
+  pongTimeoutMs: number;
+  nextPingAtMs: number;
+  waitingPongNonce: bigint | null;
+  pongDeadlineMs: number;
+  nextPingNonce: bigint;
 }
 
 /** Error during connection handling. */
@@ -207,6 +223,7 @@ export class Connection<T extends MessageTransport = MessageTransport> {
   >();
   private messagePumpRunning = false;
   private messagePumpPromise: Promise<void> | null = null;
+  private keepalive: KeepaliveConfig | null;
 
   /**
    * Optional interceptor to add metadata to outgoing requests.
@@ -220,6 +237,7 @@ export class Connection<T extends MessageTransport = MessageTransport> {
     negotiated: Negotiated,
     ourHello: Hello,
     acceptConnections: boolean = false,
+    keepalive: KeepaliveConfig | null = null,
   ) {
     this.io = io;
     this._role = role;
@@ -228,6 +246,7 @@ export class Connection<T extends MessageTransport = MessageTransport> {
     this.channelAllocator = new ChannelIdAllocator(role);
     this.channelRegistry = new ChannelRegistry();
     this._acceptConnections = acceptConnections;
+    this.keepalive = keepalive;
   }
 
   /** Get the underlying transport. */
@@ -332,6 +351,78 @@ export class Connection<T extends MessageTransport = MessageTransport> {
     return null;
   }
 
+  private failPendingRequests(error: ConnectionError): void {
+    for (const [, pending] of this.pendingRequests) {
+      clearTimeout(pending.timer);
+      pending.reject(error);
+    }
+    this.pendingRequests.clear();
+  }
+
+  private makeKeepaliveRuntime(): KeepaliveRuntime | null {
+    if (!this.keepalive) {
+      return null;
+    }
+    if (this.keepalive.pingIntervalMs <= 0 || this.keepalive.pongTimeoutMs <= 0) {
+      return null;
+    }
+    const now = Date.now();
+    return {
+      pingIntervalMs: this.keepalive.pingIntervalMs,
+      pongTimeoutMs: this.keepalive.pongTimeoutMs,
+      nextPingAtMs: now + this.keepalive.pingIntervalMs,
+      waitingPongNonce: null,
+      pongDeadlineMs: 0,
+      nextPingNonce: 1n,
+    };
+  }
+
+  private handleKeepalivePong(nonce: bigint, runtime: KeepaliveRuntime | null): void {
+    if (!runtime) {
+      return;
+    }
+    if (runtime.waitingPongNonce !== nonce) {
+      return;
+    }
+    runtime.waitingPongNonce = null;
+    runtime.pongDeadlineMs = 0;
+    runtime.nextPingAtMs = Date.now() + runtime.pingIntervalMs;
+  }
+
+  private async handleKeepaliveTick(runtime: KeepaliveRuntime | null): Promise<boolean> {
+    if (!runtime) {
+      return true;
+    }
+    const now = Date.now();
+
+    if (runtime.waitingPongNonce !== null) {
+      if (now >= runtime.pongDeadlineMs) {
+        this.failPendingRequests(ConnectionError.closed());
+        this.io.close();
+        return false;
+      }
+      return true;
+    }
+
+    if (now < runtime.nextPingAtMs) {
+      return true;
+    }
+
+    const nonce = runtime.nextPingNonce;
+    try {
+      await this.io.send(encodeMessage(messagePing(nonce)));
+    } catch {
+      this.failPendingRequests(ConnectionError.closed());
+      this.io.close();
+      return false;
+    }
+    runtime.waitingPongNonce = nonce;
+    runtime.pongDeadlineMs = now + runtime.pongTimeoutMs;
+    runtime.nextPingAtMs = now + runtime.pingIntervalMs;
+    runtime.nextPingNonce = nonce + 1n;
+    return true;
+  }
+
   /**
    * Start the message pump if not already running.
    * The pump receives messages and routes responses to pending requests.
@@ -341,8 +432,12 @@ export class Connection<T extends MessageTransport = MessageTransport> {
     this.messagePumpRunning = true;
 
     this.messagePumpPromise = (async () => {
+      const keepaliveRuntime = this.makeKeepaliveRuntime();
       try {
         while (this.pendingRequests.size > 0) {
+          if (!(await this.handleKeepaliveTick(keepaliveRuntime))) {
+            return;
+          }
           const data = await this.io.recvTimeout(100); // Short timeout to check for new requests
           if (!data) {
             // No message received, but keep running if there are pending requests
@@ -355,12 +450,7 @@ export class Connection<T extends MessageTransport = MessageTransport> {
 
           if (msgTag(msg) === "ConnectionClose" || msgTag(msg) === "ProtocolError") {
             // Reject all pending requests
-            const error = ConnectionError.closed();
-            for (const [, pending] of this.pendingRequests) {
-              clearTimeout(pending.timer);
-              pending.reject(error);
-            }
-            this.pendingRequests.clear();
+            this.failPendingRequests(ConnectionError.closed());
             return;
           }
 
@@ -370,6 +460,9 @@ export class Connection<T extends MessageTransport = MessageTransport> {
           }
 
           if (msgTag(msg) === "Pong") {
+            if (msg.connection_id === 0n) {
+              this.handleKeepalivePong(msg.payload.value.nonce, keepaliveRuntime);
+            }
             continue;
           }
 
@@ -413,6 +506,8 @@ export class Connection<T extends MessageTransport = MessageTransport> {
 
           // Ignore other messages (Hello after handshake, Reset, etc.)
         }
+      } catch {
+        this.failPendingRequests(ConnectionError.closed());
       } finally {
         this.messagePumpRunning = false;
         this.messagePumpPromise = null;
@@ -543,15 +638,23 @@ export class Connection<T extends MessageTransport = MessageTransport> {
     let pendingRecv: Promise<
       { kind: "message"; payload: Uint8Array | null } | { kind: "error"; error: unknown }
     > | null = null;
+    const keepaliveRuntime = this.makeKeepaliveRuntime();
+    const recvTimeoutMs = keepaliveRuntime
+      ? Math.max(1, Math.min(100, Math.floor(keepaliveRuntime.pingIntervalMs)))
+      : 30000;
 
     while (true) {
+      if (!(await this.handleKeepaliveTick(keepaliveRuntime))) {
+        throw ConnectionError.closed();
+      }
+
       // Flush any pending task messages from handlers
       await flushTaskQueue();
 
       // Start receiving if we don't have a pending receive
       if (!pendingRecv) {
         pendingRecv = this.io
-          .recvTimeout(30000)
+          .recvTimeout(recvTimeoutMs)
           .then((payload) => ({ kind: "message" as const, payload }))
           .catch((error) => ({ kind: "error" as const, error }));
       }
@@ -591,6 +694,9 @@ export class Connection<T extends MessageTransport = MessageTransport> {
 
       const payload = recvResult.payload;
       if (!payload) {
+        if (keepaliveRuntime) {
+          continue;
+        }
         // Connection closed - wait for all in-flight handlers to complete
         await Promise.all(inFlightHandlers);
         await flushTaskQueue();
@@ -598,7 +704,12 @@ export class Connection<T extends MessageTransport = MessageTransport> {
       }
 
       try {
-        const handlerPromise = this.handleChannelingMessage(payload, dispatcher, taskSender);
+        const handlerPromise = this.handleChannelingMessage(
+          payload,
+          dispatcher,
+          taskSender,
+          keepaliveRuntime,
+        );
 
         // If this returned a handler promise, track it
         if (handlerPromise) {
@@ -631,6 +742,7 @@ export class Connection<T extends MessageTransport = MessageTransport> {
     payload: Uint8Array,
     dispatcher: ChannelingDispatcher,
     taskSender: TaskSender,
+    keepaliveRuntime: KeepaliveRuntime | null,
   ): Promise<void> | undefined {
     // Parse message using wire codec
     const result = decodeMessage(payload);
@@ -647,6 +759,9 @@ export class Connection<T extends MessageTransport = MessageTransport> {
     }
 
     if (tag === "Pong") {
+      if (msg.connection_id === 0n) {
+        this.handleKeepalivePong(msg.payload.value.nonce, keepaliveRuntime);
+      }
       return undefined;
     }
 
@@ -824,10 +939,19 @@ export class Connection<T extends MessageTransport = MessageTransport> {
    * r[impl call.pipelining.independence] - Each request handled independently.
    */
   async run(dispatcher: ServiceDispatcher): Promise<void> {
+    const keepaliveRuntime = this.makeKeepaliveRuntime();
+    const recvTimeoutMs = keepaliveRuntime
+      ? Math.max(1, Math.min(100, Math.floor(keepaliveRuntime.pingIntervalMs)))
+      : 30000;
+
     while (true) {
+      if (!(await this.handleKeepaliveTick(keepaliveRuntime))) {
+        throw ConnectionError.closed();
+      }
+
       let payload: Uint8Array | null;
       try {
-        payload = await this.io.recvTimeout(30000);
+        payload = await this.io.recvTimeout(recvTimeoutMs);
       } catch (e) {
         // r[impl message.hello.unknown-version] - Reject unknown Hello versions.
         // Check for unknown Hello variant: [Message::Hello=0][Hello::unknown=1+]
@@ -839,11 +963,14 @@ export class Connection<T extends MessageTransport = MessageTransport> {
       }
 
       if (!payload) {
+        if (keepaliveRuntime) {
+          continue;
+        }
         return; // Connection closed or timeout
       }
 
       try {
-        await this.handleMessage(payload, dispatcher);
+        await this.handleMessage(payload, dispatcher, keepaliveRuntime);
       } catch (e) {
         if (e instanceof ConnectionError) throw e;
         // r[impl message.decode-error] - send goodbye on decode failure
@@ -852,7 +979,11 @@ export class Connection<T extends MessageTransport = MessageTransport> {
     }
   }
 
-  private async handleMessage(payload: Uint8Array, dispatcher: ServiceDispatcher): Promise<void> {
+  private async handleMessage(
+    payload: Uint8Array,
+    dispatcher: ServiceDispatcher,
+    keepaliveRuntime: KeepaliveRuntime | null,
+  ): Promise<void> {
     // Parse message using wire codec
     const result = decodeMessage(payload);
     const msg = result.value as any;
@@ -870,6 +1001,9 @@ export class Connection<T extends MessageTransport = MessageTransport> {
     }
 
     if (tag === "Pong") {
+      if (msg.connection_id === 0n) {
+        this.handleKeepalivePong(msg.payload.value.nonce, keepaliveRuntime);
+      }
       return;
     }
 
@@ -989,6 +1123,8 @@ export class Connection<T extends MessageTransport = MessageTransport> {
 export interface HelloExchangeOptions {
   /** Whether to accept incoming virtual connections. Default: false. */
   acceptConnections?: boolean;
+  /** Optional proactive keepalive config. Default: disabled. */
+  keepalive?: KeepaliveConfig;
 }
 
 /**
@@ -1025,7 +1161,14 @@ export async function helloExchangeInitiator<T extends MessageTransport>(
     ),
   };
 
-  return new Connection(io, Role.Initiator, negotiated, hello, options.acceptConnections);
+  return new Connection(
+    io,
+    Role.Initiator,
+    negotiated,
+    hello,
+    options.acceptConnections,
+    options.keepalive ?? null,
+  );
 }
 
 /**
@@ -1063,7 +1206,14 @@ export async function helloExchangeAcceptor<T extends MessageTransport>(
   const hy = helloYourself(parityEven(), hello.connection_settings.max_concurrent_requests);
   await io.send(encodeMessage(messageHelloYourself(hy)));
 
-  return new Connection(io, Role.Acceptor, negotiated, hello, options.acceptConnections);
+  return new Connection(
+    io,
+    Role.Acceptor,
+    negotiated,
+    hello,
+    options.acceptConnections,
+    options.keepalive ?? null,
+  );
 }
 
 async function waitForPeerHello<T extends MessageTransport>(io: T): Promise<Hello> {

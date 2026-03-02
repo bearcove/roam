@@ -102,6 +102,10 @@ export const HelloYourselfSchema: Schema = {
 
 export const ProtocolErrorSchema: Schema = { kind: "struct", fields: { "description": { kind: "string" } } };
 
+export const PingSchema: Schema = { kind: "struct", fields: { "nonce": { kind: "u64" } } };
+
+export const PongSchema: Schema = { kind: "struct", fields: { "nonce": { kind: "u64" } } };
+
 export const ConnectionOpenSchema: Schema = {
   kind: "struct",
   fields: {
@@ -1193,6 +1197,8 @@ export const wireSchemaRegistry: SchemaRegistry = new Map<string, Schema>([
   ["Hello", HelloSchema],
   ["HelloYourself", HelloYourselfSchema],
   ["ProtocolError", ProtocolErrorSchema],
+  ["Ping", PingSchema],
+  ["Pong", PongSchema],
   ["ConnectionOpen", ConnectionOpenSchema],
   ["ConnectionAccept", ConnectionAcceptSchema],
   ["ConnectionReject", ConnectionRejectSchema],

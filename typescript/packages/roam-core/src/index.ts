@@ -28,6 +28,7 @@ export {
   ConnectionCaller,
   ConnectionError,
   type Negotiated,
+  type KeepaliveConfig,
   type ServiceDispatcher,
   type ChannelingDispatcher,
   type HelloExchangeOptions,

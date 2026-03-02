@@ -4,13 +4,15 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use moire::task::FutureExt;
 use roam_types::{
     Caller, ChannelBinder, ChannelBody, ChannelClose, ChannelGrantCredit, ChannelId, ChannelItem,
-    ChannelMessage, ChannelSink, ConnectionSettings, Handler, IncomingChannelMessage,
-    MessageFamily, Metadata, MethodId, Parity, Payload, ReplySink, RequestBody, RequestCall,
-    RequestCancel, RequestMessage, RequestResponse, RoamError, SelfRef,
+    ChannelMessage, ChannelSink, Conduit, ConduitRx, ConnectionSettings, Handler,
+    IncomingChannelMessage, Message, MessageFamily, MessagePayload, Metadata, MethodId, Parity,
+    Payload, ReplySink, RequestBody, RequestCall, RequestCancel, RequestMessage, RequestResponse,
+    RoamError, SelfRef,
 };
 
 use crate::session::{
-    AcceptedConnection, ConnectionAcceptor, ConnectionMessage, SessionError, acceptor, initiator,
+    AcceptedConnection, ConnectionAcceptor, ConnectionMessage, SessionError,
+    SessionKeepaliveConfig, acceptor, initiator,
 };
 use crate::{BareConduit, Driver, DriverReplySink, memory_link_pair};
 
@@ -19,6 +21,55 @@ type MessageConduit = BareConduit<MessageFamily, crate::MemoryLink>;
 fn message_conduit_pair() -> (MessageConduit, MessageConduit) {
     let (a, b) = memory_link_pair(64);
     (BareConduit::new(a), BareConduit::new(b))
+}
+
+/// Conduit wrapper used by keepalive tests: drops inbound Pong messages.
+struct DropPongConduit<C> {
+    inner: C,
+}
+
+impl<C> DropPongConduit<C> {
+    fn new(inner: C) -> Self {
+        Self { inner }
+    }
+}
+
+impl<C> Conduit for DropPongConduit<C>
+where
+    C: Conduit<Msg = MessageFamily>,
+{
+    type Msg = MessageFamily;
+    type Tx = C::Tx;
+    type Rx = DropPongRx<C::Rx>;
+
+    fn split(self) -> (Self::Tx, Self::Rx) {
+        let (tx, rx) = self.inner.split();
+        (tx, DropPongRx { inner: rx })
+    }
+}
+
+struct DropPongRx<Rx> {
+    inner: Rx,
+}
+
+impl<Rx> ConduitRx for DropPongRx<Rx>
+where
+    Rx: ConduitRx<Msg = MessageFamily>,
+{
+    type Msg = MessageFamily;
+    type Error = Rx::Error;
+
+    async fn recv(&mut self) -> Result<Option<SelfRef<Message<'static>>>, Self::Error> {
+        loop {
+            let Some(msg) = self.inner.recv().await? else {
+                return Ok(None);
+            };
+            if matches!(&msg.payload, MessagePayload::Pong(_)) {
+                continue;
+            }
+            return Ok(Some(msg));
+        }
+    }
 }
 
 /// A handler that echoes back the raw args payload as the response.
@@ -242,6 +293,70 @@ async fn in_flight_call_returns_cancelled_when_peer_closes() {
     assert!(
         was_cancelled_check.load(Ordering::SeqCst),
         "server handler should be cancelled when peer connection closes"
+    );
+}
+
+#[tokio::test]
+async fn keepalive_timeout_returns_cancelled_when_pongs_are_missing() {
+    let (client_link, server_link) = memory_link_pair(64);
+    let client_conduit = DropPongConduit::new(BareConduit::new(client_link));
+    let server_conduit = BareConduit::new(server_link);
+
+    let server_task = moire::task::spawn(
+        async move {
+            let (mut server_session, server_handle, _sh) = acceptor(server_conduit)
+                .establish()
+                .await
+                .expect("server handshake failed");
+            let mut server_driver = Driver::new(
+                server_handle,
+                BlockingHandler {
+                    was_cancelled: Arc::new(AtomicBool::new(false)),
+                },
+                Parity::Even,
+            );
+            moire::task::spawn(async move { server_session.run().await }.named("server_session"));
+            moire::task::spawn(async move { server_driver.run().await }.named("server_driver"));
+        }
+        .named("server_setup"),
+    );
+
+    let (mut client_session, client_handle, _sh) = initiator(client_conduit)
+        .keepalive(SessionKeepaliveConfig {
+            ping_interval: std::time::Duration::from_millis(20),
+            pong_timeout: std::time::Duration::from_millis(50),
+        })
+        .establish()
+        .await
+        .expect("client handshake failed");
+    let mut client_driver = Driver::new(client_handle, (), Parity::Odd);
+    let caller = client_driver.caller();
+    moire::task::spawn(async move { client_session.run().await }.named("client_session"));
+    moire::task::spawn(async move { client_driver.run().await }.named("client_driver"));
+
+    server_task.await.expect("server setup failed");
+
+    let call_task = moire::task::spawn(
+        async move {
+            caller
+                .call(RequestCall {
+                    method_id: MethodId(1),
+                    args: Payload::outgoing(&123_u32),
+                    channels: vec![],
+                    metadata: Default::default(),
+                })
+                .await
+        }
+        .named("client_call"),
+    );
+
+    let result = tokio::time::timeout(std::time::Duration::from_secs(1), call_task)
+        .await
+        .expect("timed out waiting for call to resolve after keepalive timeout")
+        .expect("call task join");
+    assert!(
+        matches!(result, Err(RoamError::Cancelled)),
+        "expected cancelled after keepalive timeout"
     );
 }
 
