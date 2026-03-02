@@ -15,6 +15,230 @@ fn main() {
 
 const PAYLOAD_SIZES: &[usize] = &[64, 256, 1024, 4096, 65536];
 const STREAM_COUNTS: &[usize] = &[10, 100, 1000];
+const ZEROCOPY_PAYLOAD_SIZES: &[usize] = &[
+    64, 256, 1024, 4096, 65536, 262144, 1048576, 4194304, 16777216, 67108864, 134217728,
+];
+
+// ============================================================================
+// roam zerocopy-vs-owned
+// ============================================================================
+
+mod roam_zerocopy_bench {
+    use moire::task::FutureExt;
+    use roam_core::{BareConduit, Driver, acceptor, initiator, memory_link_pair};
+    use roam_shm::ShmLink;
+    use roam_shm::varslot::SizeClassConfig;
+    use roam_stream::StreamLink;
+    use roam_types::Parity;
+    use tokio::net::TcpListener;
+
+    type MemoryConduit = BareConduit<roam_types::MessageFamily, roam_core::MemoryLink>;
+    type ShmConduit = BareConduit<roam_types::MessageFamily, ShmLink>;
+    type TcpStreamLink =
+        StreamLink<tokio::net::tcp::OwnedReadHalf, tokio::net::tcp::OwnedWriteHalf>;
+    type TcpConduit = BareConduit<roam_types::MessageFamily, TcpStreamLink>;
+
+    #[roam::service]
+    pub trait Zerocopy {
+        async fn owned_len(&self, data: String) -> usize;
+        async fn borrowed_len(&self, data: &str) -> usize;
+    }
+
+    #[derive(Clone)]
+    pub struct Handler;
+
+    impl Zerocopy for Handler {
+        async fn owned_len(&self, data: String) -> usize {
+            data.len()
+        }
+
+        async fn borrowed_len(&self, data: &str) -> usize {
+            data.len()
+        }
+    }
+
+    pub async fn setup_mem() -> ZerocopyClient<roam_core::DriverCaller> {
+        let (a, b) = memory_link_pair(64);
+        let client_conduit: MemoryConduit = BareConduit::new(a);
+        let server_conduit: MemoryConduit = BareConduit::new(b);
+
+        let server_task = moire::task::spawn(
+            async move {
+                let (mut server_session, server_handle, _sh) = acceptor(server_conduit)
+                    .establish()
+                    .await
+                    .expect("server handshake failed");
+                let dispatcher = ZerocopyDispatcher::new(Handler);
+                let mut server_driver = Driver::new(server_handle, dispatcher, Parity::Even);
+                moire::task::spawn(
+                    async move { server_session.run().await }.named("server_session"),
+                );
+                moire::task::spawn(async move { server_driver.run().await }.named("server_driver"));
+            }
+            .named("server_setup"),
+        );
+
+        let (mut client_session, client_handle, _sh) = initiator(client_conduit)
+            .establish()
+            .await
+            .expect("client handshake failed");
+        let mut client_driver = Driver::new(client_handle, (), Parity::Odd);
+        let caller = client_driver.caller();
+        moire::task::spawn(async move { client_session.run().await }.named("client_session"));
+        moire::task::spawn(async move { client_driver.run().await }.named("client_driver"));
+
+        server_task.await.expect("server setup failed");
+
+        ZerocopyClient::new(caller)
+    }
+
+    pub async fn setup_shm() -> ZerocopyClient<roam_core::DriverCaller> {
+        let classes = [
+            SizeClassConfig {
+                slot_size: 4096,
+                slot_count: 16,
+            },
+            SizeClassConfig {
+                slot_size: 65536 + 256,
+                slot_count: 8,
+            },
+            SizeClassConfig {
+                slot_size: 262144 + 256,
+                slot_count: 4,
+            },
+            SizeClassConfig {
+                slot_size: 1048576 + 256,
+                slot_count: 2,
+            },
+        ];
+        let (a, b) = ShmLink::heap_pair(1 << 17, 1 << 24, 256, &classes).unwrap();
+        let client_conduit: ShmConduit = BareConduit::new(a);
+        let server_conduit: ShmConduit = BareConduit::new(b);
+
+        let server_task = moire::task::spawn(
+            async move {
+                let (mut server_session, server_handle, _sh) = acceptor(server_conduit)
+                    .establish()
+                    .await
+                    .expect("server handshake failed");
+                let dispatcher = ZerocopyDispatcher::new(Handler);
+                let mut server_driver = Driver::new(server_handle, dispatcher, Parity::Even);
+                moire::task::spawn(
+                    async move { server_session.run().await }.named("server_session"),
+                );
+                moire::task::spawn(async move { server_driver.run().await }.named("server_driver"));
+            }
+            .named("server_setup"),
+        );
+
+        let (mut client_session, client_handle, _sh) = initiator(client_conduit)
+            .establish()
+            .await
+            .expect("client handshake failed");
+        let mut client_driver = Driver::new(client_handle, (), Parity::Odd);
+        let caller = client_driver.caller();
+        moire::task::spawn(async move { client_session.run().await }.named("client_session"));
+        moire::task::spawn(async move { client_driver.run().await }.named("client_driver"));
+
+        server_task.await.expect("server setup failed");
+
+        ZerocopyClient::new(caller)
+    }
+
+    pub async fn setup_tcp() -> ZerocopyClient<roam_core::DriverCaller> {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let server_task = moire::task::spawn(
+            async move {
+                let (stream, _) = listener.accept().await.unwrap();
+                stream.set_nodelay(true).unwrap();
+                let server_conduit: TcpConduit = BareConduit::new(StreamLink::tcp(stream));
+                let (mut server_session, server_handle, _sh) = acceptor(server_conduit)
+                    .establish()
+                    .await
+                    .expect("server handshake failed");
+                let dispatcher = ZerocopyDispatcher::new(Handler);
+                let mut server_driver = Driver::new(server_handle, dispatcher, Parity::Even);
+                moire::task::spawn(
+                    async move { server_session.run().await }.named("server_session"),
+                );
+                moire::task::spawn(async move { server_driver.run().await }.named("server_driver"));
+            }
+            .named("server_setup"),
+        );
+
+        let stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+        stream.set_nodelay(true).unwrap();
+        let client_conduit: TcpConduit = BareConduit::new(StreamLink::tcp(stream));
+
+        let (mut client_session, client_handle, _sh) = initiator(client_conduit)
+            .establish()
+            .await
+            .expect("client handshake failed");
+        let mut client_driver = Driver::new(client_handle, (), Parity::Odd);
+        let caller = client_driver.caller();
+        moire::task::spawn(async move { client_session.run().await }.named("client_session"));
+        moire::task::spawn(async move { client_driver.run().await }.named("client_driver"));
+
+        server_task.await.expect("server setup failed");
+
+        ZerocopyClient::new(caller)
+    }
+}
+
+macro_rules! define_zerocopy_transport_benches {
+    ($owned_name:ident, $borrowed_name:ident, $setup:path, $label:literal) => {
+        #[divan::bench(args = ZEROCOPY_PAYLOAD_SIZES)]
+        fn $owned_name(bencher: divan::Bencher, n: usize) {
+            let client = TOKIO.block_on($setup());
+            let payload = "x".repeat(n);
+            bencher.bench_local(|| {
+                TOKIO.block_on(async {
+                    let resp = client
+                        .owned_len(payload.clone())
+                        .await
+                        .expect(concat!($label, " owned_len failed"));
+                    divan::black_box(resp);
+                })
+            });
+        }
+
+        #[divan::bench(args = ZEROCOPY_PAYLOAD_SIZES)]
+        fn $borrowed_name(bencher: divan::Bencher, n: usize) {
+            let client = TOKIO.block_on($setup());
+            let payload = "x".repeat(n);
+            bencher.bench_local(|| {
+                TOKIO.block_on(async {
+                    let resp = client
+                        .borrowed_len(&payload)
+                        .await
+                        .expect(concat!($label, " borrowed_len failed"));
+                    divan::black_box(resp);
+                })
+            });
+        }
+    };
+}
+
+define_zerocopy_transport_benches!(
+    roam_mem_zerocopy_owned_len,
+    roam_mem_zerocopy_borrowed_len,
+    roam_zerocopy_bench::setup_mem,
+    "roam-mem"
+);
+define_zerocopy_transport_benches!(
+    roam_tcp_zerocopy_owned_len,
+    roam_tcp_zerocopy_borrowed_len,
+    roam_zerocopy_bench::setup_tcp,
+    "roam-tcp"
+);
+define_zerocopy_transport_benches!(
+    roam_shm_zerocopy_owned_len,
+    roam_shm_zerocopy_borrowed_len,
+    roam_zerocopy_bench::setup_shm,
+    "roam-shm"
+);
 
 // ============================================================================
 // roam
