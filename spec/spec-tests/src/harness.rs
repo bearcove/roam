@@ -664,7 +664,7 @@ async fn accept_subject_shm_subject_is_guest(
 
     // Bind the control listener.
     #[cfg(unix)]
-    let mut listener = roam_local::LocalListener::bind(&control_sock_path)
+    let listener = roam_local::LocalListener::bind(&control_sock_path)
         .map_err(|e| format!("bind {}: {e}", control_sock_path.display()))?;
     #[cfg(windows)]
     let mut listener = {
@@ -898,7 +898,7 @@ async fn accept_subject_shm_subject_is_host(
         #[cfg(unix)]
         let mut stream = {
             use std::os::unix::net::UnixStream as StdUnixStream;
-            let sync_stream = loop {
+            loop {
                 if let Some(status) = child
                     .try_wait()
                     .map_err(|e| format!("try_wait on subject process: {e}"))?
@@ -943,8 +943,7 @@ async fn accept_subject_shm_subject_is_host(
                         }
                     }
                 }
-            };
-            sync_stream
+            }
         };
 
         #[cfg(windows)]
@@ -1048,12 +1047,10 @@ async fn accept_subject_shm_subject_is_host(
             let mmap_rx_fd = mmap_rx_owned.into_raw_fd();
             let mmap_tx_fd = mmap_tx_owned.into_raw_fd();
 
-            let link = unsafe {
+            unsafe {
                 guest_link_from_raw(segment, peer_id, doorbell_fd, mmap_rx_fd, mmap_tx_fd, true)
             }
-            .map_err(|e| format!("guest_link_from_raw: {e}"))?;
-
-            link
+            .map_err(|e| format!("guest_link_from_raw: {e}"))?
         };
 
         #[cfg(windows)]
@@ -1118,7 +1115,7 @@ async fn accept_subject_shm_subject_is_host(
             let mmap_tx_pipe = std::env::var("SHM_MMAP_TX_PIPE")
                 .unwrap_or_default();
 
-            
+
 
             guest_link_from_names(
                 segment,
