@@ -373,12 +373,17 @@ jobs:
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
 
       - name: Install cargo-nextest
         uses: taiki-e/install-action@nextest
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
+
+      - name: Build subject
+        run: cargo build -p subject-rust
 
       - name: Test workspace
         run: cargo nextest run --workspace
