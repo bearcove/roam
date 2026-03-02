@@ -15,6 +15,7 @@ use std::io;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::mpsc;
+use std::time::Duration;
 
 use shm_primitives::MmapRegion;
 use shm_primitives_async::MmapAttachMessage;
@@ -336,6 +337,42 @@ impl MmapAttachments {
         }
 
         Ok(mapping.clone())
+    }
+
+    /// Resolve an mmap reference, allowing a short grace period for control-plane lag.
+    ///
+    /// In practice the mmap-ref frame and the attach control message are emitted by
+    /// independent channels. A receiver can observe the frame first, then receive
+    /// the attach message a few milliseconds later.
+    pub fn resolve_with_grace(
+        &mut self,
+        map_id: u32,
+        map_generation: u32,
+        map_offset: u64,
+        payload_len: u32,
+    ) -> Result<Arc<AttachedMapping>, MmapResolveError> {
+        self.drain_control();
+        match self.resolve(map_id, map_generation, map_offset, payload_len) {
+            Ok(mapping) => return Ok(mapping),
+            Err(MmapResolveError::UnknownMapping { .. }) => {}
+            Err(err) => return Err(err),
+        }
+
+        // Bounded grace period to absorb attach/message skew without hanging forever.
+        const GRACE_ATTEMPTS: usize = 64;
+        const GRACE_SLEEP: Duration = Duration::from_millis(1);
+
+        for _ in 0..GRACE_ATTEMPTS {
+            std::thread::sleep(GRACE_SLEEP);
+            self.drain_control();
+            match self.resolve(map_id, map_generation, map_offset, payload_len) {
+                Ok(mapping) => return Ok(mapping),
+                Err(MmapResolveError::UnknownMapping { .. }) => {}
+                Err(err) => return Err(err),
+            }
+        }
+
+        self.resolve(map_id, map_generation, map_offset, payload_len)
     }
 }
 

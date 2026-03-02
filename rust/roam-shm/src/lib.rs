@@ -915,10 +915,7 @@ impl LinkRx for ShmLinkRx {
                             }
                         }
 
-                        // Drain any newly delivered fds before resolving
-                        self.mmap_attachments.drain_control();
-
-                        let mapping = match self.mmap_attachments.resolve(
+                        let mapping = match self.mmap_attachments.resolve_with_grace(
                             mmap_ref.map_id,
                             mmap_ref.map_generation,
                             mmap_ref.map_offset,
@@ -1036,6 +1033,8 @@ mod tests {
     use std::time::Duration;
 
     use roam_types::{LinkRx as _, LinkTx as _, LinkTxPermit as _};
+    use shm_primitives::{FileCleanup, MmapRegion};
+    use shm_primitives_async::MmapAttachMessage;
     use tokio::time::timeout;
 
     use super::*;
@@ -1328,5 +1327,65 @@ mod tests {
 
         // Backing must remain valid independently of attachment table/peer lifetime.
         assert_eq!(shared.as_bytes(), payload.as_slice());
+    }
+
+    #[tokio::test]
+    async fn mmap_ref_can_arrive_before_attach_control_message() {
+        let (_a, b) = ShmLink::heap_pair(4096, 1 << 20, 32, SMALL_CLASSES).unwrap();
+        let (_b_tx, mut b_rx) = b.split();
+
+        // Replace the default in-process control channel so this test can
+        // intentionally delay the attach message relative to the data frame.
+        let (control_tx, control_rx) = create_in_process_mmap_channel();
+        b_rx.mmap_attachments = MmapAttachments::new(control_rx);
+
+        let payload = b"late mmap attach payload".to_vec();
+        let map_id = 72_u32;
+        let map_generation = 1_u32;
+        let mapping_length = 4096_u64;
+        let mmap_ref = MmapRef {
+            map_id,
+            map_generation,
+            map_offset: 0,
+            payload_len: payload.len() as u32,
+        };
+
+        // Enqueue an mmap-ref frame first (before the attach control message).
+        let (mut producer, _) = b_rx.rx_bipbuf.split();
+        framing::write_mmap_ref(&mut producer, &mmap_ref).unwrap();
+
+        // Build the mapping and schedule attach delivery shortly after recv starts.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("late-attach.shm");
+        let region = Arc::new(
+            MmapRegion::create(&path, mapping_length as usize, FileCleanup::Manual).unwrap(),
+        );
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                payload.as_ptr(),
+                region.region().as_ptr(),
+                payload.len(),
+            );
+        }
+        let attach = MmapAttachMessage {
+            map_id,
+            map_generation,
+            mapping_length,
+        };
+
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(25));
+            let MmapChannelTx::InProcess(sender) = control_tx else {
+                panic!("expected in-process mmap control channel");
+            };
+            sender.send((region, attach)).unwrap();
+        });
+
+        let backing = timeout(Duration::from_secs(1), b_rx.recv())
+            .await
+            .expect("recv timed out")
+            .expect("recv should succeed despite delayed attach")
+            .expect("expected payload");
+        assert_eq!(backing.as_bytes(), payload.as_slice());
     }
 }
