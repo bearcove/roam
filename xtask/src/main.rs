@@ -234,6 +234,80 @@ fn fmt_typescript(path: &std::path::Path, text: String) -> String {
     }
 }
 
+fn fmt_swift(path: &std::path::Path, text: String) -> String {
+    fn try_swift_formatter(
+        path: &std::path::Path,
+        text: &str,
+        program: &str,
+        args: &[&str],
+    ) -> Result<Option<String>, Box<dyn std::error::Error>> {
+        use std::io::{ErrorKind, Write};
+        use std::process::{Command, Stdio};
+
+        let mut child = match Command::new(program)
+            .args(args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+        {
+            Ok(child) => child,
+            Err(e) if e.kind() == ErrorKind::NotFound => return Ok(None),
+            Err(e) => {
+                return Err(format!(
+                    "failed to start {program} while formatting {}: {e}",
+                    path.display()
+                )
+                .into());
+            }
+        };
+
+        let mut stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| format!("failed to open stdin for {program}"))?;
+        stdin.write_all(text.as_bytes())?;
+        drop(stdin);
+
+        let output = child.wait_with_output()?;
+        if output.status.success() {
+            let stdout = String::from_utf8(output.stdout)?;
+            return Ok(Some(stdout));
+        }
+
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        Err(format!(
+            "{program} {} failed while formatting {}: {}",
+            args.join(" "),
+            path.display(),
+            stderr.trim()
+        )
+        .into())
+    }
+
+    match try_swift_formatter(path, &text, "swift-format", &["format", "-"]) {
+        Ok(Some(formatted)) => formatted,
+        Ok(None) => match try_swift_formatter(path, &text, "swift", &["format", "-"]) {
+            Ok(Some(formatted)) => formatted,
+            Ok(None) => {
+                eprintln!(
+                    "warning: neither swift-format nor `swift format` found, leaving {} unformatted",
+                    path.display()
+                );
+                text
+            }
+            Err(e) => {
+                eprintln!("warning: swift format failed for {}: {e}", path.display());
+                text
+            }
+        },
+        Err(e) => {
+            eprintln!("warning: swift-format failed for {}: {e}", path.display());
+            text
+        }
+    }
+}
+
 fn codegen_typescript(workspace_root: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
     let out_dir = workspace_root.join("typescript").join("generated");
     std::fs::create_dir_all(&out_dir)?;
@@ -301,6 +375,8 @@ fn codegen_typescript_wire_schemas(
         "ProtocolErrorSchema",
         <rt::ProtocolError<'static> as facet::Facet<'static>>::SHAPE
     );
+    emit_schema!("PingSchema", <rt::Ping as facet::Facet<'static>>::SHAPE);
+    emit_schema!("PongSchema", <rt::Pong as facet::Facet<'static>>::SHAPE);
     emit_schema!(
         "ConnectionOpenSchema",
         <rt::ConnectionOpen<'static> as facet::Facet<'static>>::SHAPE
@@ -350,6 +426,8 @@ fn codegen_typescript_wire_schemas(
     out.push_str("  [\"Hello\", HelloSchema],\n");
     out.push_str("  [\"HelloYourself\", HelloYourselfSchema],\n");
     out.push_str("  [\"ProtocolError\", ProtocolErrorSchema],\n");
+    out.push_str("  [\"Ping\", PingSchema],\n");
+    out.push_str("  [\"Pong\", PongSchema],\n");
     out.push_str("  [\"ConnectionOpen\", ConnectionOpenSchema],\n");
     out.push_str("  [\"ConnectionAccept\", ConnectionAcceptSchema],\n");
     out.push_str("  [\"ConnectionReject\", ConnectionRejectSchema],\n");
@@ -384,7 +462,7 @@ fn codegen_swift(
     if swift && !swift_client && !swift_server {
         let code = roam_codegen::targets::swift::generate_service(testbed);
         let out_path = out_dir.join("Testbed.swift");
-        write_if_changed(&out_path, code)?;
+        write_if_changed(&out_path, fmt_swift(&out_path, code))?;
         return Ok(());
     }
 
@@ -394,7 +472,7 @@ fn codegen_swift(
             roam_codegen::targets::swift::SwiftBindings::Client,
         );
         let out_path = out_dir.join("TestbedClient.swift");
-        write_if_changed(&out_path, code)?;
+        write_if_changed(&out_path, fmt_swift(&out_path, code))?;
     }
 
     if swift_server || (swift && !swift_client) {
@@ -403,7 +481,7 @@ fn codegen_swift(
             roam_codegen::targets::swift::SwiftBindings::Server,
         );
         let out_path = out_dir.join("TestbedServer.swift");
-        write_if_changed(&out_path, code)?;
+        write_if_changed(&out_path, fmt_swift(&out_path, code))?;
     }
 
     Ok(())
@@ -459,7 +537,7 @@ fn codegen_swift_wire(workspace_root: &std::path::Path) -> Result<(), Box<dyn st
     ];
 
     let code = generate_wire_types(&types);
-    write_if_changed(&out_path, &code)?;
+    write_if_changed(&out_path, fmt_swift(&out_path, code))?;
     Ok(())
 }
 
