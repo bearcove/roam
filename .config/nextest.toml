@@ -1,6 +1,9 @@
 # Enable experimental features
 experimental = ["setup-scripts"]
 
+[test-groups]
+swift-shm-host-serial = { max-threads = 1 }
+
 [scripts.setup.moire-env]
 command = ['sh', '-c', 'echo "MOIRE_DASHBOARD=127.0.0.1:9119" >> "$NEXTEST_ENV"']
 
@@ -35,3 +38,7 @@ status-level = "pass"
 
 # Slow test warning threshold
 slow-timeout = { period = "2s", terminate-after = 2 }
+
+[[profile.default.overrides]]
+filter = 'test(lang_swift_transport_shm_host_mode::)'
+test-group = 'swift-shm-host-serial'

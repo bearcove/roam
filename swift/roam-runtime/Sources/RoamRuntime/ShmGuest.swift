@@ -234,29 +234,47 @@ public final class ShmDoorbell: @unchecked Sendable {
         }
     }
 
-    public func drain() {
+    private func drainForWait() throws -> ShmDoorbellWaitResult? {
         var buf = [UInt8](repeating: 0, count: 64)
+        var drained = false
         while true {
             let n = buf.withUnsafeMutableBytes { raw in
                 recv(fd, raw.baseAddress, raw.count, Int32(MSG_DONTWAIT))
             }
             if n > 0 {
+                drained = true
                 continue
             }
             if n == 0 {
-                return
+                return drained ? .signaled : .peerDead
             }
             if errno == EINTR {
                 continue
             }
             if errno == EAGAIN || errno == EWOULDBLOCK {
-                return
+                return drained ? .signaled : nil
             }
-            return
+            if errno == ECONNRESET || errno == ENOTCONN || errno == EPIPE {
+                return drained ? .signaled : .peerDead
+            }
+            throw ShmDoorbellError.waitFailed(errno: errno)
+        }
+    }
+
+    @discardableResult
+    public func drain() -> Bool {
+        do {
+            return try drainForWait() == .signaled
+        } catch {
+            return false
         }
     }
 
     public func wait(timeoutMs: Int32? = nil) throws -> ShmDoorbellWaitResult {
+        if let immediate = try drainForWait() {
+            return immediate
+        }
+
         var pfd = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
         let timeout = timeoutMs ?? -1
 
@@ -265,15 +283,14 @@ public final class ShmDoorbell: @unchecked Sendable {
                 poll(ptr, 1, timeout)
             }
             if n > 0 {
+                if let result = try drainForWait() {
+                    return result
+                }
                 if (pfd.revents & Int16(POLLHUP | POLLERR | POLLNVAL)) != 0 {
                     // r[impl shm.signal.doorbell.death]
                     return .peerDead
                 }
-                if (pfd.revents & Int16(POLLIN)) != 0 {
-                    drain()
-                    return .signaled
-                }
-                return .timeout
+                continue
             }
             if n == 0 {
                 return .timeout
@@ -343,7 +360,7 @@ public enum ShmGuestSendError: Error, Equatable {
     case slotError
     case mmapAllocationFailed
     case mmapUnavailable
-    case mmapControlError
+    case mmapControlError(errno: Int32)
     case doorbellPeerDead
 }
 
@@ -731,15 +748,27 @@ public final class ShmGuestRuntime: @unchecked Sendable {
 
         let mapId = allocateMmapId()
         let mapGeneration: UInt32 = 1
-        let sendRc = roam_mmap_control_send(
-            mmapControlFd,
-            region.rawFd,
-            mapId,
-            mapGeneration,
-            UInt64(regionSize)
-        )
-        guard sendRc == 0 else {
-            throw ShmGuestSendError.mmapControlError
+        var sentControl = false
+        var lastErrno: Int32 = 0
+        for attempt in 0..<8 {
+            let sendRc = roam_mmap_control_send(
+                mmapControlFd,
+                region.rawFd,
+                mapId,
+                mapGeneration,
+                UInt64(regionSize)
+            )
+            if sendRc == 0 {
+                sentControl = true
+                break
+            }
+            lastErrno = errno
+            if attempt < 7 {
+                usleep(useconds_t(200 * (attempt + 1)))
+            }
+        }
+        guard sentControl else {
+            throw ShmGuestSendError.mmapControlError(errno: lastErrno)
         }
 
         if let previous = outboundMmapRegion {

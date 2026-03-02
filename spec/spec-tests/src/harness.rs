@@ -1152,8 +1152,13 @@ async fn accept_subject_shm_subject_is_host(
             Ok((client, child))
         }
         Err(e) => {
+            let status_note = match child.try_wait() {
+                Ok(Some(status)) => format!("subject exited: {status}"),
+                Ok(None) => "subject still running".to_string(),
+                Err(wait_err) => format!("subject status unavailable: {wait_err}"),
+            };
             child.kill().await.ok();
-            Err(e)
+            Err(format!("{e}; {status_note}"))
         }
     }
 }

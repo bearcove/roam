@@ -52,7 +52,7 @@ public enum ShmHostSendError: Error, Equatable {
     case slotError
     case mmapAllocationFailed
     case mmapUnavailable
-    case mmapControlError
+    case mmapControlError(errno: Int32)
 }
 
 public enum ShmHostReceiveError: Error, Equatable {
@@ -699,15 +699,27 @@ public final class ShmHostRuntime: @unchecked Sendable {
 
         let mapId = allocateMmapId()
         let mapGeneration: UInt32 = 1
-        let sendRc = roam_mmap_control_send(
-            mmapControlFd,
-            mapping.rawFd,
-            mapId,
-            mapGeneration,
-            UInt64(mappingLength)
-        )
-        guard sendRc == 0 else {
-            throw ShmHostSendError.mmapControlError
+        var sentControl = false
+        var lastErrno: Int32 = 0
+        for attempt in 0..<8 {
+            let sendRc = roam_mmap_control_send(
+                mmapControlFd,
+                mapping.rawFd,
+                mapId,
+                mapGeneration,
+                UInt64(mappingLength)
+            )
+            if sendRc == 0 {
+                sentControl = true
+                break
+            }
+            lastErrno = errno
+            if attempt < 7 {
+                usleep(useconds_t(200 * (attempt + 1)))
+            }
+        }
+        guard sentControl else {
+            throw ShmHostSendError.mmapControlError(errno: lastErrno)
         }
 
         let mmapFrame = encodeShmMmapRefFrame(
