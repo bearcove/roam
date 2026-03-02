@@ -748,27 +748,15 @@ public final class ShmGuestRuntime: @unchecked Sendable {
 
         let mapId = allocateMmapId()
         let mapGeneration: UInt32 = 1
-        var sentControl = false
-        var lastErrno: Int32 = 0
-        for attempt in 0..<8 {
-            let sendRc = roam_mmap_control_send(
-                mmapControlFd,
-                region.rawFd,
-                mapId,
-                mapGeneration,
-                UInt64(regionSize)
-            )
-            if sendRc == 0 {
-                sentControl = true
-                break
-            }
-            lastErrno = errno
-            if attempt < 7 {
-                usleep(useconds_t(200 * (attempt + 1)))
-            }
-        }
-        guard sentControl else {
-            throw ShmGuestSendError.mmapControlError(errno: lastErrno)
+        let sendRc = roam_mmap_control_send(
+            mmapControlFd,
+            region.rawFd,
+            mapId,
+            mapGeneration,
+            UInt64(regionSize)
+        )
+        guard sendRc == 0 else {
+            throw ShmGuestSendError.mmapControlError(errno: errno)
         }
 
         if let previous = outboundMmapRegion {

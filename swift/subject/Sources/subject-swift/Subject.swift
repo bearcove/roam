@@ -520,6 +520,7 @@ func runShmHostServer() async throws {
         dispatcher: dispatcher,
         acceptConnections: acceptConnections
     )
+    prepared.closeGuestEndpoints()
     try await driver.run()
 }
 

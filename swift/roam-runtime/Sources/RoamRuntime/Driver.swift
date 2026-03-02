@@ -274,11 +274,44 @@ public final class ConnectionHandle: @unchecked Sendable {
 /// Events the driver processes in its run loop.
 private enum DriverEvent: Sendable {
     case incomingMessage(MessageV7)
-    case taskMessage(TaskMessage)
-    case command(HandleCommand)
+    case wake
     case retryTick
     case transportClosed
     case transportFailed(String)
+}
+
+private final class LockedQueue<T>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var items: [T] = []
+    private var closed = false
+
+    func push(_ item: T) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        if closed {
+            return false
+        }
+        items.append(item)
+        return true
+    }
+
+    func popAll() -> [T] {
+        lock.lock()
+        defer { lock.unlock() }
+        if items.isEmpty {
+            return []
+        }
+        let out = items
+        items = []
+        return out
+    }
+
+    func close() {
+        lock.lock()
+        defer { lock.unlock() }
+        closed = true
+        items.removeAll()
+    }
 }
 
 // MARK: - Driver
@@ -485,6 +518,8 @@ public final class Driver: @unchecked Sendable {
     // Event stream for multiplexing
     private let eventContinuation: AsyncStream<DriverEvent>.Continuation
     private let eventStream: AsyncStream<DriverEvent>
+    private let commandQueue: LockedQueue<HandleCommand>
+    private let taskQueue: LockedQueue<TaskMessage>
     private var pendingTaskMessages: [QueuedTaskMessage] = []
     private var pendingCalls: [QueuedCall] = []
 
@@ -507,6 +542,8 @@ public final class Driver: @unchecked Sendable {
         self.serverRegistry = ChannelRegistry()
         self.state = DriverState()
         self.virtualConnState = VirtualConnectionState()
+        self.commandQueue = LockedQueue<HandleCommand>()
+        self.taskQueue = LockedQueue<TaskMessage>()
 
         // Create event stream
         var continuation: AsyncStream<DriverEvent>.Continuation!
@@ -526,7 +563,9 @@ public final class Driver: @unchecked Sendable {
         acceptConnections: Bool,
         keepalive: DriverKeepaliveConfig?,
         eventStream: AsyncStream<DriverEvent>,
-        eventContinuation: AsyncStream<DriverEvent>.Continuation
+        eventContinuation: AsyncStream<DriverEvent>.Continuation,
+        commandQueue: LockedQueue<HandleCommand>,
+        taskQueue: LockedQueue<TaskMessage>
     ) {
         self.transport = transport
         self.dispatcher = dispatcher
@@ -540,6 +579,8 @@ public final class Driver: @unchecked Sendable {
         self.virtualConnState = VirtualConnectionState()
         self.eventStream = eventStream
         self.eventContinuation = eventContinuation
+        self.commandQueue = commandQueue
+        self.taskQueue = taskQueue
     }
 
     // Virtual connection helpers
@@ -558,8 +599,23 @@ public final class Driver: @unchecked Sendable {
     /// Get the task sender for handlers to send responses.
     public func taskSender() -> @Sendable (TaskMessage) -> Void {
         let cont = eventContinuation
+        let queue = taskQueue
         return { msg in
-            cont.yield(.taskMessage(msg))
+            guard queue.push(msg) else {
+                return
+            }
+            _ = cont.yield(.wake)
+        }
+    }
+
+    private func drainInjectedQueues() async throws {
+        let commands = commandQueue.popAll()
+        for command in commands {
+            await handleCommand(command)
+        }
+        let taskMessages = taskQueue.popAll()
+        for message in taskMessages {
+            try await handleTaskMessage(message)
         }
     }
 
@@ -595,22 +651,22 @@ public final class Driver: @unchecked Sendable {
         defer {
             readerTask.cancel()
             retryTask.cancel()
+            commandQueue.close()
+            taskQueue.close()
             eventContinuation.finish()
         }
         do {
             // Process events
             for await event in eventStream {
+                try await drainInjectedQueues()
                 try await flushPendingTaskMessages()
                 try await flushPendingCalls()
                 switch event {
                 case .incomingMessage(let msg):
                     try await handleMessage(msg, keepaliveRuntime: &keepaliveRuntime)
 
-                case .taskMessage(let msg):
-                    try await handleTaskMessage(msg)
-
-                case .command(let cmd):
-                    await handleCommand(cmd)
+                case .wake:
+                    break
 
                 case .retryTick:
                     try await handleKeepaliveTick(keepaliveRuntime: &keepaliveRuntime)
@@ -1348,6 +1404,8 @@ func makeDriverAndHandle(
     acceptConnections: Bool,
     keepalive: DriverKeepaliveConfig? = nil
 ) -> (ConnectionHandle, Driver) {
+    let commandQueue = LockedQueue<HandleCommand>()
+    let taskQueue = LockedQueue<TaskMessage>()
     // Create the event stream that will be shared
     var continuation: AsyncStream<DriverEvent>.Continuation!
     let eventStream = AsyncStream<DriverEvent> { cont in
@@ -1358,14 +1416,20 @@ func makeDriverAndHandle(
 
     // Create command sender that uses this continuation
     let commandSender: @Sendable (HandleCommand) -> Bool = { cmd in
-        let result = capturedContinuation.yield(.command(cmd))
+        guard commandQueue.push(cmd) else {
+            return false
+        }
+        let result = capturedContinuation.yield(.wake)
         guard case .terminated = result else {
             return true
         }
         return false
     }
     let taskSender: @Sendable (TaskMessage) -> Bool = { msg in
-        let result = capturedContinuation.yield(.taskMessage(msg))
+        guard taskQueue.push(msg) else {
+            return false
+        }
+        let result = capturedContinuation.yield(.wake)
         guard case .terminated = result else {
             return true
         }
@@ -1390,7 +1454,9 @@ func makeDriverAndHandle(
         acceptConnections: acceptConnections,
         keepalive: keepalive,
         eventStream: eventStream,
-        eventContinuation: continuation
+        eventContinuation: continuation,
+        commandQueue: commandQueue,
+        taskQueue: taskQueue
     )
 
     return (handle, driver)

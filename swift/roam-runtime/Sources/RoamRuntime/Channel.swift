@@ -51,7 +51,8 @@ public enum TaskMessage: Sendable {
 // MARK: - Channel Receiver
 
 /// Receives data on a channel.
-public actor ChannelReceiver {
+public final class ChannelReceiver: @unchecked Sendable {
+    private let lock = NSLock()
     private var buffer: [[UInt8]] = []
     private var closed = false
     private var waiter: CheckedContinuation<[UInt8]?, Never>?
@@ -59,42 +60,89 @@ public actor ChannelReceiver {
     public init() {}
 
     public func deliver(_ data: [UInt8]) {
+        var toResume: CheckedContinuation<[UInt8]?, Never>?
+        lock.lock()
         if let w = waiter {
             waiter = nil
-            w.resume(returning: data)
-        } else {
+            toResume = w
+        } else if !closed {
             buffer.append(data)
         }
+        lock.unlock()
+        toResume?.resume(returning: data)
     }
 
     public func deliverClose() {
+        var toResume: CheckedContinuation<[UInt8]?, Never>?
+        lock.lock()
         closed = true
         if let w = waiter {
             waiter = nil
-            w.resume(returning: nil)
+            toResume = w
         }
+        lock.unlock()
+        toResume?.resume(returning: nil)
     }
 
     /// Handle reset - abruptly close without delivering buffered data.
     public func deliverReset() {
+        var toResume: CheckedContinuation<[UInt8]?, Never>?
+        lock.lock()
         closed = true
         buffer.removeAll()
         if let w = waiter {
             waiter = nil
-            w.resume(returning: nil)
+            toResume = w
         }
+        lock.unlock()
+        toResume?.resume(returning: nil)
     }
 
     public func recv() async -> [UInt8]? {
-        if !buffer.isEmpty {
-            return buffer.removeFirst()
+        enum RecvState {
+            case value([UInt8])
+            case closed
+            case wait
         }
-        if closed {
+        let state = lock.withLock { () -> RecvState in
+            if !buffer.isEmpty {
+                return .value(buffer.removeFirst())
+            }
+            if closed {
+                return .closed
+            }
+            return .wait
+        }
+        switch state {
+        case .value(let value):
+            return value
+        case .closed:
             return nil
+        case .wait:
+            break
         }
         return await withCheckedContinuation { cont in
-            waiter = cont
+            lock.withLock {
+                if !buffer.isEmpty {
+                    let value = buffer.removeFirst()
+                    cont.resume(returning: value)
+                    return
+                }
+                if closed {
+                    cont.resume(returning: nil)
+                    return
+                }
+                waiter = cont
+            }
         }
+    }
+}
+
+private extension NSLock {
+    func withLock<T>(_ body: () throws -> T) rethrows -> T {
+        lock()
+        defer { unlock() }
+        return try body()
     }
 }
 
@@ -224,13 +272,13 @@ public actor ChannelRegistry {
         // Deliver pending data synchronously - no Task spawning!
         if let pending = pendingData.removeValue(forKey: channelId) {
             for data in pending {
-                await receiver.deliver(data)
+                receiver.deliver(data)
             }
         }
 
         // Deliver pending close synchronously after all data
         if pendingClose.remove(channelId) != nil {
-            await receiver.deliverClose()
+            receiver.deliverClose()
         }
 
         return receiver
@@ -242,7 +290,7 @@ public actor ChannelRegistry {
     /// r[impl rpc.flow-control.credit.exhaustion] - Data size bounded by max_payload_size.
     public func deliverData(channelId: ChannelId, payload: [UInt8]) async -> Bool {
         if let receiver = receivers[channelId] {
-            await receiver.deliver(payload)
+            receiver.deliver(payload)
             return true
         }
         if knownChannels.contains(channelId) {
@@ -255,7 +303,7 @@ public actor ChannelRegistry {
     /// Deliver close to a channel. Returns true if known.
     public func deliverClose(channelId: ChannelId) async -> Bool {
         if let receiver = receivers[channelId] {
-            await receiver.deliverClose()
+            receiver.deliverClose()
             receivers.removeValue(forKey: channelId)
             return true
         }
@@ -276,7 +324,7 @@ public actor ChannelRegistry {
     /// r[impl rpc.channel.reset] - Reset abruptly terminates channel.
     public func deliverReset(channelId: ChannelId) async {
         if let receiver = receivers[channelId] {
-            await receiver.deliverReset()
+            receiver.deliverReset()
             receivers.removeValue(forKey: channelId)
         }
         knownChannels.remove(channelId)

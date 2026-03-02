@@ -348,6 +348,13 @@ public final class ShmPreparedHostPeer: @unchecked Sendable {
         }
 
         guestEndpointsSent = true
+    }
+
+    /// Close guest-side endpoints after bootstrap handoff is known to be complete.
+    ///
+    /// Keeping these fds alive until the peer completes startup avoids
+    /// startup races where the handoff can be observed as prematurely closed.
+    public func closeGuestEndpoints() {
         closeIfValid(&guestDoorbellFd)
         closeIfValid(&guestMmapControlFd)
     }
@@ -699,27 +706,15 @@ public final class ShmHostRuntime: @unchecked Sendable {
 
         let mapId = allocateMmapId()
         let mapGeneration: UInt32 = 1
-        var sentControl = false
-        var lastErrno: Int32 = 0
-        for attempt in 0..<8 {
-            let sendRc = roam_mmap_control_send(
-                mmapControlFd,
-                mapping.rawFd,
-                mapId,
-                mapGeneration,
-                UInt64(mappingLength)
-            )
-            if sendRc == 0 {
-                sentControl = true
-                break
-            }
-            lastErrno = errno
-            if attempt < 7 {
-                usleep(useconds_t(200 * (attempt + 1)))
-            }
-        }
-        guard sentControl else {
-            throw ShmHostSendError.mmapControlError(errno: lastErrno)
+        let sendRc = roam_mmap_control_send(
+            mmapControlFd,
+            mapping.rawFd,
+            mapId,
+            mapGeneration,
+            UInt64(mappingLength)
+        )
+        guard sendRc == 0 else {
+            throw ShmHostSendError.mmapControlError(errno: errno)
         }
 
         let mmapFrame = encodeShmMmapRefFrame(
