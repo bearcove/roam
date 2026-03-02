@@ -651,6 +651,7 @@ fn tarpc_echo(bencher: divan::Bencher, n: usize) {
 // tonic (in-memory via DuplexStream)
 // ============================================================================
 
+#[cfg(feature = "protobuf")]
 mod tonic_bench {
     pub mod pb {
         tonic::include_proto!("adder");
@@ -761,6 +762,7 @@ mod tonic_bench {
     }
 }
 
+#[cfg(feature = "protobuf")]
 #[divan::bench]
 fn tonic_add(bencher: divan::Bencher) {
     let mut client = TOKIO.block_on(tonic_bench::setup_duplex());
@@ -776,6 +778,7 @@ fn tonic_add(bencher: divan::Bencher) {
     });
 }
 
+#[cfg(feature = "protobuf")]
 #[divan::bench(args = PAYLOAD_SIZES)]
 fn tonic_echo(bencher: divan::Bencher, n: usize) {
     let mut client = TOKIO.block_on(tonic_bench::setup_duplex());
@@ -794,6 +797,7 @@ fn tonic_echo(bencher: divan::Bencher, n: usize) {
     });
 }
 
+#[cfg(feature = "protobuf")]
 #[divan::bench(args = STREAM_COUNTS)]
 fn tonic_stream(bencher: divan::Bencher, n: usize) {
     let mut client = TOKIO.block_on(tonic_bench::setup_duplex());
@@ -818,6 +822,7 @@ fn tonic_stream(bencher: divan::Bencher, n: usize) {
 // tonic-tcp (TCP loopback)
 // ============================================================================
 
+#[cfg(feature = "protobuf")]
 #[divan::bench]
 fn tonic_tcp_add(bencher: divan::Bencher) {
     let mut client = TOKIO.block_on(tonic_bench::setup_tcp());
@@ -833,6 +838,7 @@ fn tonic_tcp_add(bencher: divan::Bencher) {
     });
 }
 
+#[cfg(feature = "protobuf")]
 #[divan::bench(args = PAYLOAD_SIZES)]
 fn tonic_tcp_echo(bencher: divan::Bencher, n: usize) {
     let mut client = TOKIO.block_on(tonic_bench::setup_tcp());
@@ -851,6 +857,7 @@ fn tonic_tcp_echo(bencher: divan::Bencher, n: usize) {
     });
 }
 
+#[cfg(feature = "protobuf")]
 #[divan::bench(args = STREAM_COUNTS)]
 fn tonic_tcp_stream(bencher: divan::Bencher, n: usize) {
     let mut client = TOKIO.block_on(tonic_bench::setup_tcp());
