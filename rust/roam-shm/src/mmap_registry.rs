@@ -359,7 +359,10 @@ impl MmapAttachments {
         }
 
         // Bounded grace period to absorb attach/message skew without hanging forever.
-        const GRACE_ATTEMPTS: usize = 64;
+        //
+        // In loaded runs (many concurrent virtual sessions), control-plane attach
+        // delivery can lag well past a few scheduler quanta.
+        const GRACE_ATTEMPTS: usize = 512;
         const GRACE_SLEEP: Duration = Duration::from_millis(1);
 
         for _ in 0..GRACE_ATTEMPTS {

@@ -1374,7 +1374,7 @@ mod tests {
         };
 
         std::thread::spawn(move || {
-            std::thread::sleep(Duration::from_millis(25));
+            std::thread::sleep(Duration::from_millis(150));
             let MmapChannelTx::InProcess(sender) = control_tx else {
                 panic!("expected in-process mmap control channel");
             };
