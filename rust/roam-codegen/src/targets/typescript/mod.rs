@@ -9,8 +9,6 @@
 //! - A service descriptor for runtime schema-driven encode/decode
 
 pub mod client;
-pub mod decode;
-pub mod encode;
 pub mod http_client;
 pub mod schema;
 pub mod server;
@@ -181,4 +179,38 @@ fn generate_request_response_types(
     }
 
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::generate_service;
+    use roam_hash::method_descriptor;
+    use roam_types::ServiceDescriptor;
+
+    #[test]
+    fn generated_typescript_contains_no_postcard_primitive_usage() {
+        let echo = method_descriptor::<(String,), String>("TestSvc", "echo", &["message"], None);
+        let divide = method_descriptor::<(u64, u64), Result<u64, String>>(
+            "TestSvc",
+            "divide",
+            &["lhs", "rhs"],
+            None,
+        );
+        let methods = Box::leak(vec![echo, divide].into_boxed_slice());
+        let service = ServiceDescriptor {
+            service_name: "TestSvc",
+            methods,
+            doc: None,
+        };
+
+        let generated = generate_service(&service);
+        assert!(
+            !generated.contains("import * as pc from \"@bearcove/roam-postcard\""),
+            "generated TypeScript must not import postcard primitive namespace:\n{generated}"
+        );
+        assert!(
+            !generated.contains("pc."),
+            "generated TypeScript must not call postcard primitives directly:\n{generated}"
+        );
+    }
 }
