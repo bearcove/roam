@@ -1210,6 +1210,7 @@ pub unsafe extern "C" fn roam_mmap_control_send(
 ///
 /// `control_fd` must be a valid Unix domain socket file descriptor owned by the
 /// caller for at least as long as the returned attachments object lives.
+#[cfg(unix)]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn roam_mmap_attachments_create(control_fd: i32) -> *mut RoamMmapAttachments {
     #[cfg(unix)]
@@ -1240,6 +1241,7 @@ pub unsafe extern "C" fn roam_mmap_attachments_create(control_fd: i32) -> *mut R
 /// # Safety
 ///
 /// `attachments` must be a valid pointer returned by `roam_mmap_attachments_create`.
+#[cfg(unix)]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn roam_mmap_attachments_drain_control(
     attachments: *mut RoamMmapAttachments,
@@ -1300,6 +1302,7 @@ pub unsafe extern "C" fn roam_mmap_attachments_drain_control(
 ///
 /// - `attachments` must be valid and created by `roam_mmap_attachments_create`.
 /// - `out_ptr` must be non-null and writable.
+#[cfg(unix)]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn roam_mmap_attachments_resolve_ptr(
     attachments: *const RoamMmapAttachments,
@@ -1358,6 +1361,7 @@ pub unsafe extern "C" fn roam_mmap_attachments_resolve_ptr(
 ///
 /// `attachments` must be null or a valid pointer returned by
 /// `roam_mmap_attachments_create`.
+#[cfg(unix)]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn roam_mmap_attachments_destroy(attachments: *mut RoamMmapAttachments) {
     #[cfg(unix)]

@@ -10,7 +10,9 @@ use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use std::sync::{Arc, Mutex};
 
 use roam_types::{Backing, Link, LinkRx, LinkTx, LinkTxPermit, SharedBacking, WriteSlot};
-use shm_primitives::{BIPBUF_HEADER_SIZE, BipBuf, HeapRegion, PeerId};
+#[cfg(unix)]
+use shm_primitives::BIPBUF_HEADER_SIZE;
+use shm_primitives::{BipBuf, HeapRegion, PeerId};
 use shm_primitives_async::{Doorbell, SignalResult};
 use tracing::{debug, trace, warn};
 
@@ -48,6 +50,7 @@ const SLOT_LEN_PREFIX_SIZE: usize = 4;
 #[derive(Clone)]
 enum Backend {
     Segment(Arc<Segment>),
+    #[allow(dead_code)]
     Heap(Arc<HeapBackend>),
 }
 
@@ -327,73 +330,77 @@ impl ShmLink {
             ));
         }
 
-        fn align_up(n: usize, align: usize) -> usize {
-            (n + align - 1) & !(align - 1)
+        #[cfg(unix)]
+        {
+            fn align_up(n: usize, align: usize) -> usize {
+                (n + align - 1) & !(align - 1)
+            }
+
+            let first_size = BIPBUF_HEADER_SIZE + bipbuf_capacity as usize;
+            let second_offset = align_up(first_size, 64);
+            let second_size = BIPBUF_HEADER_SIZE + bipbuf_capacity as usize;
+            let pair_bytes = second_offset + second_size;
+            let var_pool_offset = align_up(pair_bytes, 64);
+            let var_pool_size = VarSlotPool::required_size(size_classes);
+            let total_size = var_pool_offset + var_pool_size;
+
+            let region = Arc::new(HeapRegion::new_zeroed(total_size));
+            let g2h = Arc::new(unsafe { BipBuf::init(region.region(), 0, bipbuf_capacity) });
+            let h2g =
+                Arc::new(unsafe { BipBuf::init(region.region(), second_offset, bipbuf_capacity) });
+
+            let var_pool =
+                unsafe { VarSlotPool::init(region.region(), var_pool_offset, size_classes) };
+            let backend = Backend::Heap(Arc::new(HeapBackend {
+                _region: region,
+                var_pool,
+            }));
+            let (a_doorbell, b_handle) = Doorbell::create_pair()?;
+            let b_doorbell = Doorbell::from_handle(b_handle)?;
+
+            let a_closed = Arc::new(AtomicBool::new(false));
+            let b_closed = Arc::new(AtomicBool::new(false));
+
+            // a sends to b via a_mmap_tx → b_mmap_rx
+            let (a_mmap_tx, b_mmap_rx) = {
+                let (tx, rx) = shm_primitives_async::create_mmap_control_pair_connected()?;
+                (MmapChannelTx::Real(tx), MmapChannelRx::Real(rx))
+            };
+
+            // b sends to a via b_mmap_tx → a_mmap_rx
+            let (b_mmap_tx, a_mmap_rx) = {
+                let (tx, rx) = shm_primitives_async::create_mmap_control_pair_connected()?;
+                (MmapChannelTx::Real(tx), MmapChannelRx::Real(rx))
+            };
+
+            let a = Self::from_parts(
+                g2h.clone(),
+                h2g.clone(),
+                backend.clone(),
+                Arc::new(a_doorbell),
+                1,
+                max_payload_size,
+                inline_threshold,
+                a_closed.clone(),
+                b_closed.clone(),
+                a_mmap_tx,
+                a_mmap_rx,
+            );
+            let b = Self::from_parts(
+                h2g,
+                g2h,
+                backend,
+                Arc::new(b_doorbell),
+                2,
+                max_payload_size,
+                inline_threshold,
+                b_closed,
+                a_closed,
+                b_mmap_tx,
+                b_mmap_rx,
+            );
+            Ok((a, b))
         }
-
-        let first_size = BIPBUF_HEADER_SIZE + bipbuf_capacity as usize;
-        let second_offset = align_up(first_size, 64);
-        let second_size = BIPBUF_HEADER_SIZE + bipbuf_capacity as usize;
-        let pair_bytes = second_offset + second_size;
-        let var_pool_offset = align_up(pair_bytes, 64);
-        let var_pool_size = VarSlotPool::required_size(size_classes);
-        let total_size = var_pool_offset + var_pool_size;
-
-        let region = Arc::new(HeapRegion::new_zeroed(total_size));
-        let g2h = Arc::new(unsafe { BipBuf::init(region.region(), 0, bipbuf_capacity) });
-        let h2g =
-            Arc::new(unsafe { BipBuf::init(region.region(), second_offset, bipbuf_capacity) });
-
-        let var_pool = unsafe { VarSlotPool::init(region.region(), var_pool_offset, size_classes) };
-        let backend = Backend::Heap(Arc::new(HeapBackend {
-            _region: region,
-            var_pool,
-        }));
-        let (a_doorbell, b_handle) = Doorbell::create_pair()?;
-        let b_doorbell = Doorbell::from_handle(b_handle)?;
-
-        let a_closed = Arc::new(AtomicBool::new(false));
-        let b_closed = Arc::new(AtomicBool::new(false));
-
-        // a sends to b via a_mmap_tx → b_mmap_rx
-        let (a_mmap_tx, b_mmap_rx) = {
-            let (tx, rx) = shm_primitives_async::create_mmap_control_pair_connected()?;
-            (MmapChannelTx::Real(tx), MmapChannelRx::Real(rx))
-        };
-
-        // b sends to a via b_mmap_tx → a_mmap_rx
-        let (b_mmap_tx, a_mmap_rx) = {
-            let (tx, rx) = shm_primitives_async::create_mmap_control_pair_connected()?;
-            (MmapChannelTx::Real(tx), MmapChannelRx::Real(rx))
-        };
-
-        let a = Self::from_parts(
-            g2h.clone(),
-            h2g.clone(),
-            backend.clone(),
-            Arc::new(a_doorbell),
-            1,
-            max_payload_size,
-            inline_threshold,
-            a_closed.clone(),
-            b_closed.clone(),
-            a_mmap_tx,
-            a_mmap_rx,
-        );
-        let b = Self::from_parts(
-            h2g,
-            g2h,
-            backend,
-            Arc::new(b_doorbell),
-            2,
-            max_payload_size,
-            inline_threshold,
-            b_closed,
-            a_closed,
-            b_mmap_tx,
-            b_mmap_rx,
-        );
-        Ok((a, b))
     }
 }
 

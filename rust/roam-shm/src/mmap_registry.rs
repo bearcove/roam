@@ -184,10 +184,23 @@ pub enum MmapChannelRx {
     InProcess(mpsc::Receiver<(Arc<MmapRegion>, MmapAttachMessage)>),
 }
 
+// On Windows, MmapChannelTx is an empty (uninhabited) enum. The method must
+// still exist so callers in alloc() type-check, but it can never be invoked.
+#[cfg(windows)]
+impl MmapChannelTx {
+    fn send_region(
+        &self,
+        _region: &Arc<MmapRegion>,
+        _msg: &MmapAttachMessage,
+    ) -> io::Result<()> {
+        unreachable!("MmapChannelTx is uninhabited on Windows")
+    }
+}
+
+#[cfg(unix)]
 impl MmapChannelTx {
     fn send_region(&self, region: &Arc<MmapRegion>, msg: &MmapAttachMessage) -> io::Result<()> {
         match self {
-            #[cfg(unix)]
             MmapChannelTx::Real(sender) => {
                 if let Err(error) = sender.send(region.as_raw_fd(), msg) {
                     warn!(
@@ -316,6 +329,26 @@ impl MmapAttachments {
                     Err(mpsc::TryRecvError::Disconnected) => break,
                 },
             }
+        }
+    }
+
+    #[cfg(windows)]
+    fn attach_in_process(
+        &mut self,
+        region: &Arc<MmapRegion>,
+        msg: MmapAttachMessage,
+        key: (u32, u32),
+    ) {
+        if let Ok(attached_region) = MmapRegion::attach(region.path()) {
+            self.mappings.insert(
+                key,
+                Arc::new(AttachedMapping {
+                    region: attached_region,
+                    map_id: msg.map_id,
+                    map_generation: msg.map_generation,
+                    mapping_length: msg.mapping_length,
+                }),
+            );
         }
     }
 

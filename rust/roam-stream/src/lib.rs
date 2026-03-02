@@ -264,6 +264,8 @@ pub struct LocalLinkAcceptor {
     /// server instance accepts exactly one connection. We keep the current
     /// pending instance here, protected by a Mutex so `accept` can take `&self`.
     #[cfg(windows)]
+    addr: String,
+    #[cfg(windows)]
     pending: tokio::sync::Mutex<tokio::net::windows::named_pipe::NamedPipeServer>,
 }
 
