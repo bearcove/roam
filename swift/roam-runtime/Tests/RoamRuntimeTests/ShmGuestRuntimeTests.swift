@@ -747,7 +747,12 @@ struct ShmDoorbellAndPayloadTests {
             try guest.send(frame: ShmGuestFrame(payload: payload))
             Issue.record("expected fast send failure after peer close")
         } catch let error as ShmGuestSendError {
-            #expect(error == .hostGoodbye || error == .mmapControlError || error == .doorbellPeerDead)
+            switch error {
+            case .hostGoodbye, .doorbellPeerDead, .mmapControlError:
+                break
+            default:
+                Issue.record("unexpected send error after peer close: \(error)")
+            }
         }
         #expect(ContinuousClock.now - start < Duration.milliseconds(250))
     }

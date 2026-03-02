@@ -1070,6 +1070,7 @@ public final class ShmPreparedHostPeer: @unchecked Sendable {
         _ = hubPath
         throw ShmHostPeerError.unsupportedPlatform
     }
+    public func closeGuestEndpoints() {}
     public func intoTransport() throws -> ShmHostTransport {
         throw ShmHostPeerError.unsupportedPlatform
     }
