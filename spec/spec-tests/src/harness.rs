@@ -8,17 +8,17 @@ use std::time::{SystemTime, UNIX_EPOCH};
 #[cfg(unix)]
 use std::os::fd::{AsRawFd, IntoRawFd};
 
-use roam::{Call, Rx, Tx};
+use roam::{Rx, Tx};
 use roam_core::{
     BareConduit, Driver, DriverCaller, DriverReplySink, acceptor, initiator, memory_link_pair,
 };
 use roam_shm::HostHub;
 use roam_shm::ShmLink;
 use roam_shm::bootstrap::{BootstrapStatus, decode_request, encode_request};
-#[cfg(unix)]
-use roam_shm::guest_link_from_raw;
 #[cfg(windows)]
 use roam_shm::guest_link_from_names;
+#[cfg(unix)]
+use roam_shm::guest_link_from_raw;
 use roam_shm::segment::{Segment, SegmentConfig};
 use roam_shm::varslot::SizeClassConfig as RoamShmSizeClassConfig;
 use roam_stream::StreamLink;
@@ -140,18 +140,25 @@ pub fn workspace_root() -> &'static std::path::Path {
 pub fn subject_cmd() -> String {
     match std::env::var("SUBJECT_CMD") {
         Ok(s) if !s.trim().is_empty() => s,
-        _ => "./target/release/subject-rust".to_string(),
+        _ => subject_cmd_for_language(SubjectLanguage::Rust),
     }
 }
 
 pub fn subject_cmd_for_language(language: SubjectLanguage) -> String {
     match language {
         SubjectLanguage::Rust => {
-            let debug = workspace_root().join("target/debug/subject-rust");
+            let exe = format!("subject-rust{}", std::env::consts::EXE_SUFFIX);
+            let debug = workspace_root().join("target").join("debug").join(&exe);
             if debug.exists() {
-                return debug.display().to_string();
+                debug.display().to_string()
+            } else {
+                workspace_root()
+                    .join("target")
+                    .join("release")
+                    .join(&exe)
+                    .display()
+                    .to_string()
             }
-            "./target/release/subject-rust".to_string()
         }
         SubjectLanguage::Swift => "./swift/subject/subject-swift.sh".to_string(),
         SubjectLanguage::TypeScript => "./typescript/subject/subject-ts.sh".to_string(),
@@ -353,11 +360,15 @@ async fn spawn_subject_cmd_with_env(
     };
     eprintln!("[subject:spawn] cmd={cmd:?} peer_addr={peer_addr:?} extra_env={extra_env_desc}");
 
-    let mut command = Command::new("sh");
+    let mut command = if cmd.ends_with(".sh") {
+        let mut c = Command::new("sh");
+        c.arg("-lc").arg(cmd);
+        c
+    } else {
+        Command::new(cmd)
+    };
     command
         .current_dir(workspace_root())
-        .arg("-lc")
-        .arg(cmd)
         .env("PEER_ADDR", peer_addr)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -658,8 +669,7 @@ async fn accept_subject_shm_subject_is_guest(
     #[cfg(windows)]
     let mut listener = {
         let endpoint = roam_local::path_to_pipe_name(&control_sock_path);
-        roam_local::LocalListener::bind(&endpoint)
-            .map_err(|e| format!("bind control pipe: {e}"))?
+        roam_local::LocalListener::bind(&endpoint).map_err(|e| format!("bind control pipe: {e}"))?
     };
 
     let hub_path_str = shm_path
@@ -716,15 +726,11 @@ async fn accept_subject_shm_subject_is_guest(
             #[cfg(windows)]
             {
                 use roam_shm::bootstrap::{
-                    BootstrapSuccessNames, BootstrapStatus, encode_response,
+                    BootstrapStatus, BootstrapSuccessNames, encode_response,
                 };
                 use tokio::io::AsyncWriteExt;
                 let names = BootstrapSuccessNames {
-                    segment_path: segment_for_task
-                        .path()
-                        .to_str()
-                        .unwrap()
-                        .to_string(),
+                    segment_path: segment_for_task.path().to_str().unwrap().to_string(),
                     doorbell_name: prepared.guest_ticket.doorbell_arg(),
                     mmap_ctrl_name: prepared.guest_ticket.mmap_rx_arg(),
                 };
