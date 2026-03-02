@@ -36,6 +36,8 @@ enum Commands {
     Coverage,
     /// Run miri for undefined behavior detection (requires nightly)
     Miri,
+    /// Generate spec/spec-tests/tests/spec_matrix.rs from the combo definition
+    GenerateSpecMatrix,
     /// Generate language bindings from the canonical spec-proto crate
     Codegen {
         /// Generate TypeScript bindings into `typescript/generated/`
@@ -191,6 +193,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     eprintln!("Note: Some tests may be skipped due to Miri limitations");
                 }
             }
+        }
+        Commands::GenerateSpecMatrix => {
+            generate_spec_matrix(&workspace_root)?;
         }
         Commands::Codegen {
             typescript,
@@ -538,6 +543,251 @@ fn codegen_swift_wire(workspace_root: &std::path::Path) -> Result<(), Box<dyn st
 
     let code = generate_wire_types(&types);
     write_if_changed(&out_path, fmt_swift(&out_path, code))?;
+    Ok(())
+}
+
+fn generate_spec_matrix(
+    workspace_root: &std::path::Path,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use proc_macro2::{Ident, Span, TokenStream};
+    use quote::quote;
+
+    struct Combo {
+        mod_name: &'static str,
+        spec_const: &'static str,
+        shm: bool,
+        ignore: bool,
+    }
+
+    struct TestCase {
+        name: &'static str,
+        call: &'static str,
+    }
+
+    let combos = [
+        Combo {
+            mod_name: "lang_rust_transport_tcp",
+            spec_const: "SUBJECT_RUST_TCP",
+            shm: false,
+            ignore: false,
+        },
+        Combo {
+            mod_name: "lang_rust_transport_shm_guest_mode",
+            spec_const: "SUBJECT_RUST_SHM_GUEST",
+            shm: true,
+            ignore: false,
+        },
+        Combo {
+            mod_name: "lang_typescript_transport_tcp",
+            spec_const: "SUBJECT_TYPESCRIPT_TCP",
+            shm: false,
+            ignore: true,
+        },
+        Combo {
+            mod_name: "lang_swift_transport_tcp",
+            spec_const: "SUBJECT_SWIFT_TCP",
+            shm: false,
+            ignore: true,
+        },
+        Combo {
+            mod_name: "lang_swift_transport_shm_guest_mode",
+            spec_const: "SUBJECT_SWIFT_SHM_GUEST",
+            shm: true,
+            ignore: true,
+        },
+        Combo {
+            mod_name: "lang_swift_transport_shm_host_mode",
+            spec_const: "SUBJECT_SWIFT_SHM_HOST",
+            shm: true,
+            ignore: true,
+        },
+    ];
+
+    let harness_to_subject = [
+        TestCase {
+            name: "rpc_echo_roundtrip",
+            call: "testbed::run_rpc_echo_roundtrip",
+        },
+        TestCase {
+            name: "rpc_user_error_roundtrip",
+            call: "testbed::run_rpc_user_error_roundtrip",
+        },
+        TestCase {
+            name: "rpc_pipelining_multiple_requests",
+            call: "testbed::run_rpc_pipelining_multiple_requests",
+        },
+        TestCase {
+            name: "channeling_generate_server_to_client",
+            call: "channeling::run_channeling_generate_server_to_client",
+        },
+        TestCase {
+            name: "binary_payload_sizes",
+            call: "binary_payloads::run_subject_process_message_binary_payload_sizes",
+        },
+    ];
+    let subject_to_harness = [TestCase {
+        name: "channeling_sum_client_to_server",
+        call: "channeling::run_channeling_sum_client_to_server",
+    }];
+    let bidirectional = [TestCase {
+        name: "channeling_transform",
+        call: "channeling::run_channeling_transform_bidirectional",
+    }];
+    let shm_harness_to_subject = [TestCase {
+        name: "binary_payload_cutover_boundaries",
+        call: "binary_payloads::run_subject_process_message_binary_payload_shm_cutover_boundaries",
+    }];
+
+    let gen_mod = |mod_name: &str, cases: &[TestCase], ignore: bool| -> TokenStream {
+        let mod_ident = Ident::new(mod_name, Span::call_site());
+        let fns: Vec<TokenStream> = cases
+            .iter()
+            .map(|t| {
+                let fn_ident = Ident::new(t.name, Span::call_site());
+                let call: TokenStream = t.call.parse().unwrap();
+                let ignore_attr = if ignore {
+                    quote! { #[ignore] }
+                } else {
+                    quote! {}
+                };
+                quote! {
+                    #ignore_attr
+                    #[test]
+                    fn #fn_ident() { #call(SPEC); }
+                }
+            })
+            .collect();
+        quote! {
+            mod #mod_ident {
+                use super::*;
+                #(#fns)*
+            }
+        }
+    };
+
+    let combo_mods: Vec<TokenStream> = combos
+        .iter()
+        .map(|c| {
+            let mod_ident = Ident::new(c.mod_name, Span::call_site());
+            let spec: TokenStream = c.spec_const.parse().unwrap();
+            let h2s = gen_mod(
+                "direction_harness_to_subject",
+                &harness_to_subject,
+                c.ignore,
+            );
+            let s2h = gen_mod(
+                "direction_subject_to_harness",
+                &subject_to_harness,
+                c.ignore,
+            );
+            let bidi = gen_mod("direction_bidirectional", &bidirectional, c.ignore);
+            let shm_mod = if c.shm {
+                gen_mod(
+                    "direction_harness_to_subject_shm_only",
+                    &shm_harness_to_subject,
+                    c.ignore,
+                )
+            } else {
+                quote! {}
+            };
+            quote! {
+                mod #mod_ident {
+                    use super::*;
+                    const SPEC: SubjectSpec = #spec;
+                    #h2s
+                    #s2h
+                    #bidi
+                    #shm_mod
+                }
+            }
+        })
+        .collect();
+
+    let tokens = quote! {
+        #[path = "cases/binary_payload_transport_matrix.rs"]
+        mod binary_payload_transport_matrix;
+        #[path = "cases/binary_payloads.rs"]
+        mod binary_payloads;
+        #[path = "cases/channeling.rs"]
+        mod channeling;
+        #[path = "cases/testbed.rs"]
+        mod testbed;
+
+        #[cfg(all(unix, target_os = "macos"))]
+        #[path = "cases/cross_language_shm_guest_matrix.rs"]
+        mod cross_language_shm_guest_matrix;
+
+        use spec_tests::harness::{SubjectLanguage, SubjectSpec};
+
+        const SUBJECT_RUST_TCP: SubjectSpec = SubjectSpec::tcp(SubjectLanguage::Rust);
+        const SUBJECT_RUST_SHM_GUEST: SubjectSpec = SubjectSpec::shm_guest(SubjectLanguage::Rust);
+        const SUBJECT_TYPESCRIPT_TCP: SubjectSpec = SubjectSpec::tcp(SubjectLanguage::TypeScript);
+        const SUBJECT_SWIFT_TCP: SubjectSpec = SubjectSpec::tcp(SubjectLanguage::Swift);
+        const SUBJECT_SWIFT_SHM_GUEST: SubjectSpec = SubjectSpec::shm_guest(SubjectLanguage::Swift);
+        const SUBJECT_SWIFT_SHM_HOST: SubjectSpec = SubjectSpec::shm_host(SubjectLanguage::Swift);
+
+        #(#combo_mods)*
+
+        #[test]
+        fn lang_rust_to_rust_transport_mem_direction_bidirectional_binary_payload_transport_matrix() {
+            binary_payload_transport_matrix::run_rust_binary_payload_transport_matrix_mem();
+        }
+        #[test]
+        fn lang_rust_to_rust_transport_tcp_direction_bidirectional_binary_payload_transport_matrix() {
+            binary_payload_transport_matrix::run_rust_binary_payload_transport_matrix_subject_tcp(SUBJECT_RUST_TCP);
+        }
+        #[test]
+        fn lang_rust_to_rust_transport_shm_direction_bidirectional_binary_payload_transport_matrix() {
+            binary_payload_transport_matrix::run_rust_binary_payload_transport_matrix_subject_shm(SUBJECT_RUST_SHM_GUEST);
+        }
+        #[cfg(all(unix, target_os = "macos"))]
+        #[test]
+        fn lang_swift_to_rust_transport_shm_direction_guest_to_host_cross_language_data_path() {
+            cross_language_shm_guest_matrix::run_data_path_case();
+        }
+        #[cfg(all(unix, target_os = "macos"))]
+        #[test]
+        fn lang_swift_to_rust_transport_shm_direction_guest_to_host_cross_language_message_v7() {
+            cross_language_shm_guest_matrix::run_message_v7_case();
+        }
+        #[cfg(all(unix, target_os = "macos"))]
+        #[test]
+        fn lang_rust_to_swift_transport_shm_direction_host_to_guest_cross_language_mmap_ref_receive() {
+            cross_language_shm_guest_matrix::run_mmap_ref_receive_case();
+        }
+        #[cfg(all(unix, target_os = "macos"))]
+        #[test]
+        fn lang_rust_to_swift_transport_shm_direction_host_to_guest_cross_language_cutover_boundaries() {
+            cross_language_shm_guest_matrix::run_boundary_cutover_rust_to_swift_case();
+        }
+        #[cfg(all(unix, target_os = "macos"))]
+        #[test]
+        fn lang_swift_to_rust_transport_shm_direction_guest_to_host_cross_language_cutover_boundaries() {
+            cross_language_shm_guest_matrix::run_boundary_cutover_swift_to_rust_case();
+        }
+        #[cfg(all(unix, target_os = "macos"))]
+        #[test]
+        fn lang_swift_to_rust_transport_shm_direction_guest_to_host_cross_language_fault_mmap_control_breakage() {
+            cross_language_shm_guest_matrix::run_fault_mmap_control_breakage_case();
+        }
+        #[cfg(all(unix, target_os = "macos"))]
+        #[test]
+        fn lang_rust_to_swift_transport_shm_direction_host_to_guest_cross_language_fault_host_goodbye_wake() {
+            cross_language_shm_guest_matrix::run_fault_host_goodbye_wake_case();
+        }
+    };
+
+    let file: syn::File = syn::parse2(tokens)?;
+    let mut out =
+        String::from("// @generated by cargo xtask generate-spec-matrix\n// DO NOT EDIT\n\n");
+    out.push_str(&prettyplease::unparse(&file));
+
+    let out_path = workspace_root
+        .join("spec")
+        .join("spec-tests")
+        .join("tests")
+        .join("spec_matrix.rs");
+    write_if_changed(&out_path, out)?;
     Ok(())
 }
 

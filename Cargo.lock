@@ -4112,9 +4112,13 @@ dependencies = [
  "dprint-plugin-typescript",
  "facet 0.44.0",
  "figue",
+ "prettyplease",
+ "proc-macro2",
+ "quote",
  "roam-codegen",
  "roam-types",
  "spec-proto",
+ "syn 2.0.117",
  "xshell",
 ]
 
