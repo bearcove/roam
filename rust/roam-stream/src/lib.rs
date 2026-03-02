@@ -266,7 +266,7 @@ pub struct LocalLinkAcceptor {
     #[cfg(windows)]
     addr: String,
     #[cfg(windows)]
-    pending: tokio::sync::Mutex<tokio::net::windows::named_pipe::NamedPipeServer>,
+    pending: moire::sync::Mutex<tokio::net::windows::named_pipe::NamedPipeServer>,
 }
 
 impl LocalLinkAcceptor {
@@ -287,7 +287,7 @@ impl LocalLinkAcceptor {
             .create(&addr)?;
         Ok(Self {
             addr,
-            pending: tokio::sync::Mutex::new(server),
+            pending: moire::sync::Mutex::new("local-link-acceptor.pending", server),
         })
     }
 

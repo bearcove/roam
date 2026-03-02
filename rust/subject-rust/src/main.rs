@@ -10,7 +10,6 @@ use spec_proto::{
     Canvas, Color, LookupError, MathError, Message, Person, Point, Rectangle, Shape, Testbed,
     TestbedDispatcher,
 };
-use std::convert::Infallible;
 use tracing::{debug, error, info, instrument};
 
 #[cfg(windows)]

@@ -2551,6 +2551,7 @@ dependencies = [
 name = "roam-stream"
 version = "3.0.0"
 dependencies = [
+ "moire",
  "roam-types",
  "tempfile",
  "tokio",

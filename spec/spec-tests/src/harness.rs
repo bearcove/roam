@@ -1106,7 +1106,9 @@ async fn accept_subject_shm_subject_is_host(
             let mmap_tx_pipe = std::env::var("SHM_MMAP_TX_PIPE")
                 .unwrap_or_default();
 
-            let link = guest_link_from_names(
+            
+
+            guest_link_from_names(
                 segment,
                 peer_id,
                 &names.doorbell_name,
@@ -1114,9 +1116,7 @@ async fn accept_subject_shm_subject_is_host(
                 &mmap_tx_pipe,
                 true,
             )
-            .map_err(|e| format!("guest_link_from_names: {e}"))?;
-
-            link
+            .map_err(|e| format!("guest_link_from_names: {e}"))?
         };
 
         let conduit: BareConduit<MessageFamily, roam_shm::ShmLink> =

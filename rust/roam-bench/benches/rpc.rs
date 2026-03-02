@@ -111,6 +111,7 @@ mod roam_zerocopy_bench {
                 slot_count: 2,
             },
         ];
+        // FIXME: heap_pair disappeared, we need two processes for this.
         let (a, b) = ShmLink::heap_pair(1 << 17, 1 << 30, 256, &classes).unwrap();
         let client_conduit: ShmConduit = BareConduit::new(a);
         let server_conduit: ShmConduit = BareConduit::new(b);

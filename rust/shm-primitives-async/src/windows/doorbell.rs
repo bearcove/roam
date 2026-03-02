@@ -234,12 +234,11 @@ impl Doorbell {
         // Lazy connect: on Windows, the server pipe must call ConnectNamedPipe
         // before I/O works.  If the client already connected (in-process test),
         // this returns immediately with ERROR_PIPE_CONNECTED.
-        if !self.server_connected.load(Ordering::Acquire) {
-            if let DoorbellPipe::Server(server) = &self.pipe {
+        if !self.server_connected.load(Ordering::Acquire)
+            && let DoorbellPipe::Server(server) = &self.pipe {
                 server.connect().await?;
                 self.server_connected.store(true, Ordering::Release);
             }
-        }
 
         // Fast path: check if signal bytes are already pending via raw
         // PeekNamedPipe (bypasses tokio readiness, always non-blocking).

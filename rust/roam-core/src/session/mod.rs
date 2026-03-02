@@ -612,9 +612,7 @@ where
     }
 
     fn make_keepalive_runtime(&self) -> Option<KeepaliveRuntime> {
-        let Some(config) = self.keepalive else {
-            return None;
-        };
+        let config = self.keepalive?;
         if config.ping_interval.is_zero() || config.pong_timeout.is_zero() {
             warn!("keepalive disabled due to non-positive interval/timeout");
             return None;
