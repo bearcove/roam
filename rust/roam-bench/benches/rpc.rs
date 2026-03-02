@@ -407,7 +407,9 @@ mod roam_shm_bench {
             )
             .expect("create segment"),
         );
-        let (a, b) = create_test_link_pair(segment).await.expect("create_test_link_pair");
+        let (a, b) = create_test_link_pair(segment)
+            .await
+            .expect("create_test_link_pair");
         // Leak the tempdir so the segment file lives for the entire benchmark run.
         std::mem::forget(dir);
         let client_conduit: MessageConduit = BareConduit::new(a);

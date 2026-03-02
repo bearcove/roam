@@ -780,13 +780,8 @@ mod tests {
         let payload = names.encode();
 
         let mut buf = Vec::new();
-        send_response_stream(
-            &mut buf,
-            BootstrapStatus::Success,
-            3,
-            &payload,
-        )
-        .expect("send stream response");
+        send_response_stream(&mut buf, BootstrapStatus::Success, 3, &payload)
+            .expect("send stream response");
 
         let mut cursor = io::Cursor::new(buf);
         let got = recv_response_stream(&mut cursor).expect("recv stream response");
@@ -801,13 +796,8 @@ mod tests {
     #[test]
     fn stream_response_roundtrip_error() {
         let mut buf = Vec::new();
-        send_response_stream(
-            &mut buf,
-            BootstrapStatus::Error,
-            0,
-            b"rejected",
-        )
-        .expect("send stream error");
+        send_response_stream(&mut buf, BootstrapStatus::Error, 0, b"rejected")
+            .expect("send stream error");
 
         let mut cursor = io::Cursor::new(buf);
         let got = recv_response_stream(&mut cursor).expect("recv stream error");

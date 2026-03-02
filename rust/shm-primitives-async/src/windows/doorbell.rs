@@ -115,15 +115,7 @@ impl Doorbell {
         let handle = self.raw_handle();
         let buf = [1u8];
         let mut written: u32 = 0;
-        let ok = unsafe {
-            WriteFile(
-                handle,
-                buf.as_ptr(),
-                1,
-                &mut written,
-                std::ptr::null_mut(),
-            )
-        };
+        let ok = unsafe { WriteFile(handle, buf.as_ptr(), 1, &mut written, std::ptr::null_mut()) };
         if ok != 0 && written == 1 {
             return SignalResult::Sent;
         }

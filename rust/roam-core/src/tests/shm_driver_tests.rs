@@ -36,7 +36,9 @@ async fn message_conduit_pair() -> (MessageConduit, MessageConduit, tempfile::Te
         )
         .expect("create segment"),
     );
-    let (a, b) = create_test_link_pair(segment).await.expect("create_test_link_pair");
+    let (a, b) = create_test_link_pair(segment)
+        .await
+        .expect("create_test_link_pair");
     (BareConduit::new(a), BareConduit::new(b), dir)
 }
 

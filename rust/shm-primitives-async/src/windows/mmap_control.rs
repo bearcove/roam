@@ -16,19 +16,18 @@
 use std::io::{self, ErrorKind};
 use std::os::windows::io::RawHandle;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use windows_sys::Win32::Foundation::{
     CloseHandle, ERROR_PIPE_CONNECTED, GENERIC_READ, GENERIC_WRITE, INVALID_HANDLE_VALUE,
 };
 use windows_sys::Win32::Storage::FileSystem::{
-    CreateFileW, ReadFile, WriteFile,
-    FILE_ATTRIBUTE_NORMAL, OPEN_EXISTING, PIPE_ACCESS_DUPLEX,
+    CreateFileW, FILE_ATTRIBUTE_NORMAL, OPEN_EXISTING, PIPE_ACCESS_DUPLEX, ReadFile, WriteFile,
 };
 use windows_sys::Win32::System::Pipes::{
-    ConnectNamedPipe, CreateNamedPipeW, PeekNamedPipe,
-    PIPE_READMODE_BYTE, PIPE_TYPE_BYTE, PIPE_WAIT,
+    ConnectNamedPipe, CreateNamedPipeW, PIPE_READMODE_BYTE, PIPE_TYPE_BYTE, PIPE_WAIT,
+    PeekNamedPipe,
 };
 
 use super::MmapAttachMessage;
@@ -85,9 +84,9 @@ impl MmapControlSender {
     /// Send an mmap region's path + metadata to the receiver.
     pub fn send_path(&self, path: &Path, msg: &MmapAttachMessage) -> io::Result<()> {
         let guard = self.handle.lock().unwrap();
-        let &raw_handle = guard.as_ref().ok_or_else(|| {
-            io::Error::new(ErrorKind::BrokenPipe, "mmap control pipe closed")
-        })?;
+        let &raw_handle = guard
+            .as_ref()
+            .ok_or_else(|| io::Error::new(ErrorKind::BrokenPipe, "mmap control pipe closed"))?;
 
         // Lazy connect: the first send transitions the server handle into the
         // connected state.  If the client already called CreateFileW,

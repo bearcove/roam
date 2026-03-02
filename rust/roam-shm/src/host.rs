@@ -347,9 +347,8 @@ pub fn guest_link_from_names(
         })?;
     }
 
-    let doorbell = Doorbell::from_handle(DoorbellHandle::from_pipe_name(
-        doorbell_pipe.to_string(),
-    ))?;
+    let doorbell =
+        Doorbell::from_handle(DoorbellHandle::from_pipe_name(doorbell_pipe.to_string()))?;
 
     let mmap_rx_handle = unsafe { MmapControlHandle::from_arg(mmap_rx_pipe) }
         .map_err(|e| io_other(format!("mmap_rx pipe name: {e}")))?;

@@ -30,15 +30,14 @@ pub mod varslot;
 pub use segment::{AttachError, Segment, SegmentConfig, SegmentLayout};
 pub use varslot::{SizeClassConfig, SlotRef, VarSlotPool};
 
+pub use host::create_test_link_pair;
 pub use host::{
-    AddPeerOptions, GuestSpawnTicket, HostHub, HostPeer, MultiPeerHostDriver, PreparedPeer,
-    ShmHost,
+    AddPeerOptions, GuestSpawnTicket, HostHub, HostPeer, MultiPeerHostDriver, PreparedPeer, ShmHost,
 };
-#[cfg(unix)]
-pub use host::{guest_link_from_raw, guest_link_from_ticket};
 #[cfg(windows)]
 pub use host::{guest_link_from_names, guest_link_from_ticket_windows};
-pub use host::create_test_link_pair;
+#[cfg(unix)]
+pub use host::{guest_link_from_raw, guest_link_from_ticket};
 
 pub mod driver {
     pub use crate::host::{AddPeerOptions, MultiPeerHostDriver, ShmHost};
@@ -982,7 +981,9 @@ mod tests {
             )
             .expect("create segment"),
         );
-        let (a, b) = create_test_link_pair(segment).await.expect("create_test_link_pair");
+        let (a, b) = create_test_link_pair(segment)
+            .await
+            .expect("create_test_link_pair");
         (a, b, dir)
     }
 
@@ -1306,12 +1307,9 @@ mod tests {
         // Build the mapping and schedule attach delivery shortly after recv starts.
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("late-attach.shm");
-        let region = shm_primitives::MmapRegion::create(
-            &path,
-            mapping_length as usize,
-            FileCleanup::Manual,
-        )
-        .unwrap();
+        let region =
+            shm_primitives::MmapRegion::create(&path, mapping_length as usize, FileCleanup::Manual)
+                .unwrap();
         unsafe {
             std::ptr::copy_nonoverlapping(
                 payload.as_ptr(),

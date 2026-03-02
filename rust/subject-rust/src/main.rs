@@ -13,12 +13,12 @@ use spec_proto::{
 use std::convert::Infallible;
 use tracing::{debug, error, info, instrument};
 
-#[cfg(unix)]
-use std::os::fd::AsRawFd;
-#[cfg(unix)]
-use roam_shm::guest_link_from_raw;
 #[cfg(windows)]
 use roam_shm::guest_link_from_names;
+#[cfg(unix)]
+use roam_shm::guest_link_from_raw;
+#[cfg(unix)]
+use std::os::fd::AsRawFd;
 
 type TcpConduit = BareConduit<
     MessageFamily,
@@ -260,16 +260,14 @@ async fn connect_and_serve_shm() -> Result<(), String> {
         let doorbell_fd = fds.doorbell_fd.into_raw_fd();
         let mmap_rx_fd = fds.mmap_control_fd.into_raw_fd();
 
-        unsafe {
-            guest_link_from_raw(segment, peer_id, doorbell_fd, mmap_rx_fd, mmap_tx_fd, true)
-        }
-        .map_err(|e| format!("guest_link_from_raw: {e}"))?
+        unsafe { guest_link_from_raw(segment, peer_id, doorbell_fd, mmap_rx_fd, mmap_tx_fd, true) }
+            .map_err(|e| format!("guest_link_from_raw: {e}"))?
     };
 
     #[cfg(windows)]
     let link = {
         use roam_shm::bootstrap::{
-            BootstrapSuccessNames, BOOTSTRAP_RESPONSE_HEADER_LEN, decode_response,
+            BOOTSTRAP_RESPONSE_HEADER_LEN, BootstrapSuccessNames, decode_response,
         };
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
 

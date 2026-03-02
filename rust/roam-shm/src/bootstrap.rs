@@ -21,10 +21,10 @@ use crate::host::{GuestSpawnTicket, HostHub, HostPeer};
 use crate::segment::Segment;
 
 pub use crate::host::PreparedPeer;
-#[cfg(unix)]
-pub use crate::host::{guest_link_from_raw, guest_link_from_ticket};
 #[cfg(windows)]
 pub use crate::host::guest_link_from_names;
+#[cfg(unix)]
+pub use crate::host::{guest_link_from_raw, guest_link_from_ticket};
 
 /// Result of preparing one bootstrap success response for a guest.
 pub struct PreparedBootstrapPeer {
