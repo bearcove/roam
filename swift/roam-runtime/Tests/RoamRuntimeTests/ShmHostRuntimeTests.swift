@@ -18,6 +18,18 @@ private func hostSocketPair() throws -> (Int32, Int32) {
     return (fds[0], fds[1])
 }
 
+private func socketType(fd: Int32) -> Int32? {
+    var value: Int32 = 0
+    var len = socklen_t(MemoryLayout<Int32>.size)
+    let rc = withUnsafeMutablePointer(to: &value) { ptr in
+        getsockopt(fd, SOL_SOCKET, SO_TYPE, ptr, &len)
+    }
+    guard rc == 0 else {
+        return nil
+    }
+    return value
+}
+
 private func withHostTimeout<T: Sendable>(
     milliseconds: UInt64,
     operation: @escaping @Sendable () async throws -> T
@@ -62,6 +74,33 @@ private struct ShmHostNoopDispatcher: ServiceDispatcher {
 }
 
 struct ShmHostRuntimeTests {
+    @Test func reservePeerUsesDatagramSocketForMmapControl() throws {
+        let path = hostTmpPath("mmap-control-socket-type.bin")
+        defer { try? FileManager.default.removeItem(atPath: path) }
+
+        let segment = try ShmHostSegment.create(
+            path: path,
+            config: ShmHostSegmentConfig(
+                maxGuests: 1,
+                bipbufCapacity: 512,
+                sizeClasses: [ShmVarSlotClass(slotSize: 512, count: 4)]
+            )
+        )
+
+        let prepared = try segment.reservePeer()
+        let ticket = try prepared.makeGuestTicket()
+        defer {
+            close(ticket.doorbellFd)
+            if ticket.mmapControlFd >= 0 {
+                close(ticket.mmapControlFd)
+            }
+            prepared.releaseReservation()
+        }
+
+        #expect(socketType(fd: ticket.doorbellFd) == SOCK_STREAM)
+        #expect(socketType(fd: ticket.mmapControlFd) == SOCK_DGRAM)
+    }
+
     @Test func reserveReleaseReservationAndReusePeer() throws {
         let path = hostTmpPath("reserve-release.bin")
         defer { try? FileManager.default.removeItem(atPath: path) }

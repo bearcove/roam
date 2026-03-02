@@ -189,7 +189,19 @@ impl MmapChannelTx {
     fn send_region(&self, region: &Arc<MmapRegion>, msg: &MmapAttachMessage) -> io::Result<()> {
         match self {
             #[cfg(unix)]
-            MmapChannelTx::Real(sender) => sender.send(region.as_raw_fd(), msg),
+            MmapChannelTx::Real(sender) => {
+                if let Err(error) = sender.send(region.as_raw_fd(), msg) {
+                    warn!(
+                        map_id = msg.map_id,
+                        map_generation = msg.map_generation,
+                        mapping_length = msg.mapping_length,
+                        error = %error,
+                        "failed to send mmap attach over control channel"
+                    );
+                    return Err(error);
+                }
+                Ok(())
+            }
             MmapChannelTx::InProcess(sender) => sender.send((region.clone(), *msg)).map_err(|_| {
                 io::Error::new(io::ErrorKind::BrokenPipe, "mmap control channel closed")
             }),
@@ -261,7 +273,23 @@ impl MmapAttachments {
                         }
                     }
                     Ok(None) => break,
-                    Err(_) => break,
+                    Err(error) => {
+                        let error_kind = error.kind();
+                        warn!(
+                            error = %error,
+                            error_kind = ?error_kind,
+                            "failed to recv mmap attach from control channel"
+                        );
+                        match error_kind {
+                            io::ErrorKind::WouldBlock
+                            | io::ErrorKind::UnexpectedEof
+                            | io::ErrorKind::BrokenPipe
+                            | io::ErrorKind::ConnectionAborted
+                            | io::ErrorKind::ConnectionReset
+                            | io::ErrorKind::NotConnected => break,
+                            _ => continue,
+                        }
+                    }
                 },
                 MmapChannelRx::InProcess(receiver) => match receiver.try_recv() {
                     Ok((region, msg)) => {
@@ -622,5 +650,56 @@ mod tests {
             Err(err) => err,
         };
         assert!(matches!(err, MmapResolveError::BoundsOverflow { .. }));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn drain_control_continues_after_malformed_real_packet() {
+        use shm_primitives::FileCleanup;
+        use shm_primitives_async::create_mmap_control_pair_connected;
+
+        let (sender, receiver) =
+            create_mmap_control_pair_connected().expect("create mmap control pair");
+
+        let malformed = MmapAttachMessage {
+            map_id: 7,
+            map_generation: 3,
+            mapping_length: 1234,
+        }
+        .to_le_bytes();
+        let wrote = unsafe {
+            libc::send(
+                sender.as_raw_fd(),
+                malformed.as_ptr().cast::<libc::c_void>(),
+                malformed.len(),
+                0,
+            )
+        };
+        assert_eq!(
+            wrote as usize,
+            malformed.len(),
+            "failed to send malformed mmap control payload"
+        );
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("mmap-attach-recovery.shm");
+        let region = MmapRegion::create(&path, 4096, FileCleanup::Manual)
+            .expect("create mmap region for valid attach");
+        let attach = MmapAttachMessage {
+            map_id: 42,
+            map_generation: 1,
+            mapping_length: 4096,
+        };
+        sender
+            .send(region.as_raw_fd(), &attach)
+            .expect("send valid attach after malformed payload");
+
+        let mut attachments = MmapAttachments::new(MmapChannelRx::Real(receiver));
+        attachments.drain_control();
+
+        let mapping = attachments
+            .resolve(42, 1, 0, 1)
+            .expect("valid attach should still be processed");
+        assert_eq!(mapping.mapping_length, 4096);
     }
 }

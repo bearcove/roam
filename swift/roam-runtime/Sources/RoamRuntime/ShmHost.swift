@@ -194,7 +194,7 @@ public final class ShmHostSegment: @unchecked Sendable {
                 _ = atomicFetchAddU32(epochPtr, 1)
 
                 let doorbellPair = try makeStreamSocketPair()
-                let mmapPair = try makeStreamSocketPair()
+                let mmapPair = try makeDatagramSocketPair()
                 return ShmPreparedHostPeer(
                     segment: self,
                     peerId: peerId,
@@ -896,6 +896,15 @@ public final class ShmHostTransport: MessageTransport, @unchecked Sendable {
 private func makeStreamSocketPair() throws -> [Int32] {
     var fds = [Int32](repeating: -1, count: 2)
     guard socketpair(AF_UNIX, SOCK_STREAM, 0, &fds) == 0 else {
+        throw ShmHostSegmentError.socketPairFailed(errno: errno)
+    }
+    return fds
+}
+
+@inline(__always)
+private func makeDatagramSocketPair() throws -> [Int32] {
+    var fds = [Int32](repeating: -1, count: 2)
+    guard socketpair(AF_UNIX, SOCK_DGRAM, 0, &fds) == 0 else {
         throw ShmHostSegmentError.socketPairFailed(errno: errno)
     }
     return fds
