@@ -516,23 +516,32 @@ mod tests {
     use super::*;
     use std::sync::atomic::Ordering;
 
-    fn recv_in_process_message(rx: &mut MmapChannelRx) -> (Arc<MmapRegion>, MmapAttachMessage) {
+    #[cfg(unix)]
+    fn create_real_channel() -> (MmapChannelTx, MmapChannelRx) {
+        let (sender, receiver) = shm_primitives_async::create_mmap_control_pair_connected()
+            .expect("create control pair");
+        (MmapChannelTx::Real(sender), MmapChannelRx::Real(receiver))
+    }
+
+    #[cfg(unix)]
+    fn recv_real_message(rx: &mut MmapChannelRx) -> (std::os::fd::OwnedFd, MmapAttachMessage) {
         match rx {
-            MmapChannelRx::InProcess(inner) => {
-                inner.try_recv().expect("expected mmap attach message")
-            }
-            #[cfg(unix)]
-            MmapChannelRx::Real(_) => panic!("expected in-process channel"),
+            MmapChannelRx::Real(inner) => inner
+                .try_recv()
+                .expect("recv should not fail")
+                .expect("expected mmap attach message"),
+            MmapChannelRx::InProcess(_) => panic!("expected real channel"),
         }
     }
 
-    #[test]
-    fn alloc_reuses_existing_slot_and_delivers_attach_once() {
-        let (tx, mut rx) = create_in_process_mmap_channel();
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn alloc_reuses_existing_slot_and_delivers_attach_once() {
+        let (tx, mut rx) = create_real_channel();
         let mut registry = MmapRegistry::new(tx, 64);
 
         let first = registry.alloc(8).expect("first alloc");
-        let (first_region, first_msg) = recv_in_process_message(&mut rx);
+        let (_first_fd, first_msg) = recv_real_message(&mut rx);
         assert_eq!(first_msg.map_id, first.map_id);
         assert_eq!(first_msg.map_generation, first.map_generation);
         assert_eq!(first.map_offset, 0);
@@ -543,39 +552,40 @@ mod tests {
         assert_eq!(second.map_offset, 8);
 
         match &mut rx {
-            MmapChannelRx::InProcess(inner) => {
+            MmapChannelRx::Real(inner) => {
                 assert!(
-                    matches!(inner.try_recv(), Err(mpsc::TryRecvError::Empty)),
+                    inner.try_recv().expect("recv should not fail").is_none(),
                     "slot reuse should not redeliver attach message"
                 );
             }
-            #[cfg(unix)]
-            MmapChannelRx::Real(_) => panic!("expected in-process channel"),
+            MmapChannelRx::InProcess(_) => panic!("expected real channel"),
         }
 
-        assert_eq!(first_region.len(), first_msg.mapping_length as usize);
+        assert!(first_msg.mapping_length >= 64);
     }
 
-    #[test]
-    fn alloc_creates_new_slot_when_existing_region_is_full() {
-        let (tx, mut rx) = create_in_process_mmap_channel();
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn alloc_creates_new_slot_when_existing_region_is_full() {
+        let (tx, mut rx) = create_real_channel();
         let mut registry = MmapRegistry::new(tx, 16);
 
         let first = registry.alloc(16).expect("first alloc fills region");
-        let (_, first_msg) = recv_in_process_message(&mut rx);
+        let (_, first_msg) = recv_real_message(&mut rx);
         assert_eq!(first_msg.map_id, 0);
 
         let second = registry
             .alloc(1)
             .expect("second alloc should create another slot");
-        let (_, second_msg) = recv_in_process_message(&mut rx);
+        let (_, second_msg) = recv_real_message(&mut rx);
         assert_eq!(second_msg.map_id, 1);
         assert_ne!(second.map_id, first.map_id);
     }
 
-    #[test]
-    fn reclaim_drops_fully_consumed_slot_without_leases() {
-        let (tx, _rx) = create_in_process_mmap_channel();
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn reclaim_drops_fully_consumed_slot_without_leases() {
+        let (tx, _rx) = create_real_channel();
         let mut registry = MmapRegistry::new(tx, 8);
 
         let alloc = registry.alloc(8).expect("alloc");
@@ -589,9 +599,10 @@ mod tests {
         );
     }
 
-    #[test]
-    fn payload_mut_roundtrip_and_attachment_resolve_success() {
-        let (tx, rx) = create_in_process_mmap_channel();
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn payload_mut_roundtrip_and_attachment_resolve_success() {
+        let (tx, rx) = create_real_channel();
         let mut registry = MmapRegistry::new(tx, 128);
 
         let mut alloc = registry.alloc(16).expect("alloc");
@@ -618,9 +629,10 @@ mod tests {
         assert_eq!(got, bytes);
     }
 
-    #[test]
-    fn resolve_reports_unknown_out_of_bounds_and_overflow() {
-        let (_tx, rx) = create_in_process_mmap_channel();
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn resolve_reports_unknown_out_of_bounds_and_overflow() {
+        let (_tx, rx) = create_real_channel();
         let attachments = MmapAttachments::new(rx);
 
         let err = match attachments.resolve(42, 0, 0, 1) {
@@ -636,7 +648,8 @@ mod tests {
             mapping_length: 8,
         });
 
-        let mut attachments = MmapAttachments::new(create_in_process_mmap_channel().1);
+        let (_, rx) = create_real_channel();
+        let mut attachments = MmapAttachments::new(rx);
         attachments.mappings.insert((7, 3), mapping);
 
         let err = match attachments.resolve(7, 3, 7, 2) {

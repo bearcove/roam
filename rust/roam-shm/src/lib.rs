@@ -17,7 +17,6 @@ use tracing::{debug, trace, warn};
 use crate::framing::{DEFAULT_INLINE_THRESHOLD, MmapRef, OwnedFrame};
 use crate::mmap_registry::{
     MmapAllocation, MmapAttachments, MmapChannelRx, MmapChannelTx, MmapRegistry,
-    create_in_process_mmap_channel,
 };
 
 #[cfg(unix)]
@@ -314,6 +313,20 @@ impl ShmLink {
         inline_threshold: u32,
         size_classes: &[SizeClassConfig],
     ) -> io::Result<(Self, Self)> {
+        #[cfg(not(unix))]
+        {
+            let _ = (
+                bipbuf_capacity,
+                max_payload_size,
+                inline_threshold,
+                size_classes,
+            );
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "heap_pair requires unix mmap control channels",
+            ));
+        }
+
         fn align_up(n: usize, align: usize) -> usize {
             (n + align - 1) & !(align - 1)
         }
@@ -343,9 +356,16 @@ impl ShmLink {
         let b_closed = Arc::new(AtomicBool::new(false));
 
         // a sends to b via a_mmap_tx → b_mmap_rx
-        let (a_mmap_tx, b_mmap_rx) = create_in_process_mmap_channel();
+        let (a_mmap_tx, b_mmap_rx) = {
+            let (tx, rx) = shm_primitives_async::create_mmap_control_pair_connected()?;
+            (MmapChannelTx::Real(tx), MmapChannelRx::Real(rx))
+        };
+
         // b sends to a via b_mmap_tx → a_mmap_rx
-        let (b_mmap_tx, a_mmap_rx) = create_in_process_mmap_channel();
+        let (b_mmap_tx, a_mmap_rx) = {
+            let (tx, rx) = shm_primitives_async::create_mmap_control_pair_connected()?;
+            (MmapChannelTx::Real(tx), MmapChannelRx::Real(rx))
+        };
 
         let a = Self::from_parts(
             g2h.clone(),
@@ -1334,10 +1354,11 @@ mod tests {
         let (_a, b) = ShmLink::heap_pair(4096, 1 << 20, 32, SMALL_CLASSES).unwrap();
         let (_b_tx, mut b_rx) = b.split();
 
-        // Replace the default in-process control channel so this test can
+        // Replace the default control channel so this test can
         // intentionally delay the attach message relative to the data frame.
-        let (control_tx, control_rx) = create_in_process_mmap_channel();
-        b_rx.mmap_attachments = MmapAttachments::new(control_rx);
+        let (control_tx, control_rx) =
+            shm_primitives_async::create_mmap_control_pair_connected().unwrap();
+        b_rx.mmap_attachments = MmapAttachments::new(MmapChannelRx::Real(control_rx));
 
         let payload = b"late mmap attach payload".to_vec();
         let map_id = 72_u32;
@@ -1357,9 +1378,8 @@ mod tests {
         // Build the mapping and schedule attach delivery shortly after recv starts.
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("late-attach.shm");
-        let region = Arc::new(
-            MmapRegion::create(&path, mapping_length as usize, FileCleanup::Manual).unwrap(),
-        );
+        let region =
+            MmapRegion::create(&path, mapping_length as usize, FileCleanup::Manual).unwrap();
         unsafe {
             std::ptr::copy_nonoverlapping(
                 payload.as_ptr(),
@@ -1375,10 +1395,7 @@ mod tests {
 
         std::thread::spawn(move || {
             std::thread::sleep(Duration::from_millis(150));
-            let MmapChannelTx::InProcess(sender) = control_tx else {
-                panic!("expected in-process mmap control channel");
-            };
-            sender.send((region, attach)).unwrap();
+            control_tx.send(region.as_raw_fd(), &attach).unwrap();
         });
 
         let backing = timeout(Duration::from_secs(1), b_rx.recv())

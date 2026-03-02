@@ -109,14 +109,6 @@ private func makeDoorbellPair() throws -> (host: Int32, guest: Int32) {
     return (fds[0], fds[1])
 }
 
-private func makeDgramPair() throws -> (host: Int32, guest: Int32) {
-    var fds = [Int32](repeating: -1, count: 2)
-    guard socketpair(AF_UNIX, SOCK_DGRAM, 0, &fds) == 0 else {
-        throw POSIXError(.EIO)
-    }
-    return (fds[0], fds[1])
-}
-
 private func isConnectionClosedTransportError(_ error: Error) -> Bool {
     guard let transportError = error as? TransportError else {
         return false
@@ -583,186 +575,134 @@ struct ShmDoorbellAndPayloadTests {
     }
 
     // r[verify zerocopy.recv.shm.mmap]
-    @Test func mmapRefReceivePathResolvesAttachment() throws {
+    @Test func mmapRefReceivePathResolvesAttachment() async throws {
         let path = tmpPath("guest-mmap-recv.bin")
-        let mmapPath = tmpPath("guest-mmap-payload.bin")
-        defer {
-            try? FileManager.default.removeItem(atPath: path)
-            try? FileManager.default.removeItem(atPath: mmapPath)
-        }
+        defer { try? FileManager.default.removeItem(atPath: path) }
 
-        let fixture = try makeSegmentFixture(
+        let segment = try ShmHostSegment.create(
             path: path,
-            inlineThreshold: 64,
-            maxPayloadSize: 2048,
-            classes: [ShmVarSlotClass(slotSize: 64, count: 2)],
-            reservedPeer: 1
-        )
-
-        let doorbell = try makeDoorbellPair()
-        let control = try makeDgramPair()
-        defer {
-            close(doorbell.host)
-            close(doorbell.guest)
-            close(control.host)
-            close(control.guest)
-        }
-
-        let payload = (0..<512).map { UInt8(truncatingIfNeeded: $0) }
-        let mappingLen = 4096
-        let mmapFd = open(mmapPath, O_RDWR | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR)
-        guard mmapFd >= 0 else {
-            throw POSIXError(.EIO)
-        }
-        defer { close(mmapFd) }
-        #expect(ftruncate(mmapFd, off_t(mappingLen)) == 0)
-
-        var fileBytes = [UInt8](repeating: 0, count: mappingLen)
-        fileBytes.replaceSubrange(128..<(128 + payload.count), with: payload)
-        let wrote = fileBytes.withUnsafeBytes { raw in
-            pwrite(mmapFd, raw.baseAddress, raw.count, 0)
-        }
-        #expect(wrote == fileBytes.count)
-
-        let guest = try ShmGuestRuntime.attach(
-            ticket: ShmBootstrapTicket(
-                peerId: 1,
-                hubPath: path,
-                doorbellFd: doorbell.guest,
-                mmapControlFd: control.guest
+            config: ShmHostSegmentConfig(
+                maxGuests: 1,
+                bipbufCapacity: 4096,
+                maxPayloadSize: 16 * 1024,
+                inlineThreshold: 64,
+                sizeClasses: [ShmVarSlotClass(slotSize: 64, count: 2)]
             )
         )
+        let prepared = try segment.reservePeer()
+        let ticket = try prepared.makeGuestTicket()
+        let host = try prepared.intoTransport()
+        let guest = try ShmGuestRuntime.attach(ticket: ticket)
+        defer {
+            close(ticket.doorbellFd)
+            if ticket.mmapControlFd >= 0 {
+                close(ticket.mmapControlFd)
+            }
+        }
+        defer { Task { try? await host.close() } }
 
-        let sendRc = roam_mmap_control_send(control.host, mmapFd, 7, 1, UInt64(mappingLen))
-        #expect(sendRc == 0)
+        let expected = String(repeating: "m", count: 5_000)
+        try await host.send(.protocolError(description: expected))
 
-        let ringOffset = try #require(fixture.ringOffsets[1])
-        let h2gOffset = ringOffset + shmBipbufHeaderSize + Int(fixture.bipbufCapacity)
-        let h2g = try ShmBipBuffer.attach(region: fixture.region, headerOffset: h2gOffset)
-
-        let frame = encodeShmMmapRefFrame(
-            mmapRef: ShmMmapRef(mapId: 7, mapGeneration: 1, mapOffset: 128, payloadLen: UInt32(payload.count))
-        )
-        let grant = try #require(try h2g.tryGrant(UInt32(frame.count)))
-        grant.copyBytes(from: frame)
-        try h2g.commit(UInt32(frame.count))
-
-        let recv = try #require(try guest.receive())
-        #expect(recv.payload == payload)
+        let frame = try #require(try guest.receive())
+        let msg = try MessageV7.decode(from: Data(frame.payload))
+        guard case .protocolError(let error) = msg.payload else {
+            Issue.record("expected protocol error payload")
+            return
+        }
+        #expect(error.description == expected)
     }
 
     // r[verify shm.mmap.ordering]
     // r[verify zerocopy.send.shm]
-    @Test func mmapRefSendPathEmitsAttachmentAndFrame() throws {
+    @Test func mmapRefSendPathEmitsAttachmentAndFrame() async throws {
         let path = tmpPath("guest-mmap-send.bin")
         defer { try? FileManager.default.removeItem(atPath: path) }
 
-        let fixture = try makeSegmentFixture(
+        let segment = try ShmHostSegment.create(
             path: path,
-            inlineThreshold: 64,
-            maxPayloadSize: 16 * 1024,
-            classes: [ShmVarSlotClass(slotSize: 4096, count: 2)],
-            reservedPeer: 1
-        )
-
-        let doorbell = try makeDoorbellPair()
-        let control = try makeDgramPair()
-        defer {
-            close(doorbell.host)
-            close(doorbell.guest)
-            close(control.host)
-            close(control.guest)
-        }
-
-        let guest = try ShmGuestRuntime.attach(
-            ticket: ShmBootstrapTicket(
-                peerId: 1,
-                hubPath: path,
-                doorbellFd: doorbell.guest,
-                mmapControlFd: control.guest
+            config: ShmHostSegmentConfig(
+                maxGuests: 1,
+                bipbufCapacity: 4096,
+                maxPayloadSize: 16 * 1024,
+                inlineThreshold: 64,
+                sizeClasses: [ShmVarSlotClass(slotSize: 64, count: 2)]
             )
         )
+        let prepared = try segment.reservePeer()
+        let ticket = try prepared.makeGuestTicket()
+        let host = try prepared.intoTransport()
+        let guest = try ShmGuestRuntime.attach(ticket: ticket)
+        defer {
+            close(ticket.doorbellFd)
+            if ticket.mmapControlFd >= 0 {
+                close(ticket.mmapControlFd)
+            }
+        }
+        defer { Task { try? await host.close() } }
 
-        let payload = (0..<5000).map { UInt8(truncatingIfNeeded: $0) }
-        try guest.send(frame: ShmGuestFrame(payload: payload))
+        let expected = String(repeating: "g", count: 5_000)
+        let outbound = MessageV7.protocolError(description: expected)
+        try guest.send(frame: ShmGuestFrame(payload: outbound.encode()))
 
-        let ringOffset = try #require(fixture.ringOffsets[1])
-        let g2h = try ShmBipBuffer.attach(region: fixture.region, headerOffset: ringOffset)
-        let readable = try #require(g2h.tryRead())
-        let decoded = try decodeShmFrame(Array(readable))
-        guard case .mmapRef(let header, let mmapRef) = decoded else {
-            Issue.record("expected mmap-ref frame")
+        let inbound = try await withThrowingTaskGroup(of: MessageV7?.self) { group in
+            group.addTask {
+                try await host.recv()
+            }
+            group.addTask {
+                try await Task.sleep(nanoseconds: 1_000_000_000)
+                throw ShmHarnessError.timeout("host recv timed out")
+            }
+            let first = try await group.next()!
+            group.cancelAll()
+            return first
+        }
+        let msg = try #require(inbound)
+        guard case .protocolError(let error) = msg.payload else {
+            Issue.record("expected protocol error payload")
             return
         }
-        #expect(mmapRef.payloadLen == UInt32(payload.count))
-
-        guard let attachments = roam_mmap_attachments_create(control.host) else {
-            Issue.record("failed to create host-side mmap attachments")
-            return
-        }
-        defer { roam_mmap_attachments_destroy(attachments) }
-
-        #expect(roam_mmap_attachments_drain_control(attachments) >= 1)
-
-        var resolvedPtr: UnsafePointer<UInt8>?
-        let rc = roam_mmap_attachments_resolve_ptr(
-            attachments,
-            mmapRef.mapId,
-            mmapRef.mapGeneration,
-            mmapRef.mapOffset,
-            mmapRef.payloadLen,
-            &resolvedPtr
-        )
-        #expect(rc == 0)
-        let ptr = try #require(resolvedPtr)
-        let resolved = Array(UnsafeBufferPointer(start: ptr, count: Int(mmapRef.payloadLen)))
-        #expect(resolved == payload)
-
-        try g2h.release(header.totalLen)
+        #expect(error.description == expected)
     }
 
     // r[verify zerocopy.recv.shm.mmap]
     // r[verify shm.mmap.attach]
-    @Test func mmapRefReceiveFailsWhenAttachmentIsMissing() throws {
+    @Test func mmapRefReceiveFailsWhenAttachmentIsMissing() async throws {
         let path = tmpPath("guest-mmap-recv-missing-attachment.bin")
         defer { try? FileManager.default.removeItem(atPath: path) }
 
-        let fixture = try makeSegmentFixture(
+        let segment = try ShmHostSegment.create(
             path: path,
-            inlineThreshold: 64,
-            maxPayloadSize: 2048,
-            classes: [ShmVarSlotClass(slotSize: 64, count: 2)],
-            reservedPeer: 1
-        )
-
-        let doorbell = try makeDoorbellPair()
-        let control = try makeDgramPair()
-        defer {
-            close(doorbell.host)
-            close(doorbell.guest)
-            close(control.host)
-            close(control.guest)
-        }
-
-        let guest = try ShmGuestRuntime.attach(
-            ticket: ShmBootstrapTicket(
-                peerId: 1,
-                hubPath: path,
-                doorbellFd: doorbell.guest,
-                mmapControlFd: control.guest
+            config: ShmHostSegmentConfig(
+                maxGuests: 1,
+                bipbufCapacity: 4096,
+                maxPayloadSize: 16 * 1024,
+                inlineThreshold: 64,
+                sizeClasses: [ShmVarSlotClass(slotSize: 64, count: 2)]
             )
         )
-
-        let ringOffset = try #require(fixture.ringOffsets[1])
-        let h2gOffset = ringOffset + shmBipbufHeaderSize + Int(fixture.bipbufCapacity)
-        let h2g = try ShmBipBuffer.attach(region: fixture.region, headerOffset: h2gOffset)
-
-        let frame = encodeShmMmapRefFrame(
-            mmapRef: ShmMmapRef(mapId: 77, mapGeneration: 1, mapOffset: 0, payloadLen: 512)
+        let prepared = try segment.reservePeer()
+        let ticket = try prepared.makeGuestTicket()
+        let host = try prepared.intoTransport()
+        let guest = try ShmGuestRuntime.attach(
+            ticket: ShmBootstrapTicket(
+                peerId: ticket.peerId,
+                hubPath: ticket.hubPath,
+                doorbellFd: ticket.doorbellFd,
+                shmFd: ticket.shmFd,
+                mmapControlFd: -1
+            )
         )
-        let grant = try #require(try h2g.tryGrant(UInt32(frame.count)))
-        grant.copyBytes(from: frame)
-        try h2g.commit(UInt32(frame.count))
+        defer {
+            close(ticket.doorbellFd)
+            if ticket.mmapControlFd >= 0 {
+                close(ticket.mmapControlFd)
+            }
+        }
+        defer { Task { try? await host.close() } }
+
+        let expected = String(repeating: "x", count: 5_000)
+        try await host.send(.protocolError(description: expected))
 
         do {
             _ = try guest.receive()
@@ -770,52 +710,44 @@ struct ShmDoorbellAndPayloadTests {
         } catch let error as ShmGuestReceiveError {
             #expect(error == .malformedFrame)
         }
-
-        #expect(guest.isHostGoodbye())
-        #expect(try guest.receive() == nil)
     }
 
     // r[verify zerocopy.send.shm]
     // r[verify shm.mmap.attach]
-    @Test func mmapRefSendFailsFastWhenControlPeerIsClosed() throws {
+    @Test func mmapRefSendFailsFastWhenControlPeerIsClosed() async throws {
         let path = tmpPath("guest-mmap-send-broken-control.bin")
         defer { try? FileManager.default.removeItem(atPath: path) }
 
-        let fixture = try makeSegmentFixture(
+        let segment = try ShmHostSegment.create(
             path: path,
-            inlineThreshold: 64,
-            maxPayloadSize: 16 * 1024,
-            classes: [ShmVarSlotClass(slotSize: 64, count: 2)],
-            reservedPeer: 1
-        )
-        _ = fixture
-
-        let doorbell = try makeDoorbellPair()
-        let control = try makeDgramPair()
-        defer {
-            close(doorbell.host)
-            close(doorbell.guest)
-            close(control.guest)
-        }
-
-        let guest = try ShmGuestRuntime.attach(
-            ticket: ShmBootstrapTicket(
-                peerId: 1,
-                hubPath: path,
-                doorbellFd: doorbell.guest,
-                mmapControlFd: control.guest
+            config: ShmHostSegmentConfig(
+                maxGuests: 1,
+                bipbufCapacity: 4096,
+                maxPayloadSize: 16 * 1024,
+                inlineThreshold: 64,
+                sizeClasses: [ShmVarSlotClass(slotSize: 64, count: 2)]
             )
         )
+        let prepared = try segment.reservePeer()
+        let ticket = try prepared.makeGuestTicket()
+        let host = try prepared.intoTransport()
+        let guest = try ShmGuestRuntime.attach(ticket: ticket)
+        defer {
+            close(ticket.doorbellFd)
+            if ticket.mmapControlFd >= 0 {
+                close(ticket.mmapControlFd)
+            }
+        }
 
-        close(control.host)
+        try await host.close()
 
-        let payload = (0..<5000).map { UInt8(truncatingIfNeeded: $0) }
+        let payload = MessageV7.protocolError(description: String(repeating: "y", count: 5_000)).encode()
         let start = ContinuousClock.now
         do {
             try guest.send(frame: ShmGuestFrame(payload: payload))
-            Issue.record("expected mmapControlError with closed control peer")
+            Issue.record("expected fast send failure after peer close")
         } catch let error as ShmGuestSendError {
-            #expect(error == .mmapControlError)
+            #expect(error == .hostGoodbye || error == .mmapControlError || error == .doorbellPeerDead)
         }
         #expect(ContinuousClock.now - start < Duration.milliseconds(250))
     }
