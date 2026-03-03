@@ -90,7 +90,7 @@ pub async fn run_tests(ws_url: &str) -> TestResults {
     console_log!("Connected! Performing handshake...");
 
     let conduit = BareConduit::<MessageFamily, _>::new(link);
-    let (client, _sh) = match initiator(conduit).establish::<TestbedClient<_>>(()).await {
+    let (client, _sh) = match initiator(conduit).establish::<TestbedClient>(()).await {
         Ok(result) => result,
         Err(e) => {
             console_error!("Handshake failed: {e:?}");
