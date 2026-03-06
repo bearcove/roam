@@ -311,7 +311,7 @@ fuzz-sand-run target="all" seconds="":
 
 npm-publish *args:
     pnpm run build
-    pnpm -r publish --access public --no-git-checks {{ args }}
+    node scripts/publish-npm.mjs {{ args }}
 
 fuzz-sand target="all" seconds="":
     just fuzz-sand-run "{{ target }}" "{{ seconds }}"
