@@ -140,6 +140,15 @@ interface OutgoingState {
   credit: CreditWindow;
 }
 
+interface IncomingCreditState {
+  consumedSinceGrant: number;
+  threshold: number;
+}
+
+function creditReplenishmentThreshold(initialCredit: number): number {
+  return Math.max(1, Math.floor(initialCredit / 2));
+}
+
 /**
  * Sender handle for outgoing channel data.
  *
@@ -195,6 +204,7 @@ export class ChannelRegistry {
 
   /** Channels where we receive Data messages (backing Rx<T> handles). */
   private incoming = new Map<ChannelId, Channel<Uint8Array>>();
+  private incomingCredit = new Map<ChannelId, IncomingCreditState>();
 
   /** Channels where we send Data messages (backing Tx<T> handles). */
   private outgoing = new Map<ChannelId, OutgoingState>();
@@ -218,10 +228,31 @@ export class ChannelRegistry {
   ): ChannelReceiver<Uint8Array> {
     const channel = createChannel<Uint8Array>(initialCredit);
     this.incoming.set(channelId, channel);
+    this.incomingCredit.set(channelId, {
+      consumedSinceGrant: 0,
+      threshold: creditReplenishmentThreshold(initialCredit),
+    });
     return new ChannelReceiver(
       channel,
       this.keepaliveOwner,
-      () => (onConsumed ? onConsumed(1) : this.queueGrantCredit(channelId, 1)),
+      () => {
+        const state = this.incomingCredit.get(channelId);
+        if (!state) {
+          return;
+        }
+        state.consumedSinceGrant += 1;
+        if (state.consumedSinceGrant < state.threshold) {
+          return;
+        }
+
+        const additional = state.consumedSinceGrant;
+        state.consumedSinceGrant = 0;
+        if (onConsumed) {
+          onConsumed(additional);
+        } else {
+          this.queueGrantCredit(channelId, additional);
+        }
+      },
     );
   }
 
@@ -367,6 +398,7 @@ export class ChannelRegistry {
       channel.close();
       this.incoming.delete(channelId);
     }
+    this.incomingCredit.delete(channelId);
 
     const outgoing = this.outgoing.get(channelId);
     if (outgoing) {

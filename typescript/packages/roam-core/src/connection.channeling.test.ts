@@ -139,6 +139,20 @@ async function waitForGrantCredit(
   );
 }
 
+function latestGrantCredit(transport: ScriptedTransport, channelId: bigint): Message | undefined {
+  for (let i = transport.sent.length - 1; i >= 0; i--) {
+    const msg = transport.sent[i];
+    if (
+      msg.payload.tag === "ChannelMessage" &&
+      msg.payload.value.id === channelId &&
+      msg.payload.value.body.tag === "GrantCredit"
+    ) {
+      return msg;
+    }
+  }
+  return undefined;
+}
+
 describe("channeling connection liveness", () => {
   it("binds incoming buffers to the channel initial credit instead of the transport default", () => {
     const registry = new ChannelRegistry();
@@ -217,7 +231,7 @@ describe("channeling connection liveness", () => {
     await expect(settleWithin(updatesRx.recv(), 500)).resolves.toBeNull();
   });
 
-  it("sends GrantCredit after the caller consumes a streamed item", async () => {
+  it("batches GrantCredit after the caller consumes half the initial window", async () => {
     const transport = new ScriptedTransport();
     const conn = await helloExchangeInitiator(transport, defaultHello());
 
@@ -237,13 +251,30 @@ describe("channeling connection liveness", () => {
 
     await conn.call(1n, new Uint8Array([1]), 200, channelIds);
 
+    for (let i = 0; i < DEFAULT_INITIAL_CREDIT / 2 - 1; i++) {
+      transport.enqueue(
+        encodeMessage(messageData(channelIds[0], encodeWithSchema(i, { kind: "u32" }))),
+      );
+      await expect(settleWithin(updatesRx.recv(), 500)).resolves.toBe(i);
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(latestGrantCredit(transport, channelIds[0])).toBeUndefined();
+
     transport.enqueue(
-      encodeMessage(messageData(channelIds[0], encodeWithSchema(123, { kind: "u32" }))),
+      encodeMessage(
+        messageData(
+          channelIds[0],
+          encodeWithSchema(DEFAULT_INITIAL_CREDIT / 2 - 1, { kind: "u32" }),
+        ),
+      ),
     );
-    await expect(settleWithin(updatesRx.recv(), 500)).resolves.toBe(123);
+    await expect(settleWithin(updatesRx.recv(), 500)).resolves.toBe(
+      DEFAULT_INITIAL_CREDIT / 2 - 1,
+    );
 
     await expect(
       waitForGrantCredit(transport, channelIds[0], 500),
-    ).resolves.toMatchObject(messageCredit(channelIds[0], 1));
+    ).resolves.toMatchObject(messageCredit(channelIds[0], DEFAULT_INITIAL_CREDIT / 2));
   });
 });
