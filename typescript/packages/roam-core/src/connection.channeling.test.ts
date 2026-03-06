@@ -91,6 +91,52 @@ class ScriptedTransport implements MessageTransport {
   }
 }
 
+class CreditGrantingTransport extends ScriptedTransport {
+  requestId: bigint | null = null;
+  channelId: bigint | null = null;
+  itemCount = 0;
+
+  override async send(payload: Uint8Array): Promise<void> {
+    this.lastDecoded = payload;
+    const msg = decodeMessage(payload).value as Message;
+    this.sent.push(msg);
+
+    if (msg.payload.tag === "Hello") {
+      const hy = helloYourself(parityEven(), 64);
+      this.enqueue(encodeMessage(messageHelloYourself(hy)));
+      return;
+    }
+
+    if (msg.payload.tag === "RequestMessage" && msg.payload.value.body.tag === "Call") {
+      this.requestId = msg.payload.value.id;
+      this.channelId = msg.payload.value.body.value.channels[0] ?? null;
+      return;
+    }
+
+    if (
+      msg.payload.tag !== "ChannelMessage" ||
+      this.channelId === null ||
+      msg.payload.value.id !== this.channelId
+    ) {
+      return;
+    }
+
+    if (msg.payload.value.body.tag === "Item") {
+      this.itemCount += 1;
+      if (this.itemCount % 8 === 0) {
+        this.enqueue(encodeMessage(messageCredit(this.channelId, 8)));
+      }
+      return;
+    }
+
+    if (msg.payload.value.body.tag === "Close" && this.requestId !== null) {
+      this.enqueue(
+        encodeMessage(messageResponse(this.requestId, encodeWithSchema(40n, { kind: "i64" }))),
+      );
+    }
+  }
+}
+
 function settleWithin<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const timer = setTimeout(() => {
@@ -276,5 +322,37 @@ describe("channeling connection liveness", () => {
     await expect(
       waitForGrantCredit(transport, channelIds[0], 500),
     ).resolves.toMatchObject(messageCredit(channelIds[0], DEFAULT_INITIAL_CREDIT / 2));
+  });
+
+  it("keeps processing GrantCredit while a caller stream crosses the initial credit window", async () => {
+    const transport = new CreditGrantingTransport();
+    const conn = await helloExchangeInitiator(transport, defaultHello());
+
+    const [, numbersRx] = channel<number>();
+    const [numbersTx] = [numbersRx._pair!];
+    const channelIds = bindChannels(
+      [
+        {
+          kind: "rx",
+          initial_credit: DEFAULT_INITIAL_CREDIT,
+          element: { kind: "u32" },
+        } satisfies Schema,
+      ],
+      [numbersRx],
+      conn.getChannelAllocator(),
+      conn.getChannelRegistry(),
+    );
+
+    const resultPromise = conn.call(1n, new Uint8Array([1]), 1_000, channelIds);
+
+    for (let i = 1; i <= 40; i++) {
+      await numbersTx.send(i);
+    }
+    numbersTx.close();
+
+    await expect(settleWithin(resultPromise, 1_000)).resolves.toEqual(encodeWithSchema(40n, {
+      kind: "i64",
+    }));
+    expect(transport.itemCount).toBe(40);
   });
 });
