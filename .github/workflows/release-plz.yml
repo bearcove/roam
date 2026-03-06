@@ -61,6 +61,7 @@ jobs:
           registry-url: https://registry.npmjs.org
 
       - name: Run release-plz
+        id: release-plz
         uses: release-plz/action@v0.5
         with:
           command: release
@@ -69,12 +70,15 @@ jobs:
           CARGO_REGISTRY_TOKEN: ${{ steps.crates-io-auth.outputs.token }}
 
       - name: Install TypeScript dependencies
+        if: steps.release-plz.outputs.releases_created == 'true'
         run: pnpm install --frozen-lockfile
 
       - name: Build TypeScript packages
+        if: steps.release-plz.outputs.releases_created == 'true'
         run: pnpm run build
 
       - name: Publish npm packages
-        run: node scripts/publish-npm.mjs
+        if: steps.release-plz.outputs.releases_created == 'true'
+        run: pnpm -r --filter './typescript/packages/*' publish --access public --no-git-checks
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
