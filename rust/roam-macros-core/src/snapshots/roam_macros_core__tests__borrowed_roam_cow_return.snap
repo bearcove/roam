@@ -99,11 +99,11 @@ impl TextSvcClient {
     }
     #[doc = r" Resolve when the underlying connection closes."]
     pub async fn closed(&self) {
-        self.caller.closed().await;
+        ::roam::Caller::closed(&self.caller).await;
     }
     #[doc = r" Return whether the underlying connection is still considered connected."]
     pub fn is_connected(&self) -> bool {
-        self.caller.is_connected()
+        ::roam::Caller::is_connected(&self.caller)
     }
     pub async fn normalize(
         &self,
