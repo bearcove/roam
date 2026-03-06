@@ -523,6 +523,16 @@ fn generate_client(parsed: &ServiceTrait, roam: &TokenStream2) -> TokenStream2 {
                 }
             }
 
+            /// Resolve when the underlying connection closes.
+            pub async fn closed(&self) {
+                self.caller.closed().await;
+            }
+
+            /// Return whether the underlying connection is still considered connected.
+            pub fn is_connected(&self) -> bool {
+                self.caller.is_connected()
+            }
+
             #(#client_methods)*
         }
 
