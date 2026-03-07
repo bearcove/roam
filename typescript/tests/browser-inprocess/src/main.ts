@@ -329,13 +329,15 @@ async function runTests(): Promise<void> {
     // Wire up the in-process transport:
     // - TS creates InProcessTransport with a deliver callback
     // - Rust creates JsInProcessLink with an on_message callback
-    // JS closures capture by reference, so we can wire them circularly.
-    let transport: InProcessTransport;
-    const rustLink = start_acceptor((payload: Uint8Array) => {
-      transport!.pushMessage(payload);
-    });
-    transport = new InProcessTransport((payload: Uint8Array) => {
+    let rustLink: ReturnType<typeof start_acceptor> | null = null;
+    const transport = new InProcessTransport((payload: Uint8Array) => {
+      if (!rustLink) {
+        throw new Error("rustLink not initialized");
+      }
       rustLink.deliver(payload);
+    });
+    rustLink = start_acceptor((payload: Uint8Array) => {
+      transport.pushMessage(payload);
     });
 
     log("Performing hello exchange as initiator...");

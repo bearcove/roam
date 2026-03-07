@@ -4,7 +4,6 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-readme = "README.md"
 homepage.workspace = true
 documentation.workspace = true
 keywords.workspace = true
@@ -12,9 +11,6 @@ categories.workspace = true
 description = "In-process transport for roam — WASM-to-JS message passing without network"
 
 [package.metadata]
-
-[package.metadata."docs.rs"]
-rustdoc-args = ["--html-in-header", "arborium-header.html"]
 
 [dependencies]
 roam-types.workspace = true

@@ -21,8 +21,7 @@
     }
   },
   "files": [
-    "dist",
-    "README.md"
+    "dist"
   ],
   "dependencies": {
     "@bearcove/roam-core": "workspace:*"
@@ -41,6 +40,5 @@
     "typescript",
     "wasm",
     "in-process"
-  ],
-  "readme": "README.md"
+  ]
 }

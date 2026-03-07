@@ -306,7 +306,7 @@ insert_anchor_links = "left"
 > | BareConduit   | —      | —         | yes       | yes  | yes    |
 > | StableConduit | yes    | yes       | —         | —    | —      |
 >
-> BareConduit is used with links that don't lose connections (SHM, memory).
+> BareConduit is used with links that don't lose connections (SHM, memory, InProcess).
 > StableConduit is used with links that may disconnect (TCP, WebSocket) and
 > need seq/ack for replay on reconnect.
 
