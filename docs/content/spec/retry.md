@@ -345,6 +345,49 @@ sealed failures are replayed, not optimistically retried.
 > Once an operation is sealed, no subsequent event — cancellation,
 > disconnect, crash recovery — can unseal it. Sealed is absorbing.
 
+# Transient errors
+
+Not all failures come from connection loss. A handler might run successfully
+at the protocol level — request delivered, handler invoked, response sent
+back — but the handler itself hit a transient downstream failure: a database
+timeout, a third-party API returning 503, a lock contention retry. The
+connection is fine. The RPC layer didn't fail. But the operation failed in
+a way that's worth retrying.
+
+Today, the caller sees an error and has to decide on its own whether to
+retry. The handler knows the failure is transient but has no way to say so.
+This section gives the handler that voice.
+
+> r[retry.transient.signal]
+>
+> The handler API MUST provide a way for the handler to mark an error as
+> transient. A transient error indicates that the handler performed no
+> durable side effects and that re-execution with the same arguments is
+> expected to succeed.
+
+> r[retry.transient.release]
+>
+> A transient error MUST NOT seal the operation. The runtime MUST release
+> the operation (transition to Released / Absent), exactly as with any
+> pre-commit failure (see `r[retry.seal.pre-commit-release]`).
+
+> r[retry.transient.wire]
+>
+> The response MUST carry a flag or field indicating that the error is
+> transient. This signal is part of the wire format, not just an
+> application-level convention.
+
+> r[retry.transient.caller-policy]
+>
+> The caller's retry policy decides whether and how to act on a transient
+> error signal. The runtime MUST expose the transient flag to the caller.
+> The caller MAY implement backoff, jitter, and maximum attempt limits.
+
+> r[retry.transient.retry-after]
+>
+> The response MAY carry a retry-after hint (a duration) alongside the
+> transient flag. The caller SHOULD respect this hint when present.
+
 # Cancellation interaction
 
 Cancellation interacts with the operation state machine. There are two
@@ -487,12 +530,47 @@ Channels (see `r[rpc.channel]`) are connection-bound, stateful streams. They
 don't naturally compose with retry the way a stateless request/response pair
 does. This section defines how channels interact with the retry machinery.
 
-The motivating pattern is "seed + deltas": a method like
-`watch_room(room_id, events: Tx<RoomEvent, 16>)` where the handler first
-sends a full state dump (the seed), then streams incremental updates. On
-reconnect, the handler re-executes and sends a fresh seed — the caller
-resets its local state and picks up from there. This pattern is naturally
-rerunnable and should work transparently.
+## The channel ambiguity problem
+
+Channel items today are fire-and-forget within the credit window. Credit
+says "you may send" but it doesn't say "I received." There's no sequence
+numbering, no acknowledgment. After a connection loss, the sender has no
+idea which items made it to the receiver.
+
+This is the same five-condition ambiguity from `r[retry.ambiguity]`, but
+per-item and with zero machinery to resolve it. For channels that carry
+important state (commands, mutations, ordered event streams), this gap
+makes "transparent rebinding" dishonest unless we address it at the wire
+level.
+
+## Channel acknowledgments
+
+> r[retry.channel.seq]
+>
+> Each channel item MUST carry a monotonically increasing sequence number,
+> assigned by the sender. Sequence numbers are scoped to a single channel
+> and start at 0.
+
+> r[retry.channel.ack]
+>
+> The receiver of a channel MAY send an acknowledgment message indicating
+> that it has consumed all items up to and including a given sequence
+> number. Acknowledgment is cumulative — acking sequence N implies all
+> items before N have also been consumed.
+
+> r[retry.channel.ack.wire]
+>
+> The `AckChannel` message is a new wire message carrying a channel ID and
+> a sequence number. It is sent from the receiver to the sender.
+
+> r[retry.channel.resume]
+>
+> When a channel is rebound after re-execution (see `r[retry.channel.rebinding]`),
+> the sender MAY use the last acknowledged sequence number to determine
+> which items were consumed. Items after the last ack are ambiguous — they
+> may or may not have been processed.
+
+## Connection loss and rebinding
 
 > r[retry.channel.connection-bound]
 >
@@ -533,6 +611,13 @@ rerunnable and should work transparently.
 > A `Tx<T>` handle whose underlying channel was terminated by connection
 > loss MUST, on the next `send()` call, send items through the replacement
 > channel created by re-execution.
+
+Whether the sender replays unacknowledged items or starts fresh depends on
+the purpose of the channel. For "seed + deltas" channels (server → client),
+re-execution sends a fresh seed and the caller resets — no replay needed.
+For command channels (client → server), the caller may want to resend
+unacknowledged items using the sequence number from the last
+`AckChannel` received before disconnection.
 
 > r[retry.channel.deduplicable-no-rebinding]
 >
