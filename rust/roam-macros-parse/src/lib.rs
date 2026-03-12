@@ -458,16 +458,6 @@ impl ServiceMethod {
     pub fn is_persist(&self) -> bool {
         has_attr_helper(&self.attributes, &["roam"], "persist")
     }
-
-    /// Check whether this method explicitly declares rerun-safe semantics.
-    pub fn is_idem(&self) -> bool {
-        has_attr_helper(&self.attributes, &["roam"], "idem")
-    }
-
-    /// Check whether this method explicitly declares persistent admission.
-    pub fn is_persist(&self) -> bool {
-        has_attr_helper(&self.attributes, &["roam"], "persist")
-    }
 }
 
 // ============================================================================
