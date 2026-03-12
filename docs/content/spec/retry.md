@@ -4,29 +4,26 @@ description = "Retry safety and semantics in roam"
 weight = 13
 +++
 
-> r[retry]
->
-> The retry layer defines how roam handles ambiguous failures — cases where the
-> client does not know whether the server received, started, or completed a
-> request. It sits above the transport and session layers and below application
-> logic.
+The retry layer defines how roam handles ambiguous failures — cases where the
+client does not know whether the server received, started, or completed a
+request. It sits above the transport and session layers and below application
+logic.
 
 # The fundamental ambiguity
 
-> r[retry.ambiguity]
->
-> After any communication failure, the client faces irreducible uncertainty.
-> The previous attempt is in one of these conditions, and the client cannot
-> distinguish them:
->
->   1. The request never left the client's outbound buffer
->   2. The request arrived but the handler never started
->   3. The handler started and is still running
->   4. The handler completed but the response was lost in transit
->   5. The handler started and then failed, with or without partial side effects
->
-> Any retry mechanism MUST handle all five as possible realities behind a
-> single "unknown" from the client's perspective.
+After any communication failure, the client faces irreducible uncertainty.
+The previous attempt is in one of these conditions, and the client cannot
+distinguish them:
+
+  1. The request never left the client's outbound buffer
+  2. The request arrived but the handler never started
+  3. The handler started and is still running
+  4. The handler completed but the response was lost in transit
+  5. The handler started and then failed, with or without partial side effects
+
+Any retry mechanism must handle all five as possible realities behind a
+single "unknown" from the client's perspective. The design that follows
+does not pretend the client can tell these apart.
 
 # Operation identity
 
@@ -56,30 +53,28 @@ weight = 13
 
 # Operation state machine
 
-> r[retry.state]
->
-> The server maintains a record mapping operation IDs to states. A logical
-> operation proceeds through this lifecycle:
->
-> ```
->               ┌──────────────┐
->               │   Absent     │  ← no record exists
->               └──────┬───────┘
->                      │ first attempt arrives
->                      ▼
->               ┌──────────────┐
->          ┌────│    Live      │────┐
->          │    └──────┬───────┘    │
->          │           │            │
->    abort/cancel      │ handler    │ crash or cancel
->    (pre-commit)      │ seals      │ (post-commit,
->          │           │ outcome    │  outcome lost)
->          ▼           ▼            ▼
->   ┌──────────┐  ┌──────────┐  ┌──────────────┐
->   │ Released │  │ Sealed   │  │Indeterminate │
->   │(→ Absent)│  │(outcome) │  │              │
->   └──────────┘  └──────────┘  └──────────────┘
-> ```
+The server maintains a record mapping operation IDs to states. A logical
+operation proceeds through this lifecycle:
+
+```
+              ┌──────────────┐
+              │   Absent     │  ← no record exists
+              └──────┬───────┘
+                     │ first attempt arrives
+                     ▼
+              ┌──────────────┐
+         ┌────│    Live      │────┐
+         │    └──────┬───────┘    │
+         │           │            │
+   abort/cancel      │ handler    │ crash or cancel
+   (pre-commit)      │ seals      │ (post-commit,
+         │           │ outcome    │  outcome lost)
+         ▼           ▼            ▼
+  ┌──────────┐  ┌──────────┐  ┌──────────────┐
+  │ Released │  │ Sealed   │  │Indeterminate │
+  │(→ Absent)│  │(outcome) │  │              │
+  └──────────┘  └──────────┘  └──────────────┘
+```
 
 > r[retry.state.absent]
 >
@@ -89,15 +84,13 @@ weight = 13
 > r[retry.state.live]
 >
 > **Live.** The handler is currently executing. The operation has not yet
-> committed an outcome. There is at most one live handler execution for
+> committed an outcome. There MUST be at most one live handler execution for
 > any given operation ID.
 
 > r[retry.state.sealed]
 >
 > **Sealed(outcome).** A terminal outcome — success or failure — has been
-> recorded. This is the absorbing state: once sealed, an operation MUST
-> NOT be unsealed by cancellation or any other event. Retries replay
-> the sealed outcome.
+> recorded. Retries replay the sealed outcome without re-invoking the handler.
 
 > r[retry.state.released]
 >
@@ -113,10 +106,8 @@ weight = 13
 
 # Duplicate attempt handling
 
-> r[retry.duplicate]
->
-> When a retry arrives with an operation ID that is already known to the
-> server, behavior depends on the operation's current state.
+When a retry arrives with an operation ID that the server already knows
+about, the server's behavior depends on the operation's current state.
 
 > r[retry.duplicate.absent]
 >
@@ -125,8 +116,12 @@ weight = 13
 > r[retry.duplicate.live]
 >
 > If Live: do NOT start a second handler. The duplicate attempt MUST attach
-> to the existing in-progress operation and wait for the same outcome. When
-> the handler finishes, all attached attempts receive the result.
+> to the existing in-progress operation and wait for the same outcome.
+
+> r[retry.duplicate.live.broadcast]
+>
+> When the handler finishes, all attached attempts MUST receive the same
+> result.
 
 > r[retry.duplicate.sealed]
 >
@@ -173,27 +168,27 @@ deduplication machinery. If a response gets lost and the client retries,
 the server can just run the handler again. The only reason to cache results
 for rerunnable methods is performance, not correctness.
 
-> r[retry.category.rerunnable]
->
-> The handler is naturally idempotent: executing it N times with the same
-> arguments produces the same observable effects as executing it once. Reads,
-> upserts-by-key, pure computations, and "set X to V" operations fall here.
-
 > r[retry.category.rerunnable.contract]
 >
 > **Handler obligation:** the handler MUST tolerate being run more than once
 > for the same logical inputs. No additional cooperation with the runtime is
 > required.
 
-> r[retry.category.rerunnable.behavior]
+> r[retry.category.rerunnable.reexecution]
 >
-> The runtime MAY re-execute the handler (always safe) or return a cached
-> result if one exists (an optimization). The runtime does not need to
-> maintain operation state for correctness, only for efficiency.
+> The runtime MAY re-execute a rerunnable handler on any retry attempt,
+> regardless of operation state.
+
+> r[retry.category.rerunnable.caching]
+>
+> The runtime MAY return a cached result instead of re-executing. Operation
+> state tracking is an optimization for rerunnable methods, not a correctness
+> requirement.
 
 > r[retry.category.rerunnable.indeterminate]
 >
-> On Indeterminate state (crash recovery): re-execute. Safe by definition.
+> On Indeterminate state (crash recovery), the runtime MUST re-execute the
+> handler.
 
 ## Deduplicable
 
@@ -232,11 +227,6 @@ the database transaction aborting) or be arranged so that re-execution will
 fix things up. If the handler can't make that promise, it doesn't belong in
 this category.
 
-> r[retry.category.deduplicable]
->
-> The handler is NOT safe to run twice, but the runtime can enforce at-most-once
-> execution by tracking the operation ID and caching the outcome.
-
 > r[retry.category.deduplicable.contract]
 >
 > **Handler obligation — atomicity:** if the handler fails or is interrupted
@@ -245,26 +235,20 @@ this category.
 > beginning will subsume or correct them. Pre-commit failure MUST leave the
 > world in a state where re-execution is safe.
 
-> r[retry.category.deduplicable.behavior]
+> r[retry.category.deduplicable.no-reexecution]
 >
-> System behavior on duplicate:
->
->   * If Live: attach the duplicate, wait for the outcome, return it
->   * If Sealed: return the cached outcome
->   * If Absent: execute normally
->
-> After the handler seals its outcome, re-execution MUST NOT occur — the
-> runtime replays the cached result.
+> After a deduplicable handler seals its outcome, re-execution MUST NOT
+> occur. The runtime MUST replay the cached result for any subsequent
+> attempt with the same operation ID.
 
 > r[retry.category.deduplicable.indeterminate]
 >
-> On Indeterminate state: the atomicity obligation is load-bearing. If the
-> handler's effects and the operation record are committed together (e.g., same
-> transaction), then on recovery the system can inspect durable state: either
-> the seal is present (replay it) or it is not (effects did not persist,
-> re-execute safely).
+> On Indeterminate state: the runtime MUST inspect durable state. If the
+> seal is present, replay it. If the seal is absent, re-execute the handler.
+> This is only correct because the atomicity obligation guarantees that
+> unsealed effects did not persist.
 
-> r[retry.category.deduplicable.durability]
+> r[retry.category.deduplicable.seal-durability]
 >
 > For deduplicable methods, the seal MUST be durable. An in-memory-only seal
 > is not a real seal — a crash would lose it and violate at-most-once.
@@ -305,43 +289,29 @@ sealed successfully, response didn't make it back), a retry replays the
 sealed outcome. The difference from deduplicable only shows up in the
 Indeterminate case — the worst case.
 
-> r[retry.category.non-retryable]
->
-> The handler cannot support transparent retry. Its effects are not naturally
-> idempotent, and it cannot satisfy the atomicity obligation required for
-> deduplication — perhaps because it touches external systems without their
-> own idempotency support, or because partial effects are irrecoverable.
-
 > r[retry.category.non-retryable.contract]
 >
-> **Handler obligation:** acknowledge that the runtime cannot guarantee
-> exactly-once execution. The method SHOULD be designed so that callers can
-> query for the outcome through a separate channel if needed (e.g., a read
-> method that checks whether the effect happened).
+> **Handler obligation:** the method SHOULD provide a separate query
+> mechanism so callers can resolve ambiguous outcomes (e.g., a read method
+> that checks whether the effect happened).
 
-> r[retry.category.non-retryable.behavior]
+> r[retry.category.non-retryable.indeterminate]
 >
-> System behavior on duplicate:
->
->   * If Sealed: return the cached outcome (still safe and useful)
->   * If Live: attach and wait, same as deduplicable
->   * If Absent: execute normally
->   * If Indeterminate: REJECT the duplicate with a clear error indicating
->     that the outcome is unknown and cannot be safely retried. The client
->     MUST investigate through other means or issue a new logical operation
-
-> r[retry.category.non-retryable.distinction]
->
-> The difference from deduplicable is entirely about the Indeterminate case.
-> A non-retryable method is honest that re-execution after ambiguous failure
-> is not safe.
+> On Indeterminate state, the runtime MUST reject the retry with a clear
+> error indicating that the outcome is unknown and cannot be safely retried.
+> The client MUST investigate through other means or issue a new logical
+> operation with a new operation ID.
 
 # Sealing
 
+Sealing is the point of no return for a logical operation. Once sealed, the
+outcome is final — it will be replayed on any future retry, whether the
+outcome is success or failure.
+
 > r[retry.seal]
 >
-> The runtime provides an explicit seal/commit operation in the handler API.
-> The seal marks the point of no return for a logical operation.
+> The runtime MUST provide an explicit seal/commit operation in the handler
+> API, allowing the handler to mark the point of no return.
 
 > r[retry.seal.implicit]
 >
@@ -353,58 +323,60 @@ Indeterminate case — the worst case.
 > that irreversible work has been done and the answer is an error
 > ("seal-then-fail"). This MUST be expressible in the handler API.
 
-> r[retry.seal.post-commit-failure]
->
-> If the handler committed side effects and then reports failure, that failure
-> is the true outcome of the operation. Replaying it on retry is correct —
-> re-executing would attempt to repeat the committed effects.
+If the handler committed side effects and then reports failure, that failure
+is the true outcome of the operation. Replaying it on retry is correct —
+re-executing would attempt to repeat the committed effects. That's why
+sealed failures are replayed, not optimistically retried.
 
-> r[retry.seal.pre-commit-failure]
+> r[retry.seal.pre-commit-release]
 >
 > If the handler failed before sealing — before any durable side effects —
-> the operation SHOULD be released. This allows the client to retry and get
-> a fresh execution. This is the common case for transient errors (downstream
-> timeout, temporary resource exhaustion).
+> the runtime MUST release the operation. This allows the client to retry
+> and get a fresh execution.
 
 > r[retry.seal.terminal-replay]
 >
 > A sealed failure MUST be replayed on retry, not optimistically retried.
 > A retry of the same logical operation MUST NOT turn a sealed validation
-> error into success. The meaning of "same operation" requires this.
+> error into success.
 
 > r[retry.seal.absorbing]
 >
-> Once an operation is sealed, no subsequent event (cancellation, disconnect,
-> crash recovery) can unseal it. Sealed is absorbing.
+> Once an operation is sealed, no subsequent event — cancellation,
+> disconnect, crash recovery — can unseal it. Sealed is absorbing.
 
 # Cancellation interaction
 
-> r[retry.cancel]
->
-> Cancellation interacts with the operation state machine. There are two
-> distinct events that look like cancellation.
+Cancellation interacts with the operation state machine. There are two
+distinct events that look like cancellation: the client actively requesting
+abort, and the client simply disappearing.
 
-> r[retry.cancel.explicit]
+> r[retry.cancel.explicit.pre-commit]
 >
-> **Explicit cancellation.** The client actively requests that the operation
-> be aborted. If the operation is pre-commit, the handler SHOULD be aborted
-> and the operation released. If the operation is post-commit (sealed),
-> cancellation is a no-op — the outcome is sealed and the cancel arrives
-> too late.
+> If the client explicitly cancels and the operation has not yet sealed,
+> the handler SHOULD be aborted and the operation released.
 
-> r[retry.cancel.implicit]
+> r[retry.cancel.explicit.post-commit]
 >
-> **Implicit cancellation (lost interest).** The client disconnected or
-> stopped waiting. The client might come back. Behavior depends on
-> the method category:
+> If the client explicitly cancels but the operation is already sealed,
+> cancellation is a no-op. The sealed outcome stands.
+
+> r[retry.cancel.implicit.rerunnable]
 >
->   * **Rerunnable:** the server MAY abort the handler (saves resources),
->     because re-execution on reconnect is safe
->   * **Deduplicable:** the server SHOULD continue the handler to
->     completion and cache the outcome, so that when the client retries,
->     the answer is waiting
->   * **Non-retryable:** the server's choice; either way, the operation
->     state MUST accurately reflect what happened
+> When the client disconnects during a rerunnable method, the server MAY
+> abort the handler to save resources. Re-execution on reconnect is safe.
+
+> r[retry.cancel.implicit.deduplicable]
+>
+> When the client disconnects during a deduplicable method, the server
+> SHOULD continue the handler to completion and cache the outcome, so that
+> when the client retries, the answer is waiting.
+
+> r[retry.cancel.implicit.non-retryable]
+>
+> When the client disconnects during a non-retryable method, the server
+> MAY continue or abort. Either way, the operation state MUST accurately
+> reflect what happened.
 
 > r[retry.cancel.race]
 >
@@ -415,61 +387,43 @@ Indeterminate case — the worst case.
 > r[retry.cancel.retry-after]
 >
 > A retry with the same operation ID after a cancel request MUST reattach to
-> the same operation, not create a new one. If the operation seals as
+> the same operation, not create a new one. If the operation sealed as
 > cancelled, retries replay the cancelled outcome. To try again from scratch,
 > the client MUST use a new operation ID.
 
-> r[retry.cancel.sealed-immutable]
->
-> Cancellation MUST NOT unseal an operation. If the handler committed before
-> the cancellation was processed, the committed outcome stands.
-
 # Attempt failure vs. operation outcome
 
-> r[retry.attempt-vs-outcome]
->
-> Attempt failures and operation outcomes are distinct concepts.
+These are distinct concepts, and conflating them is a common source of bugs.
 
-> r[retry.attempt-vs-outcome.attempt]
->
-> **Attempt failures** are failures of a particular delivery/execution attempt:
-> connection dropped, timeout waiting for response, process died before durable
-> seal. These are NOT automatically operation outcomes.
+**Attempt failures** are failures of a particular delivery/execution attempt:
+connection dropped, timeout waiting for response, process died before durable
+seal. These are NOT automatically operation outcomes. The operation may still
+be Live on the server, or it may have sealed successfully with the response
+lost in transit.
 
-> r[retry.attempt-vs-outcome.operation]
->
-> **Operation outcomes** are the final outcomes of the logical operation:
-> success, business rejection, terminal failure. Transparent retry is defined
-> over operations, not over attempts.
-
-> r[retry.attempt-vs-outcome.seal-rule]
->
-> A failure seals the operation only if the system has chosen it as the
-> authoritative terminal outcome of the logical operation. A transient
-> pre-commit crash does not seal. A validation error seals. A post-commit
-> failure seals.
+**Operation outcomes** are the final outcomes of the logical operation:
+success, business rejection, terminal failure. Transparent retry is defined
+over operations, not over attempts. A transient pre-commit crash does not
+seal the operation. A validation error does. A post-commit failure does.
 
 # Transport vs. operation layer
 
-> r[retry.layers]
->
-> The transport and operation layers have distinct responsibilities regarding
-> retry.
+The transport and operation layers have distinct responsibilities. The
+transport delivers bytes; the operation layer decides what retries mean.
 
-> r[retry.layers.transport]
+> r[retry.layers.transport-retransmit]
 >
-> The transport layer's job is to deliver bytes, manage connections, handle
-> reconnection, and provide flow control. If the transport knows a message
-> was never transmitted (still in the send buffer when the connection dropped),
-> it MAY retransmit transparently — this is below the operation layer's concern.
+> If the transport knows a message was never transmitted (still in the send
+> buffer when the connection dropped), it MAY retransmit transparently —
+> this is below the operation layer's concern.
 
-> r[retry.layers.boundary]
+> r[retry.layers.no-silent-retry]
 >
 > If the transport does NOT know whether a message reached the server, it
-> MUST surface this uncertainty to the operation layer rather than silently
-> resending. The transport MUST NOT silently retry operations.
+> MUST surface this uncertainty to the operation layer. The transport MUST
+> NOT silently retry operations.
 
-> r[retry.layers.reconnect]
+> r[retry.layers.reconnect-report]
 >
 > After a reconnect, the session layer MUST report which in-flight operations
 > have ambiguous delivery status. The operation layer then re-sends those as
@@ -483,33 +437,44 @@ Indeterminate case — the worst case.
 
 # Operation record lifetime
 
-> r[retry.gc]
->
-> The server cannot keep operation records forever, but premature eviction
-> is dangerous.
+The server cannot keep operation records forever, but premature eviction
+is dangerous: if a deduplicable operation's record is evicted and the client
+retries, the server would re-execute (seeing the ID as Absent), violating
+at-most-once.
 
 > r[retry.gc.ttl]
 >
 > Operation records MUST have a TTL that exceeds the maximum retry window
-> by a comfortable margin. TTL countdown MUST start only after the operation
-> reaches a terminal state, not from request arrival. Live operations MUST
-> NOT be evicted while the handler is alive.
+> by a comfortable margin.
+
+> r[retry.gc.ttl.start]
+>
+> TTL countdown MUST start only after the operation reaches a terminal state,
+> not from request arrival.
+
+> r[retry.gc.live-protected]
+>
+> Live operations MUST NOT be evicted while the handler is alive.
 
 > r[retry.gc.session-scoped]
 >
-> Session-scoped operation IDs simplify lifetime management: when a session
-> ends cleanly, all its operation records may be evicted. Only abnormal
-> session termination leaves records requiring TTL-based cleanup.
+> When a session ends cleanly, all its operation records MAY be evicted.
+> Only abnormal session termination leaves records requiring TTL-based
+> cleanup.
 
 > r[retry.gc.fail-closed]
 >
 > Expiry MUST fail closed. If an operation record has been evicted and the
 > client retries, the server MUST reject the retry with an explicit error —
-> it MUST NOT silently treat the evicted ID as Absent and re-execute. Operation
-> IDs SHOULD encode enough structure (e.g., a session ID and monotonic sequence)
-> that the server can distinguish evicted IDs from genuinely new ones.
+> it MUST NOT silently treat the evicted ID as Absent and re-execute.
 
-> r[retry.gc.deduplicable-durability]
+> r[retry.gc.id-structure]
+>
+> Operation IDs SHOULD encode enough structure (e.g., a session ID and
+> monotonic sequence) that the server can distinguish evicted IDs from
+> genuinely new ones.
+
+> r[retry.gc.deduplicable-persistence]
 >
 > For deduplicable methods with durable effects, operation records SHOULD be
 > persisted alongside the effects (same store, same retention policy). Records
@@ -518,47 +483,34 @@ Indeterminate case — the worst case.
 
 # Multi-server deployments
 
-> r[retry.distributed]
->
-> Deduplicable semantics require that the operation log is accessible to any
-> server that might handle a retry.
+For rerunnable methods, a local operation log is sufficient — re-execution
+on a different server is safe by definition.
 
-> r[retry.distributed.rerunnable]
->
-> For rerunnable methods, a local operation log is sufficient — re-execution
-> on a different server is safe by definition.
+For deduplicable methods, the situation is different:
 
-> r[retry.distributed.deduplicable]
+> r[retry.distributed.shared-log]
 >
-> For deduplicable methods, if the client's retry hits a different server after
-> failover and that server has no access to the operation log, it would see the
-> operation as Absent and re-execute — violating at-most-once. The operation log
-> MUST be shared (replicated store, consensus protocol, or sticky routing).
+> For deduplicable methods, the operation log MUST be accessible to any
+> server that might handle a retry. If a client's retry hits a different
+> server after failover and that server has no access to the operation log,
+> it would see the operation as Absent and re-execute — violating at-most-once.
+> The operation log MUST be shared (replicated store, consensus protocol,
+> or sticky routing).
 
-# Summary of contracts
+# Summary
 
-> r[retry.contract]
->
-> The retry model distributes obligations across three parties.
+The retry model distributes obligations across three parties:
 
-> r[retry.contract.runtime]
->
-> **Runtime obligations:** provide operation IDs, maintain the state machine,
-> expose the seal/commit API, handle parked duplicates, manage operation log
-> lifetime with safe eviction, and surface uncertainty honestly.
+**The runtime** provides operation IDs, maintains the state machine, exposes
+the seal/commit API, handles parked duplicates, manages operation log
+lifetime with safe eviction, and surfaces uncertainty honestly.
 
-> r[retry.contract.handler]
->
-> **Handler obligations:** choose the correct category for each method.
-> For rerunnable: ensure natural idempotency. For deduplicable: satisfy the
-> atomicity obligation (pre-commit failure must not leak effects; commit
-> the seal durably). For non-retryable: provide a separate query mechanism
-> so clients can resolve ambiguous outcomes.
+**The handler** chooses the correct category for each method. For rerunnable:
+ensure natural idempotency. For deduplicable: satisfy the atomicity
+obligation. For non-retryable: provide a separate query mechanism.
 
-> r[retry.contract.caller]
->
-> **Caller obligations:** mint a unique operation ID per logical operation.
-> On ambiguous failure, retry with the same ID. On explicit cancellation,
-> use a new operation ID for a new attempt. Distinguish "sealed failure
-> replayed" (the operation is done, the answer is an error) from "rejected
-> as indeterminate" (the operation's fate is unknown, use other means).
+**The caller** mints a unique operation ID per logical operation, retries
+with the same ID on ambiguous failure, and uses a new ID when starting a
+genuinely new operation. The caller must distinguish "sealed failure replayed"
+(the operation is done, the answer is an error) from "rejected as
+indeterminate" (the operation's fate is unknown).
