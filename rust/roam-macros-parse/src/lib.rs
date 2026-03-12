@@ -447,7 +447,6 @@ impl ServiceMethod {
     /// Check whether this method explicitly opts into request context injection.
     pub fn wants_context(&self) -> bool {
         has_attr_path(&self.attributes, &["roam", "context"])
-            || has_attr_helper(&self.attributes, &["roam"], "cx")
     }
 
     /// Check whether this method explicitly declares rerun-safe semantics.
@@ -673,21 +672,12 @@ mod tests {
                 #[roam::context]
                 async fn contextual(&self) -> u32;
 
-                #[roam(cx)]
-                async fn contextual_alias(&self) -> u32;
-
                 async fn plain(&self) -> u32;
             }
             "#,
         );
         let mut methods = trait_def.methods();
         assert!(methods.next().expect("contextual method").wants_context());
-        assert!(
-            methods
-                .next()
-                .expect("contextual alias method")
-                .wants_context()
-        );
         assert!(!methods.next().expect("plain method").wants_context());
     }
 
