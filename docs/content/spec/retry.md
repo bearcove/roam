@@ -155,6 +155,24 @@ weight = 13
 
 ## Rerunnable
 
+The simplest category. A rerunnable method is one where running it again is
+always fine — same inputs, same observable result, no matter how many times
+you do it. Think of it as: "if in doubt, just do it again."
+
+**Examples:**
+
+- `get_user(user_id)` — reading data is inherently repeatable
+- `set_temperature(thermostat_id, 72.0)` — setting a value to a specific
+  target is the same whether you do it once or five times
+- `upsert_config(key, value)` — "insert or update" by key converges to the
+  same state regardless of repetition
+- `compute_hash(data)` — pure computation, no side effects at all
+
+The runtime doesn't need to do anything special here. No operation log, no
+deduplication machinery. If a response gets lost and the client retries,
+the server can just run the handler again. The only reason to cache results
+for rerunnable methods is performance, not correctness.
+
 > r[retry.category.rerunnable]
 >
 > The handler is naturally idempotent: executing it N times with the same
@@ -178,6 +196,41 @@ weight = 13
 > On Indeterminate state (crash recovery): re-execute. Safe by definition.
 
 ## Deduplicable
+
+This is the most interesting category, and the one that does the most heavy
+lifting. A deduplicable method is NOT safe to run twice on its own — but
+the runtime can make it safe by tracking the operation ID and caching the
+outcome.
+
+The trick: the handler doesn't need to be idempotent *everywhere*. It only
+needs to be idempotent in the window before it commits. After it seals its
+outcome, the runtime takes over and replays the cached result on any retry.
+The "idempotency" comes from the pair of (handler + runtime deduplication),
+not from the handler alone.
+
+**Examples:**
+
+- `transfer_money(from, to, amount)` — running this twice would move money
+  twice. But if the handler writes the balance changes and seals the
+  operation ID in the same database transaction, crash recovery is clean:
+  either the transaction committed (replay the result) or it didn't
+  (re-execute safely, because the balances weren't touched).
+
+- `create_order(customer_id, items)` — each execution creates a new order.
+  But if the handler wraps order creation + seal in one transaction, the
+  runtime guarantees exactly one order per operation ID. If the response is
+  lost, the client retries and gets back the same order ID without creating
+  a duplicate.
+
+- `reserve_seat(event_id, seat_number)` — double-reserving the same seat
+  would be a bug. The handler claims the seat and seals in one atomic step.
+  If the client retries, it gets the original reservation confirmation.
+
+The critical obligation on the handler is **atomicity**: if it crashes or
+fails before sealing, any partial work must either be rolled back (e.g., by
+the database transaction aborting) or be arranged so that re-execution will
+fix things up. If the handler can't make that promise, it doesn't belong in
+this category.
 
 > r[retry.category.deduplicable]
 >
@@ -217,6 +270,40 @@ weight = 13
 > is not a real seal — a crash would lose it and violate at-most-once.
 
 ## Non-retryable
+
+Sometimes you just can't make retry safe, and the honest thing is to say so.
+A non-retryable method touches systems that don't participate in the
+operation identity discipline — there's no way to atomically commit both
+the side effect and the seal, so after an ambiguous failure, nobody knows
+what happened.
+
+**Examples:**
+
+- `send_webhook(url, payload)` — the handler POSTs to a third-party API
+  that has no idempotency key support. If the POST goes through but the
+  server crashes before sealing, the operation is Indeterminate. Re-executing
+  would send the webhook again — maybe that's a duplicate Slack notification,
+  maybe it's a duplicate payment trigger. The runtime can't know.
+
+- `send_sms(phone_number, message)` — the SMS is gone the moment the
+  carrier accepts it. If the server crashes after sending but before
+  sealing, there's no transaction to roll back. The message was sent.
+
+- `trigger_deploy(service, version)` — kicks off a deploy pipeline in an
+  external CI system. Once the pipeline starts, there's no "undo" and no
+  way to check atomically whether it was triggered.
+
+For these methods, the system is honest about the gap. If a retry hits an
+Indeterminate state, it doesn't optimistically re-execute — it tells the
+client "the outcome is unknown, investigate through other means." The
+caller should have a separate read method (like `get_webhook_delivery_status`
+or `get_deploy_status`) to figure out what actually happened.
+
+Note that non-retryable methods still benefit from the operation state
+machine in the non-crash cases: if the response was simply lost (server
+sealed successfully, response didn't make it back), a retry replays the
+sealed outcome. The difference from deduplicable only shows up in the
+Indeterminate case — the worst case.
 
 > r[retry.category.non-retryable]
 >
