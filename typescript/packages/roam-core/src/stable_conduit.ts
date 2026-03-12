@@ -4,7 +4,13 @@ import {
   type Schema,
   type SchemaRegistry,
 } from "@bearcove/roam-postcard";
-import { decodeMessage, encodeMessage, type Message } from "@bearcove/roam-wire";
+import {
+  MessageSchema,
+  decodeMessage,
+  encodeMessage,
+  type Message,
+  wireSchemaRegistry,
+} from "@bearcove/roam-wire";
 import type { Conduit } from "./conduit.ts";
 import type { Link, LinkSource } from "./link.ts";
 
@@ -23,7 +29,7 @@ interface PacketAck {
 interface StableFrame {
   seq: number;
   ack: PacketAck | null;
-  item: Uint8Array;
+  item: Message;
 }
 
 const FRAME_SCHEMA: Schema = {
@@ -39,11 +45,11 @@ const FRAME_SCHEMA: Schema = {
         },
       },
     },
-    item: { kind: "bytes" },
+    item: MessageSchema,
   },
 };
 
-const FRAME_SCHEMA_REGISTRY: SchemaRegistry = new Map();
+const FRAME_SCHEMA_REGISTRY: SchemaRegistry = wireSchemaRegistry;
 
 function sameBytes(a: Uint8Array, b: Uint8Array): boolean {
   if (a.length !== b.length) {
@@ -195,7 +201,7 @@ export class StableConduit implements Conduit<Message> {
         const frame: StableFrame = {
           seq,
           ack: this.lastReceived === null ? null : { max_delivered: this.lastReceived },
-          item: itemBytes,
+          item,
         };
         this.replay.push(seq, itemBytes);
         await link.send(encodeWithSchema(frame, FRAME_SCHEMA, FRAME_SCHEMA_REGISTRY));
@@ -256,7 +262,7 @@ export class StableConduit implements Conduit<Message> {
         const frame: StableFrame = {
           seq: entry.seq,
           ack: this.lastReceived === null ? null : { max_delivered: this.lastReceived },
-          item: entry.item,
+          item: decodeMessage(entry.item).value,
         };
         await link.send(encodeWithSchema(frame, FRAME_SCHEMA, FRAME_SCHEMA_REGISTRY));
       }
@@ -283,7 +289,7 @@ export class StableConduit implements Conduit<Message> {
       const frame: StableFrame = {
         seq: entry.seq,
         ack: this.lastReceived === null ? null : { max_delivered: this.lastReceived },
-        item: entry.item,
+        item: decodeMessage(entry.item).value,
       };
       await link.send(encodeWithSchema(frame, FRAME_SCHEMA, FRAME_SCHEMA_REGISTRY));
     }
@@ -333,12 +339,11 @@ export class StableConduit implements Conduit<Message> {
           }
 
           this.lastReceived = frame.seq;
-          const message = decodeMessage(frame.item).value;
           const waiter = this.recvWaiters.shift();
           if (waiter) {
-            waiter(message);
+            waiter(frame.item);
           } else {
-            this.recvQueue.push(message);
+            this.recvQueue.push(frame.item);
           }
         } catch {
           await this.ensureReconnected();

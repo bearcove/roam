@@ -38,6 +38,8 @@ export {
   session,
   type IncomingCall,
   type SessionBuilderOptions,
+  type SessionConduitKind,
+  type SessionTransportOptions,
 } from "./session.ts";
 
 export {
@@ -86,4 +88,3 @@ export {
   clientMetadataToEntries,
   metadataEntriesToClientMetadata,
 } from "./metadata.ts";
-

@@ -10,8 +10,9 @@ import type {
   Schema,
   SchemaRegistry,
   ServiceDescriptor,
+  SessionTransportOptions,
 } from "@bearcove/roam-core";
-import { BareConduit, session } from "@bearcove/roam-core";
+import { session } from "@bearcove/roam-core";
 import { RpcError } from "@bearcove/roam-core";
 import { bindChannels, Rx, Tx } from "@bearcove/roam-core";
 import { connectWs } from "@bearcove/roam-ws";
@@ -439,9 +440,11 @@ export class TestbedClient implements TestbedCaller {
  * @param url - WebSocket URL (e.g., "ws://localhost:9000")
  * @returns A connected TestbedClient instance
  */
-export async function connectTestbed(url: string): Promise<TestbedClient> {
-  const attachment = await connectWs(url).nextLink();
-  const established = await session.initiator(new BareConduit(attachment.link));
+export async function connectTestbed(
+  url: string,
+  options: SessionTransportOptions = {},
+): Promise<TestbedClient> {
+  const established = await session.initiatorTransport(connectWs(url), options);
   return new TestbedClient(established.rootConnection().caller());
 }
 

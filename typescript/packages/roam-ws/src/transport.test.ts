@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { connectWs } from "./transport.ts";
 
-type Listener = (event: { data?: ArrayBuffer }) => void;
+type Listener = (event: { data?: ArrayBufferLike }) => void;
 
 class FakeWebSocket {
   static instances: FakeWebSocket[] = [];
@@ -36,10 +36,15 @@ class FakeWebSocket {
   }
 
   emitMessage(payload: Uint8Array): void {
-    this.dispatch("message", { data: payload.buffer.slice(0) });
+    this.dispatch("message", {
+      data: payload.buffer.slice(
+        payload.byteOffset,
+        payload.byteOffset + payload.byteLength,
+      ),
+    });
   }
 
-  private dispatch(type: string, event: { data?: ArrayBuffer }): void {
+  private dispatch(type: string, event: { data?: ArrayBufferLike }): void {
     for (const listener of this.listeners.get(type) ?? []) {
       listener(event);
     }
@@ -73,4 +78,3 @@ describe("WsLinkSource", () => {
     await expect(attachment.link.recv()).resolves.toEqual(incoming);
   });
 });
-

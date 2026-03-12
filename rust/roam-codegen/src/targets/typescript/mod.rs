@@ -105,14 +105,10 @@ fn generate_imports(service: &ServiceDescriptor, w: &mut CodeWriter<&mut String>
     // Core runtime: descriptor types + Caller + session/conduit helpers
     cw_writeln!(
         w,
-        "import type {{ Caller, MethodDescriptor, ServiceDescriptor, RoamCall, Dispatcher, RequestContext, Schema, SchemaRegistry }} from \"@bearcove/roam-core\";"
+        "import type {{ Caller, MethodDescriptor, ServiceDescriptor, RoamCall, Dispatcher, RequestContext, Schema, SchemaRegistry, SessionTransportOptions }} from \"@bearcove/roam-core\";"
     )
     .unwrap();
-    cw_writeln!(
-        w,
-        "import {{ BareConduit, session }} from \"@bearcove/roam-core\";"
-    )
-    .unwrap();
+    cw_writeln!(w, "import {{ session }} from \"@bearcove/roam-core\";").unwrap();
 
     // WebSocket transport for connect helper
     cw_writeln!(w, "import {{ connectWs }} from \"@bearcove/roam-ws\";").unwrap();

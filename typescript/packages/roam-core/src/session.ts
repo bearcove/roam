@@ -46,6 +46,10 @@ import {
   parityFromRole,
   roleFromParity,
 } from "./internal/parity.ts";
+import { BareConduit } from "./conduit.ts";
+import type { Link, LinkSource } from "./link.ts";
+import { singleLinkSource } from "./link.ts";
+import { StableConduit } from "./stable_conduit.ts";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 
@@ -67,6 +71,39 @@ export interface SessionBuilderOptions {
   maxConcurrentRequests?: number;
   metadata?: Metadata;
   onConnection?: (connection: ConnectionHandle) => void | Promise<void>;
+}
+
+export type SessionConduitKind = "bare" | "stable";
+
+export interface SessionTransportOptions extends SessionBuilderOptions {
+  conduit?: SessionConduitKind;
+}
+
+type SessionTransport = Link | LinkSource;
+
+function isLinkSource(value: SessionTransport): value is LinkSource {
+  return typeof (value as LinkSource).nextLink === "function";
+}
+
+async function makeSessionConduit(
+  transport: SessionTransport,
+  options: SessionTransportOptions,
+): Promise<Conduit<Message>> {
+  const conduit = options.conduit ?? "bare";
+  if (isLinkSource(transport)) {
+    if (conduit === "stable") {
+      return StableConduit.connect(transport);
+    }
+
+    const attachment = await transport.nextLink();
+    return new BareConduit(attachment.link);
+  }
+
+  if (conduit === "stable") {
+    return StableConduit.connect(singleLinkSource(transport));
+  }
+
+  return new BareConduit(transport);
 }
 
 export class SessionError extends Error {
@@ -750,6 +787,22 @@ export const session = {
   },
 
   acceptor(conduit: Conduit<Message>, options: SessionBuilderOptions = {}): Promise<Session> {
+    return Session.establishAcceptor(conduit, options);
+  },
+
+  async initiatorTransport(
+    transport: SessionTransport,
+    options: SessionTransportOptions = {},
+  ): Promise<Session> {
+    const conduit = await makeSessionConduit(transport, options);
+    return Session.establishInitiator(conduit, options);
+  },
+
+  async acceptorTransport(
+    transport: SessionTransport,
+    options: SessionTransportOptions = {},
+  ): Promise<Session> {
+    const conduit = await makeSessionConduit(transport, options);
     return Session.establishAcceptor(conduit, options);
   },
 

@@ -18,13 +18,13 @@ import type {
 import { TestbedClient, TestbedDispatcher } from "@bearcove/roam-generated/testbed.ts";
 import { connectTcp } from "@bearcove/roam-tcp";
 import {
-  BareConduit,
   Driver,
   SessionError,
   channel,
   session,
   type Tx,
   type Rx,
+  type SessionConduitKind,
 } from "@bearcove/roam-core";
 
 // Service implementation
@@ -155,6 +155,10 @@ class TestbedService implements TestbedHandler {
   }
 }
 
+function subjectConduit(): SessionConduitKind {
+  return process.env.SPEC_CONDUIT === "stable" ? "stable" : "bare";
+}
+
 
 async function runServer() {
   const addr = process.env.PEER_ADDR;
@@ -166,9 +170,8 @@ async function runServer() {
   const acceptConnections = process.env.ACCEPT_CONNECTIONS === "1";
 
   console.error(`server mode: connecting to ${addr}, acceptConnections=${acceptConnections}`);
-  const attachment = await connectTcp(addr).nextLink();
-  const conduit = new BareConduit(attachment.link);
-  const established = await session.initiator(conduit, {
+  const established = await session.initiatorTransport(connectTcp(addr), {
+    conduit: subjectConduit(),
     onConnection: acceptConnections
       ? (connection) => {
           const driver = new Driver(
@@ -202,8 +205,9 @@ async function runClient() {
   const scenario = process.env.CLIENT_SCENARIO ?? "echo";
   console.error(`client mode: connecting to ${addr}, scenario=${scenario}`);
 
-  const attachment = await connectTcp(addr).nextLink();
-  const established = await session.initiator(new BareConduit(attachment.link));
+  const established = await session.initiatorTransport(connectTcp(addr), {
+    conduit: subjectConduit(),
+  });
   const client = new TestbedClient(established.rootConnection().caller());
 
   switch (scenario) {

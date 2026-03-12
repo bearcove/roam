@@ -6,7 +6,6 @@
 import init, { start_acceptor } from "../pkg/wasm_inprocess_tests.js";
 import { InProcessLink } from "@bearcove/roam-inprocess";
 import {
-  BareConduit,
   session,
 } from "@bearcove/roam-core";
 import type { TestbedClient } from "@bearcove/roam-generated/testbed.ts";
@@ -341,7 +340,7 @@ async function runTests(): Promise<void> {
     });
 
     log("Establishing session as initiator...");
-    const established = await session.initiator(new BareConduit(link));
+    const established = await session.initiatorTransport(link, { conduit: "bare" });
 
     // Import the TestbedClient constructor dynamically to avoid circular issues
     const { TestbedClient } = await import(
