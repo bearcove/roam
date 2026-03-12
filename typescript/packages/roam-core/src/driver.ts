@@ -196,6 +196,9 @@ class OperationRegistry {
       return { kind: "none" };
     }
     if (existing.stored.retry.persist) {
+      if (existing.ownerRequestId === requestId) {
+        return { kind: "none" };
+      }
       existing.waiters = existing.waiters.filter((candidate) => candidate !== requestId);
       this.requestToOperation.delete(requestId);
       return { kind: "detach" };

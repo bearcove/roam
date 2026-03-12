@@ -520,7 +520,7 @@ async fn cancel_aborts_in_flight_handler() {
             let (server_caller, _sh) = acceptor(server_conduit)
                 .establish::<DriverCaller>(BlockingHandler {
                     was_cancelled,
-                    retry: RetryPolicy::default(),
+                    retry: RetryPolicy::VOLATILE,
                 })
                 .await
                 .expect("server handshake failed");
@@ -841,7 +841,7 @@ async fn in_flight_call_returns_cancelled_when_peer_closes() {
                 })
                 .establish::<DriverCaller>(BlockingHandler {
                     was_cancelled,
-                    retry: RetryPolicy::default(),
+                    retry: RetryPolicy::VOLATILE,
                 })
                 .await
                 .expect("server handshake failed");
@@ -908,7 +908,7 @@ async fn keepalive_timeout_returns_cancelled_when_pongs_are_missing() {
             let (server_caller, _sh) = acceptor(server_conduit)
                 .establish::<DriverCaller>(BlockingHandler {
                     was_cancelled: Arc::new(AtomicBool::new(false)),
-                    retry: RetryPolicy::default(),
+                    retry: RetryPolicy::VOLATILE,
                 })
                 .await
                 .expect("server handshake failed");

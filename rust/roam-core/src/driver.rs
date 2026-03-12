@@ -238,6 +238,9 @@ impl OperationRegistry {
         };
 
         if live.stored.retry.persist {
+            if live.owner_request_id == request_id {
+                return OperationCancel::None;
+            }
             live.waiters.retain(|candidate| *candidate != request_id);
             self.request_to_operation.remove(&request_id);
             return OperationCancel::DetachOnly;
