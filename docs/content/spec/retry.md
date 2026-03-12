@@ -481,21 +481,66 @@ at-most-once.
 > are only safe to evict when the client can no longer plausibly retry — after
 > the client has acknowledged receipt of the result, or after the TTL expires.
 
-# Multi-server deployments
+# Channels and retry
 
-For rerunnable methods, a local operation log is sufficient — re-execution
-on a different server is safe by definition.
+Channels (see `r[rpc.channel]`) are connection-bound, stateful streams. They
+don't naturally compose with retry the way a stateless request/response pair
+does. This section defines how channels interact with the retry machinery.
 
-For deduplicable methods, the situation is different:
+The motivating pattern is "seed + deltas": a method like
+`watch_room(room_id, events: Tx<RoomEvent, 16>)` where the handler first
+sends a full state dump (the seed), then streams incremental updates. On
+reconnect, the handler re-executes and sends a fresh seed — the caller
+resets its local state and picks up from there. This pattern is naturally
+rerunnable and should work transparently.
 
-> r[retry.distributed.shared-log]
+> r[retry.channel.connection-bound]
 >
-> For deduplicable methods, the operation log MUST be accessible to any
-> server that might handle a retry. If a client's retry hits a different
-> server after failover and that server has no access to the operation log,
-> it would see the operation as Absent and re-execute — violating at-most-once.
-> The operation log MUST be shared (replicated store, consensus protocol,
-> or sticky routing).
+> Channels are bound to the connection they were created on. When a
+> connection is lost, all channels on that connection are terminated.
+
+> r[retry.channel.no-sealed-replay]
+>
+> Sealed replay MUST NOT attempt to re-establish channels. A sealed outcome
+> contains the return value, not live channel state. Methods whose usefulness
+> depends entirely on their channels (e.g., a streaming method that returns
+> `()`) gain nothing from sealed replay — the caller must issue a new
+> operation.
+
+> r[retry.channel.rerunnable-reexecution]
+>
+> When a rerunnable method with channels is re-executed on retry, the
+> runtime MUST create fresh channels for the new execution. The handler
+> receives new channel handles and starts from scratch.
+
+> r[retry.channel.rebinding]
+>
+> When a rerunnable method is re-executed on retry, the caller's original
+> channel handles (the paired ends it kept) MUST be transparently rebound
+> to the fresh channels from the new execution. The caller MUST NOT need
+> to create new channel pairs or be aware that a retry occurred.
+
+> r[retry.channel.rebinding.rx]
+>
+> An `Rx<T>` handle whose underlying channel was terminated by connection
+> loss MUST, on the next `recv()` call, receive items from the replacement
+> channel created by re-execution. Items already consumed from the original
+> channel are not replayed — the new channel starts fresh (which is safe
+> because the method is rerunnable).
+
+> r[retry.channel.rebinding.tx]
+>
+> A `Tx<T>` handle whose underlying channel was terminated by connection
+> loss MUST, on the next `send()` call, send items through the replacement
+> channel created by re-execution.
+
+> r[retry.channel.deduplicable-no-rebinding]
+>
+> For deduplicable methods, channel rebinding MUST NOT occur. If the
+> operation is Live and a duplicate joins, the duplicate waits for the
+> return value — it does not get access to the running handler's channels.
+> If the operation is Sealed, the caller receives the cached return value
+> with no live channels.
 
 # Summary
 
