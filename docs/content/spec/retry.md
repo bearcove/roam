@@ -67,9 +67,9 @@ operation proceeds through this lifecycle:
          │    └──────┬───────┘    │
          │           │            │
    abort/cancel      │ handler    │ crash (between
-   (pre-commit)      │ calls      │ commit and seal,
-         │           │ seal()     │ outcome lost)
-         ▼           ▼            ▼
+   (pre-commit)      │ returns    │ commit() and
+         │           │ (= seal)   │ return, outcome
+         ▼           ▼            ▼  lost)
   ┌──────────┐  ┌──────────┐  ┌──────────────┐
   │ Released │  │ Sealed   │  │Indeterminate │
   │(→ Absent)│  │(outcome) │  │              │
@@ -101,10 +101,10 @@ operation proceeds through this lifecycle:
 > r[retry.state.indeterminate]
 >
 > **Indeterminate.** The server crashed or lost state while the operation was
-> Live, between commit and seal. The effect may have happened but the
-> outcome was never recorded. For idempotent methods, the runtime re-executes.
-> For effectful methods, recovery depends on whether durable state can be
-> inspected (see `r[retry.category.effectful.indeterminate]`).
+> Live. If the handler never committed, re-execution is safe. If the handler
+> committed but never returned (sealed), the effect may have happened but the
+> outcome was never recorded — the runtime must be honest about this
+> (see `r[retry.commit.indeterminate]`).
 
 # Duplicate attempt handling
 
@@ -142,21 +142,19 @@ about, the server's behavior depends on the operation's current state.
 > the retry with an explicit "expired" error. It MUST NOT treat an expired
 > ID as Absent.
 
-# Method categories
+# The volatile default
 
-> r[retry.category]
->
-> Every service method MUST be assigned one of two retry categories. The
-> category determines what guarantees the runtime can provide and what
-> obligations the handler must satisfy.
+By default, every handler is **volatile**. The runtime can cancel it at any
+time — on client disconnect, on timeout, on cancellation request. If it
+fails or is interrupted, the runtime releases the operation and a retry gets
+a fresh execution. No operation records are needed. No special cooperation
+from the handler is required.
 
-## Idempotent
+This is the right default for most methods: reads, pure computations,
+idempotent writes. If the handler never calls `commit()`, it stays volatile
+for its entire lifetime.
 
-The simplest category. An idempotent method is one where running it again is
-always fine — same inputs, same observable result, no matter how many times
-you do it. Think of it as: "if in doubt, just do it again."
-
-**Examples:**
+**Examples of volatile methods:**
 
 - `get_user(user_id)` — reading data is inherently repeatable
 - `set_temperature(thermostat_id, 72.0)` — setting a value to a specific
@@ -164,69 +162,71 @@ you do it. Think of it as: "if in doubt, just do it again."
 - `upsert_config(key, value)` — "insert or update" by key converges to the
   same state regardless of repetition
 - `compute_hash(data)` — pure computation, no side effects at all
+- `watch_room(room_id, events: Tx<RoomEvent>)` — streaming with
+  seed+deltas; re-execution produces a fresh stream
 
-The runtime doesn't need to do anything special here. No operation log, no
-deduplication machinery. If a response gets lost and the client retries,
-the server can just run the handler again. The only reason to cache results
-for idempotent methods is performance, not correctness.
-
-> r[retry.category.idempotent.contract]
+> r[retry.volatile.default]
 >
-> **Handler obligation:** the handler MUST tolerate being run more than once
-> for the same logical inputs. No additional cooperation with the runtime is
-> required.
+> A handler that never calls `commit()` is volatile. The runtime MAY cancel,
+> abort, or re-execute it at any time. No operation record is required for
+> correctness.
 
-> r[retry.category.idempotent.reexecution]
+> r[retry.volatile.reexecution]
 >
-> The runtime MAY re-execute an idempotent handler on any retry attempt,
+> The runtime MAY re-execute a volatile handler on any retry attempt,
 > regardless of operation state.
 
-> r[retry.category.idempotent.caching]
+> r[retry.volatile.caching]
 >
-> The runtime MAY return a cached result instead of re-executing. Operation
-> state tracking is an optimization for idempotent methods, not a correctness
-> requirement.
+> The runtime MAY return a cached result instead of re-executing a volatile
+> handler. Operation state tracking is an optimization for volatile methods,
+> not a correctness requirement.
 
-> r[retry.category.idempotent.indeterminate]
+> r[retry.volatile.indeterminate]
 >
-> On Indeterminate state (crash recovery), the runtime MUST re-execute the
-> handler.
+> If a volatile operation reaches Indeterminate state (crash recovery), the
+> runtime MUST re-execute the handler.
 
-## Effectful
+# The commit point
 
-An effectful method is NOT safe to run twice on its own — but the runtime
-and handler cooperate to make retry safe through two explicit lifecycle
-points: **commit** and **seal**.
+A handler becomes **committed** the moment it calls `roam::commit()`. This
+is the point of no return — the handler is about to perform an irreversible
+effect, and the runtime must change how it treats the operation.
 
-The handler controls both points:
+Before commit, the handler has not performed any irreversible effects, and
+re-execution is safe. After commit, effects may have escaped (a database
+write, an API call, a message sent), and the runtime must see the handler
+through to completion.
 
-- **Commit** marks the point of no return. Before commit, the handler has
-  not performed any irreversible effects — re-execution is safe. After
-  commit, effects may have escaped (a database write, an API call, a
-  message sent).
+`commit()` is accessed via a task-local (Rust) or async context
+(TypeScript). The handler's method signature does not change — no context
+parameter, no annotations. The runtime's dispatch wrapper sets up the
+context before invoking the handler.
 
-- **Seal** records the final outcome. After seal, retries receive the
-  cached result — the handler is never re-invoked.
-
-The critical rule: **commit before the dangerous `.await`**. If the handler
-is about to perform an irreversible operation — an external API call, a
-database write that can't be rolled back — it must call `commit()` first.
-If the process crashes during the `.await`, the runtime knows the operation
-is past the point of no return and will not blindly re-execute.
+The critical rule: **call `commit()` before the dangerous `.await`**. If
+the handler is about to perform an irreversible operation — an external API
+call, a database write that can't be rolled back — it must call `commit()`
+first. If the process crashes during the `.await`, the runtime knows the
+operation is past the point of no return and will not blindly re-execute.
 
 ```rust
 // CORRECT: commit before the irreversible await
-ctx.commit();
+roam::commit();
 let response = http_post(url, payload).await;
-ctx.seal(response);
+Ok(response) // returning = sealed
 
 // WRONG: the webhook fires, then we crash before commit —
 // runtime thinks re-execution is safe, webhook fires again
 let response = http_post(url, payload).await;
-ctx.commit(); // too late, the effect already escaped
+roam::commit(); // too late, the effect already escaped
 ```
 
-The gap between commit and seal is the **danger window**. If the process
+**Seal is implicit: returning from the handler seals the operation.** The
+handler returns `Ok(value)` or `Err(user_error)`, and the runtime records
+that as the sealed outcome. There is no explicit `seal()` API for the
+common case. The handler's return value is the seal.
+
+The gap between commit and return is the **danger window**. If the process
 crashes in this window, the operation is Indeterminate — the effect may
 have happened, but there's no cached outcome to replay.
 
@@ -234,17 +234,18 @@ How wide this window is depends on the handler's design:
 
 **Narrow window (database transactions):** For methods like
 `transfer_money(from, to, amount)`, the handler can write the balance
-changes and seal the operation ID in the same database transaction. Commit
-and seal happen atomically. If the transaction commits, the seal is there —
-retries get replays. If it doesn't, nothing happened — re-execution is
-safe. The Indeterminate window is essentially zero.
+changes and record the operation outcome in the same database transaction.
+Commit and seal happen atomically — the DB commit IS both. If the
+transaction commits, the outcome is there — retries get replays. If it
+doesn't, nothing happened — re-execution is safe. The Indeterminate window
+is essentially zero.
 
 **Wide window (external effects):** For methods like
 `send_webhook(url, payload)`, the handler POSTs to a third party. Commit
-happens before the POST; seal happens after the 200 comes back. If the
-process crashes between the POST and the seal, the webhook fired but
-there's no cached outcome. The operation is Indeterminate, and the runtime
-must be honest about it.
+happens before the POST; seal happens when the handler returns after
+getting the 200 back. If the process crashes between the POST and the
+return, the webhook fired but there's no cached outcome. The operation is
+Indeterminate, and the runtime must be honest about it.
 
 **Examples across the spectrum:**
 
@@ -254,96 +255,95 @@ must be honest about it.
 - `create_order(customer_id, items)` — same pattern: order creation + seal
   in one transaction. Retries replay the same order ID.
 
-- `send_webhook(url, payload)` — commit, then POST, then seal. Wide danger
-  window. If the process crashes mid-POST, the outcome is unknown.
+- `send_webhook(url, payload)` — commit, then POST, then return. Wide
+  danger window. If the process crashes mid-POST, the outcome is unknown.
 
 - `send_sms(phone_number, message)` — commit, then send via carrier, then
-  seal. The SMS is gone the moment the carrier accepts it. If we crash
-  before sealing, the operation is Indeterminate.
+  return. The SMS is gone the moment the carrier accepts it. If we crash
+  before returning, the operation is Indeterminate.
 
 - `trigger_deploy(service, version)` — commit, then kick off CI pipeline,
-  then seal. Once the pipeline starts, there's no undo.
+  then return. Once the pipeline starts, there's no undo.
 
 For methods with a wide danger window, the handler SHOULD provide a
 separate query mechanism (like `get_webhook_delivery_status`) so callers
 can resolve ambiguous outcomes.
 
-> r[retry.category.effectful.commit]
+> r[retry.commit]
 >
-> The runtime MUST provide an explicit `commit()` operation in the handler
-> API. Calling `commit()` marks the point of no return — the handler is
-> about to perform irreversible effects.
+> The runtime MUST provide a `commit()` operation accessible from the
+> handler's execution context (task-local in Rust, async context in
+> TypeScript). Calling `commit()` marks the point of no return — the
+> handler is about to perform irreversible effects.
 
-> r[retry.category.effectful.commit-before-await]
+> r[retry.commit.no-annotation]
 >
-> The handler MUST call `commit()` before any `.await` (or other yield
-> point) that performs an irreversible operation. If the handler crashes
-> during an irreversible `.await` without having committed, the runtime
-> will assume re-execution is safe — potentially causing duplicate effects.
+> Whether a handler calls `commit()` is a runtime decision, not a
+> declaration. The handler's method signature MUST NOT change based on
+> whether it uses `commit()`. No attribute or annotation is required.
 
-> r[retry.category.effectful.pre-commit-safe]
+> r[retry.commit.before-effect]
 >
-> Before `commit()` is called, the operation is safe to abort and re-execute.
-> If the handler fails or is interrupted before committing, the runtime
-> MUST release the operation (transition to Released / Absent), allowing
-> a fresh execution on retry.
+> The handler MUST call `commit()` before any operation that performs an
+> irreversible effect (e.g., an `.await` on an external API call). If the
+> handler crashes during an irreversible operation without having committed,
+> the runtime will assume re-execution is safe — potentially causing
+> duplicate effects.
 
-> r[retry.category.effectful.seal]
+> r[retry.commit.pre-commit-safe]
 >
-> The runtime MUST provide an explicit `seal(outcome)` operation in the
-> handler API. Sealing records the final outcome (success or failure) so
-> that retries receive the cached result without re-invoking the handler.
+> Before `commit()` is called, the operation is volatile. If the handler
+> fails or is interrupted before committing, the runtime MUST release the
+> operation (transition to Released / Absent), allowing a fresh execution
+> on retry.
 
-> r[retry.category.effectful.seal-after-commit]
+> r[retry.commit.post-commit-sticky]
 >
-> `seal()` MUST be called after `commit()`. The handler commits (point of
-> no return), performs the effect, observes the result, and then seals the
-> outcome.
+> After `commit()` is called, the runtime MUST NOT drop the handler's
+> future on client disconnect or cancellation. The handler must run to
+> completion so that it can return (seal) an outcome.
 
-> r[retry.category.effectful.implicit-seal]
+> r[retry.commit.seal-is-return]
 >
-> Returning a success value from an effectful handler implicitly seals the
-> operation with that value. Explicit `seal()` is needed only when the
-> handler wants to record an outcome before returning — for example, to
-> seal a success and then return an error ("seal-then-fail").
+> Returning from the handler — whether `Ok(value)` or `Err(user_error)` —
+> implicitly seals the operation with that outcome. There is no separate
+> `seal()` API. The handler's return value is the sealed outcome.
 
-> r[retry.category.effectful.no-reexecution]
+> r[retry.commit.no-reexecution]
 >
-> After an effectful handler seals its outcome, re-execution MUST NOT
-> occur. The runtime MUST replay the cached result for any subsequent
-> attempt with the same operation ID.
+> After a committed handler returns (seals), re-execution MUST NOT occur.
+> The runtime MUST replay the cached result for any subsequent attempt with
+> the same operation ID.
 
-> r[retry.category.effectful.indeterminate]
+> r[retry.commit.indeterminate]
 >
-> On Indeterminate state (crash between commit and seal): the runtime MUST
-> inspect durable state. If the seal is present, replay it. If the seal is
-> absent but the operation was committed, the outcome is genuinely unknown.
-> The runtime MUST report this to the client as an indeterminate error.
-> If the operation was never committed, re-execution is safe.
+> On Indeterminate state (crash between commit and return): the runtime
+> MUST inspect durable state. If the seal is present, replay it. If the
+> seal is absent but the operation was committed, the outcome is genuinely
+> unknown. The runtime MUST report this to the client as an indeterminate
+> error. If the operation was never committed, re-execution is safe.
 
-> r[retry.category.effectful.seal-durability]
+> r[retry.commit.seal-durability]
 >
-> For effectful methods, the seal MUST be durable. An in-memory-only seal
-> is not a real seal — a crash would lose it and violate at-most-once.
+> For committed operations, the seal MUST be durable. An in-memory-only
+> seal is not a real seal — a crash would lose it and violate at-most-once.
 
-> r[retry.category.effectful.narrow-window]
+> r[retry.commit.narrow-window]
 >
 > When possible, the handler SHOULD arrange for commit and seal to happen
 > atomically (e.g., in the same database transaction). This eliminates the
 > Indeterminate window entirely.
 
-> r[retry.category.effectful.query-mechanism]
+> r[retry.commit.query-mechanism]
 >
-> For effectful methods with a wide commit-to-seal window (external API
+> For committed operations with a wide commit-to-seal window (external API
 > calls, messages to third parties), the handler SHOULD provide a separate
 > query mechanism so callers can resolve ambiguous outcomes.
 
 # Sealing properties
 
-The commit/seal lifecycle is defined in the effectful method category (see
-`r[retry.category.effectful.commit]` through
-`r[retry.category.effectful.seal-durability]`). This section covers
-properties of sealed outcomes that apply regardless of method category.
+Seal is implicit — the handler returns, and the runtime records the
+outcome. These properties apply to all sealed outcomes.
 
 If the handler committed side effects and then reports failure, that failure
 is the true outcome of the operation. Replaying it on retry is correct —
@@ -385,7 +385,7 @@ This section gives the handler that voice.
 >
 > A transient error MUST NOT seal the operation. The runtime MUST release
 > the operation (transition to Released / Absent), exactly as with any
-> pre-commit failure (see `r[retry.seal.pre-commit-release]`).
+> pre-commit failure (see `r[retry.commit.pre-commit-safe]`).
 
 > r[retry.transient.wire]
 >
@@ -426,22 +426,17 @@ abort, and the client simply disappearing.
 > yet sealed, the server SHOULD continue the handler to completion and seal
 > the outcome. Aborting a committed operation leaves it Indeterminate.
 
-> r[retry.cancel.implicit.idempotent]
+> r[retry.cancel.implicit.pre-commit]
 >
-> When the client disconnects during an idempotent method, the server MAY
-> abort the handler to save resources. Re-execution on reconnect is safe.
+> When the client disconnects and the handler has not yet committed, the
+> server MAY abort the handler and release the operation. Re-execution on
+> retry is safe because no irreversible effects have occurred.
 
-> r[retry.cancel.implicit.effectful.pre-commit]
+> r[retry.cancel.implicit.post-commit]
 >
-> When the client disconnects during an effectful method that has not yet
-> committed, the server MAY abort the handler and release the operation.
-> Re-execution on retry is safe because no irreversible effects have occurred.
-
-> r[retry.cancel.implicit.effectful.post-commit]
->
-> When the client disconnects during an effectful method that has already
-> committed, the server SHOULD continue the handler to completion and seal
-> the outcome. Aborting a committed operation leaves it Indeterminate.
+> When the client disconnects and the handler has already committed, the
+> server MUST continue the handler to completion and seal the outcome.
+> Aborting a committed operation leaves it Indeterminate.
 
 > r[retry.cancel.race]
 >
@@ -553,7 +548,7 @@ No pre-emptive copies needed.
 >
 > Channels that were active before the conduit failure are terminated by
 > the connection loss (see `r[retry.channel.connection-bound]`). After
-> session resumption, idempotent methods with channels are re-executed and
+> session resumption, volatile methods with channels are re-executed and
 > channel handles are rebound per `r[retry.channel.rebinding]`.
 
 If session resumption fails — the server has no record of the session
@@ -579,7 +574,7 @@ what came before.
 # Operation record lifetime
 
 The server cannot keep operation records forever, but premature eviction
-is dangerous: if an effectful operation's record is evicted and the client
+is dangerous: if a committed operation's record is evicted and the client
 retries, the server would re-execute (seeing the ID as Absent), violating
 at-most-once.
 
@@ -615,9 +610,9 @@ at-most-once.
 > monotonic sequence) that the server can distinguish evicted IDs from
 > genuinely new ones.
 
-> r[retry.gc.effectful-persistence]
+> r[retry.gc.committed-persistence]
 >
-> For effectful methods with durable effects, operation records SHOULD be
+> For committed operations with durable effects, operation records SHOULD be
 > persisted alongside the effects (same store, same retention policy). Records
 > are only safe to evict when the client can no longer plausibly retry — after
 > the client has acknowledged receipt of the result, or after the TTL expires.
@@ -627,6 +622,45 @@ at-most-once.
 Channels (see `r[rpc.channel]`) are connection-bound, stateful streams. They
 don't naturally compose with retry the way a stateless request/response pair
 does. This section defines how channels interact with the retry machinery.
+
+## Channels and commit are mutually exclusive
+
+Channels require re-execution on reconnect — the handler starts fresh, sends
+a new seed, streams new deltas. Committed operations cannot be re-executed —
+the whole point of commit is that effects have escaped and re-execution is
+unsafe. These two properties are fundamentally incompatible.
+
+Rather than defining complex interactions for "what happens if you commit
+with active channels," the spec forbids it. If your method has channels,
+you cannot call `commit()`. If you need both a mutation and a streaming
+subscription, use two calls:
+
+```rust
+// Committed: mutates state, no channels
+async fn place_order(&self, items: Vec<Item>) -> OrderId {
+    roam::commit();
+    let order = db.insert_order(items).await;
+    Ok(order.id)
+}
+
+// Volatile: streams events, has channels, never commits
+async fn watch_orders(&self, events: Tx<OrderEvent>) {
+    let snapshot = db.get_all_orders().await;
+    events.send(OrderEvent::Seed(snapshot)).await;
+    loop {
+        let event = db.subscribe_orders().recv().await;
+        events.send(event).await;
+    }
+}
+```
+
+> r[retry.channel.no-commit]
+>
+> A handler with channel arguments (`Tx<T>` or `Rx<T>`) MUST NOT call
+> `commit()`. If a handler with channels calls `commit()`, the runtime
+> MUST panic or return an error. Channels and commit are mutually exclusive.
+
+## Channel rebinding on retry
 
 The motivating pattern is "seed + deltas": a method like
 `watch_room(room_id, events: Tx<RoomEvent, 16>)` where the handler first
@@ -661,15 +695,15 @@ is out of scope for the retry layer.
 > `()`) gain nothing from sealed replay — the caller must issue a new
 > operation.
 
-> r[retry.channel.idempotent-reexecution]
+> r[retry.channel.reexecution]
 >
-> When an idempotent method with channels is re-executed on retry, the
-> runtime MUST create fresh channels for the new execution. The handler
-> receives new channel handles and starts from scratch.
+> When a volatile method with channels is re-executed on retry, the runtime
+> MUST create fresh channels for the new execution. The handler receives
+> new channel handles and starts from scratch.
 
 > r[retry.channel.rebinding]
 >
-> When an idempotent method is re-executed on retry, the caller's original
+> When a volatile method is re-executed on retry, the caller's original
 > channel handles (the paired ends it kept) MUST be transparently rebound
 > to the fresh channels from the new execution. The caller MUST NOT need
 > to create new channel pairs or be aware that a retry occurred.
@@ -680,7 +714,7 @@ is out of scope for the retry layer.
 > loss MUST, on the next `recv()` call, receive items from the replacement
 > channel created by re-execution. Items already consumed from the original
 > channel are not replayed — the new channel starts fresh (which is safe
-> because the method is idempotent and the handler will re-seed).
+> because the handler will re-seed).
 
 > r[retry.channel.rebinding.tx]
 >
@@ -688,27 +722,23 @@ is out of scope for the retry layer.
 > loss MUST, on the next `send()` call, send items through the replacement
 > channel created by re-execution.
 
-> r[retry.channel.effectful-no-rebinding]
->
-> For effectful methods, channel rebinding MUST NOT occur. If the
-> operation is Live and a duplicate joins, the duplicate waits for the
-> return value — it does not get access to the running handler's channels.
-> If the operation is Sealed, the caller receives the cached return value
-> with no live channels.
-
 # Summary
 
 The retry model distributes obligations across three parties:
 
 **The runtime** provides operation IDs, maintains the state machine, exposes
-the commit/seal API, handles parked duplicates, manages operation log
-lifetime with safe eviction, and surfaces uncertainty honestly.
+`commit()` via task-local, handles parked duplicates, manages operation log
+lifetime with safe eviction, and surfaces uncertainty honestly. It seals
+operations implicitly when the handler returns.
 
-**The handler** chooses the correct category for each method. For idempotent:
-ensure natural idempotency. For effectful: call `commit()` before
-irreversible effects and `seal()` after observing the outcome. When commit
-and seal can be atomic (e.g., same database transaction), the Indeterminate
-window is eliminated entirely.
+**The handler** is volatile by default — cancelable, re-executable, no
+ceremony. If the handler is about to perform an irreversible effect, it
+calls `roam::commit()` before the dangerous operation. That's it. One
+function call. No annotations, no context parameters, no explicit seal.
+When commit and return can be atomic (e.g., same database transaction),
+the Indeterminate window is eliminated entirely. Methods with channels
+never call `commit()` — if you need both a mutation and a subscription,
+use two calls.
 
 **The caller** mints a unique operation ID per logical operation, retries
 with the same ID on ambiguous failure, and uses a new ID when starting a
