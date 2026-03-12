@@ -449,10 +449,89 @@ success, business rejection, terminal failure. Transparent retry is defined
 over operations, not over attempts. A transient pre-commit crash does not
 seal the operation. A validation error does. A post-commit failure does.
 
-# Transport vs. operation layer
+# Reconnection model
 
-The transport and operation layers have distinct responsibilities. The
-transport delivers bytes; the operation layer decides what retries mean.
+There are three levels of reconnection, each with different implications
+for retry. The key insight is that the session is the thing with identity
+and state — the conduit is just the pipe. When the pipe breaks, you get a
+new pipe and continue the same session.
+
+## Level 1: Stable conduit reconnection
+
+A `StableConduit` (see `r[conduit.stable]`) handles link failures
+transparently — it reconnects over a fresh link and replays missed
+messages. The session doesn't even notice the interruption. No retry
+machinery is needed because from the session's perspective, nothing
+happened.
+
+> r[retry.reconnect.stable-conduit]
+>
+> When a `StableConduit` successfully reconnects and replays missed
+> messages, the session MUST continue as if the link never failed. No
+> operation-level retry is triggered.
+
+## Level 2: Session resumption on a new conduit
+
+The conduit is dead — `BareConduit` link failure, or a `StableConduit`
+that could not recover. But the session doesn't have to die with it. The
+client can obtain a new conduit and resume the existing session. All
+session state — operation records, in-flight requests, channel state — is
+preserved because it's the same session, just on a new pipe.
+
+This is the primary scenario the retry machinery is designed for. The
+operation ID scope is the session (see `r[retry.op-id.scope]`), so as
+long as the session survives, retry works.
+
+> r[retry.reconnect.session-resume]
+>
+> A session MUST be resumable on a new conduit. When the underlying conduit
+> fails, the session MUST NOT be torn down immediately. The server MUST
+> retain session state (operation records, connection state, channel state)
+> for a configurable grace period, allowing the client to resume.
+
+> r[retry.reconnect.session-resume.handshake]
+>
+> Session resumption MUST use a resume handshake that presents the existing
+> session's identity to the server. The server MUST validate the session
+> identity and, if the session is still alive, continue it on the new
+> conduit.
+
+> r[retry.reconnect.session-resume.ambiguous-ops]
+>
+> After session resumption, the session layer MUST determine which
+> in-flight operations have ambiguous delivery status. For each ambiguous
+> operation, the operation layer re-sends the request as an explicit retry
+> attempt with the original operation ID.
+
+> r[retry.reconnect.session-resume.reattach]
+>
+> If the server confirms that an in-flight operation is still Live after
+> session resumption, the client MAY wait for the result over the resumed
+> session without re-sending the request.
+
+> r[retry.reconnect.session-resume.channels]
+>
+> Channels that were active before the conduit failure are terminated by
+> the connection loss (see `r[retry.channel.connection-bound]`). After
+> session resumption, rerunnable methods with channels are re-executed and
+> channel handles are rebound per `r[retry.channel.rebinding]`.
+
+## Level 3: Fresh session
+
+The old session is truly gone — server crashed, grace period expired,
+or the client chose to start over. A new session means a new handshake,
+new session identity, and no operation records from the previous session.
+Retry with old operation IDs is not possible. The client must issue new
+logical operations.
+
+> r[retry.reconnect.fresh-session]
+>
+> When a session cannot be resumed (server has no record of the session
+> identity, or the grace period has expired), the client MUST establish a
+> fresh session. All operations from the previous session are lost from the
+> retry layer's perspective. The client MUST use new operation IDs.
+
+## Transport layer obligations
 
 > r[retry.layers.transport-retransmit]
 >
@@ -465,18 +544,6 @@ transport delivers bytes; the operation layer decides what retries mean.
 > If the transport does NOT know whether a message reached the server, it
 > MUST surface this uncertainty to the operation layer. The transport MUST
 > NOT silently retry operations.
-
-> r[retry.layers.reconnect-report]
->
-> After a reconnect, the session layer MUST report which in-flight operations
-> have ambiguous delivery status. The operation layer then re-sends those as
-> explicit retry attempts with the original operation IDs.
-
-> r[retry.layers.reattach]
->
-> If the session layer can resume a connection and the server confirms that
-> a particular in-flight operation is still Live, the session layer MAY
-> wait for the result over the new connection without re-sending the request.
 
 # Operation record lifetime
 
