@@ -484,6 +484,14 @@ This is the primary scenario the retry machinery is designed for. The
 operation ID scope is the session (see `r[retry.op-id.scope]`), so as
 long as the session survives, retry works.
 
+This path is particularly attractive for zero-copy transports (e.g.,
+shared memory) where `StableConduit` buffering overhead is unacceptable.
+A `BareConduit` pays nothing in the happy path — no replay log, no
+message buffering. On failure, the caller still owns the original
+arguments (they were borrowed for serialization, not consumed), so
+retrying is just: same operation ID, re-serialize from the same source.
+No pre-emptive copies needed.
+
 > r[retry.reconnect.session-resume]
 >
 > A session MUST be resumable on a new conduit. When the underlying conduit
@@ -504,6 +512,13 @@ long as the session survives, retry works.
 > in-flight operations have ambiguous delivery status. For each ambiguous
 > operation, the operation layer re-sends the request as an explicit retry
 > attempt with the original operation ID.
+
+> r[retry.reconnect.session-resume.reserialize]
+>
+> When retrying an ambiguous operation after session resumption, the runtime
+> MUST re-serialize the arguments from the caller's original data. The
+> runtime MUST NOT require pre-emptive copies of serialized request payloads
+> for retry purposes.
 
 > r[retry.reconnect.session-resume.reattach]
 >
