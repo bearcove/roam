@@ -102,15 +102,15 @@ fn generate_imports(service: &ServiceDescriptor, w: &mut CodeWriter<&mut String>
         .iter()
         .any(|m| matches!(classify_shape(m.return_shape), ShapeKind::Result { .. }));
 
-    // Core runtime: descriptor types + Caller + CallBuilder + connection helpers
+    // Core runtime: descriptor types + Caller + session/conduit helpers
     cw_writeln!(
         w,
-        "import type {{ Caller, MethodDescriptor, ServiceDescriptor, RoamCall, ChannelingDispatcher, Schema, SchemaRegistry }} from \"@bearcove/roam-core\";"
+        "import type {{ Caller, MethodDescriptor, ServiceDescriptor, RoamCall, Dispatcher, RequestContext, Schema, SchemaRegistry }} from \"@bearcove/roam-core\";"
     )
     .unwrap();
     cw_writeln!(
         w,
-        "import {{ CallBuilder, helloExchangeInitiator, defaultHello }} from \"@bearcove/roam-core\";"
+        "import {{ BareConduit, session }} from \"@bearcove/roam-core\";"
     )
     .unwrap();
 

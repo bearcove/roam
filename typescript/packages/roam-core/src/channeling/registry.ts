@@ -396,6 +396,17 @@ export class ChannelRegistry {
     this.closed.add(channelId);
   }
 
+  closeAll(): void {
+    for (const channelId of this.incoming.keys()) {
+      this.close(channelId);
+    }
+    for (const channelId of this.outgoing.keys()) {
+      this.close(channelId);
+    }
+    this.pendingCredits.length = 0;
+    this.creditWaiter = null;
+  }
+
   /** Check if a channel ID is registered (either incoming or outgoing). */
   contains(channelId: ChannelId): boolean {
     return this.incoming.has(channelId) || this.outgoing.has(channelId);

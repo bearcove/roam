@@ -16,8 +16,16 @@ import type {
   LookupError,
 } from "@bearcove/roam-generated/testbed.ts";
 import { TestbedClient, TestbedDispatcher } from "@bearcove/roam-generated/testbed.ts";
-import { Server } from "@bearcove/roam-tcp";
-import { type Tx, type Rx, channel, ConnectionError } from "@bearcove/roam-core";
+import { connectTcp } from "@bearcove/roam-tcp";
+import {
+  BareConduit,
+  Driver,
+  SessionError,
+  channel,
+  session,
+  type Tx,
+  type Rx,
+} from "@bearcove/roam-core";
 
 // Service implementation
 class TestbedService implements TestbedHandler {
@@ -67,7 +75,7 @@ class TestbedService implements TestbedHandler {
   async generate(count: number, output: Tx<number>): Promise<void> {
     // Server sends count numbers via Tx channel
     for (let i = 0; i < count; i++) {
-      output.send(i);
+      await output.send(i);
     }
     // Note: output.close() is called by the generated handler after this returns
   }
@@ -75,7 +83,7 @@ class TestbedService implements TestbedHandler {
   async transform(input: Rx<string>, output: Tx<string>): Promise<void> {
     // Server receives via Rx, sends via Tx (echo back as-is)
     for await (const s of input) {
-      output.send(s);
+      await output.send(s);
     }
     // Note: output.close() is called by the generated handler after this returns
   }
@@ -158,13 +166,26 @@ async function runServer() {
   const acceptConnections = process.env.ACCEPT_CONNECTIONS === "1";
 
   console.error(`server mode: connecting to ${addr}, acceptConnections=${acceptConnections}`);
-  const server = new Server();
-  const conn = await server.connect(addr, { acceptConnections });
+  const attachment = await connectTcp(addr).nextLink();
+  const conduit = new BareConduit(attachment.link);
+  const established = await session.initiator(conduit, {
+    onConnection: acceptConnections
+      ? (connection) => {
+          const driver = new Driver(
+            connection,
+            new TestbedDispatcher(new TestbedService()),
+          );
+          void driver.run();
+        }
+      : undefined,
+  });
+  const root = established.rootConnection();
+  const driver = new Driver(root, new TestbedDispatcher(new TestbedService()));
 
   try {
-    await conn.runChanneling(new TestbedDispatcher(new TestbedService()));
+    await driver.run();
   } catch (e) {
-    if (e instanceof ConnectionError && e.kind === "closed") {
+    if (e instanceof SessionError) {
       // Clean shutdown
       return;
     }
@@ -181,9 +202,9 @@ async function runClient() {
   const scenario = process.env.CLIENT_SCENARIO ?? "echo";
   console.error(`client mode: connecting to ${addr}, scenario=${scenario}`);
 
-  const server = new Server();
-  const conn = await server.connect(addr);
-  const client = new TestbedClient(conn.asCaller());
+  const attachment = await connectTcp(addr).nextLink();
+  const established = await session.initiator(new BareConduit(attachment.link));
+  const client = new TestbedClient(established.rootConnection().caller());
 
   switch (scenario) {
     case "echo": {
@@ -279,8 +300,6 @@ async function runClient() {
       throw new Error(`unknown CLIENT_SCENARIO: ${scenario}`);
   }
 
-  // Close the connection to allow process to exit
-  conn.getIo().close();
 }
 
 async function main() {
