@@ -451,18 +451,19 @@ seal the operation. A validation error does. A post-commit failure does.
 
 # Reconnection model
 
-There are three levels of reconnection, each with different implications
-for retry. The key insight is that the session is the thing with identity
-and state — the conduit is just the pipe. When the pipe breaks, you get a
-new pipe and continue the same session.
+The session is the thing with identity and state. The conduit is just the
+pipe. When the pipe breaks, you get a new pipe and continue the same
+session.
 
-## Level 1: Stable conduit reconnection
+Recovery is a two-step process: first try conduit-level reconnection, and
+if that fails, resume the session on a new conduit.
+
+## Conduit-level reconnection
 
 A `StableConduit` (see `r[conduit.stable]`) handles link failures
 transparently — it reconnects over a fresh link and replays missed
-messages. The session doesn't even notice the interruption. No retry
-machinery is needed because from the session's perspective, nothing
-happened.
+messages. The session doesn't even notice the interruption. This is the
+cheapest recovery path and should be tried first.
 
 > r[retry.reconnect.stable-conduit]
 >
@@ -470,12 +471,13 @@ happened.
 > messages, the session MUST continue as if the link never failed. No
 > operation-level retry is triggered.
 
-## Level 2: Session resumption on a new conduit
+## Session resumption
 
-The conduit is dead — `BareConduit` link failure, or a `StableConduit`
-that could not recover. But the session doesn't have to die with it. The
-client can obtain a new conduit and resume the existing session. All
-session state — operation records, in-flight requests, channel state — is
+If conduit-level reconnection fails — `BareConduit` link failure, or a
+`StableConduit` that could not recover — the session resumes on a new
+conduit. The conduit is dead, but the session is not. The client obtains
+a new conduit and presents the existing session's identity. All session
+state — operation records, in-flight requests, connection state — is
 preserved because it's the same session, just on a new pipe.
 
 This is the primary scenario the retry machinery is designed for. The
@@ -485,9 +487,9 @@ long as the session survives, retry works.
 > r[retry.reconnect.session-resume]
 >
 > A session MUST be resumable on a new conduit. When the underlying conduit
-> fails, the session MUST NOT be torn down immediately. The server MUST
-> retain session state (operation records, connection state, channel state)
-> for a configurable grace period, allowing the client to resume.
+> fails, the session MUST NOT be torn down. The server MUST retain session
+> state (operation records, connection state, channel state) until the
+> client resumes or the session is explicitly closed.
 
 > r[retry.reconnect.session-resume.handshake]
 >
@@ -516,20 +518,11 @@ long as the session survives, retry works.
 > session resumption, rerunnable methods with channels are re-executed and
 > channel handles are rebound per `r[retry.channel.rebinding]`.
 
-## Level 3: Fresh session
-
-The old session is truly gone — server crashed, grace period expired,
-or the client chose to start over. A new session means a new handshake,
-new session identity, and no operation records from the previous session.
-Retry with old operation IDs is not possible. The client must issue new
-logical operations.
-
-> r[retry.reconnect.fresh-session]
->
-> When a session cannot be resumed (server has no record of the session
-> identity, or the grace period has expired), the client MUST establish a
-> fresh session. All operations from the previous session are lost from the
-> retry layer's perspective. The client MUST use new operation IDs.
+If session resumption fails — the server has no record of the session
+because it crashed and lost state — then the client is starting from
+scratch. New session, new identity, new operation IDs. There is no retry
+of old operations in this case; the server is gone and has no memory of
+what came before.
 
 ## Transport layer obligations
 
