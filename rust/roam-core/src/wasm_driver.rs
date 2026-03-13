@@ -132,10 +132,11 @@ impl OperationRegistry {
                 replay
             }
             OperationState::Released(stored) => {
-                if !stored.signature.matches_call(method_id, args) || !stored.retry.idem {
+                let matches_call = stored.signature.matches_call(method_id, args);
+                if !matches_call || !stored.retry.idem {
                     self.states
                         .insert(operation_id, OperationState::Released(stored));
-                    return if stored.signature.matches_call(method_id, args) {
+                    return if matches_call {
                         OperationAdmit::Indeterminate
                     } else {
                         OperationAdmit::Conflict
@@ -156,10 +157,11 @@ impl OperationRegistry {
                 OperationAdmit::Start
             }
             OperationState::Indeterminate(stored) => {
-                if !stored.signature.matches_call(method_id, args) || !stored.retry.idem {
+                let matches_call = stored.signature.matches_call(method_id, args);
+                if !matches_call || !stored.retry.idem {
                     self.states
                         .insert(operation_id, OperationState::Indeterminate(stored));
-                    return if stored.signature.matches_call(method_id, args) {
+                    return if matches_call {
                         OperationAdmit::Indeterminate
                     } else {
                         OperationAdmit::Conflict
@@ -659,7 +661,7 @@ impl<H: Handler<DriverReplySink>> Driver<H> {
                                 .await
                                 .is_err()
                             {
-                                sender.mark_failure(req_id, "send_response failed");
+                                sender.mark_failure(req_id, FailureDisposition::Cancelled);
                             }
                         });
                         return;
