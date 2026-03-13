@@ -1145,9 +1145,17 @@ public final class ShmHostTransport: MessageTransport, @unchecked Sendable {
     public func recv() async throws -> MessageV7? {
         throw TransportError.transportIO("unsupported platform")
     }
+    public func sendRawPrologue(_ bytes: [UInt8]) async throws {
+        _ = bytes
+        throw TransportError.transportIO("unsupported platform")
+    }
+    public func recvRawPrologue() async throws -> [UInt8]? {
+        throw TransportError.transportIO("unsupported platform")
+    }
     public func setMaxFrameSize(_ size: Int) async throws {
         _ = size
     }
     public func close() async throws {}
 }
+extension ShmHostTransport: RawTransportPrologueIO {}
 #endif
