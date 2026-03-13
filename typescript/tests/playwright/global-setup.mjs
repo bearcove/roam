@@ -1,4 +1,5 @@
 import { existsSync, readdirSync, statSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 
@@ -48,10 +49,30 @@ function needsBuild(target) {
   return inputMtime > outputMtime;
 }
 
+function wasmPackCommand() {
+  const candidates = [
+    process.env.CARGO_HOME ? join(process.env.CARGO_HOME, "bin", "wasm-pack") : null,
+    join(homedir(), ".cargo", "bin", "wasm-pack"),
+    "wasm-pack",
+  ];
+
+  for (const candidate of candidates) {
+    if (candidate === null) {
+      continue;
+    }
+    if (candidate === "wasm-pack" || existsSync(candidate)) {
+      return candidate;
+    }
+  }
+
+  return "wasm-pack";
+}
+
 function buildTarget(target) {
   console.log(`[playwright] building ${target.name} wasm fixture with wasm-pack`);
+  const wasmPack = wasmPackCommand();
   const result = spawnSync(
-    "wasm-pack",
+    wasmPack,
     ["build", "--target", "web", target.crateArg, "--out-dir", target.outDirArg],
     {
       cwd: projectRoot,
@@ -60,7 +81,7 @@ function buildTarget(target) {
   );
 
   if (result.error) {
-    throw new Error(`failed to launch wasm-pack for ${target.name}: ${result.error.message}`);
+    throw new Error(`failed to launch ${wasmPack} for ${target.name}: ${result.error.message}`);
   }
 
   if (result.status !== 0) {
