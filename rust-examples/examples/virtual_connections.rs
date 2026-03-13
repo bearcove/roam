@@ -152,10 +152,11 @@ async fn run_demo() -> Result<()> {
     let socket = tokio::net::TcpStream::connect(addr)
         .await
         .wrap_err("connecting client socket")?;
-    let (_root_caller_guard, session_handle) = roam::initiator(StreamLink::tcp(socket))
-        .establish::<roam::DriverCaller>(())
-        .await
-        .map_err(|e| eyre!("failed to establish initiator session: {e:?}"))?;
+    let (_root_caller_guard, session_handle) =
+        roam::initiator_on(StreamLink::tcp(socket), roam::TransportMode::Bare)
+            .establish::<roam::DriverCaller>(())
+            .await
+            .map_err(|e| eyre!("failed to establish initiator session: {e:?}"))?;
     println!("[client] root session established");
     server_ready_rx
         .await

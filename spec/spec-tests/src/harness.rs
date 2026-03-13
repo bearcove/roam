@@ -545,7 +545,7 @@ where
         std::future::pending::<()>().await;
     });
 
-    let (client, _sh) = roam_core::initiator_on(client_link, roam_core::TransportMode::Bare)
+    let (client, _sh) = roam_core::initiator_conduit(client_link)
         .establish::<TestbedClient>(NoopHandler)
         .await
         .map_err(|e| format!("client handshake: {e}"))?;
