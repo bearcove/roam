@@ -67,7 +67,7 @@ async fn run_demo() -> Result<()> {
         println!("[server] waiting for client");
         let (socket, _) = listener.accept().await.expect("accept");
         println!("[server] client connected; establishing session");
-        let (server_caller_guard, _) = roam::acceptor(StreamLink::tcp(socket))
+        let (server_caller_guard, _) = roam::acceptor_on(StreamLink::tcp(socket))
             .establish::<WordLabClient>(WordLabDispatcher::new(WordLabService))
             .await
             .expect("server establish");

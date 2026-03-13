@@ -138,7 +138,7 @@ async fn run_demo() -> Result<()> {
         println!("[server] waiting for client");
         let (socket, _) = listener.accept().await.expect("accept");
         println!("[server] client connected; establishing root session");
-        let (server_root_guard, _) = roam::acceptor(StreamLink::tcp(socket))
+        let (server_root_guard, _) = roam::acceptor_on(StreamLink::tcp(socket))
             .on_connection(CounterLabAcceptor)
             .establish::<roam::DriverCaller>(())
             .await
