@@ -71,15 +71,18 @@ public final class NIOTransport: MessageTransport, @unchecked Sendable {
     private let frameLimit: FrameLimit
     private let inboundStream: AsyncStream<Result<MessageV7, Error>>
     private var inboundIterator: AsyncStream<Result<MessageV7, Error>>.Iterator
+    private var owningGroup: MultiThreadedEventLoopGroup?
 
     init(
         channel: Channel, frameLimit: FrameLimit,
-        inboundStream: AsyncStream<Result<MessageV7, Error>>
+        inboundStream: AsyncStream<Result<MessageV7, Error>>,
+        owningGroup: MultiThreadedEventLoopGroup? = nil
     ) {
         self.channel = channel
         self.frameLimit = frameLimit
         self.inboundStream = inboundStream
         self.inboundIterator = inboundStream.makeAsyncIterator()
+        self.owningGroup = owningGroup
     }
 
     public func send(_ message: MessageV7) async throws {
@@ -113,6 +116,10 @@ public final class NIOTransport: MessageTransport, @unchecked Sendable {
 
     public func close() async throws {
         try await channel.close()
+        if let group = owningGroup {
+            owningGroup = nil
+            try await group.shutdownGracefully()
+        }
     }
 
     // Internal testing hook to verify socket options configured by connect().
@@ -255,6 +262,7 @@ private let transportAcceptMagic = Array("ROTA".utf8)
 private let transportRejectMagic = Array("ROTR".utf8)
 private let transportVersion: UInt8 = 9
 private let rejectUnsupportedMode: UInt8 = 1
+private let defaultTransportPrologueTimeoutNs: UInt64 = 5_000_000_000
 
 private func encodeTransportHello(_ conduit: TransportConduitKind) -> [UInt8] {
     [
@@ -300,6 +308,28 @@ private func writeRawFrame(channel: Channel, bytes: [UInt8]) async throws {
     try await channel.writeAndFlush(buffer)
 }
 
+private func awaitRawFrame(
+    _ stream: AsyncStream<Result<[UInt8], Error>>,
+    timeoutNs: UInt64
+) async throws -> [UInt8] {
+    try await withThrowingTaskGroup(of: [UInt8].self) { group in
+        group.addTask {
+            var iterator = stream.makeAsyncIterator()
+            guard let result = await iterator.next() else {
+                throw TransportError.connectionClosed
+            }
+            return try result.get()
+        }
+        group.addTask {
+            try await Task.sleep(nanoseconds: timeoutNs)
+            throw TransportError.protocolViolation("transport prologue timed out")
+        }
+        let response = try await group.next()!
+        group.cancelAll()
+        return response
+    }
+}
+
 private func installMessagePipeline(
     channel: Channel,
     continuation: AsyncStream<Result<MessageV7, Error>>.Continuation
@@ -312,7 +342,8 @@ private func installMessagePipeline(
 private func performTransportPrologue(
     channel: Channel,
     frameLimit: FrameLimit,
-    conduit: TransportConduitKind
+    conduit: TransportConduitKind,
+    timeoutNs: UInt64
 ) async throws {
     if conduit == .stable {
         throw TransportError.protocolViolation("swift runtime does not yet support stable conduit")
@@ -331,19 +362,32 @@ private func performTransportPrologue(
         channel.pipeline.addHandler(rawHandler)
     }.get()
 
-    try await writeRawFrame(channel: channel, bytes: encodeTransportHello(conduit))
-
-    var iterator = rawStream.makeAsyncIterator()
-    guard let result = await iterator.next() else {
-        throw TransportError.connectionClosed
+    do {
+        try await writeRawFrame(channel: channel, bytes: encodeTransportHello(conduit))
+        let response = try await awaitRawFrame(rawStream, timeoutNs: timeoutNs)
+        try validateTransportAccept(response, requested: conduit)
+        try await channel.pipeline.removeHandler(rawHandler).get()
+    } catch {
+        try? await channel.pipeline.removeHandler(rawHandler).get()
+        throw error
     }
-    let response = try result.get()
-    try validateTransportAccept(response, requested: conduit)
-
-    try await channel.pipeline.removeHandler(rawHandler).get()
 }
 
 public func connect(host: String, port: Int, conduit: TransportConduitKind = .bare) async throws -> NIOTransport {
+    try await connect(
+        host: host,
+        port: port,
+        conduit: conduit,
+        prologueTimeoutNs: defaultTransportPrologueTimeoutNs
+    )
+}
+
+func connect(
+    host: String,
+    port: Int,
+    conduit: TransportConduitKind = .bare,
+    prologueTimeoutNs: UInt64
+) async throws -> NIOTransport {
     let frameLimit = FrameLimit(defaultMaxFrameBytes)
     let group = MultiThreadedEventLoopGroup(numberOfThreads: 1)
 
@@ -357,10 +401,30 @@ public func connect(host: String, port: Int, conduit: TransportConduitKind = .ba
     let bootstrap = ClientBootstrap(group: group)
         .channelOption(ChannelOptions.socketOption(.so_keepalive), value: 1)
 
-    let channel = try await bootstrap.connect(host: host, port: port).get()
-    try await performTransportPrologue(channel: channel, frameLimit: frameLimit, conduit: conduit)
-    try await installMessagePipeline(channel: channel, continuation: capturedContinuation)
-    return NIOTransport(channel: channel, frameLimit: frameLimit, inboundStream: inboundStream)
+    do {
+        let channel = try await bootstrap.connect(host: host, port: port).get()
+        do {
+            try await performTransportPrologue(
+                channel: channel,
+                frameLimit: frameLimit,
+                conduit: conduit,
+                timeoutNs: prologueTimeoutNs
+            )
+            try await installMessagePipeline(channel: channel, continuation: capturedContinuation)
+            return NIOTransport(
+                channel: channel,
+                frameLimit: frameLimit,
+                inboundStream: inboundStream,
+                owningGroup: group
+            )
+        } catch {
+            try? await channel.close()
+            throw error
+        }
+    } catch {
+        try? await group.shutdownGracefully()
+        throw error
+    }
 }
 
 // MARK: - Errors
