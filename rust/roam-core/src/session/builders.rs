@@ -6,11 +6,12 @@ use roam_types::{
     Metadata, Parity, SplitLink,
 };
 
-use crate::{BareConduit, IntoConduit, TransportMode, accept_transport, initiate_transport};
 #[cfg(not(target_arch = "wasm32"))]
 use crate::{
-    StableConduit, prepare_acceptor_attachment, single_attachment_source, single_link_source,
+    Attachment, LinkSource, StableConduit, prepare_acceptor_attachment, single_attachment_source,
+    single_link_source,
 };
+use crate::{BareConduit, IntoConduit, TransportMode, accept_transport, initiate_transport};
 
 use super::{
     CloseRequest, ConduitRecoverer, ConnectionAcceptor, OpenRequest, Session, SessionError,
@@ -52,9 +53,10 @@ pub fn initiator_conduit<I: IntoConduit>(
     SessionInitiatorBuilder::new(into_conduit.into_conduit())
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub fn initiator<S>(source: S, mode: TransportMode) -> SessionSourceInitiatorBuilder<'static, S>
 where
-    S: crate::LinkSource,
+    S: LinkSource,
 {
     SessionSourceInitiatorBuilder::new(source, mode)
 }
@@ -219,6 +221,7 @@ impl<'a, C> SessionInitiatorBuilder<'a, C> {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub struct SessionSourceInitiatorBuilder<'a, S> {
     source: S,
     mode: TransportMode,
@@ -230,6 +233,7 @@ pub struct SessionSourceInitiatorBuilder<'a, S> {
     spawn_fn: SpawnFn,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl<'a, S> SessionSourceInitiatorBuilder<'a, S> {
     fn new(source: S, mode: TransportMode) -> Self {
         Self {
@@ -294,13 +298,12 @@ impl<'a, S> SessionSourceInitiatorBuilder<'a, S> {
         self
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     pub async fn establish<Client: From<DriverCaller>>(
         self,
         handler: impl Handler<DriverReplySink> + 'static,
     ) -> Result<(Client, SessionHandle), SessionError>
     where
-        S: crate::LinkSource,
+        S: LinkSource,
         S::Link: Link + Send + 'static,
         <S::Link as Link>::Tx: MaybeSend + MaybeSync + Send + 'static,
         <<S::Link as Link>::Tx as roam_types::LinkTx>::Permit: MaybeSend,
@@ -362,57 +365,6 @@ impl<'a, S> SessionSourceInitiatorBuilder<'a, S> {
                 .establish(handler)
                 .await
             }
-        }
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub async fn establish<Client: From<DriverCaller>>(
-        self,
-        handler: impl Handler<DriverReplySink> + 'static,
-    ) -> Result<(Client, SessionHandle), SessionError>
-    where
-        S: crate::LinkSource,
-        S::Link: Link + 'static,
-        <S::Link as Link>::Tx: MaybeSend + MaybeSync + 'static,
-        <<S::Link as Link>::Tx as roam_types::LinkTx>::Permit: MaybeSend,
-        <S::Link as Link>::Rx: MaybeSend + 'static,
-    {
-        let Self {
-            mut source,
-            mode,
-            root_settings,
-            metadata,
-            on_connection,
-            keepalive,
-            resumable,
-            spawn_fn,
-        } = self;
-
-        match mode {
-            TransportMode::Bare => {
-                let attachment = source.next_link().await.map_err(SessionError::Io)?;
-                let link = initiate_transport(attachment.into_link(), TransportMode::Bare)
-                    .await
-                    .map_err(session_error_from_transport)?;
-                let builder =
-                    SessionInitiatorBuilder::new(BareConduit::<MessageFamily, _>::new(link));
-                let recoverer = Box::new(BareSourceRecoverer { source });
-                SessionTransportInitiatorBuilder::<S::Link>::apply_common_parts(
-                    builder,
-                    root_settings,
-                    metadata,
-                    on_connection,
-                    keepalive,
-                    resumable,
-                    Some(recoverer),
-                    spawn_fn,
-                )
-                .establish(handler)
-                .await
-            }
-            TransportMode::Stable => Err(SessionError::Protocol(
-                "stable conduit transport selection is unsupported on wasm".into(),
-            )),
         }
     }
 }
@@ -682,13 +634,15 @@ impl<'a, L> SessionTransportInitiatorBuilder<'a, L> {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 struct BareSourceRecoverer<S> {
     source: S,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl<S> ConduitRecoverer for BareSourceRecoverer<S>
 where
-    S: crate::LinkSource,
+    S: LinkSource,
     S::Link: Link + Send + 'static,
     <S::Link as Link>::Tx: MaybeSend + MaybeSync + Send + 'static,
     <<S::Link as Link>::Tx as roam_types::LinkTx>::Permit: MaybeSend,
@@ -721,14 +675,16 @@ where
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 struct TransportedLinkSource<S> {
     source: S,
     mode: TransportMode,
 }
 
-impl<S> crate::LinkSource for TransportedLinkSource<S>
+#[cfg(not(target_arch = "wasm32"))]
+impl<S> LinkSource for TransportedLinkSource<S>
 where
-    S: crate::LinkSource,
+    S: LinkSource,
     S::Link: Link + Send + 'static,
     <S::Link as Link>::Tx: MaybeSend + MaybeSync + Send + 'static,
     <<S::Link as Link>::Tx as roam_types::LinkTx>::Permit: MaybeSend,
@@ -736,12 +692,12 @@ where
 {
     type Link = SplitLink<<S::Link as Link>::Tx, <S::Link as Link>::Rx>;
 
-    async fn next_link(&mut self) -> std::io::Result<crate::Attachment<Self::Link>> {
+    async fn next_link(&mut self) -> std::io::Result<Attachment<Self::Link>> {
         let attachment = self.source.next_link().await?;
         let link = initiate_transport(attachment.into_link(), self.mode)
             .await
             .map_err(std::io::Error::other)?;
-        Ok(crate::Attachment::initiator(link))
+        Ok(Attachment::initiator(link))
     }
 }
 
