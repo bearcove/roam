@@ -41,6 +41,11 @@ public protocol MessageTransport: Sendable {
     func close() async throws
 }
 
+public enum TransportConduitKind: Sendable {
+    case bare
+    case stable
+}
+
 // MARK: - Shared Frame Limit
 
 /// Shared mutable frame limit, referenced by both `NIOTransport` and `LengthPrefixDecoder`.
@@ -216,6 +221,28 @@ final class MessageStreamHandler: ChannelInboundHandler, @unchecked Sendable {
     }
 }
 
+final class RawFrameStreamHandler: ChannelInboundHandler, RemovableChannelHandler, @unchecked Sendable {
+    typealias InboundIn = [UInt8]
+
+    private let continuation: AsyncStream<Result<[UInt8], Error>>.Continuation
+
+    init(continuation: AsyncStream<Result<[UInt8], Error>>.Continuation) {
+        self.continuation = continuation
+    }
+
+    func channelRead(context: ChannelHandlerContext, data: NIOAny) {
+        continuation.yield(.success(unwrapInboundIn(data)))
+    }
+
+    func errorCaught(context: ChannelHandlerContext, error: Error) {
+        continuation.yield(.failure(error))
+    }
+
+    func channelInactive(context: ChannelHandlerContext) {
+        continuation.finish()
+    }
+}
+
 // MARK: - Connection Factory
 
 /// Connect to a TCP server and return a transport.
@@ -223,7 +250,100 @@ final class MessageStreamHandler: ChannelInboundHandler, @unchecked Sendable {
 /// The transport starts with a small frame limit (1 MiB), sufficient for handshake
 /// messages. After negotiation, call `setMaxFrameSize()` to allow frames up to
 /// the negotiated `max_payload_size`.
-public func connect(host: String, port: Int) async throws -> NIOTransport {
+private let transportHelloMagic = Array("ROTH".utf8)
+private let transportAcceptMagic = Array("ROTA".utf8)
+private let transportRejectMagic = Array("ROTR".utf8)
+private let transportVersion: UInt8 = 9
+private let rejectUnsupportedMode: UInt8 = 1
+
+private func encodeTransportHello(_ conduit: TransportConduitKind) -> [UInt8] {
+    [
+        transportHelloMagic[0], transportHelloMagic[1], transportHelloMagic[2], transportHelloMagic[3],
+        transportVersion,
+        conduit == .stable ? 1 : 0,
+        0,
+        0,
+    ]
+}
+
+private func validateTransportAccept(_ bytes: [UInt8], requested: TransportConduitKind) throws {
+    guard bytes.count == 8 else {
+        throw TransportError.protocolViolation("invalid transport prologue response size")
+    }
+    if Array(bytes[0..<4]) == transportAcceptMagic {
+        guard bytes[4] == transportVersion else {
+            throw TransportError.protocolViolation("unsupported transport version \(bytes[4])")
+        }
+        let selected = bytes[5] == 1 ? TransportConduitKind.stable : TransportConduitKind.bare
+        guard selected == requested else {
+            throw TransportError.protocolViolation("transport selected \(selected) for requested \(requested)")
+        }
+        return
+    }
+    if Array(bytes[0..<4]) == transportRejectMagic {
+        if bytes[5] == rejectUnsupportedMode {
+            throw TransportError.protocolViolation("transport rejected unsupported conduit mode")
+        }
+        throw TransportError.protocolViolation("transport rejected with reason \(bytes[5])")
+    }
+    throw TransportError.protocolViolation("expected TransportAccept or TransportReject")
+}
+
+private func writeRawFrame(channel: Channel, bytes: [UInt8]) async throws {
+    guard let len = UInt32(exactly: bytes.count) else {
+        throw TransportError.frameEncoding("frame too large for u32 length prefix")
+    }
+
+    var buffer = channel.allocator.buffer(capacity: 4 + bytes.count)
+    buffer.writeInteger(len, endianness: .little)
+    buffer.writeBytes(bytes)
+    try await channel.writeAndFlush(buffer)
+}
+
+private func installMessagePipeline(
+    channel: Channel,
+    continuation: AsyncStream<Result<MessageV7, Error>>.Continuation
+) async throws {
+    try await channel.pipeline.addHandler(MessageDecoder()).flatMap {
+        channel.pipeline.addHandler(MessageStreamHandler(continuation: continuation))
+    }.get()
+}
+
+private func performTransportPrologue(
+    channel: Channel,
+    frameLimit: FrameLimit,
+    conduit: TransportConduitKind
+) async throws {
+    if conduit == .stable {
+        throw TransportError.protocolViolation("swift runtime does not yet support stable conduit")
+    }
+
+    var rawContinuation: AsyncStream<Result<[UInt8], Error>>.Continuation!
+    let rawStream = AsyncStream<Result<[UInt8], Error>> { continuation in
+        rawContinuation = continuation
+    }
+    let capturedRawContinuation = rawContinuation!
+    let rawHandler = RawFrameStreamHandler(continuation: capturedRawContinuation)
+
+    try await channel.pipeline.addHandler(
+        ByteToMessageHandler(LengthPrefixDecoder(frameLimit: frameLimit))
+    ).flatMap {
+        channel.pipeline.addHandler(rawHandler)
+    }.get()
+
+    try await writeRawFrame(channel: channel, bytes: encodeTransportHello(conduit))
+
+    var iterator = rawStream.makeAsyncIterator()
+    guard let result = await iterator.next() else {
+        throw TransportError.connectionClosed
+    }
+    let response = try result.get()
+    try validateTransportAccept(response, requested: conduit)
+
+    try await channel.pipeline.removeHandler(rawHandler).get()
+}
+
+public func connect(host: String, port: Int, conduit: TransportConduitKind = .bare) async throws -> NIOTransport {
     let frameLimit = FrameLimit(defaultMaxFrameBytes)
     let group = MultiThreadedEventLoopGroup(numberOfThreads: 1)
 
@@ -236,20 +356,10 @@ public func connect(host: String, port: Int) async throws -> NIOTransport {
 
     let bootstrap = ClientBootstrap(group: group)
         .channelOption(ChannelOptions.socketOption(.so_keepalive), value: 1)
-        .channelInitializer { channel in
-            // Note: ByteToMessageHandler is explicitly non-Sendable in SwiftNIO.
-            // This warning is benign - channel initializers run on the event loop.
-            channel.pipeline.addHandler(
-                ByteToMessageHandler(LengthPrefixDecoder(frameLimit: frameLimit))
-            ).flatMap {
-                channel.pipeline.addHandler(MessageDecoder())
-            }.flatMap {
-                channel.pipeline.addHandler(
-                    MessageStreamHandler(continuation: capturedContinuation))
-            }
-        }
 
     let channel = try await bootstrap.connect(host: host, port: port).get()
+    try await performTransportPrologue(channel: channel, frameLimit: frameLimit, conduit: conduit)
+    try await installMessagePipeline(channel: channel, continuation: capturedContinuation)
     return NIOTransport(channel: channel, frameLimit: frameLimit, inboundStream: inboundStream)
 }
 
