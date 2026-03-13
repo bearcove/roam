@@ -1238,7 +1238,10 @@ export const session = {
     options: SessionTransportOptions = {},
   ): Promise<Session> {
     const conduit = await makeAcceptorSessionConduit(transport);
-    return Session.establishAcceptor(conduit, options);
+    return Session.establishAcceptor(conduit, {
+      ...options,
+      resumable: options.resumable ?? true,
+    });
   },
 
   async initiatorTransport(
@@ -1253,7 +1256,10 @@ export const session = {
     options: SessionTransportOptions = {},
   ): Promise<Session> {
     const conduit = await makeAcceptorSessionConduit(transport);
-    return Session.establishAcceptor(conduit, options);
+    return Session.establishAcceptor(conduit, {
+      ...options,
+      resumable: options.resumable ?? true,
+    });
   },
 
   rootSettings(role: Role, maxConcurrentRequests = 64): ConnectionSettings {

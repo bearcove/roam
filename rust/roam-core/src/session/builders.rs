@@ -843,7 +843,7 @@ impl<'a, L: Link> SessionTransportAcceptorBuilder<'a, L> {
             metadata: vec![],
             on_connection: None,
             keepalive: None,
-            resumable: false,
+            resumable: true,
             spawn_fn: default_spawn_fn(),
         }
     }
