@@ -1101,7 +1101,7 @@ async fn accept_subject_shm_subject_is_host(cmd: &str) -> Result<(TestbedClient,
             .map_err(|e| format!("guest_link_from_names: {e}"))?
         };
 
-        let (client, _sh) = roam_core::initiator_on(link, roam_core::TransportMode::Bare)
+        let (client, _sh) = roam_core::initiator_conduit(link)
             .establish::<TestbedClient>(NoopHandler)
             .await
             .map_err(|e| format!("handshake: {e}"))?;
