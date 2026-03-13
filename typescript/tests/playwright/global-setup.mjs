@@ -59,8 +59,12 @@ function buildTarget(target) {
     },
   );
 
+  if (result.error) {
+    throw new Error(`failed to launch wasm-pack for ${target.name}: ${result.error.message}`);
+  }
+
   if (result.status !== 0) {
-    throw new Error(`wasm-pack build failed for ${target.name}`);
+    throw new Error(`wasm-pack build failed for ${target.name} with exit code ${result.status}`);
   }
 }
 
