@@ -30,6 +30,7 @@ type ResponseSlot = moire::sync::oneshot::Sender<SelfRef<RequestMessage<'static>
 struct InFlightHandler {
     handle: moire::task::JoinHandle<()>,
     retry: roam_types::RetryPolicy,
+    has_channels: bool,
 }
 
 /// State shared between the driver loop and any DriverCaller/DriverChannelSink handles.
@@ -719,6 +720,29 @@ impl ChannelCreditReplenisher for DriverChannelCreditReplenisher {
 }
 
 impl<H: Handler<DriverReplySink>> Driver<H> {
+    fn close_all_channel_runtime_state(&self) {
+        for semaphore in self.shared.channel_credits.lock().values() {
+            semaphore.close();
+        }
+        self.shared.channel_senders.lock().clear();
+        self.shared.channel_buffers.lock().clear();
+        self.shared.channel_credits.lock().clear();
+    }
+
+    fn close_outbound_channel(&self, channel_id: ChannelId) {
+        if let Some(semaphore) = self.shared.channel_credits.lock().remove(&channel_id) {
+            semaphore.close();
+        }
+    }
+
+    fn abort_channel_handlers(&mut self) {
+        for in_flight in self.in_flight_handlers.values() {
+            if in_flight.has_channels {
+                in_flight.handle.abort();
+            }
+        }
+    }
+
     pub fn new(handle: ConnectionHandle, handler: H) -> Self {
         Self::with_operation_store(handle, handler, Arc::new(InMemoryOperationStore::default()))
     }
@@ -825,6 +849,8 @@ impl<H: Handler<DriverReplySink>> Driver<H> {
     /// Handler calls run as spawned tasks — we don't block the driver
     /// loop waiting for a handler to finish.
     pub async fn run(&mut self) {
+        let mut resumed_rx = self.resumed_rx.clone();
+        let mut seen_resume_generation = *resumed_rx.borrow();
         loop {
             tokio::select! {
                 msg = self.rx.recv() => {
@@ -834,13 +860,24 @@ impl<H: Handler<DriverReplySink>> Driver<H> {
                     }
                 }
                 Some((req_id, disposition)) = self.failures_rx.recv() => {
+                    let reply_disposition = self
+                        .in_flight_handlers
+                        .get(&req_id)
+                        .map(|in_flight| {
+                            if in_flight.has_channels && !in_flight.retry.idem {
+                                FailureDisposition::Indeterminate
+                            } else {
+                                disposition
+                            }
+                        })
+                        .unwrap_or(disposition);
                     // Clean up the handler tracking entry.
                     self.in_flight_handlers.remove(&req_id);
                     if self.shared.pending_responses.lock().remove(&req_id).is_none() {
                         // Incoming call — handler failed to reply.
                         // Wire format is always Result<T, RoamError<E>>, so encode
                         // the runtime outcome as Err(...) in that envelope.
-                        let roam_error = match disposition {
+                        let roam_error = match reply_disposition {
                             FailureDisposition::Cancelled => RoamError::Cancelled,
                             FailureDisposition::Indeterminate => RoamError::Indeterminate,
                         };
@@ -856,6 +893,17 @@ impl<H: Handler<DriverReplySink>> Driver<H> {
                 Some(ctrl) = self.local_control_rx.recv() => {
                     self.handle_local_control(ctrl).await;
                 }
+                changed = resumed_rx.changed() => {
+                    if changed.is_err() {
+                        break;
+                    }
+                    let generation = *resumed_rx.borrow();
+                    if generation != seen_resume_generation {
+                        seen_resume_generation = generation;
+                        self.close_all_channel_runtime_state();
+                        self.abort_channel_handlers();
+                    }
+                }
             }
         }
 
@@ -867,10 +915,9 @@ impl<H: Handler<DriverReplySink>> Driver<H> {
         self.shared.pending_responses.lock().clear();
 
         // Connection is gone: drop channel runtime state so any registered Rx
-        // receivers observe closure instead of hanging on recv().
-        self.shared.channel_senders.lock().clear();
-        self.shared.channel_buffers.lock().clear();
-        self.shared.channel_credits.lock().clear();
+        // receivers observe closure instead of hanging on recv(), and wake any
+        // outbound Tx handles waiting for grant-credit.
+        self.close_all_channel_runtime_state();
     }
 
     async fn handle_local_control(&mut self, control: DriverLocalControl) {
@@ -1015,6 +1062,7 @@ impl<H: Handler<DriverReplySink>> Driver<H> {
                 operations: operation_id.map(|_| Arc::clone(&self.shared.operations)),
                 binder: self.internal_binder(),
             };
+            let has_channels = !call.channels.is_empty();
             let join_handle = moire::task::spawn(
                 async move {
                     handler.handle(call, reply).await;
@@ -1026,6 +1074,7 @@ impl<H: Handler<DriverReplySink>> Driver<H> {
                 InFlightHandler {
                     handle: join_handle,
                     retry,
+                    has_channels,
                 },
             );
         } else if is_response {
@@ -1121,7 +1170,7 @@ impl<H: Handler<DriverReplySink>> Driver<H> {
                         .push(IncomingChannelMessage::Close(close));
                 }
                 self.shared.channel_senders.lock().remove(&chan_id);
-                self.shared.channel_credits.lock().remove(&chan_id);
+                self.close_outbound_channel(chan_id);
             }
             // r[impl rpc.channel.reset]
             ChannelBody::Reset(_reset) => {
@@ -1145,7 +1194,7 @@ impl<H: Handler<DriverReplySink>> Driver<H> {
                         .push(IncomingChannelMessage::Reset(reset));
                 }
                 self.shared.channel_senders.lock().remove(&chan_id);
-                self.shared.channel_credits.lock().remove(&chan_id);
+                self.close_outbound_channel(chan_id);
             }
             // r[impl rpc.flow-control.credit.grant]
             // r[impl rpc.flow-control.credit.grant.additive]

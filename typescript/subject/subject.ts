@@ -230,8 +230,10 @@ async function runClient() {
     transport: subjectConduit(),
   });
   const client = new TestbedClient(established.rootConnection().caller());
+  const handle = established.handle();
 
-  switch (scenario) {
+  try {
+    switch (scenario) {
     case "echo": {
       const result = await client.echo("hello from client");
       console.error(`echo result: ${result}`);
@@ -376,6 +378,10 @@ async function runClient() {
     }
     default:
       throw new Error(`unknown CLIENT_SCENARIO: ${scenario}`);
+  }
+  } finally {
+    handle.shutdown();
+    await established.closed().catch(() => {});
   }
 
 }

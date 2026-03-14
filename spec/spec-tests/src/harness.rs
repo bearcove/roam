@@ -462,7 +462,6 @@ impl TestbedService {
     }
 
     async fn stream_retry_probe_values(&self, count: u32, output: Tx<i32>) {
-        eprintln!("[harness] stream_retry_probe_values start count={count}");
         for i in 0..count as i32 {
             if output.send(i).await.is_err() {
                 eprintln!("[harness] stream_retry_probe_values send failed at {i}");

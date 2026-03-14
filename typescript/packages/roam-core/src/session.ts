@@ -448,6 +448,9 @@ class SessionCore {
   }
 
   private async handleConduitBreak(): Promise<boolean> {
+    if (this.closed) {
+      return false;
+    }
     if (!this.resumable) {
       return false;
     }
@@ -455,6 +458,10 @@ class SessionCore {
     if (this.recoverConduit) {
       try {
         const conduit = await this.recoverConduit();
+        if (this.closed) {
+          await conduit.close().catch(() => {});
+          return false;
+        }
         this.disconnected = true;
         await this.resumeOnConduit(conduit);
         this.disconnected = false;
@@ -846,7 +853,6 @@ export class ConnectionHandle {
     const channels = request.channels ?? [];
     const requestId = this.nextRequestId;
     this.nextRequestId += 2n;
-
     const responsePayload = await new Promise<Uint8Array>((resolve, reject) => {
       const state: PendingResponse = {
         resolve,
@@ -992,11 +998,16 @@ export class ConnectionHandle {
     if (this.closed || !this.peerSupportsRetry) {
       return;
     }
+    this.channelRegistry.closeAll();
     const states = new Set(this.pendingResponses.values());
     for (const state of states) {
       if (state.settled) {
         continue;
       }
+      for (const requestId of state.requestIds) {
+        this.pendingResponses.delete(requestId);
+      }
+      state.requestIds.clear();
       void this.sendPendingRequest(state);
     }
   }
@@ -1021,7 +1032,6 @@ export class ConnectionHandle {
     if (state.settled || this.closed) {
       return;
     }
-
     this.pendingResponses.set(requestId, state);
     state.requestIds.add(requestId);
 
