@@ -55,6 +55,12 @@ pub struct BoundChannelReceiver {
     pub replenisher: Option<ChannelCreditReplenisherHandle>,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+struct LogicalReceiverState {
+    sender: Option<mpsc::Sender<LogicalIncomingChannelMessage>>,
+    receiver: Option<mpsc::Receiver<LogicalIncomingChannelMessage>>,
+}
+
 // r[impl rpc.channel.pair]
 /// Shared state between a `Tx`/`Rx` pair created by `channel()`.
 ///
@@ -64,6 +70,7 @@ pub struct BoundChannelReceiver {
 #[cfg(not(target_arch = "wasm32"))]
 pub struct ChannelCore {
     binding: Mutex<Option<ChannelBinding>>,
+    logical_receiver: Mutex<Option<LogicalReceiverState>>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -71,13 +78,13 @@ impl ChannelCore {
     fn new() -> Self {
         Self {
             binding: Mutex::new(None),
+            logical_receiver: Mutex::new(None),
         }
     }
 
-    /// Store a binding in the core. Panics if already set.
+    /// Store or replace a binding in the core.
     pub fn set_binding(&self, binding: ChannelBinding) {
         let mut guard = self.binding.lock().expect("channel core mutex poisoned");
-        assert!(guard.is_none(), "channel binding already set");
         *guard = Some(binding);
     }
 
@@ -103,6 +110,61 @@ impl ChannelCore {
                 None
             }
         }
+    }
+
+    pub fn bind_retryable_receiver(&self, bound: BoundChannelReceiver) {
+        let mut guard = self
+            .logical_receiver
+            .lock()
+            .expect("channel core logical receiver mutex poisoned");
+        let state = guard.get_or_insert_with(|| {
+            let (tx, rx) = mpsc::channel(64);
+            LogicalReceiverState {
+                sender: Some(tx),
+                receiver: Some(rx),
+            }
+        });
+
+        let Some(sender) = state.sender.clone() else {
+            return;
+        };
+
+        tokio::spawn(async move {
+            let mut receiver = bound.receiver;
+            let replenisher = bound.replenisher.clone();
+            while let Some(msg) = receiver.recv().await {
+                let forwarded = LogicalIncomingChannelMessage {
+                    msg,
+                    replenisher: replenisher.clone(),
+                };
+                if sender.send(forwarded).await.is_err() {
+                    return;
+                }
+            }
+        });
+    }
+
+    pub fn take_logical_receiver(&self) -> Option<mpsc::Receiver<LogicalIncomingChannelMessage>> {
+        self.logical_receiver
+            .lock()
+            .expect("channel core logical receiver mutex poisoned")
+            .as_mut()
+            .and_then(|state| state.receiver.take())
+    }
+
+    pub fn finish_retry_binding(&self) {
+        {
+            let mut guard = self
+                .logical_receiver
+                .lock()
+                .expect("channel core logical receiver mutex poisoned");
+            if let Some(state) = guard.as_mut() {
+                state.sender.take();
+            }
+            *guard = None;
+        }
+        let mut guard = self.binding.lock().expect("channel core mutex poisoned");
+        *guard = None;
     }
 }
 
@@ -236,6 +298,12 @@ pub enum IncomingChannelMessage {
     Reset(SelfRef<ChannelReset<'static>>),
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+pub struct LogicalIncomingChannelMessage {
+    pub msg: IncomingChannelMessage,
+    pub replenisher: Option<ChannelCreditReplenisherHandle>,
+}
+
 /// Sender-side runtime slot.
 #[derive(Facet)]
 #[facet(opaque)]
@@ -279,6 +347,22 @@ pub(crate) struct ReceiverSlot {
 }
 
 impl ReceiverSlot {
+    pub(crate) fn empty() -> Self {
+        Self {
+            #[cfg(not(target_arch = "wasm32"))]
+            inner: None,
+        }
+    }
+}
+
+#[derive(Facet)]
+#[facet(opaque)]
+pub(crate) struct LogicalReceiverSlot {
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) inner: Option<mpsc::Receiver<LogicalIncomingChannelMessage>>,
+}
+
+impl LogicalReceiverSlot {
     pub(crate) fn empty() -> Self {
         Self {
             #[cfg(not(target_arch = "wasm32"))]
@@ -501,6 +585,7 @@ impl std::error::Error for TxError {}
 #[facet(proxy = ())]
 pub struct Rx<T, const N: usize = 16> {
     pub(crate) receiver: ReceiverSlot,
+    pub(crate) logical_receiver: LogicalReceiverSlot,
     pub(crate) core: CoreSlot,
     pub(crate) liveness: LivenessSlot,
     pub(crate) replenisher: ReplenisherSlot,
@@ -513,6 +598,7 @@ impl<T, const N: usize> Rx<T, N> {
     pub fn unbound() -> Self {
         Self {
             receiver: ReceiverSlot::empty(),
+            logical_receiver: LogicalReceiverSlot::empty(),
             core: CoreSlot::empty(),
             liveness: LivenessSlot::empty(),
             replenisher: ReplenisherSlot::empty(),
@@ -525,6 +611,7 @@ impl<T, const N: usize> Rx<T, N> {
     fn paired(core: Arc<ChannelCore>) -> Self {
         Self {
             receiver: ReceiverSlot::empty(),
+            logical_receiver: LogicalReceiverSlot::empty(),
             core: CoreSlot { inner: Some(core) },
             liveness: LivenessSlot::empty(),
             replenisher: ReplenisherSlot::empty(),
@@ -558,6 +645,48 @@ impl<T, const N: usize> Rx<T, N> {
     where
         T: Facet<'static>,
     {
+        if self.logical_receiver.inner.is_none()
+            && let Some(core) = &self.core.inner
+            && let Some(receiver) = core.take_logical_receiver()
+        {
+            self.logical_receiver.inner = Some(receiver);
+        }
+
+        if let Some(receiver) = self.logical_receiver.inner.as_mut() {
+            match receiver.recv().await {
+                Some(LogicalIncomingChannelMessage {
+                    msg: IncomingChannelMessage::Close(_),
+                    ..
+                })
+                | None => return Ok(None),
+                Some(LogicalIncomingChannelMessage {
+                    msg: IncomingChannelMessage::Reset(_),
+                    ..
+                }) => return Err(RxError::Reset),
+                Some(LogicalIncomingChannelMessage {
+                    msg: IncomingChannelMessage::Item(msg),
+                    replenisher,
+                }) => {
+                    let value = msg
+                        .try_repack(|item, _backing_bytes| {
+                            let Payload::Incoming(bytes) = item.item else {
+                                return Err(RxError::Protocol(
+                                    "incoming channel item payload was not Incoming".into(),
+                                ));
+                            };
+                            facet_postcard::from_slice_borrowed(bytes).map_err(RxError::Deserialize)
+                        })
+                        .map(Some);
+                    if value.is_ok()
+                        && let Some(replenisher) = replenisher.as_ref()
+                    {
+                        replenisher.on_item_consumed();
+                    }
+                    return value;
+                }
+            }
+        }
+
         // On first call, take receiver from shared core into local slot
         if self.receiver.inner.is_none()
             && let Some(core) = &self.core.inner
@@ -607,6 +736,7 @@ impl<T, const N: usize> Rx<T, N> {
         liveness: Option<ChannelLivenessHandle>,
     ) {
         self.receiver.inner = Some(receiver);
+        self.logical_receiver.inner = None;
         self.liveness.inner = liveness;
         self.replenisher.inner = None;
     }

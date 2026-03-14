@@ -27,14 +27,15 @@ public final class UnboundTx<T: Sendable>: @unchecked Sendable {
         credit: ChannelCreditController
     ) {
         let (waiters, shouldCloseImmediately) = lock.withLock { () -> ([CheckedContinuation<Void, Never>], Bool) in
-            precondition(!bound, "UnboundTx already bound")
             self.channelId = channelId
             self.taskTx = taskTx
             self.credit = credit
             self.bound = true
+            let shouldCloseImmediately = self.closed
+            self.closed = false
             let waiters = self.bindingWaiters
             self.bindingWaiters.removeAll()
-            return (waiters, self.closed)
+            return (waiters, shouldCloseImmediately)
         }
         for waiter in waiters {
             waiter.resume()
@@ -50,7 +51,6 @@ public final class UnboundTx<T: Sendable>: @unchecked Sendable {
     /// Set channel ID only (when paired Rx is bound).
     func setChannelIdOnly(channelId: ChannelId) {
         let waiters = lock.withLock { () -> [CheckedContinuation<Void, Never>] in
-            precondition(!bound, "UnboundTx already bound")
             self.channelId = channelId
             self.bound = true
             let waiters = self.bindingWaiters
@@ -91,6 +91,11 @@ public final class UnboundTx<T: Sendable>: @unchecked Sendable {
             }
         }
         taskTx?(.close(channelId: channelId))
+    }
+
+    func finishRetryBinding() {
+        close()
+        (pairedRx as? AnyRetryFinalizableChannel)?.finishRetryBinding()
     }
 
     private func waitForSendBinding() async throws
@@ -136,6 +141,7 @@ public final class UnboundTx<T: Sendable>: @unchecked Sendable {
 public final class UnboundRx<T: Sendable>: @unchecked Sendable {
     public private(set) var channelId: ChannelId = 0
     private var receiver: ChannelReceiver?
+    private var logicalReceiver: ChannelReceiver?
     private let deserialize: @Sendable ([UInt8]) throws -> T
     private var bound = false
     private let lock = NSLock()
@@ -152,24 +158,29 @@ public final class UnboundRx<T: Sendable>: @unchecked Sendable {
 
     /// Bind for receiving (client-side incoming).
     func bind(channelId: ChannelId, receiver: ChannelReceiver) {
-        let waiters = lock.withLock { () -> [CheckedContinuation<Void, Never>] in
-            precondition(!bound, "UnboundRx already bound")
+        let (logical, waiters) = lock.withLock { () -> (ChannelReceiver, [CheckedContinuation<Void, Never>]) in
+            let logical = self.logicalReceiver ?? ChannelReceiver()
+            self.logicalReceiver = logical
             self.channelId = channelId
-            self.receiver = receiver
+            self.receiver = logical
             self.bound = true
             let waiters = self.bindingWaiters
             self.bindingWaiters.removeAll()
-            return waiters
+            return (logical, waiters)
         }
         for waiter in waiters {
             waiter.resume()
+        }
+        Task {
+            while let bytes = await receiver.recv() {
+                logical.deliver(bytes)
+            }
         }
     }
 
     /// Set channel ID only (when paired Tx is bound).
     func setChannelIdOnly(channelId: ChannelId) {
         let waiters = lock.withLock { () -> [CheckedContinuation<Void, Never>] in
-            precondition(!bound, "UnboundRx already bound")
             self.channelId = channelId
             self.bound = true
             let waiters = self.bindingWaiters
@@ -216,6 +227,11 @@ public final class UnboundRx<T: Sendable>: @unchecked Sendable {
                 }
             }
         }
+    }
+
+    func finishRetryBinding() {
+        let logical = lock.withLock { logicalReceiver }
+        logical?.deliverClose()
     }
 }
 
@@ -281,6 +297,15 @@ public func bindChannels(
             taskSender: taskSender,
             serializers: serializers
         )
+    }
+}
+
+public func finalizeBoundChannels(
+    schemas: [Schema],
+    args: [Any]
+) {
+    for (schema, arg) in zip(schemas, args) {
+        finalizeValue(schema: schema, value: arg)
     }
 }
 
@@ -410,6 +435,35 @@ private func bindValue(
     }
 }
 
+private func finalizeValue(schema: Schema, value: Any) {
+    switch schema {
+    case .rx:
+        (value as? AnyRetryFinalizableChannel)?.finishRetryBinding()
+    case .tx:
+        (value as? AnyRetryFinalizableChannel)?.finishRetryBinding()
+    case .vec(let element):
+        if let arr = value as? [Any] {
+            for item in arr {
+                finalizeValue(schema: element, value: item)
+            }
+        }
+    case .option(let inner):
+        let mirror = Mirror(reflecting: value)
+        if mirror.displayStyle == .optional, let (_, unwrapped) = mirror.children.first {
+            finalizeValue(schema: inner, value: unwrapped)
+        }
+    case .struct(let fields):
+        let mirror = Mirror(reflecting: value)
+        for (fieldName, fieldSchema) in fields {
+            if let child = mirror.children.first(where: { $0.label == fieldName }) {
+                finalizeValue(schema: fieldSchema, value: child.value)
+            }
+        }
+    default:
+        break
+    }
+}
+
 // MARK: - Type Erasure for Binding
 
 /// Protocol for type-erased UnboundRx binding.
@@ -469,6 +523,10 @@ protocol AnyUnboundTxSender: AnyObject {
     )
 }
 
+protocol AnyRetryFinalizableChannel: AnyObject {
+    func finishRetryBinding()
+}
+
 extension UnboundTx: AnyUnboundTxSender {
     func bindForSending(
         channelId: ChannelId,
@@ -479,6 +537,8 @@ extension UnboundTx: AnyUnboundTxSender {
     }
 }
 
+extension UnboundTx: AnyRetryFinalizableChannel {}
+
 protocol AnyUnboundRxReceiver: AnyObject {
     func bindForReceiving(channelId: ChannelId, receiver: ChannelReceiver)
 }
@@ -488,3 +548,5 @@ extension UnboundRx: AnyUnboundRxReceiver {
         self.bind(channelId: channelId, receiver: receiver)
     }
 }
+
+extension UnboundRx: AnyRetryFinalizableChannel {}

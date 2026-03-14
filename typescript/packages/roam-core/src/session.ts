@@ -74,6 +74,11 @@ interface PendingResponse {
   payload: Uint8Array;
   metadata: Metadata;
   channels: bigint[];
+  prepareRetry?: () => {
+    payload: Uint8Array;
+    channels: bigint[];
+  };
+  finalizeChannels?: () => void;
   requestIds: Set<bigint>;
   settled: boolean;
 }
@@ -459,7 +464,7 @@ class SessionCore {
       try {
         const conduit = await this.recoverConduit();
         if (this.closed) {
-          await conduit.close().catch(() => {});
+          conduit.close();
           return false;
         }
         this.disconnected = true;
@@ -841,16 +846,20 @@ export class ConnectionHandle {
     }
 
     const values = Object.values(request.args);
-    const payload =
-      values.length === 0
-        ? new Uint8Array(0)
-        : encodeWithSchema(values, request.descriptor.args, request.schemaRegistry);
+    const initial = request.prepareRetry
+      ? request.prepareRetry()
+      : {
+          payload:
+            values.length === 0
+              ? new Uint8Array(0)
+              : encodeWithSchema(values, request.descriptor.args, request.schemaRegistry),
+          channels: request.channels ?? [],
+        };
     const metadataCarrier = request.metadata ? request.metadata.clone() : new ClientMetadata();
     if (this.peerSupportsRetry) {
       ensureOperationId(metadataCarrier, this.nextOperationId++);
     }
     const metadata = clientMetadataToEntries(metadataCarrier);
-    const channels = request.channels ?? [];
     const requestId = this.nextRequestId;
     this.nextRequestId += 2n;
     const responsePayload = await new Promise<Uint8Array>((resolve, reject) => {
@@ -862,9 +871,11 @@ export class ConnectionHandle {
           reject(new SessionError("timeout waiting for response"));
         }, request.timeoutMs ?? DEFAULT_TIMEOUT_MS),
         methodId: request.descriptor.id,
-        payload: payload.slice(),
+        payload: initial.payload.slice(),
         metadata: cloneMetadata(metadata),
-        channels: [...channels],
+        channels: [...initial.channels],
+        prepareRetry: request.prepareRetry,
+        finalizeChannels: request.finalizeChannels,
         requestIds: new Set(),
         settled: false,
       };
@@ -990,6 +1001,7 @@ export class ConnectionHandle {
       pending.settled = true;
       clearTimeout(pending.timer);
       pending.requestIds.clear();
+      pending.finalizeChannels?.();
       pending.reject(error);
     }
   }
@@ -1022,6 +1034,7 @@ export class ConnectionHandle {
       this.pendingResponses.delete(requestId);
     }
     state.requestIds.clear();
+    state.finalizeChannels?.();
   }
 
   private async sendPendingRequest(
@@ -1036,6 +1049,11 @@ export class ConnectionHandle {
     state.requestIds.add(requestId);
 
     try {
+      if (state.prepareRetry) {
+        const rebuilt = state.prepareRetry();
+        state.payload = rebuilt.payload.slice();
+        state.channels = [...rebuilt.channels];
+      }
       await this.session.sendMessage(
         messageRequest(
           requestId,

@@ -329,25 +329,30 @@ public final class TestbedClient: TestbedCaller, Sendable {
   }
 
   public func sum(numbers: UnboundRx<Int32>) async throws -> Int64 {
-    // Bind channels using schema
-    await bindChannels(
-      schemas: testbed_schemas["sum"]!.args,
-      args: [numbers],
-      allocator: connection.channelAllocator,
-      incomingRegistry: connection.incomingChannelRegistry,
-      taskSender: connection.taskSender,
-      serializers: TestbedSerializers()
-    )
+    let prepareRetry: @Sendable () async -> PreparedRetryRequest = { [connection] in
+      await bindChannels(
+        schemas: testbed_schemas["sum"]!.args,
+        args: [numbers],
+        allocator: connection.channelAllocator,
+        incomingRegistry: connection.incomingChannelRegistry,
+        taskSender: connection.taskSender,
+        serializers: TestbedSerializers()
+      )
 
-    // Encode payload with channel IDs
-    var payloadBytes: [UInt8] = []
-    payloadBytes += encodeVarint(numbers.channelId)
-    let payload = Data(payloadBytes)
-    let channels = collectChannelIds(schemas: testbed_schemas["sum"]!.args, args: [numbers])
+      var payloadBytes: [UInt8] = []
+      payloadBytes += encodeVarint(numbers.channelId)
+      let payload = payloadBytes
+      let channels = collectChannelIds(schemas: testbed_schemas["sum"]!.args, args: [numbers])
+      return PreparedRetryRequest(payload: payload, channels: channels)
+    }
+    let prepared = await prepareRetry()
 
     let response = try await connection.call(
-      methodId: 0x855b_3a25_d97b_fefd, payload: payload, channels: channels, retry: .volatile,
-      timeout: timeout)
+      methodId: 0x855b_3a25_d97b_fefd, payload: Data(prepared.payload), channels: prepared.channels,
+      retry: .volatile, timeout: timeout, prepareRetry: prepareRetry,
+      finalizeChannels: {
+        finalizeBoundChannels(schemas: testbed_schemas["sum"]!.args, args: [numbers])
+      })
     var cursor = 0
     let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
     switch _cursor_resultDisc {
@@ -376,27 +381,32 @@ public final class TestbedClient: TestbedCaller, Sendable {
   }
 
   public func generate(count: UInt32, output: UnboundTx<Int32>) async throws {
-    // Bind channels using schema
-    await bindChannels(
-      schemas: testbed_schemas["generate"]!.args,
-      args: [count, output],
-      allocator: connection.channelAllocator,
-      incomingRegistry: connection.incomingChannelRegistry,
-      taskSender: connection.taskSender,
-      serializers: TestbedSerializers()
-    )
+    let prepareRetry: @Sendable () async -> PreparedRetryRequest = { [connection] in
+      await bindChannels(
+        schemas: testbed_schemas["generate"]!.args,
+        args: [count, output],
+        allocator: connection.channelAllocator,
+        incomingRegistry: connection.incomingChannelRegistry,
+        taskSender: connection.taskSender,
+        serializers: TestbedSerializers()
+      )
 
-    // Encode payload with channel IDs
-    var payloadBytes: [UInt8] = []
-    payloadBytes += encodeU32(count)
-    payloadBytes += encodeVarint(output.channelId)
-    let payload = Data(payloadBytes)
-    let channels = collectChannelIds(
-      schemas: testbed_schemas["generate"]!.args, args: [count, output])
+      var payloadBytes: [UInt8] = []
+      payloadBytes += encodeU32(count)
+      payloadBytes += encodeVarint(output.channelId)
+      let payload = payloadBytes
+      let channels = collectChannelIds(
+        schemas: testbed_schemas["generate"]!.args, args: [count, output])
+      return PreparedRetryRequest(payload: payload, channels: channels)
+    }
+    let prepared = await prepareRetry()
 
     let response = try await connection.call(
-      methodId: 0x54d2_273d_8cdb_9c38, payload: payload, channels: channels, retry: .volatile,
-      timeout: timeout)
+      methodId: 0x54d2_273d_8cdb_9c38, payload: Data(prepared.payload), channels: prepared.channels,
+      retry: .volatile, timeout: timeout, prepareRetry: prepareRetry,
+      finalizeChannels: {
+        finalizeBoundChannels(schemas: testbed_schemas["generate"]!.args, args: [count, output])
+      })
     var cursor = 0
     let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
     switch _cursor_resultDisc {
@@ -424,27 +434,33 @@ public final class TestbedClient: TestbedCaller, Sendable {
   }
 
   public func generateRetryNonIdem(count: UInt32, output: UnboundTx<Int32>) async throws {
-    // Bind channels using schema
-    await bindChannels(
-      schemas: testbed_schemas["generateRetryNonIdem"]!.args,
-      args: [count, output],
-      allocator: connection.channelAllocator,
-      incomingRegistry: connection.incomingChannelRegistry,
-      taskSender: connection.taskSender,
-      serializers: TestbedSerializers()
-    )
+    let prepareRetry: @Sendable () async -> PreparedRetryRequest = { [connection] in
+      await bindChannels(
+        schemas: testbed_schemas["generateRetryNonIdem"]!.args,
+        args: [count, output],
+        allocator: connection.channelAllocator,
+        incomingRegistry: connection.incomingChannelRegistry,
+        taskSender: connection.taskSender,
+        serializers: TestbedSerializers()
+      )
 
-    // Encode payload with channel IDs
-    var payloadBytes: [UInt8] = []
-    payloadBytes += encodeU32(count)
-    payloadBytes += encodeVarint(output.channelId)
-    let payload = Data(payloadBytes)
-    let channels = collectChannelIds(
-      schemas: testbed_schemas["generateRetryNonIdem"]!.args, args: [count, output])
+      var payloadBytes: [UInt8] = []
+      payloadBytes += encodeU32(count)
+      payloadBytes += encodeVarint(output.channelId)
+      let payload = payloadBytes
+      let channels = collectChannelIds(
+        schemas: testbed_schemas["generateRetryNonIdem"]!.args, args: [count, output])
+      return PreparedRetryRequest(payload: payload, channels: channels)
+    }
+    let prepared = await prepareRetry()
 
     let response = try await connection.call(
-      methodId: 0x8b28_6369_0edf_136e, payload: payload, channels: channels, retry: .volatile,
-      timeout: timeout)
+      methodId: 0x8b28_6369_0edf_136e, payload: Data(prepared.payload), channels: prepared.channels,
+      retry: .volatile, timeout: timeout, prepareRetry: prepareRetry,
+      finalizeChannels: {
+        finalizeBoundChannels(
+          schemas: testbed_schemas["generateRetryNonIdem"]!.args, args: [count, output])
+      })
     var cursor = 0
     let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
     switch _cursor_resultDisc {
@@ -472,27 +488,33 @@ public final class TestbedClient: TestbedCaller, Sendable {
   }
 
   public func generateRetryIdem(count: UInt32, output: UnboundTx<Int32>) async throws {
-    // Bind channels using schema
-    await bindChannels(
-      schemas: testbed_schemas["generateRetryIdem"]!.args,
-      args: [count, output],
-      allocator: connection.channelAllocator,
-      incomingRegistry: connection.incomingChannelRegistry,
-      taskSender: connection.taskSender,
-      serializers: TestbedSerializers()
-    )
+    let prepareRetry: @Sendable () async -> PreparedRetryRequest = { [connection] in
+      await bindChannels(
+        schemas: testbed_schemas["generateRetryIdem"]!.args,
+        args: [count, output],
+        allocator: connection.channelAllocator,
+        incomingRegistry: connection.incomingChannelRegistry,
+        taskSender: connection.taskSender,
+        serializers: TestbedSerializers()
+      )
 
-    // Encode payload with channel IDs
-    var payloadBytes: [UInt8] = []
-    payloadBytes += encodeU32(count)
-    payloadBytes += encodeVarint(output.channelId)
-    let payload = Data(payloadBytes)
-    let channels = collectChannelIds(
-      schemas: testbed_schemas["generateRetryIdem"]!.args, args: [count, output])
+      var payloadBytes: [UInt8] = []
+      payloadBytes += encodeU32(count)
+      payloadBytes += encodeVarint(output.channelId)
+      let payload = payloadBytes
+      let channels = collectChannelIds(
+        schemas: testbed_schemas["generateRetryIdem"]!.args, args: [count, output])
+      return PreparedRetryRequest(payload: payload, channels: channels)
+    }
+    let prepared = await prepareRetry()
 
     let response = try await connection.call(
-      methodId: 0x3be5_efd8_db40_b6f3, payload: payload, channels: channels, retry: .idem,
-      timeout: timeout)
+      methodId: 0x3be5_efd8_db40_b6f3, payload: Data(prepared.payload), channels: prepared.channels,
+      retry: .idem, timeout: timeout, prepareRetry: prepareRetry,
+      finalizeChannels: {
+        finalizeBoundChannels(
+          schemas: testbed_schemas["generateRetryIdem"]!.args, args: [count, output])
+      })
     var cursor = 0
     let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
     switch _cursor_resultDisc {
@@ -520,27 +542,32 @@ public final class TestbedClient: TestbedCaller, Sendable {
   }
 
   public func transform(input: UnboundRx<String>, output: UnboundTx<String>) async throws {
-    // Bind channels using schema
-    await bindChannels(
-      schemas: testbed_schemas["transform"]!.args,
-      args: [input, output],
-      allocator: connection.channelAllocator,
-      incomingRegistry: connection.incomingChannelRegistry,
-      taskSender: connection.taskSender,
-      serializers: TestbedSerializers()
-    )
+    let prepareRetry: @Sendable () async -> PreparedRetryRequest = { [connection] in
+      await bindChannels(
+        schemas: testbed_schemas["transform"]!.args,
+        args: [input, output],
+        allocator: connection.channelAllocator,
+        incomingRegistry: connection.incomingChannelRegistry,
+        taskSender: connection.taskSender,
+        serializers: TestbedSerializers()
+      )
 
-    // Encode payload with channel IDs
-    var payloadBytes: [UInt8] = []
-    payloadBytes += encodeVarint(input.channelId)
-    payloadBytes += encodeVarint(output.channelId)
-    let payload = Data(payloadBytes)
-    let channels = collectChannelIds(
-      schemas: testbed_schemas["transform"]!.args, args: [input, output])
+      var payloadBytes: [UInt8] = []
+      payloadBytes += encodeVarint(input.channelId)
+      payloadBytes += encodeVarint(output.channelId)
+      let payload = payloadBytes
+      let channels = collectChannelIds(
+        schemas: testbed_schemas["transform"]!.args, args: [input, output])
+      return PreparedRetryRequest(payload: payload, channels: channels)
+    }
+    let prepared = await prepareRetry()
 
     let response = try await connection.call(
-      methodId: 0x5d98_9560_4eb1_8b19, payload: payload, channels: channels, retry: .volatile,
-      timeout: timeout)
+      methodId: 0x5d98_9560_4eb1_8b19, payload: Data(prepared.payload), channels: prepared.channels,
+      retry: .volatile, timeout: timeout, prepareRetry: prepareRetry,
+      finalizeChannels: {
+        finalizeBoundChannels(schemas: testbed_schemas["transform"]!.args, args: [input, output])
+      })
     var cursor = 0
     let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
     switch _cursor_resultDisc {

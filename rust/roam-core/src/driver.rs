@@ -16,7 +16,8 @@ use roam_types::{
     ChannelCreditReplenisherHandle, ChannelId, ChannelItem, ChannelLivenessHandle, ChannelMessage,
     ChannelSink, CreditSink, Handler, IdAllocator, IncomingChannelMessage, MaybeSend, Payload,
     ReplySink, RequestBody, RequestCall, RequestId, RequestMessage, RequestResponse, RoamError,
-    SelfRef, TxError, ensure_operation_id, metadata_operation_id,
+    RpcPlan, SelfRef, TxError, ensure_operation_id, finalize_channels_caller_args,
+    metadata_operation_id,
 };
 
 use crate::session::{
@@ -31,6 +32,7 @@ struct InFlightHandler {
     handle: moire::task::JoinHandle<()>,
     retry: roam_types::RetryPolicy,
     has_channels: bool,
+    operation_id: Option<u64>,
 }
 
 /// State shared between the driver loop and any DriverCaller/DriverChannelSink handles.
@@ -537,6 +539,15 @@ impl Caller for DriverCaller {
     + MaybeSend
     + 'a {
         async move {
+            let caller_channel_plan = match &call.args {
+                Payload::Outgoing { ptr, shape, .. } => {
+                    let plan = RpcPlan::for_shape(shape);
+                    (!plan.channel_locations.is_empty())
+                        .then_some((ptr.raw_ptr() as usize, plan))
+                }
+                Payload::Incoming(_) => None,
+            };
+
             if self.peer_supports_retry {
                 let operation_id = self
                     .shared
@@ -570,6 +581,9 @@ impl Caller for DriverCaller {
                 .is_err()
             {
                 self.shared.pending_responses.lock().remove(&req_id);
+                if let Some((args_ptr, plan)) = caller_channel_plan {
+                    unsafe { finalize_channels_caller_args(args_ptr as *mut u8, plan) };
+                }
                 return Err(RoamError::Cancelled);
             }
 
@@ -581,11 +595,22 @@ impl Caller for DriverCaller {
             let response_msg: SelfRef<RequestMessage<'static>> = loop {
                 tokio::select! {
                     result = &mut response => {
-                        break result.map_err(|_| RoamError::Cancelled)?;
+                        match result {
+                            Ok(msg) => break msg,
+                            Err(_) => {
+                                if let Some((args_ptr, plan)) = caller_channel_plan {
+                                    unsafe { finalize_channels_caller_args(args_ptr as *mut u8, plan) };
+                                }
+                                return Err(RoamError::Cancelled);
+                            }
+                        }
                     }
                     changed = resumed_rx.changed(), if self.peer_supports_retry => {
                         if changed.is_err() {
                             self.shared.pending_responses.lock().remove(&req_id);
+                            if let Some((args_ptr, plan)) = caller_channel_plan {
+                                unsafe { finalize_channels_caller_args(args_ptr as *mut u8, plan) };
+                            }
                             return Err(RoamError::Cancelled);
                         }
                         let generation = *resumed_rx.borrow();
@@ -593,18 +618,46 @@ impl Caller for DriverCaller {
                             continue;
                         }
                         seen_resume_generation = generation;
-                        let resend_call: Result<RequestCall<'_>, _> =
-                            facet_postcard::from_slice_borrowed(encoded_call.as_ref());
-                        if let Ok(resend_call) = resend_call {
+                        if let Some((args_ptr, plan)) = caller_channel_plan {
+                                if let Some(binder) = self.channel_binder() {
+                                    let channels = unsafe {
+                                    roam_types::bind_channels_caller_args(args_ptr as *mut u8, plan, binder)
+                                };
+                                call.channels = channels;
+                            }
+                            let resend_args = match &call.args {
+                                Payload::Outgoing { ptr, shape, .. } => unsafe {
+                                    Payload::outgoing_unchecked(*ptr, shape)
+                                },
+                                Payload::Incoming(bytes) => Payload::Incoming(bytes),
+                            };
+                            let resend_call = RequestCall {
+                                method_id: call.method_id,
+                                args: resend_args,
+                                channels: call.channels.clone(),
+                                metadata: call.metadata.clone(),
+                            };
                             let _ = self.sender.send(ConnectionMessage::Request(RequestMessage {
                                 id: req_id,
                                 body: RequestBody::Call(resend_call),
                             })).await;
+                        } else {
+                            let resend_call: Result<RequestCall<'_>, _> =
+                                facet_postcard::from_slice_borrowed(encoded_call.as_ref());
+                            if let Ok(resend_call) = resend_call {
+                            let _ = self.sender.send(ConnectionMessage::Request(RequestMessage {
+                                id: req_id,
+                                body: RequestBody::Call(resend_call),
+                            })).await;
+                            }
                         }
                     }
                     changed = closed_rx.changed() => {
                         if changed.is_err() || *closed_rx.borrow() {
                             self.shared.pending_responses.lock().remove(&req_id);
+                            if let Some((args_ptr, plan)) = caller_channel_plan {
+                                unsafe { finalize_channels_caller_args(args_ptr as *mut u8, plan) };
+                            }
                             return Err(RoamError::Cancelled);
                         }
                     }
@@ -617,6 +670,9 @@ impl Caller for DriverCaller {
                 _ => unreachable!("pending_responses only gets Response variants"),
             });
 
+            if let Some((args_ptr, plan)) = caller_channel_plan {
+                unsafe { finalize_channels_caller_args(args_ptr as *mut u8, plan) };
+            }
             Ok(response)
         }
         .named("Caller::call")
@@ -736,8 +792,16 @@ impl<H: Handler<DriverReplySink>> Driver<H> {
     }
 
     fn abort_channel_handlers(&mut self) {
-        for in_flight in self.in_flight_handlers.values() {
+        for (req_id, in_flight) in &self.in_flight_handlers {
             if in_flight.has_channels {
+                if in_flight.retry.idem
+                    && let Some(operation_id) = in_flight.operation_id
+                {
+                    let _ = self
+                        .shared
+                        .operations
+                        .fail_without_reply(operation_id, *req_id);
+                }
                 in_flight.handle.abort();
             }
         }
@@ -865,15 +929,20 @@ impl<H: Handler<DriverReplySink>> Driver<H> {
                         .get(&req_id)
                         .map(|in_flight| {
                             if in_flight.has_channels && !in_flight.retry.idem {
-                                FailureDisposition::Indeterminate
+                                Some(FailureDisposition::Indeterminate)
+                            } else if in_flight.has_channels && in_flight.retry.idem {
+                                None
                             } else {
-                                disposition
+                                Some(disposition)
                             }
                         })
-                        .unwrap_or(disposition);
+                        .unwrap_or(Some(disposition));
                     // Clean up the handler tracking entry.
                     self.in_flight_handlers.remove(&req_id);
                     if self.shared.pending_responses.lock().remove(&req_id).is_none() {
+                        let Some(reply_disposition) = reply_disposition else {
+                            continue;
+                        };
                         // Incoming call — handler failed to reply.
                         // Wire format is always Result<T, RoamError<E>>, so encode
                         // the runtime outcome as Err(...) in that envelope.
@@ -1075,6 +1144,7 @@ impl<H: Handler<DriverReplySink>> Driver<H> {
                     handle: join_handle,
                     retry,
                     has_channels,
+                    operation_id,
                 },
             );
         } else if is_response {

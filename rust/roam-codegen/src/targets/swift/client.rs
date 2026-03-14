@@ -212,54 +212,56 @@ fn generate_streaming_client_body(
 ) {
     let service_name_lower = service_name.to_lower_camel_case();
 
-    // Bind channels
     let arg_names: Vec<String> = method
         .args
         .iter()
         .map(|a| a.name.to_lower_camel_case())
         .collect();
 
-    w.writeln("// Bind channels using schema").unwrap();
-    w.writeln("await bindChannels(").unwrap();
+    w.writeln("let prepareRetry: @Sendable () async -> PreparedRetryRequest = { [connection] in")
+        .unwrap();
     {
         let _indent = w.indent();
+        w.writeln("await bindChannels(").unwrap();
+        {
+            let _indent = w.indent();
+            cw_writeln!(
+                w,
+                "schemas: {service_name_lower}_schemas[\"{method_id_name}\"]!.args,"
+            )
+            .unwrap();
+            cw_writeln!(w, "args: [{}],", arg_names.join(", ")).unwrap();
+            w.writeln("allocator: connection.channelAllocator,")
+                .unwrap();
+            w.writeln("incomingRegistry: connection.incomingChannelRegistry,")
+                .unwrap();
+            w.writeln("taskSender: connection.taskSender,").unwrap();
+            cw_writeln!(w, "serializers: {service_name}Serializers()").unwrap();
+        }
+        w.writeln(")").unwrap();
+        w.blank_line().unwrap();
+        w.writeln("var payloadBytes: [UInt8] = []").unwrap();
+        for arg in method.args {
+            let arg_name = arg.name.to_lower_camel_case();
+            if is_tx(arg.shape) || is_rx(arg.shape) {
+                cw_writeln!(w, "payloadBytes += encodeVarint({arg_name}.channelId)").unwrap();
+            } else {
+                let encode_expr = generate_encode_expr(arg.shape, &arg_name);
+                cw_writeln!(w, "payloadBytes += {encode_expr}").unwrap();
+            }
+        }
+        w.writeln("let payload = payloadBytes").unwrap();
         cw_writeln!(
             w,
-            "schemas: {service_name_lower}_schemas[\"{method_id_name}\"]!.args,"
+            "let channels = collectChannelIds(schemas: {service_name_lower}_schemas[\"{method_id_name}\"]!.args, args: [{}])",
+            arg_names.join(", ")
         )
         .unwrap();
-        cw_writeln!(w, "args: [{}],", arg_names.join(", ")).unwrap();
-        w.writeln("allocator: connection.channelAllocator,")
+        w.writeln("return PreparedRetryRequest(payload: payload, channels: channels)")
             .unwrap();
-        w.writeln("incomingRegistry: connection.incomingChannelRegistry,")
-            .unwrap();
-        w.writeln("taskSender: connection.taskSender,").unwrap();
-        cw_writeln!(w, "serializers: {service_name}Serializers()").unwrap();
     }
-    w.writeln(")").unwrap();
-    w.blank_line().unwrap();
-
-    // Encode payload as the full argument tuple.
-    // Channel IDs are still included here for payload shape fidelity, and also sent
-    // in Request.channels for schema-driven discovery.
-    w.writeln("// Encode payload with channel IDs").unwrap();
-    w.writeln("var payloadBytes: [UInt8] = []").unwrap();
-    for arg in method.args {
-        let arg_name = arg.name.to_lower_camel_case();
-        if is_tx(arg.shape) || is_rx(arg.shape) {
-            cw_writeln!(w, "payloadBytes += encodeVarint({arg_name}.channelId)").unwrap();
-        } else {
-            let encode_expr = generate_encode_expr(arg.shape, &arg_name);
-            cw_writeln!(w, "payloadBytes += {encode_expr}").unwrap();
-        }
-    }
-    w.writeln("let payload = Data(payloadBytes)").unwrap();
-    cw_writeln!(
-        w,
-        "let channels = collectChannelIds(schemas: {service_name_lower}_schemas[\"{method_id_name}\"]!.args, args: [{}])",
-        arg_names.join(", ")
-    )
-    .unwrap();
+    w.writeln("}").unwrap();
+    w.writeln("let prepared = await prepareRetry()").unwrap();
     w.blank_line().unwrap();
 
     // Make the call
@@ -268,8 +270,9 @@ fn generate_streaming_client_body(
     let _ = ret_type;
     cw_writeln!(
         w,
-        "let response = try await connection.call(methodId: {}, payload: payload, channels: channels, retry: {retry_policy}, timeout: timeout)",
-        hex_u64(method_id)
+        "let response = try await connection.call(methodId: {}, payload: Data(prepared.payload), channels: prepared.channels, retry: {retry_policy}, timeout: timeout, prepareRetry: prepareRetry, finalizeChannels: {{ finalizeBoundChannels(schemas: {service_name_lower}_schemas[\"{method_id_name}\"]!.args, args: [{}]) }})",
+        hex_u64(method_id),
+        arg_names.join(", ")
     )
     .unwrap();
     generate_response_decode(w, method, cursor_var, "response");

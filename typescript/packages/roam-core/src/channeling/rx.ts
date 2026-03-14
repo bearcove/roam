@@ -1,7 +1,7 @@
 // Rx channel handle - caller receives data from callee.
 
 import { type ChannelId, ChannelError } from "./types.ts";
-import { ChannelReceiver } from "./channel.ts";
+import { createChannel, ChannelReceiver, ChannelSender } from "./channel.ts";
 import { ChannelRegistry } from "./registry.ts";
 
 // Forward declaration for pair reference
@@ -27,6 +27,7 @@ export class Rx<T> {
   private _channelId: ChannelId | undefined;
   private receiver: ChannelReceiver<Uint8Array> | undefined;
   private deserialize: ((bytes: Uint8Array) => T) | undefined;
+  private logicalSender: ChannelSender<Uint8Array> | undefined;
 
   /** Reference to the paired Tx (set by channel<T>()). */
   _pair: Tx<T> | undefined;
@@ -92,14 +93,17 @@ export class Rx<T> {
     initialCredit: number,
     onConsumed?: (additional: number) => void,
   ): void {
-    if (this._consumed) {
-      throw ChannelError.alreadyConsumed("Rx");
-    }
+    this.attachIncomingBinding(channelId, registry, deserialize, initialCredit, onConsumed, false);
+  }
 
-    this._channelId = channelId;
-    this.receiver = registry.registerIncoming(channelId, initialCredit, onConsumed);
-    this.deserialize = deserialize;
-    this._consumed = true;
+  rebind(
+    channelId: ChannelId,
+    registry: ChannelRegistry,
+    deserialize: (bytes: Uint8Array) => T,
+    initialCredit: number,
+    onConsumed?: (additional: number) => void,
+  ): void {
+    this.attachIncomingBinding(channelId, registry, deserialize, initialCredit, onConsumed, true);
   }
 
   /**
@@ -143,6 +147,47 @@ export class Rx<T> {
       }
       yield value;
     }
+  }
+
+  finishRetryBinding(): void {
+    this.logicalSender?.close();
+  }
+
+  private attachIncomingBinding(
+    channelId: ChannelId,
+    registry: ChannelRegistry,
+    deserialize: (bytes: Uint8Array) => T,
+    initialCredit: number,
+    onConsumed: ((additional: number) => void) | undefined,
+    allowRebind: boolean,
+  ): void {
+    if (this._consumed && !allowRebind) {
+      throw ChannelError.alreadyConsumed("Rx");
+    }
+
+    if (!this.logicalSender || !this.receiver) {
+      const logical = createChannel<Uint8Array>(initialCredit);
+      this.logicalSender = new ChannelSender(logical);
+      this.receiver = new ChannelReceiver(logical);
+    }
+
+    this._channelId = channelId;
+    this.deserialize = deserialize;
+    this._consumed = true;
+
+    const transportReceiver = registry.registerIncoming(channelId, initialCredit, onConsumed);
+    const logicalSender = this.logicalSender;
+    void (async () => {
+      while (true) {
+        const bytes = await transportReceiver.recv();
+        if (bytes === null) {
+          return;
+        }
+        if (!logicalSender.send(bytes)) {
+          return;
+        }
+      }
+    })();
   }
 }
 
