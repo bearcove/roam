@@ -187,6 +187,14 @@ fn generate_client_method(
 
 /// Generate code to encode method arguments (for client).
 fn generate_encode_args(w: &mut CodeWriter<&mut String>, args: &[roam_types::ArgDescriptor]) {
+    generate_encode_args_filtered(w, args, false);
+}
+
+fn generate_encode_args_filtered(
+    w: &mut CodeWriter<&mut String>,
+    args: &[roam_types::ArgDescriptor],
+    skip_channels: bool,
+) {
     if args.is_empty() {
         w.writeln("let payload = Data()").unwrap();
         return;
@@ -194,6 +202,9 @@ fn generate_encode_args(w: &mut CodeWriter<&mut String>, args: &[roam_types::Arg
 
     w.writeln("var payloadBytes: [UInt8] = []").unwrap();
     for arg in args {
+        if skip_channels && (is_tx(arg.shape) || is_rx(arg.shape)) {
+            continue;
+        }
         let arg_name = arg.name.to_lower_camel_case();
         let encode_expr = generate_encode_expr(arg.shape, &arg_name);
         cw_writeln!(w, "payloadBytes += {encode_expr}").unwrap();
@@ -240,24 +251,14 @@ fn generate_streaming_client_body(
         }
         w.writeln(")").unwrap();
         w.blank_line().unwrap();
-        w.writeln("var payloadBytes: [UInt8] = []").unwrap();
-        for arg in method.args {
-            let arg_name = arg.name.to_lower_camel_case();
-            if is_tx(arg.shape) || is_rx(arg.shape) {
-                cw_writeln!(w, "payloadBytes += encodeVarint({arg_name}.channelId)").unwrap();
-            } else {
-                let encode_expr = generate_encode_expr(arg.shape, &arg_name);
-                cw_writeln!(w, "payloadBytes += {encode_expr}").unwrap();
-            }
-        }
-        w.writeln("let payload = payloadBytes").unwrap();
+        generate_encode_args_filtered(w, method.args, true);
         cw_writeln!(
             w,
             "let channels = collectChannelIds(schemas: {service_name_lower}_schemas[\"{method_id_name}\"]!.args, args: [{}])",
             arg_names.join(", ")
         )
         .unwrap();
-        w.writeln("return PreparedRetryRequest(payload: payload, channels: channels)")
+        w.writeln("return PreparedRetryRequest(payload: Array(payload), channels: channels)")
             .unwrap();
     }
     w.writeln("}").unwrap();

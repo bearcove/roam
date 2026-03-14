@@ -705,6 +705,37 @@ fn leaked_dirs() -> &'static Mutex<Vec<tempfile::TempDir>> {
     DIRS.get_or_init(|| Mutex::new(Vec::new()))
 }
 
+struct ResumableSubjectClientGuard {
+    path: std::path::PathBuf,
+}
+
+impl Drop for ResumableSubjectClientGuard {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir(&self.path);
+    }
+}
+
+async fn acquire_resumable_subject_client_guard() -> Result<ResumableSubjectClientGuard, String> {
+    let path = std::env::temp_dir().join("roam-spec-tests-resumable-subject-client.lock");
+    loop {
+        match std::fs::create_dir(&path) {
+            Ok(()) => return Ok(ResumableSubjectClientGuard { path }),
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
+                if let Ok(metadata) = std::fs::metadata(&path)
+                    && let Ok(modified) = metadata.modified()
+                    && let Ok(age) = SystemTime::now().duration_since(modified)
+                    && age > Duration::from_secs(10)
+                {
+                    let _ = std::fs::remove_dir_all(&path);
+                    continue;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            Err(err) => return Err(format!("create resumable subject lock: {err}")),
+        }
+    }
+}
+
 fn keep_tempdir_alive(dir: tempfile::TempDir) {
     leaked_dirs().lock().expect("tempdir mutex").push(dir);
 }
@@ -759,6 +790,8 @@ pub async fn run_subject_client_scenario_resumable(
     scenario: &str,
     break_after: usize,
 ) -> Result<(), String> {
+    let _guard = acquire_resumable_subject_client_guard().await?;
+
     if spec.transport != SubjectTestTransport::Tcp {
         return Err("resumable subject client scenarios are only supported for TCP".to_string());
     }
@@ -786,6 +819,7 @@ pub async fn run_subject_client_scenario_resumable(
     let accept_task = tokio::spawn(async move {
         let mut first_accept_tx = Some(first_accept_tx);
         let mut retained_clients = Vec::new();
+        let mut retained_handles = Vec::new();
         loop {
             let (stream, _) = match listener.accept().await {
                 Ok(accepted) => accepted,
@@ -811,9 +845,10 @@ pub async fn run_subject_client_scenario_resumable(
                 .establish_or_resume::<TestbedClient>(TestbedDispatcher::new(service.clone()))
                 .await
             {
-                Ok(SessionAcceptOutcome::Established(client, _)) => {
+                Ok(SessionAcceptOutcome::Established(client, handle)) => {
                     eprintln!("[harness] established subject client session");
                     retained_clients.push(client);
+                    retained_handles.push(handle);
                     if let Some(tx) = first_accept_tx.take() {
                         let _ = tx.send(Ok(()));
                     }

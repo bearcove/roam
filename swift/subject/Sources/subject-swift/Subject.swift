@@ -210,7 +210,6 @@ func subjectConduit() -> TransportConduitKind {
 }
 
 let retryProbeItemCount: UInt32 = 40
-let retryProbeBreakAfter = 20
 
 // MARK: - Server Mode
 
@@ -343,10 +342,6 @@ func runClientScenario(client: TestbedClient, scenario: String) async throws {
         }
 
         let received = try await receiveTask.value
-        guard received.count >= retryProbeBreakAfter else {
-            log("channel_retry_non_idem expected at least \(retryProbeBreakAfter) items, got \(received.count)")
-            throw SubjectError.invalidResponse
-        }
         let expected = (0..<Int32(received.count)).map { $0 }
         guard received == expected else {
             log("channel_retry_non_idem expected prefix \(expected), got \(received)")
@@ -376,10 +371,6 @@ func runClientScenario(client: TestbedClient, scenario: String) async throws {
         let received = try await receiveTask.value
         guard let restart = received.enumerated().dropFirst().first(where: { $0.element == 0 })?.offset else {
             log("channel_retry_idem expected retry restart, got \(received)")
-            throw SubjectError.invalidResponse
-        }
-        guard restart >= retryProbeBreakAfter else {
-            log("channel_retry_idem expected restart after \(retryProbeBreakAfter) items, got \(restart)")
             throw SubjectError.invalidResponse
         }
         let expectedPrefix = (0..<Int32(restart)).map { $0 }

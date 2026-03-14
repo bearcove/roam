@@ -57,6 +57,10 @@ struct DriverShared {
     channel_credits: SyncMutex<BTreeMap<ChannelId, Arc<Semaphore>>>,
 }
 
+fn payload_is_runtime_error(payload: &Payload<'_>) -> bool {
+    matches!(payload, Payload::Incoming(bytes) if bytes.len() >= 2 && bytes[0] == 1 && bytes[1] != 0)
+}
+
 struct CallerDropGuard {
     control_tx: mpsc::UnboundedSender<DropControlRequest>,
     request: DropControlRequest,
@@ -406,6 +410,7 @@ pub struct DriverCaller {
     local_control_tx: mpsc::UnboundedSender<DriverLocalControl>,
     closed_rx: watch::Receiver<bool>,
     resumed_rx: watch::Receiver<u64>,
+    resume_processed_rx: watch::Receiver<u64>,
     peer_supports_retry: bool,
     _drop_guard: Option<Arc<CallerDropGuard>>,
 }
@@ -589,6 +594,7 @@ impl Caller for DriverCaller {
 
             let mut resumed_rx = self.resumed_rx.clone();
             let mut seen_resume_generation = *resumed_rx.borrow();
+            let mut resume_processed_rx = self.resume_processed_rx.clone();
             let mut closed_rx = self.closed_rx.clone();
             let mut response = std::pin::pin!(rx.named("awaiting_response"));
 
@@ -618,10 +624,23 @@ impl Caller for DriverCaller {
                             continue;
                         }
                         seen_resume_generation = generation;
+                        while *resume_processed_rx.borrow() < generation {
+                            if resume_processed_rx.changed().await.is_err() {
+                                self.shared.pending_responses.lock().remove(&req_id);
+                                if let Some((args_ptr, plan)) = caller_channel_plan {
+                                    unsafe { finalize_channels_caller_args(args_ptr as *mut u8, plan) };
+                                }
+                                return Err(RoamError::Cancelled);
+                            }
+                        }
                         if let Some((args_ptr, plan)) = caller_channel_plan {
-                                if let Some(binder) = self.channel_binder() {
-                                    let channels = unsafe {
-                                    roam_types::bind_channels_caller_args(args_ptr as *mut u8, plan, binder)
+                            if let Some(binder) = self.channel_binder() {
+                                let channels = unsafe {
+                                    roam_types::bind_channels_caller_args(
+                                        args_ptr as *mut u8,
+                                        plan,
+                                        binder,
+                                    )
                                 };
                                 call.channels = channels;
                             }
@@ -670,7 +689,9 @@ impl Caller for DriverCaller {
                 _ => unreachable!("pending_responses only gets Response variants"),
             });
 
-            if let Some((args_ptr, plan)) = caller_channel_plan {
+            if let Some((args_ptr, plan)) = caller_channel_plan
+                && payload_is_runtime_error(&response.ret)
+            {
                 unsafe { finalize_channels_caller_args(args_ptr as *mut u8, plan) };
             }
             Ok(response)
@@ -713,6 +734,7 @@ pub struct Driver<H: Handler<DriverReplySink>> {
     failures_rx: mpsc::UnboundedReceiver<(RequestId, FailureDisposition)>,
     closed_rx: watch::Receiver<bool>,
     resumed_rx: watch::Receiver<u64>,
+    resume_processed_tx: watch::Sender<u64>,
     peer_supports_retry: bool,
     local_control_rx: mpsc::UnboundedReceiver<DriverLocalControl>,
     handler: Arc<H>,
@@ -794,9 +816,7 @@ impl<H: Handler<DriverReplySink>> Driver<H> {
     fn abort_channel_handlers(&mut self) {
         for (req_id, in_flight) in &self.in_flight_handlers {
             if in_flight.has_channels {
-                if in_flight.retry.idem
-                    && let Some(operation_id) = in_flight.operation_id
-                {
+                if let Some(operation_id) = in_flight.operation_id {
                     let _ = self
                         .shared
                         .operations
@@ -829,12 +849,14 @@ impl<H: Handler<DriverReplySink>> Driver<H> {
         } = handle;
         let drop_control_request = DropControlRequest::Close(conn_id);
         let (local_control_tx, local_control_rx) = mpsc::unbounded_channel("driver.local_control");
+        let (resume_processed_tx, _resume_processed_rx) = watch::channel(0_u64);
         Self {
             sender,
             rx,
             failures_rx,
             closed_rx,
             resumed_rx,
+            resume_processed_tx,
             peer_supports_retry,
             local_control_rx,
             handler: Arc::new(handler),
@@ -894,6 +916,7 @@ impl<H: Handler<DriverReplySink>> Driver<H> {
             local_control_tx: self.local_control_tx.clone(),
             closed_rx: self.closed_rx.clone(),
             resumed_rx: self.resumed_rx.clone(),
+            resume_processed_rx: self.resume_processed_tx.subscribe(),
             peer_supports_retry: self.peer_supports_retry,
             _drop_guard: drop_guard,
         }
@@ -917,6 +940,19 @@ impl<H: Handler<DriverReplySink>> Driver<H> {
         let mut seen_resume_generation = *resumed_rx.borrow();
         loop {
             tokio::select! {
+                biased;
+                changed = resumed_rx.changed() => {
+                    if changed.is_err() {
+                        break;
+                    }
+                    let generation = *resumed_rx.borrow();
+                    if generation != seen_resume_generation {
+                        seen_resume_generation = generation;
+                        self.close_all_channel_runtime_state();
+                        self.abort_channel_handlers();
+                        let _ = self.resume_processed_tx.send(generation);
+                    }
+                }
                 msg = self.rx.recv() => {
                     match msg {
                         Some(msg) => self.handle_msg(msg),
@@ -961,17 +997,6 @@ impl<H: Handler<DriverReplySink>> Driver<H> {
                 }
                 Some(ctrl) = self.local_control_rx.recv() => {
                     self.handle_local_control(ctrl).await;
-                }
-                changed = resumed_rx.changed() => {
-                    if changed.is_err() {
-                        break;
-                    }
-                    let generation = *resumed_rx.borrow();
-                    if generation != seen_resume_generation {
-                        seen_resume_generation = generation;
-                        self.close_all_channel_runtime_state();
-                        self.abort_channel_handlers();
-                    }
                 }
             }
         }

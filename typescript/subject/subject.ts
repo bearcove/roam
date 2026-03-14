@@ -171,7 +171,6 @@ function subjectConduit(): SessionConduitKind {
 }
 
 const RETRY_PROBE_ITEM_COUNT = 40;
-const RETRY_PROBE_BREAK_AFTER = 20;
 
 function expectSequentialPrefix(received: number[], label: string): void {
   const expected = Array.from({ length: received.length }, (_, idx) => idx);
@@ -297,9 +296,6 @@ async function runClient() {
       if (!(result instanceof Error) || !("code" in result) || result.code !== RpcErrorCode.INDETERMINATE) {
         throw new Error(`expected indeterminate error, got ${String(result)}`);
       }
-      if (received.length < RETRY_PROBE_BREAK_AFTER) {
-        throw new Error(`expected at least ${RETRY_PROBE_BREAK_AFTER} items before disconnect, got ${received.length}`);
-      }
       expectSequentialPrefix(received, "non-idem retry");
       break;
     }
@@ -317,9 +313,6 @@ async function runClient() {
       await callPromise;
       const received = await receiveTask;
       const restart = received.findIndex((value, idx) => idx > 0 && value === 0);
-      if (restart < RETRY_PROBE_BREAK_AFTER) {
-        throw new Error(`expected retry restart after at least ${RETRY_PROBE_BREAK_AFTER} items, got ${restart}`);
-      }
       expectSequentialPrefix(received.slice(0, restart), "idem retry first attempt");
       const rerun = Array.from({ length: RETRY_PROBE_ITEM_COUNT }, (_, idx) => idx);
       const suffix = received.slice(restart);

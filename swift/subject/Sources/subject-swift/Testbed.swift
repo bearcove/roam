@@ -340,10 +340,9 @@ public final class TestbedClient: TestbedCaller, Sendable {
       )
 
       var payloadBytes: [UInt8] = []
-      payloadBytes += encodeVarint(numbers.channelId)
-      let payload = payloadBytes
+      let payload = Data(payloadBytes)
       let channels = collectChannelIds(schemas: testbed_schemas["sum"]!.args, args: [numbers])
-      return PreparedRetryRequest(payload: payload, channels: channels)
+      return PreparedRetryRequest(payload: Array(payload), channels: channels)
     }
     let prepared = await prepareRetry()
 
@@ -393,11 +392,10 @@ public final class TestbedClient: TestbedCaller, Sendable {
 
       var payloadBytes: [UInt8] = []
       payloadBytes += encodeU32(count)
-      payloadBytes += encodeVarint(output.channelId)
-      let payload = payloadBytes
+      let payload = Data(payloadBytes)
       let channels = collectChannelIds(
         schemas: testbed_schemas["generate"]!.args, args: [count, output])
-      return PreparedRetryRequest(payload: payload, channels: channels)
+      return PreparedRetryRequest(payload: Array(payload), channels: channels)
     }
     let prepared = await prepareRetry()
 
@@ -446,11 +444,10 @@ public final class TestbedClient: TestbedCaller, Sendable {
 
       var payloadBytes: [UInt8] = []
       payloadBytes += encodeU32(count)
-      payloadBytes += encodeVarint(output.channelId)
-      let payload = payloadBytes
+      let payload = Data(payloadBytes)
       let channels = collectChannelIds(
         schemas: testbed_schemas["generateRetryNonIdem"]!.args, args: [count, output])
-      return PreparedRetryRequest(payload: payload, channels: channels)
+      return PreparedRetryRequest(payload: Array(payload), channels: channels)
     }
     let prepared = await prepareRetry()
 
@@ -500,11 +497,10 @@ public final class TestbedClient: TestbedCaller, Sendable {
 
       var payloadBytes: [UInt8] = []
       payloadBytes += encodeU32(count)
-      payloadBytes += encodeVarint(output.channelId)
-      let payload = payloadBytes
+      let payload = Data(payloadBytes)
       let channels = collectChannelIds(
         schemas: testbed_schemas["generateRetryIdem"]!.args, args: [count, output])
-      return PreparedRetryRequest(payload: payload, channels: channels)
+      return PreparedRetryRequest(payload: Array(payload), channels: channels)
     }
     let prepared = await prepareRetry()
 
@@ -553,12 +549,10 @@ public final class TestbedClient: TestbedCaller, Sendable {
       )
 
       var payloadBytes: [UInt8] = []
-      payloadBytes += encodeVarint(input.channelId)
-      payloadBytes += encodeVarint(output.channelId)
-      let payload = payloadBytes
+      let payload = Data(payloadBytes)
       let channels = collectChannelIds(
         schemas: testbed_schemas["transform"]!.args, args: [input, output])
-      return PreparedRetryRequest(payload: payload, channels: channels)
+      return PreparedRetryRequest(payload: Array(payload), channels: channels)
     }
     let prepared = await prepareRetry()
 

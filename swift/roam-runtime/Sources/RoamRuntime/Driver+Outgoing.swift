@@ -254,7 +254,18 @@ extension Driver {
     func replayPendingCallsAfterResume() async {
         let inFlight = await state.pendingCallsSnapshot()
         pendingCalls.removeAll()
-        for call in inFlight where call.retry.idem {
+        for call in inFlight {
+            if !call.channels.isEmpty && !call.retry.idem {
+                guard let pending = await state.claimPendingResponse(
+                    call.requestId,
+                    reason: "resume-channel-indeterminate"
+                ) else {
+                    continue
+                }
+                pending.timeoutTask?.cancel()
+                pending.responseTx(.success(encodeIndeterminateError()))
+                continue
+            }
             pendingCalls.append(call)
         }
     }

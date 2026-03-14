@@ -14,7 +14,7 @@ use facet_core::PtrConst;
 use tokio::sync::{Semaphore, mpsc};
 
 #[cfg(not(target_arch = "wasm32"))]
-use crate::{ChannelClose, ChannelItem, ChannelReset, Metadata, Payload, SelfRef};
+use crate::{Backing, ChannelClose, ChannelItem, ChannelReset, Metadata, Payload, SelfRef};
 
 // r[impl rpc.channel.pair]
 /// The binding stored in a channel core — either a sink or a receiver, never both.
@@ -57,6 +57,8 @@ pub struct BoundChannelReceiver {
 
 #[cfg(not(target_arch = "wasm32"))]
 struct LogicalReceiverState {
+    generation: u64,
+    liveness: Option<ChannelLivenessHandle>,
     sender: Option<mpsc::Sender<LogicalIncomingChannelMessage>>,
     receiver: Option<mpsc::Receiver<LogicalIncomingChannelMessage>>,
 }
@@ -112,7 +114,7 @@ impl ChannelCore {
         }
     }
 
-    pub fn bind_retryable_receiver(&self, bound: BoundChannelReceiver) {
+    pub fn bind_retryable_receiver(self: &Arc<Self>, bound: BoundChannelReceiver) {
         let mut guard = self
             .logical_receiver
             .lock()
@@ -120,19 +122,40 @@ impl ChannelCore {
         let state = guard.get_or_insert_with(|| {
             let (tx, rx) = mpsc::channel(64);
             LogicalReceiverState {
+                generation: 0,
+                liveness: None,
                 sender: Some(tx),
                 receiver: Some(rx),
             }
         });
+        state.generation = state.generation.wrapping_add(1);
+        state.liveness = bound.liveness.clone();
+        let generation = state.generation;
 
         let Some(sender) = state.sender.clone() else {
             return;
         };
 
+        drop(guard);
+        let core = Arc::clone(self);
+
         tokio::spawn(async move {
             let mut receiver = bound.receiver;
             let replenisher = bound.replenisher.clone();
             while let Some(msg) = receiver.recv().await {
+                let is_current_generation = {
+                    let guard = core
+                        .logical_receiver
+                        .lock()
+                        .expect("channel core logical receiver mutex poisoned");
+                    guard
+                        .as_ref()
+                        .map(|state| state.generation == generation)
+                        .unwrap_or(false)
+                };
+                if !is_current_generation {
+                    return;
+                }
                 let forwarded = LogicalIncomingChannelMessage {
                     msg,
                     replenisher: replenisher.clone(),
@@ -144,25 +167,45 @@ impl ChannelCore {
         });
     }
 
-    pub fn take_logical_receiver(&self) -> Option<mpsc::Receiver<LogicalIncomingChannelMessage>> {
+    pub fn take_logical_receiver(
+        &self,
+    ) -> Option<(
+        mpsc::Receiver<LogicalIncomingChannelMessage>,
+        Option<ChannelLivenessHandle>,
+    )> {
         self.logical_receiver
             .lock()
             .expect("channel core logical receiver mutex poisoned")
             .as_mut()
-            .and_then(|state| state.receiver.take())
+            .and_then(|state| {
+                state
+                    .receiver
+                    .take()
+                    .map(|receiver| (receiver, state.liveness.clone()))
+            })
     }
 
     pub fn finish_retry_binding(&self) {
-        {
-            let mut guard = self
-                .logical_receiver
-                .lock()
-                .expect("channel core logical receiver mutex poisoned");
-            if let Some(state) = guard.as_mut() {
-                state.sender.take();
+        let mut guard = self
+            .logical_receiver
+            .lock()
+            .expect("channel core logical receiver mutex poisoned");
+        if let Some(state) = guard.as_mut() {
+            if let Some(sender) = state.sender.as_ref() {
+                let close = SelfRef::owning(
+                    Backing::Boxed(Box::<[u8]>::default()),
+                    ChannelClose {
+                        metadata: Metadata::default(),
+                    },
+                );
+                let _ = sender.try_send(LogicalIncomingChannelMessage {
+                    msg: IncomingChannelMessage::Close(close),
+                    replenisher: None,
+                });
             }
-            *guard = None;
+            state.sender.take();
         }
+        *guard = None;
         let mut guard = self.binding.lock().expect("channel core mutex poisoned");
         *guard = None;
     }
@@ -647,9 +690,10 @@ impl<T, const N: usize> Rx<T, N> {
     {
         if self.logical_receiver.inner.is_none()
             && let Some(core) = &self.core.inner
-            && let Some(receiver) = core.take_logical_receiver()
+            && let Some((receiver, liveness)) = core.take_logical_receiver()
         {
             self.logical_receiver.inner = Some(receiver);
+            self.liveness.inner = liveness;
         }
 
         if let Some(receiver) = self.logical_receiver.inner.as_mut() {

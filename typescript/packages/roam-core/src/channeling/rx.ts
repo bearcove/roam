@@ -28,6 +28,8 @@ export class Rx<T> {
   private receiver: ChannelReceiver<Uint8Array> | undefined;
   private deserialize: ((bytes: Uint8Array) => T) | undefined;
   private logicalSender: ChannelSender<Uint8Array> | undefined;
+  private logicalCapacity: number | undefined;
+  private bindingGeneration = 0;
 
   /** Reference to the paired Tx (set by channel<T>()). */
   _pair: Tx<T> | undefined;
@@ -165,22 +167,48 @@ export class Rx<T> {
       throw ChannelError.alreadyConsumed("Rx");
     }
 
+    const transportReceiver = registry.registerIncoming(channelId, initialCredit, onConsumed);
+
+    if (!allowRebind && !this.logicalSender) {
+      this._channelId = channelId;
+      this.receiver = transportReceiver;
+      this.deserialize = deserialize;
+      this._consumed = true;
+      this.bindingGeneration += 1;
+      return;
+    }
+
     if (!this.logicalSender || !this.receiver) {
-      const logical = createChannel<Uint8Array>(initialCredit);
+      const logical = createChannel<Uint8Array>(this.logicalCapacity ?? initialCredit);
       this.logicalSender = new ChannelSender(logical);
+      if (this.receiver) {
+        this.startForwarding(this.receiver, this.logicalSender, this.bindingGeneration);
+      }
       this.receiver = new ChannelReceiver(logical);
+      this.logicalCapacity = initialCredit;
     }
 
     this._channelId = channelId;
     this.deserialize = deserialize;
     this._consumed = true;
-
-    const transportReceiver = registry.registerIncoming(channelId, initialCredit, onConsumed);
+    this.bindingGeneration += 1;
+    const generation = this.bindingGeneration;
     const logicalSender = this.logicalSender;
+    this.startForwarding(transportReceiver, logicalSender, generation);
+  }
+
+  private startForwarding(
+    transportReceiver: ChannelReceiver<Uint8Array>,
+    logicalSender: ChannelSender<Uint8Array>,
+    generation: number,
+  ): void {
     void (async () => {
       while (true) {
         const bytes = await transportReceiver.recv();
         if (bytes === null) {
+          if (this.bindingGeneration === generation) {
+            logicalSender.close();
+          }
           return;
         }
         if (!logicalSender.send(bytes)) {
