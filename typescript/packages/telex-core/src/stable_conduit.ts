@@ -324,6 +324,10 @@ export class StableConduit implements Conduit<Message> {
             this.recvQueue.push(message);
           }
         } catch {
+          // If we're closed, exit gracefully instead of trying to reconnect
+          if (this.closed) {
+            break;
+          }
           await this.ensureReconnected();
         }
       }
