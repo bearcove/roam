@@ -92,13 +92,12 @@ extension Driver {
         // Reset schema tracker - type IDs are per-connection and must not carry over
         schemaSendTracker.reset()
 
-        // Clear incoming in-flight requests
-        let interruptedRequestIds = await state.clearIncomingInFlightForResume()
-        for requestId in interruptedRequestIds {
-            _ = await operations.failWithoutReply(ownerRequestId: requestId)
-        }
+        // Note: We do NOT clear incoming in-flight requests on the acceptor side.
+        // Handlers that are still processing should complete and send their responses
+        // on the new conduit. The inFlightRequests map is kept intact so responseMessage()
+        // can find the request context when the handler eventually responds.
 
-        // Replay pending calls
+        // Replay pending outgoing calls (initiator side)
         await replayPendingCallsAfterResume()
 
         // Reset keepalive
