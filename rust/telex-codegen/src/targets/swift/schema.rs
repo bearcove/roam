@@ -1,21 +1,22 @@
 //! Swift binding-schema generation for runtime channel binding.
 //!
-//! Generates runtime schema information for channel discovery.
+//! Generates runtime schema information for channel discovery and wire schema exchange.
 
-use facet_core::{ScalarType, Shape};
+use facet_core::{Facet, ScalarType, Shape};
 use heck::{ToLowerCamelCase, ToUpperCamelCase};
 use telex_types::{
-    EnumInfo, ServiceDescriptor, ShapeKind, StructInfo, VariantKind, classify_shape,
-    classify_variant, is_bytes,
+    EnumInfo, SchemaPayload, ServiceDescriptor, ShapeKind, StructInfo, TelexError, TypeRef,
+    VariantKind, classify_shape, classify_variant, extract_schemas, is_bytes,
 };
 
 use crate::code_writer::CodeWriter;
 use crate::cw_writeln;
 
-/// Generate complete schema code (method schemas + serializers).
+/// Generate complete schema code (method schemas + serializers + wire schemas).
 pub fn generate_schemas(service: &ServiceDescriptor) -> String {
     let mut out = String::new();
     out.push_str(&generate_method_schemas(service));
+    out.push_str(&generate_wire_schemas(service));
     out.push_str(&generate_serializers(service));
     out
 }
@@ -47,6 +48,128 @@ fn generate_method_schemas(service: &ServiceDescriptor) -> String {
 
     out.push_str("]\n\n");
     out
+}
+
+/// Generate wire schema payloads for protocol schema exchange.
+///
+/// Produces pre-computed CBOR bytes for each method's args and response schemas.
+/// These are sent with requests/responses so the peer can decode with schema evolution.
+fn generate_wire_schemas(service: &ServiceDescriptor) -> String {
+    use crate::render::hex_u64;
+
+    let service_name = service.service_name.to_lower_camel_case();
+
+    // Extract Result and TelexError schemas once (used for wrapping responses)
+    let result_extracted =
+        extract_schemas(<Result<bool, u32> as Facet<'static>>::SHAPE).expect("Result schema");
+    let result_type_id = match &result_extracted.root {
+        TypeRef::Concrete { type_id, .. } => *type_id,
+        _ => panic!("Result root should be concrete"),
+    };
+
+    let telex_error_extracted =
+        extract_schemas(<TelexError<std::convert::Infallible> as Facet<'static>>::SHAPE)
+            .expect("TelexError schema");
+    let telex_error_type_id = match &telex_error_extracted.root {
+        TypeRef::Concrete { type_id, .. } => *type_id,
+        _ => panic!("TelexError root should be concrete"),
+    };
+
+    let mut out = String::new();
+
+    // Generate per-method schema payloads
+    out.push_str(&format!(
+        "/// Pre-computed CBOR schema payloads for wire protocol schema exchange.\n"
+    ));
+    out.push_str(&format!(
+        "public let {service_name}_wire_schemas: [UInt64: MethodWireSchemas] = [\n"
+    ));
+
+    for method in service.methods {
+        let method_id = crate::method_id(method);
+
+        // Extract args schemas
+        let args_extracted = extract_schemas(method.args_shape).expect("args schema extraction");
+        let args_payload = SchemaPayload {
+            schemas: args_extracted.schemas,
+            root: args_extracted.root,
+        };
+        let args_cbor = args_payload.to_cbor();
+
+        // Extract response schemas - wrap in Result<T, TelexError<E>>
+        let (ok_extracted, err_extracted) = match classify_shape(method.return_shape) {
+            ShapeKind::Result { ok, err } => (
+                extract_schemas(ok).expect("ok schema"),
+                extract_schemas(err).expect("err schema"),
+            ),
+            _ => (
+                extract_schemas(method.return_shape).expect("return schema"),
+                extract_schemas(<std::convert::Infallible as Facet<'static>>::SHAPE)
+                    .expect("Infallible schema"),
+            ),
+        };
+
+        // Combine all schemas for the response
+        let mut response_schemas = Vec::new();
+        response_schemas.extend(result_extracted.schemas.iter().cloned());
+        response_schemas.extend(telex_error_extracted.schemas.iter().cloned());
+        response_schemas.extend(ok_extracted.schemas);
+        response_schemas.extend(err_extracted.schemas);
+
+        // Deduplicate by schema ID
+        let mut seen = std::collections::HashSet::new();
+        response_schemas.retain(|s| seen.insert(s.id));
+
+        // Build the response root: Result<ok_root, TelexError<err_root>>
+        let telex_error_ref = TypeRef::generic(telex_error_type_id, vec![err_extracted.root]);
+        let response_root =
+            TypeRef::generic(result_type_id, vec![ok_extracted.root, telex_error_ref]);
+
+        let response_payload = SchemaPayload {
+            schemas: response_schemas,
+            root: response_root,
+        };
+        let response_cbor = response_payload.to_cbor();
+
+        // Format as Swift byte array literal
+        let args_bytes = format_swift_bytes(&args_cbor.0);
+        let response_bytes = format_swift_bytes(&response_cbor.0);
+
+        out.push_str(&format!(
+            "    {}: MethodWireSchemas(\n        argsSchemas: {},\n        responseSchemas: {}\n    ),\n",
+            hex_u64(method_id),
+            args_bytes,
+            response_bytes
+        ));
+    }
+
+    out.push_str("]\n\n");
+    out
+}
+
+/// Format bytes as a Swift array literal.
+fn format_swift_bytes(bytes: &[u8]) -> String {
+    if bytes.is_empty() {
+        return "[]".to_string();
+    }
+
+    let hex_bytes: Vec<String> = bytes.iter().map(|b| format!("0x{:02x}", b)).collect();
+
+    // For short arrays, single line
+    if hex_bytes.len() <= 8 {
+        return format!("[{}]", hex_bytes.join(", "));
+    }
+
+    // Split into chunks of 12 bytes per line for readability
+    let mut lines = Vec::new();
+    for chunk in hex_bytes.chunks(12) {
+        lines.push(chunk.join(", "));
+    }
+
+    format!(
+        "[\n            {}\n        ]",
+        lines.join(",\n            ")
+    )
 }
 
 /// Convert a Shape to its Swift binding-schema representation.

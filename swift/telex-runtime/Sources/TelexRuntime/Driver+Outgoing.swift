@@ -3,7 +3,8 @@ import Foundation
 extension Driver {
     private func responseMessage(
         requestId: UInt64,
-        payload: [UInt8]
+        payload: [UInt8],
+        schemas: [UInt8] = []
     ) async -> Message? {
         let responseContext = await state.removeInFlight(requestId)
         guard responseContext.removed else {
@@ -13,6 +14,7 @@ extension Driver {
             connId: responseContext.connectionId,
             requestId: requestId,
             metadata: responseContext.responseMetadata,
+            schemas: schemas,
             payload: payload
         )
     }
@@ -39,7 +41,7 @@ extension Driver {
             wireMsg = .close(connId: 0, channelId: channelId)
         case .grantCredit(let channelId, let bytes):
             wireMsg = .credit(connId: 0, channelId: channelId, bytes: bytes)
-        case .response(let requestId, let payload):
+        case .response(let requestId, let payload, let schemas):
             let checkedPayload: [UInt8]
             if payload.count > Int(negotiated.maxPayloadSize) {
                 debugLog(
@@ -52,7 +54,7 @@ extension Driver {
             let waiters = await operations.seal(ownerRequestId: requestId, payload: checkedPayload)
             if !waiters.isEmpty {
                 for waiter in waiters {
-                    guard let replay = await responseMessage(requestId: waiter, payload: checkedPayload) else {
+                    guard let replay = await responseMessage(requestId: waiter, payload: checkedPayload, schemas: schemas) else {
                         continue
                     }
                     do {
@@ -63,7 +65,7 @@ extension Driver {
                 }
                 return
             }
-            guard let response = await responseMessage(requestId: requestId, payload: checkedPayload) else {
+            guard let response = await responseMessage(requestId: requestId, payload: checkedPayload, schemas: schemas) else {
                 return
             }
             wireMsg = response
