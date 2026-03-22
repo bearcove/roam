@@ -12,7 +12,7 @@ import Foundation
 /// - Task messages from handlers (Data/Close/Response)
 /// - Commands from ConnectionHandle
 public final class Driver: @unchecked Sendable {
-    let conduit: any Conduit
+    var conduit: any Conduit
     let dispatcher: any ServiceDispatcher
     let role: Role
     let negotiated: Negotiated
@@ -32,6 +32,14 @@ public final class Driver: @unchecked Sendable {
     let taskQueue: LockedQueue<TaskMessage>
     var pendingTaskMessages: [DriverQueuedTaskMessage] = []
     var pendingCalls: [DriverQueuedCall] = []
+
+    // Session resumption support
+    let resumable: Bool
+    let localRootSettings: ConnectionSettings?
+    let peerRootSettings: ConnectionSettings?
+    let transport: TransportConduitKind?
+    let recoverAttachment: (@Sendable () async throws -> LinkAttachment)?
+    let sessionResumeKey: [UInt8]?
 
     init(
         conduit: any Conduit,
@@ -57,6 +65,12 @@ public final class Driver: @unchecked Sendable {
         self.schemaSendTracker = SchemaSendTracker()
         self.commandQueue = LockedQueue<HandleCommand>()
         self.taskQueue = LockedQueue<TaskMessage>()
+        self.resumable = false
+        self.localRootSettings = nil
+        self.peerRootSettings = nil
+        self.transport = nil
+        self.recoverAttachment = nil
+        self.sessionResumeKey = nil
 
         // Create event stream
         var continuation: AsyncStream<DriverEvent>.Continuation!
@@ -80,7 +94,13 @@ public final class Driver: @unchecked Sendable {
         eventContinuation: AsyncStream<DriverEvent>.Continuation,
         commandQueue: LockedQueue<HandleCommand>,
         taskQueue: LockedQueue<TaskMessage>,
-        schemaSendTracker: SchemaSendTracker = SchemaSendTracker()
+        schemaSendTracker: SchemaSendTracker = SchemaSendTracker(),
+        resumable: Bool = false,
+        localRootSettings: ConnectionSettings? = nil,
+        peerRootSettings: ConnectionSettings? = nil,
+        transport: TransportConduitKind? = nil,
+        recoverAttachment: (@Sendable () async throws -> LinkAttachment)? = nil,
+        sessionResumeKey: [UInt8]? = nil
     ) {
         self.conduit = conduit
         self.dispatcher = dispatcher
@@ -98,5 +118,11 @@ public final class Driver: @unchecked Sendable {
         self.eventContinuation = eventContinuation
         self.commandQueue = commandQueue
         self.taskQueue = taskQueue
+        self.resumable = resumable
+        self.localRootSettings = localRootSettings
+        self.peerRootSettings = peerRootSettings
+        self.transport = transport
+        self.recoverAttachment = recoverAttachment
+        self.sessionResumeKey = sessionResumeKey
     }
 }

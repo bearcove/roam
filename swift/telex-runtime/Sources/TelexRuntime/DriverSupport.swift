@@ -11,6 +11,7 @@ enum DriverEvent: Sendable {
     case retryTick
     case conduitClosed
     case conduitFailed(String)
+    case resumeConduit(any Conduit)
 }
 
 final class LockedQueue<T>: @unchecked Sendable {
@@ -126,31 +127,72 @@ func makeSessionDriverAndConnection(
     transport: TransportConduitKind,
     recoverAttachment: (@Sendable () async throws -> LinkAttachment)? = nil
 ) -> (Connection, Driver, SessionHandle) {
-    let coordinator = SessionResumeCoordinator(
+    let commandQueue = LockedQueue<HandleCommand>()
+    let taskQueue = LockedQueue<TaskMessage>()
+    var continuation: AsyncStream<DriverEvent>.Continuation!
+    let eventStream = AsyncStream<DriverEvent> { cont in
+        continuation = cont
+    }
+    let capturedContinuation = continuation!
+
+    let commandSender: @Sendable (HandleCommand) -> Bool = { cmd in
+        guard commandQueue.push(cmd) else {
+            return false
+        }
+        let result = capturedContinuation.yield(.wake)
+        guard case .terminated = result else {
+            return true
+        }
+        return false
+    }
+    let taskSender: @Sendable (TaskMessage) -> Bool = { msg in
+        guard taskQueue.push(msg) else {
+            return false
+        }
+        let result = capturedContinuation.yield(.wake)
+        guard case .terminated = result else {
+            return true
+        }
+        return false
+    }
+
+    let handle = ConnectionHandle(
+        commandTx: commandSender,
+        taskTx: taskSender,
+        role: role,
+        peerSupportsRetry: peerSupportsRetry,
+        maxConcurrentRequests: negotiated.maxConcurrentRequests
+    )
+
+    let driver = Driver(
+        conduit: conduit,
+        dispatcher: dispatcher,
+        role: role,
+        negotiated: negotiated,
+        handle: handle,
+        operations: OperationRegistry(),
+        acceptConnections: acceptConnections,
+        keepalive: keepalive,
+        eventStream: eventStream,
+        eventContinuation: continuation,
+        commandQueue: commandQueue,
+        taskQueue: taskQueue,
+        resumable: resumable,
+        localRootSettings: localRootSettings,
+        peerRootSettings: peerRootSettings,
+        transport: transport,
+        recoverAttachment: recoverAttachment,
+        sessionResumeKey: sessionResumeKey
+    )
+
+    let sessionHandle = SessionHandle(
+        eventContinuation: continuation,
         role: role,
         localRootSettings: localRootSettings,
         peerRootSettings: peerRootSettings,
         transport: transport,
-        resumable: resumable,
-        sessionResumeKey: sessionResumeKey,
-        recoverAttachment: recoverAttachment
+        sessionResumeKey: sessionResumeKey
     )
 
-    let runtimeConduit: any Conduit
-    if resumable {
-        runtimeConduit = ResumableConduit(conduit: conduit, coordinator: coordinator)
-    } else {
-        runtimeConduit = conduit
-    }
-
-    let (connection, driver) = makeDriverAndConnection(
-        conduit: runtimeConduit,
-        dispatcher: dispatcher,
-        role: role,
-        negotiated: negotiated,
-        peerSupportsRetry: peerSupportsRetry,
-        acceptConnections: acceptConnections,
-        keepalive: keepalive
-    )
-    return (connection, driver, SessionHandle(coordinator: coordinator))
+    return (Connection(handle: handle), driver, sessionHandle)
 }

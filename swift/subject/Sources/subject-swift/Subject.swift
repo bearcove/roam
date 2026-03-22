@@ -824,7 +824,7 @@ func runClient() async throws {
     let session = try await Session.initiator(
         connector,
         dispatcher: dispatcher,
-        resumable: false
+        resumable: true
     )
 
     log("handshake complete")
