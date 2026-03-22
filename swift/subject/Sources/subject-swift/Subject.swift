@@ -4,7 +4,6 @@
 /// is compliant with the telex protocol spec.
 
 import Foundation
-import Darwin
 import TelexRuntime
 
 // MARK: - Testbed Service Implementation
