@@ -2,7 +2,7 @@
 
 Async operating-system control helpers for shared-memory transport plumbing.
 
-## Role in the Roam stack
+## Role in the Telex stack
 
 `shm-primitives-async` supports low-level SHM transport setup and coordination below the `Link` layer.
 
@@ -14,6 +14,6 @@ Async operating-system control helpers for shared-memory transport plumbing.
 ## Fits with
 
 - `shm-primitives` core data structures
-- `roam-shm` transport orchestration
+- `telex-shm` transport orchestration
 
-Part of the Roam workspace: <https://github.com/bearcove/roam>
+Part of the Telex workspace: <https://github.com/bearcove/telex>

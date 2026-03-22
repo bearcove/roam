@@ -2,7 +2,7 @@
 
 specs (
     {
-        name roam
+        name telex
         include (docs/content/spec/*.md)
         impls (
             {
@@ -12,16 +12,16 @@ specs (
             }
             {
                 name swift
-                include (swift/roam-runtime/**/*.swift)
+                include (swift/telex-runtime/**/*.swift)
             }
             {
                 name typescript
                 include (
-                    typescript/packages/roam-core/src/session.ts
-                    typescript/packages/roam-core/src/stable_conduit.ts
-                    typescript/packages/roam-core/src/driver.ts
-                    typescript/packages/roam-core/src/channeling/registry.ts
-                    typescript/packages/roam-core/src/channeling/registry.test.ts
+                    typescript/packages/telex-core/src/session.ts
+                    typescript/packages/telex-core/src/stable_conduit.ts
+                    typescript/packages/telex-core/src/driver.ts
+                    typescript/packages/telex-core/src/channeling/registry.ts
+                    typescript/packages/telex-core/src/channeling/registry.test.ts
                 )
             }
         )

@@ -1,0 +1,44 @@
+{
+  "name": "@bearcove/telex-inprocess",
+  "version": "7.3.0",
+  "private": false,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "build": "tsdown",
+    "check": "tsgo --noEmit"
+  },
+  "publishConfig": {
+    "exports": {
+      ".": {
+        "import": {
+          "types": "./dist/index.d.mts",
+          "default": "./dist/index.mjs"
+        }
+      }
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "dependencies": {
+    "@bearcove/telex-core": "workspace:*"
+  },
+  "devDependencies": {
+    "vitest": "^2.1.0"
+  },
+  "license": "MIT OR Apache-2.0",
+  "description": "In-process transport for telex — WASM to TypeScript communication without network",
+  "repository": "https://github.com/bearcove/telex",
+  "homepage": "https://github.com/bearcove/telex",
+  "keywords": [
+    "telex",
+    "ipc",
+    "rpc",
+    "typescript",
+    "wasm",
+    "in-process"
+  ]
+}

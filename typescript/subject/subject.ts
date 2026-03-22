@@ -1,7 +1,7 @@
-// Node subject for the roam compliance suite.
+// Node subject for the telex compliance suite.
 //
-// This demonstrates the minimal code needed to implement a roam service
-// using the @roam/tcp transport library.
+// This demonstrates the minimal code needed to implement a telex service
+// using the @telex/tcp transport library.
 
 import type {
   TestbedHandler,
@@ -21,25 +21,25 @@ import type {
   Measurement,
   Config,
   TaggedPoint,
-} from "@bearcove/roam-generated/testbed.generated.ts";
-import { TestbedClient, TestbedDispatcher } from "@bearcove/roam-generated/testbed.generated.ts";
-import { tcpConnector, acceptTcp } from "@bearcove/roam-tcp";
+} from "@bearcove/telex-generated/testbed.generated.ts";
+import { TestbedClient, TestbedDispatcher } from "@bearcove/telex-generated/testbed.generated.ts";
+import { tcpConnector, acceptTcp } from "@bearcove/telex-tcp";
 import { createServer as createTcpServer, type AddressInfo } from "net";
-import { wsConnector } from "@bearcove/roam-ws";
+import { wsConnector } from "@bearcove/telex-ws";
 import {
   Driver,
   RpcErrorCode,
   SessionError,
   channel,
   session,
-  setRoamLogger,
+  setTelexLogger,
   type Tx,
   type Rx,
   type SessionConduitKind,
-} from "@bearcove/roam-core";
+} from "@bearcove/telex-core";
 
-// Enable roam internals logging for test visibility
-setRoamLogger({
+// Enable telex internals logging for test visibility
+setTelexLogger({
   debug: (...args) => console.error(...args),
   error: (...args) => console.error(...args),
 });

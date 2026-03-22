@@ -1,1 +1,1 @@
-//! Example binaries for the Roam Rust surface.
+//! Example binaries for the Telex Rust surface.

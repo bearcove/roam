@@ -1,0 +1,45 @@
+{
+  "name": "@bearcove/telex-tcp",
+  "version": "7.3.0",
+  "private": false,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "build": "tsdown",
+    "check": "tsgo --noEmit"
+  },
+  "publishConfig": {
+    "exports": {
+      ".": {
+        "import": {
+          "types": "./dist/index.d.mts",
+          "default": "./dist/index.mjs"
+        }
+      }
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "dependencies": {
+    "@bearcove/telex-core": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^22"
+  },
+  "license": "MIT OR Apache-2.0",
+  "description": "TCP transport implementation for the Telex protocol",
+  "repository": "https://github.com/bearcove/telex",
+  "homepage": "https://github.com/bearcove/telex",
+  "keywords": [
+    "telex",
+    "ipc",
+    "rpc",
+    "typescript",
+    "shared-memory"
+  ],
+  "readme": "README.md"
+}

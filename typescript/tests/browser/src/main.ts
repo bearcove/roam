@@ -1,4 +1,4 @@
-// Browser test client for roam WebSocket
+// Browser test client for telex WebSocket
 //
 // This test connects to a Rust WebSocket server and makes RPC calls
 // using generated client code for the Testbed service.
@@ -8,9 +8,9 @@ import {
   session,
   type LinkAttachment,
   type LinkSource,
-} from "@bearcove/roam-core";
-import { connectTestbed, TestbedClient } from "@bearcove/roam-generated/testbed.generated.ts";
-import { WsLink, WsLinkSource } from "@bearcove/roam-ws";
+} from "@bearcove/telex-core";
+import { connectTestbed, TestbedClient } from "@bearcove/telex-generated/testbed.generated.ts";
+import { WsLink, WsLinkSource } from "@bearcove/telex-ws";
 
 // Make test results available to Playwright
 declare global {
@@ -524,15 +524,15 @@ async function runReconnectTest(wsUrl: string): Promise<void> {
     const client = new TestbedClient(established.rootConnection().caller());
 
     log("Starting delayed echo call...");
-    const delayedEcho = client.echo("__roam_reconnect__");
+    const delayedEcho = client.echo("__telex_reconnect__");
 
     await new Promise((resolve) => globalThis.setTimeout(resolve, 50));
     log("Dropping active WebSocket during in-flight call...");
     source.closeCurrentLink();
 
     const result = await delayedEcho;
-    if (result !== "__roam_reconnect__") {
-      throw new Error(`Reconnect echo mismatch: expected __roam_reconnect__, got ${result}`);
+    if (result !== "__telex_reconnect__") {
+      throw new Error(`Reconnect echo mismatch: expected __telex_reconnect__, got ${result}`);
     }
     addResult("reconnects and resumes in-flight echo", true);
     log("Reconnect test passed!");

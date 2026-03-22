@@ -1,5 +1,5 @@
 {
-  "name": "@bearcove/roam-subject",
+  "name": "@bearcove/telex-subject",
   "version": "7.3.0",
   "private": true,
   "type": "module",
@@ -7,10 +7,10 @@
     "check": "tsgo --noEmit"
   },
   "dependencies": {
-    "@bearcove/roam-core": "workspace:*",
-    "@bearcove/roam-generated": "workspace:*",
-    "@bearcove/roam-tcp": "workspace:*",
-    "@bearcove/roam-ws": "workspace:*"
+    "@bearcove/telex-core": "workspace:*",
+    "@bearcove/telex-generated": "workspace:*",
+    "@bearcove/telex-tcp": "workspace:*",
+    "@bearcove/telex-ws": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22"

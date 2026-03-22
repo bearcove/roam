@@ -12,12 +12,12 @@ import type {
   Tag,
   Measurement,
   Config,
-} from "@bearcove/roam-generated/testbed_evolved.generated.ts";
-import { TestbedDispatcher } from "@bearcove/roam-generated/testbed_evolved.generated.ts";
-import { setRoamLogger } from "@bearcove/roam-core";
+} from "@bearcove/telex-generated/testbed_evolved.generated.ts";
+import { TestbedDispatcher } from "@bearcove/telex-generated/testbed_evolved.generated.ts";
+import { setTelexLogger } from "@bearcove/telex-core";
 import { runSubjectServer } from "./harness.ts";
 
-setRoamLogger({
+setTelexLogger({
   debug: (...args) => console.error(...args),
   error: (...args) => console.error(...args),
 });

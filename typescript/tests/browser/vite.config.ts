@@ -4,9 +4,9 @@ import path from 'node:path';
 export default defineConfig({
   resolve: {
     alias: {
-      '@bearcove/roam-core': path.resolve(__dirname, '../../packages/roam-core/src'),
-      '@bearcove/roam-ws': path.resolve(__dirname, '../../packages/roam-ws/src'),
-      '@bearcove/roam-generated': path.resolve(__dirname, '../../generated'),
+      '@bearcove/telex-core': path.resolve(__dirname, '../../packages/telex-core/src'),
+      '@bearcove/telex-ws': path.resolve(__dirname, '../../packages/telex-ws/src'),
+      '@bearcove/telex-generated': path.resolve(__dirname, '../../generated'),
     },
   },
   build: {

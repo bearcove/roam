@@ -9,23 +9,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 #[cfg(unix)]
 use std::os::fd::{AsRawFd, IntoRawFd};
 
-use roam::{Rx, Tx};
-use roam_core::{
-    DriverReplySink, SessionAcceptOutcome, SessionHandle, SessionRegistry, TransportMode,
-    acceptor_conduit, acceptor_on, acceptor_transport, initiator_on, memory_link_pair,
-};
-use roam_shm::HostHub;
-use roam_shm::ShmLink;
-use roam_shm::bootstrap::{BootstrapStatus, decode_request, encode_request};
-#[cfg(windows)]
-use roam_shm::guest_link_from_names;
-#[cfg(unix)]
-use roam_shm::guest_link_from_raw;
-use roam_shm::segment::{Segment, SegmentConfig};
-use roam_shm::varslot::SizeClassConfig as RoamShmSizeClassConfig;
-use roam_stream::StreamLink;
-use roam_types::{Backing, Link, LinkRx, LinkTx, LinkTxPermit, RequestCall, SelfRef, WriteSlot};
-use roam_websocket::WsLink;
 use shm_primitives::FileCleanup;
 use shm_primitives::SizeClassConfig;
 use spec_proto::{
@@ -33,6 +16,23 @@ use spec_proto::{
     Record, Rectangle, Shape, Status, Tag, TaggedPoint, Testbed, TestbedClient, TestbedDispatcher,
 };
 use std::process::Stdio;
+use telex::{Rx, Tx};
+use telex_core::{
+    DriverReplySink, SessionAcceptOutcome, SessionHandle, SessionRegistry, TransportMode,
+    acceptor_conduit, acceptor_on, acceptor_transport, initiator_on, memory_link_pair,
+};
+use telex_shm::HostHub;
+use telex_shm::ShmLink;
+use telex_shm::bootstrap::{BootstrapStatus, decode_request, encode_request};
+#[cfg(windows)]
+use telex_shm::guest_link_from_names;
+#[cfg(unix)]
+use telex_shm::guest_link_from_raw;
+use telex_shm::segment::{Segment, SegmentConfig};
+use telex_shm::varslot::SizeClassConfig as TelexShmSizeClassConfig;
+use telex_stream::StreamLink;
+use telex_types::{Backing, Link, LinkRx, LinkTx, LinkTxPermit, RequestCall, SelfRef, WriteSlot};
+use telex_websocket::WsLink;
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, BufReader};
 use tokio::net::TcpListener;
 use tokio::process::{Child, Command};
@@ -135,12 +135,12 @@ impl SubjectSpec {
 
 struct NoopHandler;
 
-impl roam_types::Handler<DriverReplySink> for NoopHandler {
+impl telex_types::Handler<DriverReplySink> for NoopHandler {
     async fn handle(
         &self,
         _call: SelfRef<RequestCall<'static>>,
         _reply: DriverReplySink,
-        _schemas: std::sync::Arc<roam_types::SchemaRecvTracker>,
+        _schemas: std::sync::Arc<telex_types::SchemaRecvTracker>,
     ) {
     }
 }
@@ -756,7 +756,7 @@ async fn spawn_subject_cmd_with_env(
     command
         .current_dir(workspace_root())
         .env("PEER_ADDR", peer_addr)
-        .env("ROAM_DLOG", "1")
+        .env("TELEX_DLOG", "1")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -811,7 +811,7 @@ impl Drop for ResumableSubjectClientGuard {
 }
 
 async fn acquire_resumable_subject_client_guard() -> Result<ResumableSubjectClientGuard, String> {
-    let path = std::env::temp_dir().join("roam-spec-tests-resumable-subject-client.lock");
+    let path = std::env::temp_dir().join("telex-spec-tests-resumable-subject-client.lock");
     loop {
         match std::fs::create_dir(&path) {
             Ok(()) => return Ok(ResumableSubjectClientGuard { path }),
@@ -836,7 +836,7 @@ fn keep_tempdir_alive(dir: tempfile::TempDir) {
 }
 
 /// Listen on a random TCP port, upgrade incoming connection to WebSocket,
-/// complete the roam handshake, and return a ready `TestbedClient`.
+/// complete the telex handshake, and return a ready `TestbedClient`.
 pub async fn accept_subject_ws(cmd: &str) -> Result<(TestbedClient, Child, SessionHandle), String> {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
@@ -1012,7 +1012,7 @@ pub async fn spawn_server_subject(spec: SubjectSpec) -> Result<(String, Child), 
         .env("PEER_ADDR", "unused")
         .env("SUBJECT_MODE", "server-listen")
         .env("LISTEN_PORT", "0")
-        .env("ROAM_DLOG", "1")
+        .env("TELEX_DLOG", "1")
         .stdin(Stdio::null())
         .stdout(Stdio::piped()) // we read this ourselves
         .stderr(Stdio::piped()); // pumped after addr is read
@@ -1386,7 +1386,7 @@ pub async fn accept_rust_inproc(transport: RustTransport) -> Result<TestbedClien
             .await
         }
         RustTransport::Shm => {
-            let classes = [RoamShmSizeClassConfig {
+            let classes = [TelexShmSizeClassConfig {
                 slot_size: 4096,
                 slot_count: 64,
             }];
@@ -1407,7 +1407,7 @@ pub async fn accept_rust_inproc(transport: RustTransport) -> Result<TestbedClien
                 )
                 .map_err(|e| format!("shm segment create: {e}"))?,
             );
-            let (a, b) = roam_shm::create_test_link_pair(segment)
+            let (a, b) = telex_shm::create_test_link_pair(segment)
                 .await
                 .map_err(|e| format!("shm create_test_link_pair: {e}"))?;
             // Keep the temp dir alive for the test duration by leaking it.
@@ -1422,20 +1422,20 @@ async fn accept_rust_inproc_with_conduits<L>(
     server_link: L,
 ) -> Result<TestbedClient, String>
 where
-    L: roam_types::Link + Send + 'static,
+    L: telex_types::Link + Send + 'static,
     L::Tx: Send + 'static,
     L::Rx: Send + 'static,
-    <L::Rx as roam_types::LinkRx>::Error: std::error::Error + Send + Sync + 'static,
+    <L::Rx as telex_types::LinkRx>::Error: std::error::Error + Send + Sync + 'static,
 {
     let (server_ready_tx, server_ready_rx) = oneshot::channel::<Result<(), String>>();
     let _server_task =
         tokio::spawn(async move {
-            let (tx, mut rx) = roam_types::Link::split(server_link);
-            let handshake_result = roam_core::handshake_as_acceptor(
+            let (tx, mut rx) = telex_types::Link::split(server_link);
+            let handshake_result = telex_core::handshake_as_acceptor(
                 &tx,
                 &mut rx,
-                roam_types::ConnectionSettings {
-                    parity: roam_types::Parity::Even,
+                telex_types::ConnectionSettings {
+                    parity: telex_types::Parity::Even,
                     max_concurrent_requests: 64,
                 },
                 true,
@@ -1451,8 +1451,8 @@ where
                     return;
                 }
             };
-            let server_conduit = roam_core::BareConduit::<roam_types::MessageFamily, _>::new(
-                roam_types::SplitLink { tx, rx },
+            let server_conduit = telex_core::BareConduit::<telex_types::MessageFamily, _>::new(
+                telex_types::SplitLink { tx, rx },
             );
             let setup = acceptor_conduit(server_conduit, handshake_result)
                 .establish::<TestbedClient>(TestbedDispatcher::new(TestbedService::new()))
@@ -1471,12 +1471,12 @@ where
             std::future::pending::<()>().await;
         });
 
-    let (client_tx, mut client_rx) = roam_types::Link::split(client_link);
-    let client_handshake = roam_core::handshake_as_initiator(
+    let (client_tx, mut client_rx) = telex_types::Link::split(client_link);
+    let client_handshake = telex_core::handshake_as_initiator(
         &client_tx,
         &mut client_rx,
-        roam_types::ConnectionSettings {
-            parity: roam_types::Parity::Odd,
+        telex_types::ConnectionSettings {
+            parity: telex_types::Parity::Odd,
             max_concurrent_requests: 64,
         },
         true,
@@ -1485,11 +1485,11 @@ where
     .await
     .map_err(|e| format!("client CBOR handshake: {e}"))?;
     let client_conduit =
-        roam_core::BareConduit::<roam_types::MessageFamily, _>::new(roam_types::SplitLink {
+        telex_core::BareConduit::<telex_types::MessageFamily, _>::new(telex_types::SplitLink {
             tx: client_tx,
             rx: client_rx,
         });
-    let (client, _sh) = roam_core::initiator_conduit(client_conduit, client_handshake)
+    let (client, _sh) = telex_core::initiator_conduit(client_conduit, client_handshake)
         .establish::<TestbedClient>(NoopHandler)
         .await
         .map_err(|e| format!("client handshake: {e}"))?;
@@ -1664,12 +1664,13 @@ async fn accept_subject_shm_subject_is_guest(
 
     // Bind the control listener.
     #[cfg(unix)]
-    let listener = roam_local::LocalListener::bind(&control_sock_path)
+    let listener = telex_local::LocalListener::bind(&control_sock_path)
         .map_err(|e| format!("bind {}: {e}", control_sock_path.display()))?;
     #[cfg(windows)]
     let mut listener = {
-        let endpoint = roam_local::path_to_pipe_name(&control_sock_path);
-        roam_local::LocalListener::bind(&endpoint).map_err(|e| format!("bind control pipe: {e}"))?
+        let endpoint = telex_local::path_to_pipe_name(&control_sock_path);
+        telex_local::LocalListener::bind(&endpoint)
+            .map_err(|e| format!("bind control pipe: {e}"))?
     };
 
     let hub_path_str = shm_path
@@ -1688,13 +1689,13 @@ async fn accept_subject_shm_subject_is_guest(
         .ok_or_else(|| format!("invalid socket path: {}", control_sock_path.display()))?
         .to_string();
     #[cfg(windows)]
-    let control_sock = roam_local::path_to_pipe_name(&control_sock_path);
+    let control_sock = telex_local::path_to_pipe_name(&control_sock_path);
 
     let (peer_tx, peer_rx) = oneshot::channel();
     let sid_for_task = sid.clone();
     let segment_for_task = Arc::clone(&segment);
     tokio::spawn(async move {
-        let result: Result<roam_shm::host::HostPeer, String> = async {
+        let result: Result<telex_shm::host::HostPeer, String> = async {
             let mut stream = listener
                 .accept()
                 .await
@@ -1725,7 +1726,7 @@ async fn accept_subject_shm_subject_is_guest(
             }
             #[cfg(windows)]
             {
-                use roam_shm::bootstrap::{
+                use telex_shm::bootstrap::{
                     BootstrapStatus, BootstrapSuccessNames, encode_response,
                 };
                 use tokio::io::AsyncWriteExt;
@@ -1855,7 +1856,7 @@ async fn accept_subject_shm_subject_is_host(
         .ok_or_else(|| format!("invalid socket path: {}", control_sock_path.display()))?
         .to_string();
     #[cfg(windows)]
-    let control_sock = roam_local::path_to_pipe_name(&control_sock_path);
+    let control_sock = telex_local::path_to_pipe_name(&control_sock_path);
 
     let shm_path_str = shm_path
         .to_str()
@@ -1940,7 +1941,7 @@ async fn accept_subject_shm_subject_is_host(
 
         #[cfg(windows)]
         let mut stream = {
-            let pipe_name = roam_local::path_to_pipe_name(&control_sock_path);
+            let pipe_name = telex_local::path_to_pipe_name(&control_sock_path);
             loop {
                 if let Some(status) = child
                     .try_wait()
@@ -1950,7 +1951,7 @@ async fn accept_subject_shm_subject_is_host(
                         "subject exited before bootstrap handshake: {status}"
                     ));
                 }
-                match roam_local::connect(&pipe_name).await {
+                match telex_local::connect(&pipe_name).await {
                     Ok(client) => {
                         eprintln!(
                             "[subject:{pid}] connected to bootstrap pipe {}",
@@ -2047,7 +2048,7 @@ async fn accept_subject_shm_subject_is_host(
 
         #[cfg(windows)]
         let link: ShmLink = {
-            use roam_shm::bootstrap::{
+            use telex_shm::bootstrap::{
                 BootstrapSuccessNames, BOOTSTRAP_RESPONSE_HEADER_LEN, decode_response,
             };
             use tokio::io::AsyncWriteExt;

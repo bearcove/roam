@@ -1,7 +1,7 @@
 import Foundation
 import Testing
 
-@testable import RoamRuntime
+@testable import TelexRuntime
 @testable import subject_swift
 
 private enum RetryHarnessTimeout: Error {
@@ -432,8 +432,8 @@ struct GeneratedClientRetryTransportTests {
                 try await awaitRetryStep("non-idem call") {
                     try await callTask.value
                 }
-                Issue.record("expected RoamError.indeterminate")
-            } catch RoamError.indeterminate {
+                Issue.record("expected TelexError.indeterminate")
+            } catch TelexError.indeterminate {
                 retryTestLog("non-idem: received indeterminate")
             }
 

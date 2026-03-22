@@ -1,7 +1,7 @@
 import Foundation
 import Testing
 
-@testable import RoamRuntime
+@testable import TelexRuntime
 @testable import subject_swift
 
 private actor CallRecorder {
@@ -17,7 +17,7 @@ private actor CallRecorder {
     func methodIds() -> [UInt64] { observedMethodIds }
 }
 
-private final class CapturingConnection: RoamConnection, @unchecked Sendable {
+private final class CapturingConnection: TelexConnection, @unchecked Sendable {
     let channelAllocator = ChannelIdAllocator(role: .initiator)
     let incomingChannelRegistry = ChannelRegistry()
     let taskSender: TaskSender = { _ in }

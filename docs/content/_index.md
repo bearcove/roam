@@ -1,9 +1,9 @@
 +++
-title = "roam"
+title = "telex"
 description = "Rust-native RPC protocol with cross-language codegen and multiple transport backends."
 +++
 
-roam is a Rust-native RPC protocol designed for bidirectional, multiplexed communication.
+telex is a Rust-native RPC protocol designed for bidirectional, multiplexed communication.
 
 Define services in Rust traits and generate clients/servers for other languages.
 

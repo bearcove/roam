@@ -4,17 +4,17 @@ version = "7.3.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 publish = false
-description = "Compliance tests for the canonical roam spec in docs/content/"
+description = "Compliance tests for the canonical telex spec in docs/content/"
 
 [dependencies]
-roam = { workspace = true }
-roam-core = { workspace = true }
-roam-local.workspace = true
-roam-postcard.workspace = true
-roam-shm.workspace = true
-roam-stream = { workspace = true }
-roam-websocket = { workspace = true }
-roam-types = { workspace = true }
+telex = { workspace = true }
+telex-core = { workspace = true }
+telex-local.workspace = true
+telex-postcard.workspace = true
+telex-shm.workspace = true
+telex-stream = { workspace = true }
+telex-websocket = { workspace = true }
+telex-types = { workspace = true }
 shm-primitives = { workspace = true }
 spec-proto.workspace = true
 moire = { workspace = true }

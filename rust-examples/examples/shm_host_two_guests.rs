@@ -16,19 +16,19 @@ mod unix_demo {
     };
 
     use eyre::{Result, WrapErr, eyre};
-    use roam::DriverCaller;
-    use roam_shm::bootstrap::{BootstrapStatus, decode_request, encode_request};
-    use roam_shm::guest_link_from_raw;
-    use roam_shm::varslot::SizeClassConfig;
-    use roam_shm::{HostHub, Segment, SegmentConfig, ShmLink};
     use shm_primitives::{FileCleanup, PeerId};
+    use telex::DriverCaller;
+    use telex_shm::bootstrap::{BootstrapStatus, decode_request, encode_request};
+    use telex_shm::guest_link_from_raw;
+    use telex_shm::varslot::SizeClassConfig;
+    use telex_shm::{HostHub, Segment, SegmentConfig, ShmLink};
 
-    #[roam::service]
+    #[telex::service]
     trait Adder {
         async fn add(&self, a: i32, b: i32) -> i32;
     }
 
-    #[roam::service]
+    #[telex::service]
     trait StringReverser {
         async fn reverse(&self, value: String) -> String;
     }
@@ -144,10 +144,10 @@ mod unix_demo {
         println!("[host] launching guest: Adder");
         let mut adder_guest = spawn_guest(GuestService::Adder)?;
         println!("[host] guest Adder pid={}", adder_guest.process.child.id());
-        let (adder, _) = roam::acceptor_on_link(
+        let (adder, _) = telex::acceptor_on_link(
             adder_guest.link,
-            roam::ConnectionSettings {
-                parity: roam::Parity::Even,
+            telex::ConnectionSettings {
+                parity: telex::Parity::Even,
                 max_concurrent_requests: 64,
             },
         )
@@ -163,10 +163,10 @@ mod unix_demo {
             "[host] guest StringReverser pid={}",
             reverser_guest.process.child.id()
         );
-        let (reverser, _) = roam::acceptor_on_link(
+        let (reverser, _) = telex::acceptor_on_link(
             reverser_guest.link,
-            roam::ConnectionSettings {
-                parity: roam::Parity::Even,
+            telex::ConnectionSettings {
+                parity: telex::Parity::Even,
                 max_concurrent_requests: 64,
             },
         )
@@ -203,10 +203,10 @@ mod unix_demo {
 
         match service {
             GuestService::Adder => {
-                let (guard, _) = roam::initiator_on_link(
+                let (guard, _) = telex::initiator_on_link(
                     link,
-                    roam::ConnectionSettings {
-                        parity: roam::Parity::Odd,
+                    telex::ConnectionSettings {
+                        parity: telex::Parity::Odd,
                         max_concurrent_requests: 64,
                     },
                 )
@@ -220,10 +220,10 @@ mod unix_demo {
                 std::future::pending::<()>().await;
             }
             GuestService::StringReverser => {
-                let (guard, _) = roam::initiator_on_link(
+                let (guard, _) = telex::initiator_on_link(
                     link,
-                    roam::ConnectionSettings {
-                        parity: roam::Parity::Odd,
+                    telex::ConnectionSettings {
+                        parity: telex::Parity::Odd,
                         max_concurrent_requests: 64,
                     },
                 )

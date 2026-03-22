@@ -1,5 +1,5 @@
 {
-  "name": "@bearcove/roam-browser-inprocess-tests",
+  "name": "@bearcove/telex-browser-inprocess-tests",
   "version": "7.3.0",
   "private": true,
   "type": "module",
@@ -9,9 +9,9 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@bearcove/roam-core": "workspace:*",
-    "@bearcove/roam-generated": "workspace:*",
-    "@bearcove/roam-inprocess": "workspace:*"
+    "@bearcove/telex-core": "workspace:*",
+    "@bearcove/telex-generated": "workspace:*",
+    "@bearcove/telex-inprocess": "workspace:*"
   },
   "devDependencies": {
     "vite": "^6",

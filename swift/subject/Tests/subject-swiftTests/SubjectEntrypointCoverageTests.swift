@@ -5,9 +5,9 @@ import Foundation
 @preconcurrency import NIOCore
 @preconcurrency import NIOPosix
 import Testing
-import CRoamShmFfi
+import CTelexShmFfi
 
-@testable import RoamRuntime
+@testable import TelexRuntime
 @testable import subject_swift
 
 private actor SubjectEnvGate {
@@ -446,7 +446,7 @@ private func startBootstrapServer(
 
         let payloadBytes = [UInt8](payloadPath.utf8)
         let rc = payloadBytes.withUnsafeBufferPointer { buf in
-            roam_shm_bootstrap_response_send_unix(
+            telex_shm_bootstrap_response_send_unix(
                 client,
                 0,
                 1,
@@ -705,7 +705,7 @@ struct SubjectEntrypointCoverageTests {
 
     @Test func runShmClientInvalidControlSocketFailsFast() async {
         await SubjectEnvGate.shared.withEnvironment([
-            ("SHM_CONTROL_SOCK", "/tmp/roam-nonexistent-\(UUID().uuidString).sock"),
+            ("SHM_CONTROL_SOCK", "/tmp/telex-nonexistent-\(UUID().uuidString).sock"),
             ("SHM_SESSION_ID", UUID().uuidString.lowercased()),
             ("CLIENT_SCENARIO", "echo"),
         ]) {
@@ -724,7 +724,7 @@ struct SubjectEntrypointCoverageTests {
 
     @Test func runShmServerInvalidControlSocketFailsFast() async {
         await SubjectEnvGate.shared.withEnvironment([
-            ("SHM_CONTROL_SOCK", "/tmp/roam-nonexistent-\(UUID().uuidString).sock"),
+            ("SHM_CONTROL_SOCK", "/tmp/telex-nonexistent-\(UUID().uuidString).sock"),
             ("SHM_SESSION_ID", UUID().uuidString.lowercased()),
             ("ACCEPT_CONNECTIONS", "1"),
         ]) {

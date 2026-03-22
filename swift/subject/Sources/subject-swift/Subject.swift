@@ -1,11 +1,11 @@
-/// Swift subject binary for the roam compliance suite.
+/// Swift subject binary for the telex compliance suite.
 ///
-/// This uses the roam-runtime library to validate that the Swift implementation
-/// is compliant with the roam protocol spec.
+/// This uses the telex-runtime library to validate that the Swift implementation
+/// is compliant with the telex protocol spec.
 
 import Foundation
 import Darwin
-import RoamRuntime
+import TelexRuntime
 
 // MARK: - Testbed Service Implementation
 
@@ -481,7 +481,7 @@ func runClientScenario(client: TestbedClient, scenario: String) async throws {
             try await callTask.value
             log("channel_retry_non_idem expected indeterminate")
             throw SubjectError.invalidResponse
-        } catch RoamError.indeterminate {
+        } catch TelexError.indeterminate {
         } catch {
             log("channel_retry_non_idem unexpected error: \(error)")
             throw error
@@ -844,9 +844,9 @@ func runClient() async throws {
 
 final class SocketLink: Link, @unchecked Sendable {
     private let fd: Int32
-    private let readQueue = DispatchQueue(label: "bearcove.roam.subject-swift.socket-link.read")
-    private let writeQueue = DispatchQueue(label: "bearcove.roam.subject-swift.socket-link.write")
-    private let stateQueue = DispatchQueue(label: "bearcove.roam.subject-swift.socket-link.state")
+    private let readQueue = DispatchQueue(label: "bearcove.telex.subject-swift.socket-link.read")
+    private let writeQueue = DispatchQueue(label: "bearcove.telex.subject-swift.socket-link.write")
+    private let stateQueue = DispatchQueue(label: "bearcove.telex.subject-swift.socket-link.state")
     private var maxFrameSize = 1024 * 1024
     private var closed = false
 
@@ -1137,7 +1137,7 @@ func runShmHostServer() async throws {
     }
 
     let hubPath = ProcessInfo.processInfo.environment["SHM_HUB_PATH"]
-        ?? "/tmp/roam-swift-subject-\(UUID().uuidString).shm"
+        ?? "/tmp/telex-swift-subject-\(UUID().uuidString).shm"
     let acceptConnections = ProcessInfo.processInfo.environment["ACCEPT_CONNECTIONS"] == "1"
 
     let segment = try ShmHostSegment.create(

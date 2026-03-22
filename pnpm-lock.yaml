@@ -26,40 +26,40 @@ importers:
 
   typescript/generated:
     dependencies:
-      '@bearcove/roam-core':
+      '@bearcove/telex-core':
         specifier: workspace:*
-        version: link:../packages/roam-core
-      '@bearcove/roam-postcard':
+        version: link:../packages/telex-core
+      '@bearcove/telex-postcard':
         specifier: workspace:*
-        version: link:../packages/roam-postcard
-      '@bearcove/roam-ws':
+        version: link:../packages/telex-postcard
+      '@bearcove/telex-ws':
         specifier: workspace:*
-        version: link:../packages/roam-ws
+        version: link:../packages/telex-ws
 
-  typescript/packages/roam-core:
+  typescript/packages/telex-core:
     dependencies:
-      '@bearcove/roam-postcard':
+      '@bearcove/telex-postcard':
         specifier: workspace:*
-        version: link:../roam-postcard
-      '@bearcove/roam-wire':
+        version: link:../telex-postcard
+      '@bearcove/telex-wire':
         specifier: workspace:*
-        version: link:../roam-wire
+        version: link:../telex-wire
     devDependencies:
       vitest:
         specifier: ^2.1.0
         version: 2.1.9(@types/node@22.19.3)
 
-  typescript/packages/roam-inprocess:
+  typescript/packages/telex-inprocess:
     dependencies:
-      '@bearcove/roam-core':
+      '@bearcove/telex-core':
         specifier: workspace:*
-        version: link:../roam-core
+        version: link:../telex-core
     devDependencies:
       vitest:
         specifier: ^2.1.0
         version: 2.1.9(@types/node@22.19.3)
 
-  typescript/packages/roam-postcard:
+  typescript/packages/telex-postcard:
     devDependencies:
       '@vitest/coverage-v8':
         specifier: ^4.1.0
@@ -68,34 +68,34 @@ importers:
         specifier: ^4.1.0
         version: 4.1.0(@types/node@22.19.3)(vite@6.4.1(@types/node@22.19.3)(jiti@2.6.1))
 
-  typescript/packages/roam-tcp:
+  typescript/packages/telex-tcp:
     dependencies:
-      '@bearcove/roam-core':
+      '@bearcove/telex-core':
         specifier: workspace:*
-        version: link:../roam-core
+        version: link:../telex-core
     devDependencies:
       '@types/node':
         specifier: ^22
         version: 22.19.3
 
-  typescript/packages/roam-wire:
+  typescript/packages/telex-wire:
     dependencies:
-      '@bearcove/roam-postcard':
+      '@bearcove/telex-postcard':
         specifier: workspace:*
-        version: link:../roam-postcard
+        version: link:../telex-postcard
     devDependencies:
       vitest:
         specifier: ^2.1.0
         version: 2.1.9(@types/node@22.19.3)
 
-  typescript/packages/roam-ws:
+  typescript/packages/telex-ws:
     dependencies:
-      '@bearcove/roam-core':
+      '@bearcove/telex-core':
         specifier: workspace:*
-        version: link:../roam-core
-      '@bearcove/roam-tcp':
+        version: link:../telex-core
+      '@bearcove/telex-tcp':
         specifier: workspace:*
-        version: link:../roam-tcp
+        version: link:../telex-tcp
     devDependencies:
       '@types/node':
         specifier: ^22
@@ -106,18 +106,18 @@ importers:
 
   typescript/subject:
     dependencies:
-      '@bearcove/roam-core':
+      '@bearcove/telex-core':
         specifier: workspace:*
-        version: link:../packages/roam-core
-      '@bearcove/roam-generated':
+        version: link:../packages/telex-core
+      '@bearcove/telex-generated':
         specifier: workspace:*
         version: link:../generated
-      '@bearcove/roam-tcp':
+      '@bearcove/telex-tcp':
         specifier: workspace:*
-        version: link:../packages/roam-tcp
-      '@bearcove/roam-ws':
+        version: link:../packages/telex-tcp
+      '@bearcove/telex-ws':
         specifier: workspace:*
-        version: link:../packages/roam-ws
+        version: link:../packages/telex-ws
     devDependencies:
       '@types/node':
         specifier: ^22
@@ -125,15 +125,15 @@ importers:
 
   typescript/tests/browser:
     dependencies:
-      '@bearcove/roam-core':
+      '@bearcove/telex-core':
         specifier: workspace:*
-        version: link:../../packages/roam-core
-      '@bearcove/roam-generated':
+        version: link:../../packages/telex-core
+      '@bearcove/telex-generated':
         specifier: workspace:*
         version: link:../../generated
-      '@bearcove/roam-ws':
+      '@bearcove/telex-ws':
         specifier: workspace:*
-        version: link:../../packages/roam-ws
+        version: link:../../packages/telex-ws
     devDependencies:
       vite:
         specifier: ^6
@@ -141,15 +141,15 @@ importers:
 
   typescript/tests/browser-inprocess:
     dependencies:
-      '@bearcove/roam-core':
+      '@bearcove/telex-core':
         specifier: workspace:*
-        version: link:../../packages/roam-core
-      '@bearcove/roam-generated':
+        version: link:../../packages/telex-core
+      '@bearcove/telex-generated':
         specifier: workspace:*
         version: link:../../generated
-      '@bearcove/roam-inprocess':
+      '@bearcove/telex-inprocess':
         specifier: workspace:*
-        version: link:../../packages/roam-inprocess
+        version: link:../../packages/telex-inprocess
     devDependencies:
       vite:
         specifier: ^6
@@ -169,10 +169,10 @@ importers:
 
   typescript/tests/playwright:
     devDependencies:
-      '@bearcove/roam-core':
+      '@bearcove/telex-core':
         specifier: workspace:*
-        version: link:../../packages/roam-core
-      '@bearcove/roam-generated':
+        version: link:../../packages/telex-core
+      '@bearcove/telex-generated':
         specifier: workspace:*
         version: link:../../generated
       '@playwright/test':

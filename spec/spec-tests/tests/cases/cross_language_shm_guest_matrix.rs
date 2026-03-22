@@ -6,19 +6,19 @@ use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use roam_postcard::{from_slice_borrowed, to_vec};
-use roam_shm::HostHub;
-use roam_shm::framing::{MmapRef, OwnedFrame, read_frame, write_inline, write_mmap_ref};
-use roam_shm::segment::{Segment, SegmentConfig};
-use roam_shm::varslot::SizeClassConfig;
-use roam_types::{
+use shm_primitives::{FileCleanup, MmapRegion};
+use shm_primitives_async::{MmapAttachMessage, clear_cloexec, create_mmap_control_pair};
+use spec_tests::harness::run_async;
+use telex_postcard::{from_slice_borrowed, to_vec};
+use telex_shm::HostHub;
+use telex_shm::framing::{MmapRef, OwnedFrame, read_frame, write_inline, write_mmap_ref};
+use telex_shm::segment::{Segment, SegmentConfig};
+use telex_shm::varslot::SizeClassConfig;
+use telex_types::{
     ChannelBody, ChannelClose, ChannelGrantCredit, ChannelId, ChannelMessage, ConnectionId, Link,
     LinkRx, LinkTx, LinkTxPermit, Message, MessagePayload, Metadata, MetadataEntry, MetadataFlags,
     MetadataValue, Payload, RequestBody, RequestId, RequestMessage, RequestResponse, WriteSlot,
 };
-use shm_primitives::{FileCleanup, MmapRegion};
-use shm_primitives_async::{MmapAttachMessage, clear_cloexec, create_mmap_control_pair};
-use spec_tests::harness::run_async;
 use tokio::process::Command as TokioCommand;
 
 fn boundary_sizes() -> &'static [usize] {
@@ -76,7 +76,7 @@ async fn wait_child_with_timeout(
 
 fn swift_runtime_package_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../swift/roam-runtime")
+        .join("../../swift/telex-runtime")
         .canonicalize()
         .expect("swift runtime package path")
 }
@@ -95,7 +95,7 @@ fn swift_shm_guest_client_path() -> PathBuf {
         }
     }
 
-    panic!("shm-guest-client binary not found; build swift/roam-runtime target first")
+    panic!("shm-guest-client binary not found; build swift/telex-runtime target first")
 }
 
 fn read_guest_payloads(

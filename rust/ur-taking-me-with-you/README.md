@@ -2,9 +2,9 @@
 
 Utility crate for ensuring child processes terminate when their parent exits.
 
-## Role in the Roam stack
+## Role in the Telex stack
 
-`ur-taking-me-with-you` is an operational helper used by process-launch workflows around Roam components and test tooling.
+`ur-taking-me-with-you` is an operational helper used by process-launch workflows around Telex components and test tooling.
 
 ## What this crate provides
 
@@ -15,4 +15,4 @@ Utility crate for ensuring child processes terminate when their parent exits.
 
 - Runtime/test harness process orchestration where process lifetimes must stay coupled
 
-Part of the Roam workspace: <https://github.com/bearcove/roam>
+Part of the Telex workspace: <https://github.com/bearcove/telex>
