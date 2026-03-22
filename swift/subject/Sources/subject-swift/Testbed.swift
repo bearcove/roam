@@ -303,8 +303,12 @@ public final class TestbedClient: TestbedCaller, Sendable {
     var payloadBytes: [UInt8] = []
     payloadBytes += encodeString(message)
     let payload = Data(payloadBytes)
+    let schemaInfo = ClientSchemaInfo(
+      methodInfo: testbed_method_schemas[0x880b_c4ee_e235_74be]!,
+      schemaRegistry: testbed_schema_registry)
     let response = try await connection.call(
-      methodId: 0x880b_c4ee_e235_74be, payload: payload, retry: .volatile, timeout: timeout)
+      methodId: 0x880b_c4ee_e235_74be, metadata: [], payload: payload, retry: .volatile,
+      timeout: timeout, prepareRetry: nil, finalizeChannels: nil, schemaInfo: schemaInfo)
     var cursor = 0
     let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
     switch _cursor_resultDisc {
@@ -336,8 +340,12 @@ public final class TestbedClient: TestbedCaller, Sendable {
     var payloadBytes: [UInt8] = []
     payloadBytes += encodeString(message)
     let payload = Data(payloadBytes)
+    let schemaInfo = ClientSchemaInfo(
+      methodInfo: testbed_method_schemas[0x1c22_3f30_e180_392a]!,
+      schemaRegistry: testbed_schema_registry)
     let response = try await connection.call(
-      methodId: 0x1c22_3f30_e180_392a, payload: payload, retry: .volatile, timeout: timeout)
+      methodId: 0x1c22_3f30_e180_392a, metadata: [], payload: payload, retry: .volatile,
+      timeout: timeout, prepareRetry: nil, finalizeChannels: nil, schemaInfo: schemaInfo)
     var cursor = 0
     let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
     switch _cursor_resultDisc {
@@ -370,8 +378,12 @@ public final class TestbedClient: TestbedCaller, Sendable {
     payloadBytes += encodeI64(dividend)
     payloadBytes += encodeI64(divisor)
     let payload = Data(payloadBytes)
+    let schemaInfo = ClientSchemaInfo(
+      methodInfo: testbed_method_schemas[0xfb68_d931_8f83_0875]!,
+      schemaRegistry: testbed_schema_registry)
     let response = try await connection.call(
-      methodId: 0xfb68_d931_8f83_0875, payload: payload, retry: .volatile, timeout: timeout)
+      methodId: 0xfb68_d931_8f83_0875, metadata: [], payload: payload, retry: .volatile,
+      timeout: timeout, prepareRetry: nil, finalizeChannels: nil, schemaInfo: schemaInfo)
     var cursor = 0
     let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
     switch _cursor_resultDisc {
@@ -413,8 +425,12 @@ public final class TestbedClient: TestbedCaller, Sendable {
     var payloadBytes: [UInt8] = []
     payloadBytes += encodeU32(id)
     let payload = Data(payloadBytes)
+    let schemaInfo = ClientSchemaInfo(
+      methodInfo: testbed_method_schemas[0xa15f_f520_9471_2a3b]!,
+      schemaRegistry: testbed_schema_registry)
     let response = try await connection.call(
-      methodId: 0xa15f_f520_9471_2a3b, payload: payload, retry: .volatile, timeout: timeout)
+      methodId: 0xa15f_f520_9471_2a3b, metadata: [], payload: payload, retry: .volatile,
+      timeout: timeout, prepareRetry: nil, finalizeChannels: nil, schemaInfo: schemaInfo)
     var cursor = 0
     let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
     switch _cursor_resultDisc {
@@ -458,6 +474,9 @@ public final class TestbedClient: TestbedCaller, Sendable {
   }
 
   public func sum(numbers: UnboundRx<Int32>) async throws -> Int64 {
+    let schemaInfo = ClientSchemaInfo(
+      methodInfo: testbed_method_schemas[0x51f9_cfd8_e865_77c9]!,
+      schemaRegistry: testbed_schema_registry)
     let prepareRetry: @Sendable () async -> PreparedRetryRequest = { [connection] in
       await bindChannels(
         schemas: testbed_schemas["sum"]!.args,
@@ -476,11 +495,11 @@ public final class TestbedClient: TestbedCaller, Sendable {
     let prepared = await prepareRetry()
 
     let response = try await connection.call(
-      methodId: 0x51f9_cfd8_e865_77c9, payload: Data(prepared.payload), retry: .volatile,
-      timeout: timeout, prepareRetry: prepareRetry,
+      methodId: 0x51f9_cfd8_e865_77c9, metadata: [], payload: Data(prepared.payload),
+      retry: .volatile, timeout: timeout, prepareRetry: prepareRetry,
       finalizeChannels: {
         finalizeBoundChannels(schemas: testbed_schemas["sum"]!.args, args: [numbers])
-      })
+      }, schemaInfo: schemaInfo)
     var cursor = 0
     let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
     switch _cursor_resultDisc {
@@ -509,6 +528,9 @@ public final class TestbedClient: TestbedCaller, Sendable {
   }
 
   public func generate(count: UInt32, output: UnboundTx<Int32>) async throws {
+    let schemaInfo = ClientSchemaInfo(
+      methodInfo: testbed_method_schemas[0x239e_5b99_b1f8_207a]!,
+      schemaRegistry: testbed_schema_registry)
     let prepareRetry: @Sendable () async -> PreparedRetryRequest = { [connection] in
       await bindChannels(
         schemas: testbed_schemas["generate"]!.args,
@@ -528,11 +550,11 @@ public final class TestbedClient: TestbedCaller, Sendable {
     let prepared = await prepareRetry()
 
     let response = try await connection.call(
-      methodId: 0x239e_5b99_b1f8_207a, payload: Data(prepared.payload), retry: .volatile,
-      timeout: timeout, prepareRetry: prepareRetry,
+      methodId: 0x239e_5b99_b1f8_207a, metadata: [], payload: Data(prepared.payload),
+      retry: .volatile, timeout: timeout, prepareRetry: prepareRetry,
       finalizeChannels: {
         finalizeBoundChannels(schemas: testbed_schemas["generate"]!.args, args: [count, output])
-      })
+      }, schemaInfo: schemaInfo)
     var cursor = 0
     let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
     switch _cursor_resultDisc {
@@ -560,6 +582,9 @@ public final class TestbedClient: TestbedCaller, Sendable {
   }
 
   public func generateRetryNonIdem(count: UInt32, output: UnboundTx<Int32>) async throws {
+    let schemaInfo = ClientSchemaInfo(
+      methodInfo: testbed_method_schemas[0x3441_9529_478c_c7b8]!,
+      schemaRegistry: testbed_schema_registry)
     let prepareRetry: @Sendable () async -> PreparedRetryRequest = { [connection] in
       await bindChannels(
         schemas: testbed_schemas["generateRetryNonIdem"]!.args,
@@ -579,12 +604,12 @@ public final class TestbedClient: TestbedCaller, Sendable {
     let prepared = await prepareRetry()
 
     let response = try await connection.call(
-      methodId: 0x3441_9529_478c_c7b8, payload: Data(prepared.payload), retry: .volatile,
-      timeout: timeout, prepareRetry: prepareRetry,
+      methodId: 0x3441_9529_478c_c7b8, metadata: [], payload: Data(prepared.payload),
+      retry: .volatile, timeout: timeout, prepareRetry: prepareRetry,
       finalizeChannels: {
         finalizeBoundChannels(
           schemas: testbed_schemas["generateRetryNonIdem"]!.args, args: [count, output])
-      })
+      }, schemaInfo: schemaInfo)
     var cursor = 0
     let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
     switch _cursor_resultDisc {
@@ -612,6 +637,9 @@ public final class TestbedClient: TestbedCaller, Sendable {
   }
 
   public func generateRetryIdem(count: UInt32, output: UnboundTx<Int32>) async throws {
+    let schemaInfo = ClientSchemaInfo(
+      methodInfo: testbed_method_schemas[0xe2d2_7fd9_098c_6ea2]!,
+      schemaRegistry: testbed_schema_registry)
     let prepareRetry: @Sendable () async -> PreparedRetryRequest = { [connection] in
       await bindChannels(
         schemas: testbed_schemas["generateRetryIdem"]!.args,
@@ -631,12 +659,12 @@ public final class TestbedClient: TestbedCaller, Sendable {
     let prepared = await prepareRetry()
 
     let response = try await connection.call(
-      methodId: 0xe2d2_7fd9_098c_6ea2, payload: Data(prepared.payload), retry: .idem,
+      methodId: 0xe2d2_7fd9_098c_6ea2, metadata: [], payload: Data(prepared.payload), retry: .idem,
       timeout: timeout, prepareRetry: prepareRetry,
       finalizeChannels: {
         finalizeBoundChannels(
           schemas: testbed_schemas["generateRetryIdem"]!.args, args: [count, output])
-      })
+      }, schemaInfo: schemaInfo)
     var cursor = 0
     let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
     switch _cursor_resultDisc {
@@ -664,6 +692,9 @@ public final class TestbedClient: TestbedCaller, Sendable {
   }
 
   public func transform(input: UnboundRx<String>, output: UnboundTx<String>) async throws {
+    let schemaInfo = ClientSchemaInfo(
+      methodInfo: testbed_method_schemas[0xcb46_9cff_8d79_8feb]!,
+      schemaRegistry: testbed_schema_registry)
     let prepareRetry: @Sendable () async -> PreparedRetryRequest = { [connection] in
       await bindChannels(
         schemas: testbed_schemas["transform"]!.args,
@@ -683,11 +714,11 @@ public final class TestbedClient: TestbedCaller, Sendable {
     let prepared = await prepareRetry()
 
     let response = try await connection.call(
-      methodId: 0xcb46_9cff_8d79_8feb, payload: Data(prepared.payload), retry: .volatile,
-      timeout: timeout, prepareRetry: prepareRetry,
+      methodId: 0xcb46_9cff_8d79_8feb, metadata: [], payload: Data(prepared.payload),
+      retry: .volatile, timeout: timeout, prepareRetry: prepareRetry,
       finalizeChannels: {
         finalizeBoundChannels(schemas: testbed_schemas["transform"]!.args, args: [input, output])
-      })
+      }, schemaInfo: schemaInfo)
     var cursor = 0
     let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
     switch _cursor_resultDisc {
@@ -718,8 +749,12 @@ public final class TestbedClient: TestbedCaller, Sendable {
     var payloadBytes: [UInt8] = []
     payloadBytes += encodeI32(point.x) + encodeI32(point.y)
     let payload = Data(payloadBytes)
+    let schemaInfo = ClientSchemaInfo(
+      methodInfo: testbed_method_schemas[0x81f5_386d_589d_fbe4]!,
+      schemaRegistry: testbed_schema_registry)
     let response = try await connection.call(
-      methodId: 0x81f5_386d_589d_fbe4, payload: payload, retry: .volatile, timeout: timeout)
+      methodId: 0x81f5_386d_589d_fbe4, metadata: [], payload: payload, retry: .volatile,
+      timeout: timeout, prepareRetry: nil, finalizeChannels: nil, schemaInfo: schemaInfo)
     var cursor = 0
     let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
     switch _cursor_resultDisc {
@@ -755,8 +790,12 @@ public final class TestbedClient: TestbedCaller, Sendable {
     payloadBytes += encodeU8(age)
     payloadBytes += encodeOption(email, encoder: { encodeString($0) })
     let payload = Data(payloadBytes)
+    let schemaInfo = ClientSchemaInfo(
+      methodInfo: testbed_method_schemas[0x68ff_a90b_7728_bde7]!,
+      schemaRegistry: testbed_schema_registry)
     let response = try await connection.call(
-      methodId: 0x68ff_a90b_7728_bde7, payload: payload, retry: .volatile, timeout: timeout)
+      methodId: 0x68ff_a90b_7728_bde7, metadata: [], payload: payload, retry: .volatile,
+      timeout: timeout, prepareRetry: nil, finalizeChannels: nil, schemaInfo: schemaInfo)
     var cursor = 0
     let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
     switch _cursor_resultDisc {
@@ -795,8 +834,12 @@ public final class TestbedClient: TestbedCaller, Sendable {
       encodeI32(rect.topLeft.x) + encodeI32(rect.topLeft.y) + encodeI32(rect.bottomRight.x)
       + encodeI32(rect.bottomRight.y) + encodeOption(rect.label, encoder: { encodeString($0) })
     let payload = Data(payloadBytes)
+    let schemaInfo = ClientSchemaInfo(
+      methodInfo: testbed_method_schemas[0x223f_e028_2d26_3107]!,
+      schemaRegistry: testbed_schema_registry)
     let response = try await connection.call(
-      methodId: 0x223f_e028_2d26_3107, payload: payload, retry: .volatile, timeout: timeout)
+      methodId: 0x223f_e028_2d26_3107, metadata: [], payload: payload, retry: .volatile,
+      timeout: timeout, prepareRetry: nil, finalizeChannels: nil, schemaInfo: schemaInfo)
     var cursor = 0
     let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
     switch _cursor_resultDisc {
@@ -828,8 +871,12 @@ public final class TestbedClient: TestbedCaller, Sendable {
     var payloadBytes: [UInt8] = []
     payloadBytes += encodeString(name)
     let payload = Data(payloadBytes)
+    let schemaInfo = ClientSchemaInfo(
+      methodInfo: testbed_method_schemas[0xd4f1_6ea9_eca1_32e6]!,
+      schemaRegistry: testbed_schema_registry)
     let response = try await connection.call(
-      methodId: 0xd4f1_6ea9_eca1_32e6, payload: payload, retry: .volatile, timeout: timeout)
+      methodId: 0xd4f1_6ea9_eca1_32e6, metadata: [], payload: payload, retry: .volatile,
+      timeout: timeout, prepareRetry: nil, finalizeChannels: nil, schemaInfo: schemaInfo)
     var cursor = 0
     let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
     switch _cursor_resultDisc {
@@ -886,8 +933,12 @@ public final class TestbedClient: TestbedCaller, Sendable {
       }
     }(shape)
     let payload = Data(payloadBytes)
+    let schemaInfo = ClientSchemaInfo(
+      methodInfo: testbed_method_schemas[0x0438_5a4b_e2a8_82f5]!,
+      schemaRegistry: testbed_schema_registry)
     let response = try await connection.call(
-      methodId: 0x0438_5a4b_e2a8_82f5, payload: payload, retry: .volatile, timeout: timeout)
+      methodId: 0x0438_5a4b_e2a8_82f5, metadata: [], payload: payload, retry: .volatile,
+      timeout: timeout, prepareRetry: nil, finalizeChannels: nil, schemaInfo: schemaInfo)
     var cursor = 0
     let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
     switch _cursor_resultDisc {
@@ -942,8 +993,12 @@ public final class TestbedClient: TestbedCaller, Sendable {
       }
     }(background)
     let payload = Data(payloadBytes)
+    let schemaInfo = ClientSchemaInfo(
+      methodInfo: testbed_method_schemas[0xef42_1eb5_b08c_973a]!,
+      schemaRegistry: testbed_schema_registry)
     let response = try await connection.call(
-      methodId: 0xef42_1eb5_b08c_973a, payload: payload, retry: .volatile, timeout: timeout)
+      methodId: 0xef42_1eb5_b08c_973a, metadata: [], payload: payload, retry: .volatile,
+      timeout: timeout, prepareRetry: nil, finalizeChannels: nil, schemaInfo: schemaInfo)
     var cursor = 0
     let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
     switch _cursor_resultDisc {
@@ -1018,8 +1073,12 @@ public final class TestbedClient: TestbedCaller, Sendable {
       }
     }(msg)
     let payload = Data(payloadBytes)
+    let schemaInfo = ClientSchemaInfo(
+      methodInfo: testbed_method_schemas[0xe08f_0f52_54e7_a997]!,
+      schemaRegistry: testbed_schema_registry)
     let response = try await connection.call(
-      methodId: 0xe08f_0f52_54e7_a997, payload: payload, retry: .volatile, timeout: timeout)
+      methodId: 0xe08f_0f52_54e7_a997, metadata: [], payload: payload, retry: .volatile,
+      timeout: timeout, prepareRetry: nil, finalizeChannels: nil, schemaInfo: schemaInfo)
     var cursor = 0
     let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
     switch _cursor_resultDisc {
@@ -1065,8 +1124,12 @@ public final class TestbedClient: TestbedCaller, Sendable {
     var payloadBytes: [UInt8] = []
     payloadBytes += encodeU32(count)
     let payload = Data(payloadBytes)
+    let schemaInfo = ClientSchemaInfo(
+      methodInfo: testbed_method_schemas[0x5985_1852_3a62_66bf]!,
+      schemaRegistry: testbed_schema_registry)
     let response = try await connection.call(
-      methodId: 0x5985_1852_3a62_66bf, payload: payload, retry: .volatile, timeout: timeout)
+      methodId: 0x5985_1852_3a62_66bf, metadata: [], payload: payload, retry: .volatile,
+      timeout: timeout, prepareRetry: nil, finalizeChannels: nil, schemaInfo: schemaInfo)
     var cursor = 0
     let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
     switch _cursor_resultDisc {
@@ -1104,8 +1167,12 @@ public final class TestbedClient: TestbedCaller, Sendable {
     var payloadBytes: [UInt8] = []
     payloadBytes += { encodeI32($0) }(pair.0) + { encodeString($0) }(pair.1)
     let payload = Data(payloadBytes)
+    let schemaInfo = ClientSchemaInfo(
+      methodInfo: testbed_method_schemas[0x7d55_a713_ad61_2bf2]!,
+      schemaRegistry: testbed_schema_registry)
     let response = try await connection.call(
-      methodId: 0x7d55_a713_ad61_2bf2, payload: payload, retry: .volatile, timeout: timeout)
+      methodId: 0x7d55_a713_ad61_2bf2, metadata: [], payload: payload, retry: .volatile,
+      timeout: timeout, prepareRetry: nil, finalizeChannels: nil, schemaInfo: schemaInfo)
     var cursor = 0
     let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
     switch _cursor_resultDisc {
@@ -1140,8 +1207,12 @@ public final class TestbedClient: TestbedCaller, Sendable {
     var payloadBytes: [UInt8] = []
     payloadBytes += encodeBytes(Array(data))
     let payload = Data(payloadBytes)
+    let schemaInfo = ClientSchemaInfo(
+      methodInfo: testbed_method_schemas[0x4405_6c78_42fa_336c]!,
+      schemaRegistry: testbed_schema_registry)
     let response = try await connection.call(
-      methodId: 0x4405_6c78_42fa_336c, payload: payload, retry: .volatile, timeout: timeout)
+      methodId: 0x4405_6c78_42fa_336c, metadata: [], payload: payload, retry: .volatile,
+      timeout: timeout, prepareRetry: nil, finalizeChannels: nil, schemaInfo: schemaInfo)
     var cursor = 0
     let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
     switch _cursor_resultDisc {
@@ -1173,8 +1244,12 @@ public final class TestbedClient: TestbedCaller, Sendable {
     var payloadBytes: [UInt8] = []
     payloadBytes += encodeBool(b)
     let payload = Data(payloadBytes)
+    let schemaInfo = ClientSchemaInfo(
+      methodInfo: testbed_method_schemas[0x5136_d8f0_1a5f_496c]!,
+      schemaRegistry: testbed_schema_registry)
     let response = try await connection.call(
-      methodId: 0x5136_d8f0_1a5f_496c, payload: payload, retry: .volatile, timeout: timeout)
+      methodId: 0x5136_d8f0_1a5f_496c, metadata: [], payload: payload, retry: .volatile,
+      timeout: timeout, prepareRetry: nil, finalizeChannels: nil, schemaInfo: schemaInfo)
     var cursor = 0
     let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
     switch _cursor_resultDisc {
@@ -1206,8 +1281,12 @@ public final class TestbedClient: TestbedCaller, Sendable {
     var payloadBytes: [UInt8] = []
     payloadBytes += encodeVarint(n)
     let payload = Data(payloadBytes)
+    let schemaInfo = ClientSchemaInfo(
+      methodInfo: testbed_method_schemas[0x85e2_380d_bf7f_fe65]!,
+      schemaRegistry: testbed_schema_registry)
     let response = try await connection.call(
-      methodId: 0x85e2_380d_bf7f_fe65, payload: payload, retry: .volatile, timeout: timeout)
+      methodId: 0x85e2_380d_bf7f_fe65, metadata: [], payload: payload, retry: .volatile,
+      timeout: timeout, prepareRetry: nil, finalizeChannels: nil, schemaInfo: schemaInfo)
     var cursor = 0
     let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
     switch _cursor_resultDisc {
@@ -1239,8 +1318,12 @@ public final class TestbedClient: TestbedCaller, Sendable {
     var payloadBytes: [UInt8] = []
     payloadBytes += encodeOption(s, encoder: { encodeString($0) })
     let payload = Data(payloadBytes)
+    let schemaInfo = ClientSchemaInfo(
+      methodInfo: testbed_method_schemas[0xb1a5_bfd2_05b3_fbfc]!,
+      schemaRegistry: testbed_schema_registry)
     let response = try await connection.call(
-      methodId: 0xb1a5_bfd2_05b3_fbfc, payload: payload, retry: .volatile, timeout: timeout)
+      methodId: 0xb1a5_bfd2_05b3_fbfc, metadata: [], payload: payload, retry: .volatile,
+      timeout: timeout, prepareRetry: nil, finalizeChannels: nil, schemaInfo: schemaInfo)
     var cursor = 0
     let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
     switch _cursor_resultDisc {
@@ -1271,6 +1354,9 @@ public final class TestbedClient: TestbedCaller, Sendable {
   }
 
   public func sumLarge(numbers: UnboundRx<Int32>) async throws -> Int64 {
+    let schemaInfo = ClientSchemaInfo(
+      methodInfo: testbed_method_schemas[0x9a7b_ed54_5e08_8054]!,
+      schemaRegistry: testbed_schema_registry)
     let prepareRetry: @Sendable () async -> PreparedRetryRequest = { [connection] in
       await bindChannels(
         schemas: testbed_schemas["sumLarge"]!.args,
@@ -1289,11 +1375,11 @@ public final class TestbedClient: TestbedCaller, Sendable {
     let prepared = await prepareRetry()
 
     let response = try await connection.call(
-      methodId: 0x9a7b_ed54_5e08_8054, payload: Data(prepared.payload), retry: .volatile,
-      timeout: timeout, prepareRetry: prepareRetry,
+      methodId: 0x9a7b_ed54_5e08_8054, metadata: [], payload: Data(prepared.payload),
+      retry: .volatile, timeout: timeout, prepareRetry: prepareRetry,
       finalizeChannels: {
         finalizeBoundChannels(schemas: testbed_schemas["sumLarge"]!.args, args: [numbers])
-      })
+      }, schemaInfo: schemaInfo)
     var cursor = 0
     let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
     switch _cursor_resultDisc {
@@ -1322,6 +1408,9 @@ public final class TestbedClient: TestbedCaller, Sendable {
   }
 
   public func generateLarge(count: UInt32, output: UnboundTx<Int32>) async throws {
+    let schemaInfo = ClientSchemaInfo(
+      methodInfo: testbed_method_schemas[0x8edf_bd65_d162_f685]!,
+      schemaRegistry: testbed_schema_registry)
     let prepareRetry: @Sendable () async -> PreparedRetryRequest = { [connection] in
       await bindChannels(
         schemas: testbed_schemas["generateLarge"]!.args,
@@ -1341,12 +1430,12 @@ public final class TestbedClient: TestbedCaller, Sendable {
     let prepared = await prepareRetry()
 
     let response = try await connection.call(
-      methodId: 0x8edf_bd65_d162_f685, payload: Data(prepared.payload), retry: .volatile,
-      timeout: timeout, prepareRetry: prepareRetry,
+      methodId: 0x8edf_bd65_d162_f685, metadata: [], payload: Data(prepared.payload),
+      retry: .volatile, timeout: timeout, prepareRetry: prepareRetry,
       finalizeChannels: {
         finalizeBoundChannels(
           schemas: testbed_schemas["generateLarge"]!.args, args: [count, output])
-      })
+      }, schemaInfo: schemaInfo)
     var cursor = 0
     let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
     switch _cursor_resultDisc {
@@ -1375,8 +1464,12 @@ public final class TestbedClient: TestbedCaller, Sendable {
 
   public func allColors() async throws -> [Color] {
     let payload = Data()
+    let schemaInfo = ClientSchemaInfo(
+      methodInfo: testbed_method_schemas[0xfbfb_05bb_caad_e4a0]!,
+      schemaRegistry: testbed_schema_registry)
     let response = try await connection.call(
-      methodId: 0xfbfb_05bb_caad_e4a0, payload: payload, retry: .volatile, timeout: timeout)
+      methodId: 0xfbfb_05bb_caad_e4a0, metadata: [], payload: payload, retry: .volatile,
+      timeout: timeout, prepareRetry: nil, finalizeChannels: nil, schemaInfo: schemaInfo)
     var cursor = 0
     let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
     switch _cursor_resultDisc {
@@ -1429,8 +1522,12 @@ public final class TestbedClient: TestbedCaller, Sendable {
     payloadBytes += encodeI32(y)
     payloadBytes += encodeBool(active)
     let payload = Data(payloadBytes)
+    let schemaInfo = ClientSchemaInfo(
+      methodInfo: testbed_method_schemas[0x62fe_b14a_8fcf_9b6d]!,
+      schemaRegistry: testbed_schema_registry)
     let response = try await connection.call(
-      methodId: 0x62fe_b14a_8fcf_9b6d, payload: payload, retry: .volatile, timeout: timeout)
+      methodId: 0x62fe_b14a_8fcf_9b6d, metadata: [], payload: payload, retry: .volatile,
+      timeout: timeout, prepareRetry: nil, finalizeChannels: nil, schemaInfo: schemaInfo)
     var cursor = 0
     let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
     switch _cursor_resultDisc {
@@ -1476,8 +1573,12 @@ public final class TestbedClient: TestbedCaller, Sendable {
       }
     }(shape)
     let payload = Data(payloadBytes)
+    let schemaInfo = ClientSchemaInfo(
+      methodInfo: testbed_method_schemas[0x4125_b5e6_78b7_b4a5]!,
+      schemaRegistry: testbed_schema_registry)
     let response = try await connection.call(
-      methodId: 0x4125_b5e6_78b7_b4a5, payload: payload, retry: .volatile, timeout: timeout)
+      methodId: 0x4125_b5e6_78b7_b4a5, metadata: [], payload: payload, retry: .volatile,
+      timeout: timeout, prepareRetry: nil, finalizeChannels: nil, schemaInfo: schemaInfo)
     var cursor = 0
     let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
     switch _cursor_resultDisc {
@@ -1530,8 +1631,12 @@ public final class TestbedClient: TestbedCaller, Sendable {
       }
     }(status)
     let payload = Data(payloadBytes)
+    let schemaInfo = ClientSchemaInfo(
+      methodInfo: testbed_method_schemas[0xc7c5_aa84_5cfb_8bf6]!,
+      schemaRegistry: testbed_schema_registry)
     let response = try await connection.call(
-      methodId: 0xc7c5_aa84_5cfb_8bf6, payload: payload, retry: .volatile, timeout: timeout)
+      methodId: 0xc7c5_aa84_5cfb_8bf6, metadata: [], payload: payload, retry: .volatile,
+      timeout: timeout, prepareRetry: nil, finalizeChannels: nil, schemaInfo: schemaInfo)
     var cursor = 0
     let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
     switch _cursor_resultDisc {
@@ -1572,8 +1677,12 @@ public final class TestbedClient: TestbedCaller, Sendable {
     var payloadBytes: [UInt8] = []
     payloadBytes += encodeString(tag.label) + encodeU32(tag.priority) + encodeString(tag.note)
     let payload = Data(payloadBytes)
+    let schemaInfo = ClientSchemaInfo(
+      methodInfo: testbed_method_schemas[0x6619_071b_e5d5_c259]!,
+      schemaRegistry: testbed_schema_registry)
     let response = try await connection.call(
-      methodId: 0x6619_071b_e5d5_c259, payload: payload, retry: .volatile, timeout: timeout)
+      methodId: 0x6619_071b_e5d5_c259, metadata: [], payload: payload, retry: .volatile,
+      timeout: timeout, prepareRetry: nil, finalizeChannels: nil, schemaInfo: schemaInfo)
     var cursor = 0
     let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
     switch _cursor_resultDisc {
@@ -1608,8 +1717,12 @@ public final class TestbedClient: TestbedCaller, Sendable {
     var payloadBytes: [UInt8] = []
     payloadBytes += encodeString(profile.name) + encodeString(profile.bio)
     let payload = Data(payloadBytes)
+    let schemaInfo = ClientSchemaInfo(
+      methodInfo: testbed_method_schemas[0xbd9b_cabd_deeb_eb04]!,
+      schemaRegistry: testbed_schema_registry)
     let response = try await connection.call(
-      methodId: 0xbd9b_cabd_deeb_eb04, payload: payload, retry: .volatile, timeout: timeout)
+      methodId: 0xbd9b_cabd_deeb_eb04, metadata: [], payload: payload, retry: .volatile,
+      timeout: timeout, prepareRetry: nil, finalizeChannels: nil, schemaInfo: schemaInfo)
     var cursor = 0
     let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
     switch _cursor_resultDisc {
@@ -1643,8 +1756,12 @@ public final class TestbedClient: TestbedCaller, Sendable {
     var payloadBytes: [UInt8] = []
     payloadBytes += encodeI32(record.alpha) + encodeString(record.beta) + encodeF64(record.gamma)
     let payload = Data(payloadBytes)
+    let schemaInfo = ClientSchemaInfo(
+      methodInfo: testbed_method_schemas[0x100b_0e08_da4b_8f1a]!,
+      schemaRegistry: testbed_schema_registry)
     let response = try await connection.call(
-      methodId: 0x100b_0e08_da4b_8f1a, payload: payload, retry: .volatile, timeout: timeout)
+      methodId: 0x100b_0e08_da4b_8f1a, metadata: [], payload: payload, retry: .volatile,
+      timeout: timeout, prepareRetry: nil, finalizeChannels: nil, schemaInfo: schemaInfo)
     var cursor = 0
     let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
     switch _cursor_resultDisc {
@@ -1686,8 +1803,12 @@ public final class TestbedClient: TestbedCaller, Sendable {
       }
     }(status)
     let payload = Data(payloadBytes)
+    let schemaInfo = ClientSchemaInfo(
+      methodInfo: testbed_method_schemas[0x6975_90d3_ffc3_6703]!,
+      schemaRegistry: testbed_schema_registry)
     let response = try await connection.call(
-      methodId: 0x6975_90d3_ffc3_6703, payload: payload, retry: .volatile, timeout: timeout)
+      methodId: 0x6975_90d3_ffc3_6703, metadata: [], payload: payload, retry: .volatile,
+      timeout: timeout, prepareRetry: nil, finalizeChannels: nil, schemaInfo: schemaInfo)
     var cursor = 0
     let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
     switch _cursor_resultDisc {
@@ -1728,8 +1849,12 @@ public final class TestbedClient: TestbedCaller, Sendable {
     var payloadBytes: [UInt8] = []
     payloadBytes += encodeString(tag.label) + encodeU32(tag.priority) + encodeString(tag.note)
     let payload = Data(payloadBytes)
+    let schemaInfo = ClientSchemaInfo(
+      methodInfo: testbed_method_schemas[0x2bd1_b314_9d73_ce97]!,
+      schemaRegistry: testbed_schema_registry)
     let response = try await connection.call(
-      methodId: 0x2bd1_b314_9d73_ce97, payload: payload, retry: .volatile, timeout: timeout)
+      methodId: 0x2bd1_b314_9d73_ce97, metadata: [], payload: payload, retry: .volatile,
+      timeout: timeout, prepareRetry: nil, finalizeChannels: nil, schemaInfo: schemaInfo)
     var cursor = 0
     let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
     switch _cursor_resultDisc {
@@ -1764,8 +1889,12 @@ public final class TestbedClient: TestbedCaller, Sendable {
     var payloadBytes: [UInt8] = []
     payloadBytes += encodeString(m.unit) + encodeF64(m.value)
     let payload = Data(payloadBytes)
+    let schemaInfo = ClientSchemaInfo(
+      methodInfo: testbed_method_schemas[0x3b3d_22b0_15fa_1a3f]!,
+      schemaRegistry: testbed_schema_registry)
     let response = try await connection.call(
-      methodId: 0x3b3d_22b0_15fa_1a3f, payload: payload, retry: .volatile, timeout: timeout)
+      methodId: 0x3b3d_22b0_15fa_1a3f, metadata: [], payload: payload, retry: .volatile,
+      timeout: timeout, prepareRetry: nil, finalizeChannels: nil, schemaInfo: schemaInfo)
     var cursor = 0
     let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
     switch _cursor_resultDisc {
@@ -1799,8 +1928,12 @@ public final class TestbedClient: TestbedCaller, Sendable {
     var payloadBytes: [UInt8] = []
     payloadBytes += encodeString(c.key) + encodeString(c.value)
     let payload = Data(payloadBytes)
+    let schemaInfo = ClientSchemaInfo(
+      methodInfo: testbed_method_schemas[0xe13a_477f_b964_ce28]!,
+      schemaRegistry: testbed_schema_registry)
     let response = try await connection.call(
-      methodId: 0xe13a_477f_b964_ce28, payload: payload, retry: .volatile, timeout: timeout)
+      methodId: 0xe13a_477f_b964_ce28, metadata: [], payload: payload, retry: .volatile,
+      timeout: timeout, prepareRetry: nil, finalizeChannels: nil, schemaInfo: schemaInfo)
     var cursor = 0
     let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
     switch _cursor_resultDisc {
