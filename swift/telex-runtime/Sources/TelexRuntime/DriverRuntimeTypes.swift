@@ -20,6 +20,7 @@ struct DriverQueuedCall: Sendable {
     let retry: RetryPolicy
     let timeout: TimeInterval?
     let prepareRetry: (@Sendable () async -> PreparedRetryRequest)?
+    let schemaInfo: ClientSchemaInfo?
 }
 
 struct DriverKeepaliveRuntime {

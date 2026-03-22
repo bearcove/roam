@@ -6,6 +6,21 @@ import Foundation
 public typealias PostcardEncoder<T> = (T) -> [UInt8]
 public typealias PostcardDecoder<T> = ([UInt8]) throws -> T
 
+// MARK: - Client Schema Info
+
+/// Schema information for a client call. Used to send schema data with outgoing requests.
+public struct ClientSchemaInfo: Sendable {
+    /// Method schema information
+    public let methodInfo: MethodSchemaInfo
+    /// Global schema registry
+    public let schemaRegistry: [SchemaHash: Schema]
+
+    public init(methodInfo: MethodSchemaInfo, schemaRegistry: [SchemaHash: Schema]) {
+        self.methodInfo = methodInfo
+        self.schemaRegistry = schemaRegistry
+    }
+}
+
 // MARK: - TelexConnection Protocol
 
 /// Protocol for telex connections (used by generated clients).
@@ -18,7 +33,8 @@ public protocol TelexConnection: Sendable {
         retry: RetryPolicy,
         timeout: TimeInterval?,
         prepareRetry: (@Sendable () async -> PreparedRetryRequest)?,
-        finalizeChannels: (@Sendable () -> Void)?
+        finalizeChannels: (@Sendable () -> Void)?,
+        schemaInfo: ClientSchemaInfo?
     ) async throws -> Data
 
     /// Get the channel allocator.
@@ -34,6 +50,27 @@ public protocol TelexConnection: Sendable {
 public extension TelexConnection {
     func call(
         methodId: UInt64,
+        metadata: [MetadataEntry],
+        payload: Data,
+        retry: RetryPolicy,
+        timeout: TimeInterval?,
+        prepareRetry: (@Sendable () async -> PreparedRetryRequest)?,
+        finalizeChannels: (@Sendable () -> Void)?
+    ) async throws -> Data {
+        try await call(
+            methodId: methodId,
+            metadata: metadata,
+            payload: payload,
+            retry: retry,
+            timeout: timeout,
+            prepareRetry: prepareRetry,
+            finalizeChannels: finalizeChannels,
+            schemaInfo: nil
+        )
+    }
+
+    func call(
+        methodId: UInt64,
         payload: Data,
         retry: RetryPolicy,
         timeout: TimeInterval?
@@ -45,7 +82,8 @@ public extension TelexConnection {
             retry: retry,
             timeout: timeout,
             prepareRetry: nil,
-            finalizeChannels: nil
+            finalizeChannels: nil,
+            schemaInfo: nil
         )
     }
 
@@ -64,7 +102,8 @@ public extension TelexConnection {
             retry: retry,
             timeout: timeout,
             prepareRetry: prepareRetry,
-            finalizeChannels: finalizeChannels
+            finalizeChannels: finalizeChannels,
+            schemaInfo: nil
         )
     }
 
@@ -81,7 +120,8 @@ public extension TelexConnection {
             retry: .volatile,
             timeout: timeout,
             prepareRetry: nil,
-            finalizeChannels: nil
+            finalizeChannels: nil,
+            schemaInfo: nil
         )
     }
 
@@ -93,7 +133,8 @@ public extension TelexConnection {
             retry: .volatile,
             timeout: nil,
             prepareRetry: nil,
-            finalizeChannels: nil
+            finalizeChannels: nil,
+            schemaInfo: nil
         )
     }
 
@@ -105,7 +146,8 @@ public extension TelexConnection {
             retry: .volatile,
             timeout: timeout,
             prepareRetry: nil,
-            finalizeChannels: nil
+            finalizeChannels: nil,
+            schemaInfo: nil
         )
     }
 

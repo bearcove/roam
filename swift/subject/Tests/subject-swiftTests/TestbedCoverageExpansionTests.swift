@@ -125,7 +125,8 @@ private final class LoopbackConnection: TelexConnection, @unchecked Sendable {
         retry _: RetryPolicy,
         timeout _: TimeInterval?,
         prepareRetry _: (@Sendable () async -> PreparedRetryRequest)?,
-        finalizeChannels: (@Sendable () -> Void)?
+        finalizeChannels: (@Sendable () -> Void)?,
+        schemaInfo _: ClientSchemaInfo?
     ) async throws -> Data {
         let requestId: UInt64 = lock.withLock {
             let id = nextRequestId

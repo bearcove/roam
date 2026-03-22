@@ -10,6 +10,7 @@ enum HandleCommand: Sendable {
         retry: RetryPolicy,
         timeout: TimeInterval?,
         prepareRetry: (@Sendable () async -> PreparedRetryRequest)?,
-        responseTx: @Sendable (Result<[UInt8], ConnectionError>) -> Void
+        responseTx: @Sendable (Result<[UInt8], ConnectionError>) -> Void,
+        schemaInfo: ClientSchemaInfo?
     )
 }

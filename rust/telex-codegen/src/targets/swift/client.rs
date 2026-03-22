@@ -96,7 +96,8 @@ fn generate_client_impl(service: &ServiceDescriptor) -> String {
     .unwrap();
     {
         let _indent = w.indent();
-        w.writeln("private let connection: TelexConnection").unwrap();
+        w.writeln("private let connection: TelexConnection")
+            .unwrap();
         w.writeln("private let timeout: TimeInterval?").unwrap();
         w.blank_line().unwrap();
         w.writeln("public init(connection: TelexConnection, timeout: TimeInterval? = 30.0) {")
@@ -170,6 +171,9 @@ fn generate_client_method(
         let _indent = w.indent();
         let cursor_var = unique_decode_cursor_name(method.args);
 
+        let service_name_lower = service_name.to_lower_camel_case();
+        let method_id = crate::method_id(method);
+
         if has_streaming {
             generate_streaming_client_body(
                 w,
@@ -183,11 +187,18 @@ fn generate_client_method(
             // Encode arguments
             generate_encode_args(w, method.args);
 
-            // Start the first request attempt for this logical call.
-            let method_id = crate::method_id(method);
+            // Build schema info for the request
             cw_writeln!(
                 w,
-                "let response = try await connection.call(methodId: {}, payload: payload, retry: {retry_policy}, timeout: timeout)",
+                "let schemaInfo = ClientSchemaInfo(methodInfo: {service_name_lower}_method_schemas[{}]!, schemaRegistry: {service_name_lower}_schema_registry)",
+                hex_u64(method_id)
+            )
+            .unwrap();
+
+            // Start the first request attempt for this logical call.
+            cw_writeln!(
+                w,
+                "let response = try await connection.call(methodId: {}, metadata: [], payload: payload, retry: {retry_policy}, timeout: timeout, prepareRetry: nil, finalizeChannels: nil, schemaInfo: schemaInfo)",
                 hex_u64(method_id),
             )
             .unwrap();
@@ -235,6 +246,16 @@ fn generate_streaming_client_body(
         .map(|a| a.name.to_lower_camel_case())
         .collect();
 
+    let method_id = crate::method_id(method);
+
+    // Build schema info for the request
+    cw_writeln!(
+        w,
+        "let schemaInfo = ClientSchemaInfo(methodInfo: {service_name_lower}_method_schemas[{}]!, schemaRegistry: {service_name_lower}_schema_registry)",
+        hex_u64(method_id)
+    )
+    .unwrap();
+
     w.writeln("let prepareRetry: @Sendable () async -> PreparedRetryRequest = { [connection] in")
         .unwrap();
     {
@@ -267,11 +288,10 @@ fn generate_streaming_client_body(
 
     // Start the first request attempt for this logical call.
     let ret_type = swift_type_client_return(method.return_shape);
-    let method_id = crate::method_id(method);
     let _ = ret_type;
     cw_writeln!(
         w,
-        "let response = try await connection.call(methodId: {}, payload: Data(prepared.payload), retry: {retry_policy}, timeout: timeout, prepareRetry: prepareRetry, finalizeChannels: {{ finalizeBoundChannels(schemas: {service_name_lower}_schemas[\"{method_id_name}\"]!.args, args: [{}]) }})",
+        "let response = try await connection.call(methodId: {}, metadata: [], payload: Data(prepared.payload), retry: {retry_policy}, timeout: timeout, prepareRetry: prepareRetry, finalizeChannels: {{ finalizeBoundChannels(schemas: {service_name_lower}_schemas[\"{method_id_name}\"]!.args, args: [{}]) }}, schemaInfo: schemaInfo)",
         hex_u64(method_id),
         arg_names.join(", ")
     )

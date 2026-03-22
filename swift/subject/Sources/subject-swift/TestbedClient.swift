@@ -303,8 +303,12 @@ public final class TestbedClient: TestbedCaller, Sendable {
     var payloadBytes: [UInt8] = []
     payloadBytes += encodeString(message)
     let payload = Data(payloadBytes)
+    let schemaInfo = ClientSchemaInfo(
+      methodInfo: testbed_method_schemas[0x880b_c4ee_e235_74be]!,
+      schemaRegistry: testbed_schema_registry)
     let response = try await connection.call(
-      methodId: 0x880b_c4ee_e235_74be, payload: payload, retry: .volatile, timeout: timeout)
+      methodId: 0x880b_c4ee_e235_74be, metadata: [], payload: payload, retry: .volatile,
+      timeout: timeout, prepareRetry: nil, finalizeChannels: nil, schemaInfo: schemaInfo)
     var cursor = 0
     let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
     switch _cursor_resultDisc {
@@ -336,8 +340,12 @@ public final class TestbedClient: TestbedCaller, Sendable {
     var payloadBytes: [UInt8] = []
     payloadBytes += encodeString(message)
     let payload = Data(payloadBytes)
+    let schemaInfo = ClientSchemaInfo(
+      methodInfo: testbed_method_schemas[0x1c22_3f30_e180_392a]!,
+      schemaRegistry: testbed_schema_registry)
     let response = try await connection.call(
-      methodId: 0x1c22_3f30_e180_392a, payload: payload, retry: .volatile, timeout: timeout)
+      methodId: 0x1c22_3f30_e180_392a, metadata: [], payload: payload, retry: .volatile,
+      timeout: timeout, prepareRetry: nil, finalizeChannels: nil, schemaInfo: schemaInfo)
     var cursor = 0
     let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
     switch _cursor_resultDisc {
@@ -370,8 +378,12 @@ public final class TestbedClient: TestbedCaller, Sendable {
     payloadBytes += encodeI64(dividend)
     payloadBytes += encodeI64(divisor)
     let payload = Data(payloadBytes)
+    let schemaInfo = ClientSchemaInfo(
+      methodInfo: testbed_method_schemas[0xfb68_d931_8f83_0875]!,
+      schemaRegistry: testbed_schema_registry)
     let response = try await connection.call(
-      methodId: 0xfb68_d931_8f83_0875, payload: payload, retry: .volatile, timeout: timeout)
+      methodId: 0xfb68_d931_8f83_0875, metadata: [], payload: payload, retry: .volatile,
+      timeout: timeout, prepareRetry: nil, finalizeChannels: nil, schemaInfo: schemaInfo)
     var cursor = 0
     let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
     switch _cursor_resultDisc {
@@ -413,8 +425,12 @@ public final class TestbedClient: TestbedCaller, Sendable {
     var payloadBytes: [UInt8] = []
     payloadBytes += encodeU32(id)
     let payload = Data(payloadBytes)
+    let schemaInfo = ClientSchemaInfo(
+      methodInfo: testbed_method_schemas[0xa15f_f520_9471_2a3b]!,
+      schemaRegistry: testbed_schema_registry)
     let response = try await connection.call(
-      methodId: 0xa15f_f520_9471_2a3b, payload: payload, retry: .volatile, timeout: timeout)
+      methodId: 0xa15f_f520_9471_2a3b, metadata: [], payload: payload, retry: .volatile,
+      timeout: timeout, prepareRetry: nil, finalizeChannels: nil, schemaInfo: schemaInfo)
     var cursor = 0
     let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
     switch _cursor_resultDisc {
@@ -458,6 +474,9 @@ public final class TestbedClient: TestbedCaller, Sendable {
   }
 
   public func sum(numbers: UnboundRx<Int32>) async throws -> Int64 {
+    let schemaInfo = ClientSchemaInfo(
+      methodInfo: testbed_method_schemas[0x51f9_cfd8_e865_77c9]!,
+      schemaRegistry: testbed_schema_registry)
     let prepareRetry: @Sendable () async -> PreparedRetryRequest = { [connection] in
       await bindChannels(
         schemas: testbed_schemas["sum"]!.args,
@@ -476,11 +495,11 @@ public final class TestbedClient: TestbedCaller, Sendable {
     let prepared = await prepareRetry()
 
     let response = try await connection.call(
-      methodId: 0x51f9_cfd8_e865_77c9, payload: Data(prepared.payload), retry: .volatile,
-      timeout: timeout, prepareRetry: prepareRetry,
+      methodId: 0x51f9_cfd8_e865_77c9, metadata: [], payload: Data(prepared.payload),
+      retry: .volatile, timeout: timeout, prepareRetry: prepareRetry,
       finalizeChannels: {
         finalizeBoundChannels(schemas: testbed_schemas["sum"]!.args, args: [numbers])
-      })
+      }, schemaInfo: schemaInfo)
     var cursor = 0
     let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
     switch _cursor_resultDisc {
@@ -509,6 +528,9 @@ public final class TestbedClient: TestbedCaller, Sendable {
   }
 
   public func generate(count: UInt32, output: UnboundTx<Int32>) async throws {
+    let schemaInfo = ClientSchemaInfo(
+      methodInfo: testbed_method_schemas[0x239e_5b99_b1f8_207a]!,
+      schemaRegistry: testbed_schema_registry)
     let prepareRetry: @Sendable () async -> PreparedRetryRequest = { [connection] in
       await bindChannels(
         schemas: testbed_schemas["generate"]!.args,
@@ -528,11 +550,11 @@ public final class TestbedClient: TestbedCaller, Sendable {
     let prepared = await prepareRetry()
 
     let response = try await connection.call(
-      methodId: 0x239e_5b99_b1f8_207a, payload: Data(prepared.payload), retry: .volatile,
-      timeout: timeout, prepareRetry: prepareRetry,
+      methodId: 0x239e_5b99_b1f8_207a, metadata: [], payload: Data(prepared.payload),
+      retry: .volatile, timeout: timeout, prepareRetry: prepareRetry,
       finalizeChannels: {
         finalizeBoundChannels(schemas: testbed_schemas["generate"]!.args, args: [count, output])
-      })
+      }, schemaInfo: schemaInfo)
     var cursor = 0
     let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
     switch _cursor_resultDisc {
@@ -560,6 +582,9 @@ public final class TestbedClient: TestbedCaller, Sendable {
   }
 
   public func generateRetryNonIdem(count: UInt32, output: UnboundTx<Int32>) async throws {
+    let schemaInfo = ClientSchemaInfo(
+      methodInfo: testbed_method_schemas[0x3441_9529_478c_c7b8]!,
+      schemaRegistry: testbed_schema_registry)
     let prepareRetry: @Sendable () async -> PreparedRetryRequest = { [connection] in
       await bindChannels(
         schemas: testbed_schemas["generateRetryNonIdem"]!.args,
@@ -579,12 +604,12 @@ public final class TestbedClient: TestbedCaller, Sendable {
     let prepared = await prepareRetry()
 
     let response = try await connection.call(
-      methodId: 0x3441_9529_478c_c7b8, payload: Data(prepared.payload), retry: .volatile,
-      timeout: timeout, prepareRetry: prepareRetry,
+      methodId: 0x3441_9529_478c_c7b8, metadata: [], payload: Data(prepared.payload),
+      retry: .volatile, timeout: timeout, prepareRetry: prepareRetry,
       finalizeChannels: {
         finalizeBoundChannels(
           schemas: testbed_schemas["generateRetryNonIdem"]!.args, args: [count, output])
-      })
+      }, schemaInfo: schemaInfo)
     var cursor = 0
     let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
     switch _cursor_resultDisc {
@@ -612,6 +637,9 @@ public final class TestbedClient: TestbedCaller, Sendable {
   }
 
   public func generateRetryIdem(count: UInt32, output: UnboundTx<Int32>) async throws {
+    let schemaInfo = ClientSchemaInfo(
+      methodInfo: testbed_method_schemas[0xe2d2_7fd9_098c_6ea2]!,
+      schemaRegistry: testbed_schema_registry)
     let prepareRetry: @Sendable () async -> PreparedRetryRequest = { [connection] in
       await bindChannels(
         schemas: testbed_schemas["generateRetryIdem"]!.args,
@@ -631,12 +659,12 @@ public final class TestbedClient: TestbedCaller, Sendable {
     let prepared = await prepareRetry()
 
     let response = try await connection.call(
-      methodId: 0xe2d2_7fd9_098c_6ea2, payload: Data(prepared.payload), retry: .idem,
+      methodId: 0xe2d2_7fd9_098c_6ea2, metadata: [], payload: Data(prepared.payload), retry: .idem,
       timeout: timeout, prepareRetry: prepareRetry,
       finalizeChannels: {
         finalizeBoundChannels(
           schemas: testbed_schemas["generateRetryIdem"]!.args, args: [count, output])
-      })
+      }, schemaInfo: schemaInfo)
     var cursor = 0
     let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
     switch _cursor_resultDisc {
@@ -664,6 +692,9 @@ public final class TestbedClient: TestbedCaller, Sendable {
   }
 
   public func transform(input: UnboundRx<String>, output: UnboundTx<String>) async throws {
+    let schemaInfo = ClientSchemaInfo(
+      methodInfo: testbed_method_schemas[0xcb46_9cff_8d79_8feb]!,
+      schemaRegistry: testbed_schema_registry)
     let prepareRetry: @Sendable () async -> PreparedRetryRequest = { [connection] in
       await bindChannels(
         schemas: testbed_schemas["transform"]!.args,
@@ -683,11 +714,11 @@ public final class TestbedClient: TestbedCaller, Sendable {
     let prepared = await prepareRetry()
 
     let response = try await connection.call(
-      methodId: 0xcb46_9cff_8d79_8feb, payload: Data(prepared.payload), retry: .volatile,
-      timeout: timeout, prepareRetry: prepareRetry,
+      methodId: 0xcb46_9cff_8d79_8feb, metadata: [], payload: Data(prepared.payload),
+      retry: .volatile, timeout: timeout, prepareRetry: prepareRetry,
       finalizeChannels: {
         finalizeBoundChannels(schemas: testbed_schemas["transform"]!.args, args: [input, output])
-      })
+      }, schemaInfo: schemaInfo)
     var cursor = 0
     let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
     switch _cursor_resultDisc {
@@ -718,8 +749,12 @@ public final class TestbedClient: TestbedCaller, Sendable {
     var payloadBytes: [UInt8] = []
     payloadBytes += encodeI32(point.x) + encodeI32(point.y)
     let payload = Data(payloadBytes)
+    let schemaInfo = ClientSchemaInfo(
+      methodInfo: testbed_method_schemas[0x81f5_386d_589d_fbe4]!,
+      schemaRegistry: testbed_schema_registry)
     let response = try await connection.call(
-      methodId: 0x81f5_386d_589d_fbe4, payload: payload, retry: .volatile, timeout: timeout)
+      methodId: 0x81f5_386d_589d_fbe4, metadata: [], payload: payload, retry: .volatile,
+      timeout: timeout, prepareRetry: nil, finalizeChannels: nil, schemaInfo: schemaInfo)
     var cursor = 0
     let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
     switch _cursor_resultDisc {
@@ -755,8 +790,12 @@ public final class TestbedClient: TestbedCaller, Sendable {
     payloadBytes += encodeU8(age)
     payloadBytes += encodeOption(email, encoder: { encodeString($0) })
     let payload = Data(payloadBytes)
+    let schemaInfo = ClientSchemaInfo(
+      methodInfo: testbed_method_schemas[0x68ff_a90b_7728_bde7]!,
+      schemaRegistry: testbed_schema_registry)
     let response = try await connection.call(
-      methodId: 0x68ff_a90b_7728_bde7, payload: payload, retry: .volatile, timeout: timeout)
+      methodId: 0x68ff_a90b_7728_bde7, metadata: [], payload: payload, retry: .volatile,
+      timeout: timeout, prepareRetry: nil, finalizeChannels: nil, schemaInfo: schemaInfo)
     var cursor = 0
     let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
     switch _cursor_resultDisc {
@@ -795,8 +834,12 @@ public final class TestbedClient: TestbedCaller, Sendable {
       encodeI32(rect.topLeft.x) + encodeI32(rect.topLeft.y) + encodeI32(rect.bottomRight.x)
       + encodeI32(rect.bottomRight.y) + encodeOption(rect.label, encoder: { encodeString($0) })
     let payload = Data(payloadBytes)
+    let schemaInfo = ClientSchemaInfo(
+      methodInfo: testbed_method_schemas[0x223f_e028_2d26_3107]!,
+      schemaRegistry: testbed_schema_registry)
     let response = try await connection.call(
-      methodId: 0x223f_e028_2d26_3107, payload: payload, retry: .volatile, timeout: timeout)
+      methodId: 0x223f_e028_2d26_3107, metadata: [], payload: payload, retry: .volatile,
+      timeout: timeout, prepareRetry: nil, finalizeChannels: nil, schemaInfo: schemaInfo)
     var cursor = 0
     let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
     switch _cursor_resultDisc {
@@ -828,8 +871,12 @@ public final class TestbedClient: TestbedCaller, Sendable {
     var payloadBytes: [UInt8] = []
     payloadBytes += encodeString(name)
     let payload = Data(payloadBytes)
+    let schemaInfo = ClientSchemaInfo(
+      methodInfo: testbed_method_schemas[0xd4f1_6ea9_eca1_32e6]!,
+      schemaRegistry: testbed_schema_registry)
     let response = try await connection.call(
-      methodId: 0xd4f1_6ea9_eca1_32e6, payload: payload, retry: .volatile, timeout: timeout)
+      methodId: 0xd4f1_6ea9_eca1_32e6, metadata: [], payload: payload, retry: .volatile,
+      timeout: timeout, prepareRetry: nil, finalizeChannels: nil, schemaInfo: schemaInfo)
     var cursor = 0
     let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
     switch _cursor_resultDisc {
@@ -886,8 +933,12 @@ public final class TestbedClient: TestbedCaller, Sendable {
       }
     }(shape)
     let payload = Data(payloadBytes)
+    let schemaInfo = ClientSchemaInfo(
+      methodInfo: testbed_method_schemas[0x0438_5a4b_e2a8_82f5]!,
+      schemaRegistry: testbed_schema_registry)
     let response = try await connection.call(
-      methodId: 0x0438_5a4b_e2a8_82f5, payload: payload, retry: .volatile, timeout: timeout)
+      methodId: 0x0438_5a4b_e2a8_82f5, metadata: [], payload: payload, retry: .volatile,
+      timeout: timeout, prepareRetry: nil, finalizeChannels: nil, schemaInfo: schemaInfo)
     var cursor = 0
     let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
     switch _cursor_resultDisc {
@@ -942,8 +993,12 @@ public final class TestbedClient: TestbedCaller, Sendable {
       }
     }(background)
     let payload = Data(payloadBytes)
+    let schemaInfo = ClientSchemaInfo(
+      methodInfo: testbed_method_schemas[0xef42_1eb5_b08c_973a]!,
+      schemaRegistry: testbed_schema_registry)
     let response = try await connection.call(
-      methodId: 0xef42_1eb5_b08c_973a, payload: payload, retry: .volatile, timeout: timeout)
+      methodId: 0xef42_1eb5_b08c_973a, metadata: [], payload: payload, retry: .volatile,
+      timeout: timeout, prepareRetry: nil, finalizeChannels: nil, schemaInfo: schemaInfo)
     var cursor = 0
     let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
     switch _cursor_resultDisc {
@@ -1018,8 +1073,12 @@ public final class TestbedClient: TestbedCaller, Sendable {
       }
     }(msg)
     let payload = Data(payloadBytes)
+    let schemaInfo = ClientSchemaInfo(
+      methodInfo: testbed_method_schemas[0xe08f_0f52_54e7_a997]!,
+      schemaRegistry: testbed_schema_registry)
     let response = try await connection.call(
-      methodId: 0xe08f_0f52_54e7_a997, payload: payload, retry: .volatile, timeout: timeout)
+      methodId: 0xe08f_0f52_54e7_a997, metadata: [], payload: payload, retry: .volatile,
+      timeout: timeout, prepareRetry: nil, finalizeChannels: nil, schemaInfo: schemaInfo)
     var cursor = 0
     let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
     switch _cursor_resultDisc {
@@ -1065,8 +1124,12 @@ public final class TestbedClient: TestbedCaller, Sendable {
     var payloadBytes: [UInt8] = []
     payloadBytes += encodeU32(count)
     let payload = Data(payloadBytes)
+    let schemaInfo = ClientSchemaInfo(
+      methodInfo: testbed_method_schemas[0x5985_1852_3a62_66bf]!,
+      schemaRegistry: testbed_schema_registry)
     let response = try await connection.call(
-      methodId: 0x5985_1852_3a62_66bf, payload: payload, retry: .volatile, timeout: timeout)
+      methodId: 0x5985_1852_3a62_66bf, metadata: [], payload: payload, retry: .volatile,
+      timeout: timeout, prepareRetry: nil, finalizeChannels: nil, schemaInfo: schemaInfo)
     var cursor = 0
     let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
     switch _cursor_resultDisc {
@@ -1104,8 +1167,12 @@ public final class TestbedClient: TestbedCaller, Sendable {
     var payloadBytes: [UInt8] = []
     payloadBytes += { encodeI32($0) }(pair.0) + { encodeString($0) }(pair.1)
     let payload = Data(payloadBytes)
+    let schemaInfo = ClientSchemaInfo(
+      methodInfo: testbed_method_schemas[0x7d55_a713_ad61_2bf2]!,
+      schemaRegistry: testbed_schema_registry)
     let response = try await connection.call(
-      methodId: 0x7d55_a713_ad61_2bf2, payload: payload, retry: .volatile, timeout: timeout)
+      methodId: 0x7d55_a713_ad61_2bf2, metadata: [], payload: payload, retry: .volatile,
+      timeout: timeout, prepareRetry: nil, finalizeChannels: nil, schemaInfo: schemaInfo)
     var cursor = 0
     let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
     switch _cursor_resultDisc {
@@ -1140,8 +1207,12 @@ public final class TestbedClient: TestbedCaller, Sendable {
     var payloadBytes: [UInt8] = []
     payloadBytes += encodeBytes(Array(data))
     let payload = Data(payloadBytes)
+    let schemaInfo = ClientSchemaInfo(
+      methodInfo: testbed_method_schemas[0x4405_6c78_42fa_336c]!,
+      schemaRegistry: testbed_schema_registry)
     let response = try await connection.call(
-      methodId: 0x4405_6c78_42fa_336c, payload: payload, retry: .volatile, timeout: timeout)
+      methodId: 0x4405_6c78_42fa_336c, metadata: [], payload: payload, retry: .volatile,
+      timeout: timeout, prepareRetry: nil, finalizeChannels: nil, schemaInfo: schemaInfo)
     var cursor = 0
     let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
     switch _cursor_resultDisc {
@@ -1173,8 +1244,12 @@ public final class TestbedClient: TestbedCaller, Sendable {
     var payloadBytes: [UInt8] = []
     payloadBytes += encodeBool(b)
     let payload = Data(payloadBytes)
+    let schemaInfo = ClientSchemaInfo(
+      methodInfo: testbed_method_schemas[0x5136_d8f0_1a5f_496c]!,
+      schemaRegistry: testbed_schema_registry)
     let response = try await connection.call(
-      methodId: 0x5136_d8f0_1a5f_496c, payload: payload, retry: .volatile, timeout: timeout)
+      methodId: 0x5136_d8f0_1a5f_496c, metadata: [], payload: payload, retry: .volatile,
+      timeout: timeout, prepareRetry: nil, finalizeChannels: nil, schemaInfo: schemaInfo)
     var cursor = 0
     let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
     switch _cursor_resultDisc {
@@ -1206,8 +1281,12 @@ public final class TestbedClient: TestbedCaller, Sendable {
     var payloadBytes: [UInt8] = []
     payloadBytes += encodeVarint(n)
     let payload = Data(payloadBytes)
+    let schemaInfo = ClientSchemaInfo(
+      methodInfo: testbed_method_schemas[0x85e2_380d_bf7f_fe65]!,
+      schemaRegistry: testbed_schema_registry)
     let response = try await connection.call(
-      methodId: 0x85e2_380d_bf7f_fe65, payload: payload, retry: .volatile, timeout: timeout)
+      methodId: 0x85e2_380d_bf7f_fe65, metadata: [], payload: payload, retry: .volatile,
+      timeout: timeout, prepareRetry: nil, finalizeChannels: nil, schemaInfo: schemaInfo)
     var cursor = 0
     let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
     switch _cursor_resultDisc {
@@ -1239,8 +1318,12 @@ public final class TestbedClient: TestbedCaller, Sendable {
     var payloadBytes: [UInt8] = []
     payloadBytes += encodeOption(s, encoder: { encodeString($0) })
     let payload = Data(payloadBytes)
+    let schemaInfo = ClientSchemaInfo(
+      methodInfo: testbed_method_schemas[0xb1a5_bfd2_05b3_fbfc]!,
+      schemaRegistry: testbed_schema_registry)
     let response = try await connection.call(
-      methodId: 0xb1a5_bfd2_05b3_fbfc, payload: payload, retry: .volatile, timeout: timeout)
+      methodId: 0xb1a5_bfd2_05b3_fbfc, metadata: [], payload: payload, retry: .volatile,
+      timeout: timeout, prepareRetry: nil, finalizeChannels: nil, schemaInfo: schemaInfo)
     var cursor = 0
     let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
     switch _cursor_resultDisc {
@@ -1271,6 +1354,9 @@ public final class TestbedClient: TestbedCaller, Sendable {
   }
 
   public func sumLarge(numbers: UnboundRx<Int32>) async throws -> Int64 {
+    let schemaInfo = ClientSchemaInfo(
+      methodInfo: testbed_method_schemas[0x9a7b_ed54_5e08_8054]!,
+      schemaRegistry: testbed_schema_registry)
     let prepareRetry: @Sendable () async -> PreparedRetryRequest = { [connection] in
       await bindChannels(
         schemas: testbed_schemas["sumLarge"]!.args,
@@ -1289,11 +1375,11 @@ public final class TestbedClient: TestbedCaller, Sendable {
     let prepared = await prepareRetry()
 
     let response = try await connection.call(
-      methodId: 0x9a7b_ed54_5e08_8054, payload: Data(prepared.payload), retry: .volatile,
-      timeout: timeout, prepareRetry: prepareRetry,
+      methodId: 0x9a7b_ed54_5e08_8054, metadata: [], payload: Data(prepared.payload),
+      retry: .volatile, timeout: timeout, prepareRetry: prepareRetry,
       finalizeChannels: {
         finalizeBoundChannels(schemas: testbed_schemas["sumLarge"]!.args, args: [numbers])
-      })
+      }, schemaInfo: schemaInfo)
     var cursor = 0
     let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
     switch _cursor_resultDisc {
@@ -1322,6 +1408,9 @@ public final class TestbedClient: TestbedCaller, Sendable {
   }
 
   public func generateLarge(count: UInt32, output: UnboundTx<Int32>) async throws {
+    let schemaInfo = ClientSchemaInfo(
+      methodInfo: testbed_method_schemas[0x8edf_bd65_d162_f685]!,
+      schemaRegistry: testbed_schema_registry)
     let prepareRetry: @Sendable () async -> PreparedRetryRequest = { [connection] in
       await bindChannels(
         schemas: testbed_schemas["generateLarge"]!.args,
@@ -1341,12 +1430,12 @@ public final class TestbedClient: TestbedCaller, Sendable {
     let prepared = await prepareRetry()
 
     let response = try await connection.call(
-      methodId: 0x8edf_bd65_d162_f685, payload: Data(prepared.payload), retry: .volatile,
-      timeout: timeout, prepareRetry: prepareRetry,
+      methodId: 0x8edf_bd65_d162_f685, metadata: [], payload: Data(prepared.payload),
+      retry: .volatile, timeout: timeout, prepareRetry: prepareRetry,
       finalizeChannels: {
         finalizeBoundChannels(
           schemas: testbed_schemas["generateLarge"]!.args, args: [count, output])
-      })
+      }, schemaInfo: schemaInfo)
     var cursor = 0
     let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
     switch _cursor_resultDisc {
@@ -1375,8 +1464,12 @@ public final class TestbedClient: TestbedCaller, Sendable {
 
   public func allColors() async throws -> [Color] {
     let payload = Data()
+    let schemaInfo = ClientSchemaInfo(
+      methodInfo: testbed_method_schemas[0xfbfb_05bb_caad_e4a0]!,
+      schemaRegistry: testbed_schema_registry)
     let response = try await connection.call(
-      methodId: 0xfbfb_05bb_caad_e4a0, payload: payload, retry: .volatile, timeout: timeout)
+      methodId: 0xfbfb_05bb_caad_e4a0, metadata: [], payload: payload, retry: .volatile,
+      timeout: timeout, prepareRetry: nil, finalizeChannels: nil, schemaInfo: schemaInfo)
     var cursor = 0
     let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
     switch _cursor_resultDisc {
@@ -1429,8 +1522,12 @@ public final class TestbedClient: TestbedCaller, Sendable {
     payloadBytes += encodeI32(y)
     payloadBytes += encodeBool(active)
     let payload = Data(payloadBytes)
+    let schemaInfo = ClientSchemaInfo(
+      methodInfo: testbed_method_schemas[0x62fe_b14a_8fcf_9b6d]!,
+      schemaRegistry: testbed_schema_registry)
     let response = try await connection.call(
-      methodId: 0x62fe_b14a_8fcf_9b6d, payload: payload, retry: .volatile, timeout: timeout)
+      methodId: 0x62fe_b14a_8fcf_9b6d, metadata: [], payload: payload, retry: .volatile,
+      timeout: timeout, prepareRetry: nil, finalizeChannels: nil, schemaInfo: schemaInfo)
     var cursor = 0
     let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
     switch _cursor_resultDisc {
@@ -1476,8 +1573,12 @@ public final class TestbedClient: TestbedCaller, Sendable {
       }
     }(shape)
     let payload = Data(payloadBytes)
+    let schemaInfo = ClientSchemaInfo(
+      methodInfo: testbed_method_schemas[0x4125_b5e6_78b7_b4a5]!,
+      schemaRegistry: testbed_schema_registry)
     let response = try await connection.call(
-      methodId: 0x4125_b5e6_78b7_b4a5, payload: payload, retry: .volatile, timeout: timeout)
+      methodId: 0x4125_b5e6_78b7_b4a5, metadata: [], payload: payload, retry: .volatile,
+      timeout: timeout, prepareRetry: nil, finalizeChannels: nil, schemaInfo: schemaInfo)
     var cursor = 0
     let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
     switch _cursor_resultDisc {
@@ -1530,8 +1631,12 @@ public final class TestbedClient: TestbedCaller, Sendable {
       }
     }(status)
     let payload = Data(payloadBytes)
+    let schemaInfo = ClientSchemaInfo(
+      methodInfo: testbed_method_schemas[0xc7c5_aa84_5cfb_8bf6]!,
+      schemaRegistry: testbed_schema_registry)
     let response = try await connection.call(
-      methodId: 0xc7c5_aa84_5cfb_8bf6, payload: payload, retry: .volatile, timeout: timeout)
+      methodId: 0xc7c5_aa84_5cfb_8bf6, metadata: [], payload: payload, retry: .volatile,
+      timeout: timeout, prepareRetry: nil, finalizeChannels: nil, schemaInfo: schemaInfo)
     var cursor = 0
     let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
     switch _cursor_resultDisc {
@@ -1572,8 +1677,12 @@ public final class TestbedClient: TestbedCaller, Sendable {
     var payloadBytes: [UInt8] = []
     payloadBytes += encodeString(tag.label) + encodeU32(tag.priority) + encodeString(tag.note)
     let payload = Data(payloadBytes)
+    let schemaInfo = ClientSchemaInfo(
+      methodInfo: testbed_method_schemas[0x6619_071b_e5d5_c259]!,
+      schemaRegistry: testbed_schema_registry)
     let response = try await connection.call(
-      methodId: 0x6619_071b_e5d5_c259, payload: payload, retry: .volatile, timeout: timeout)
+      methodId: 0x6619_071b_e5d5_c259, metadata: [], payload: payload, retry: .volatile,
+      timeout: timeout, prepareRetry: nil, finalizeChannels: nil, schemaInfo: schemaInfo)
     var cursor = 0
     let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
     switch _cursor_resultDisc {
@@ -1608,8 +1717,12 @@ public final class TestbedClient: TestbedCaller, Sendable {
     var payloadBytes: [UInt8] = []
     payloadBytes += encodeString(profile.name) + encodeString(profile.bio)
     let payload = Data(payloadBytes)
+    let schemaInfo = ClientSchemaInfo(
+      methodInfo: testbed_method_schemas[0xbd9b_cabd_deeb_eb04]!,
+      schemaRegistry: testbed_schema_registry)
     let response = try await connection.call(
-      methodId: 0xbd9b_cabd_deeb_eb04, payload: payload, retry: .volatile, timeout: timeout)
+      methodId: 0xbd9b_cabd_deeb_eb04, metadata: [], payload: payload, retry: .volatile,
+      timeout: timeout, prepareRetry: nil, finalizeChannels: nil, schemaInfo: schemaInfo)
     var cursor = 0
     let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
     switch _cursor_resultDisc {
@@ -1643,8 +1756,12 @@ public final class TestbedClient: TestbedCaller, Sendable {
     var payloadBytes: [UInt8] = []
     payloadBytes += encodeI32(record.alpha) + encodeString(record.beta) + encodeF64(record.gamma)
     let payload = Data(payloadBytes)
+    let schemaInfo = ClientSchemaInfo(
+      methodInfo: testbed_method_schemas[0x100b_0e08_da4b_8f1a]!,
+      schemaRegistry: testbed_schema_registry)
     let response = try await connection.call(
-      methodId: 0x100b_0e08_da4b_8f1a, payload: payload, retry: .volatile, timeout: timeout)
+      methodId: 0x100b_0e08_da4b_8f1a, metadata: [], payload: payload, retry: .volatile,
+      timeout: timeout, prepareRetry: nil, finalizeChannels: nil, schemaInfo: schemaInfo)
     var cursor = 0
     let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
     switch _cursor_resultDisc {
@@ -1686,8 +1803,12 @@ public final class TestbedClient: TestbedCaller, Sendable {
       }
     }(status)
     let payload = Data(payloadBytes)
+    let schemaInfo = ClientSchemaInfo(
+      methodInfo: testbed_method_schemas[0x6975_90d3_ffc3_6703]!,
+      schemaRegistry: testbed_schema_registry)
     let response = try await connection.call(
-      methodId: 0x6975_90d3_ffc3_6703, payload: payload, retry: .volatile, timeout: timeout)
+      methodId: 0x6975_90d3_ffc3_6703, metadata: [], payload: payload, retry: .volatile,
+      timeout: timeout, prepareRetry: nil, finalizeChannels: nil, schemaInfo: schemaInfo)
     var cursor = 0
     let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
     switch _cursor_resultDisc {
@@ -1728,8 +1849,12 @@ public final class TestbedClient: TestbedCaller, Sendable {
     var payloadBytes: [UInt8] = []
     payloadBytes += encodeString(tag.label) + encodeU32(tag.priority) + encodeString(tag.note)
     let payload = Data(payloadBytes)
+    let schemaInfo = ClientSchemaInfo(
+      methodInfo: testbed_method_schemas[0x2bd1_b314_9d73_ce97]!,
+      schemaRegistry: testbed_schema_registry)
     let response = try await connection.call(
-      methodId: 0x2bd1_b314_9d73_ce97, payload: payload, retry: .volatile, timeout: timeout)
+      methodId: 0x2bd1_b314_9d73_ce97, metadata: [], payload: payload, retry: .volatile,
+      timeout: timeout, prepareRetry: nil, finalizeChannels: nil, schemaInfo: schemaInfo)
     var cursor = 0
     let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
     switch _cursor_resultDisc {
@@ -1764,8 +1889,12 @@ public final class TestbedClient: TestbedCaller, Sendable {
     var payloadBytes: [UInt8] = []
     payloadBytes += encodeString(m.unit) + encodeF64(m.value)
     let payload = Data(payloadBytes)
+    let schemaInfo = ClientSchemaInfo(
+      methodInfo: testbed_method_schemas[0x3b3d_22b0_15fa_1a3f]!,
+      schemaRegistry: testbed_schema_registry)
     let response = try await connection.call(
-      methodId: 0x3b3d_22b0_15fa_1a3f, payload: payload, retry: .volatile, timeout: timeout)
+      methodId: 0x3b3d_22b0_15fa_1a3f, metadata: [], payload: payload, retry: .volatile,
+      timeout: timeout, prepareRetry: nil, finalizeChannels: nil, schemaInfo: schemaInfo)
     var cursor = 0
     let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
     switch _cursor_resultDisc {
@@ -1799,8 +1928,12 @@ public final class TestbedClient: TestbedCaller, Sendable {
     var payloadBytes: [UInt8] = []
     payloadBytes += encodeString(c.key) + encodeString(c.value)
     let payload = Data(payloadBytes)
+    let schemaInfo = ClientSchemaInfo(
+      methodInfo: testbed_method_schemas[0xe13a_477f_b964_ce28]!,
+      schemaRegistry: testbed_schema_registry)
     let response = try await connection.call(
-      methodId: 0xe13a_477f_b964_ce28, payload: payload, retry: .volatile, timeout: timeout)
+      methodId: 0xe13a_477f_b964_ce28, metadata: [], payload: payload, retry: .volatile,
+      timeout: timeout, prepareRetry: nil, finalizeChannels: nil, schemaInfo: schemaInfo)
     var cursor = 0
     let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
     switch _cursor_resultDisc {
@@ -1895,6 +2028,820 @@ public let testbed_schemas: [String: MethodBindingSchema] = [
     .struct(fields: [("unit", .string), ("value", .f64)])
   ]),
   "echoConfig": MethodBindingSchema(args: [.struct(fields: [("key", .string), ("value", .string)])]
+  ),
+]
+
+/// Global schema registry containing all schemas for this service.
+public let testbed_schema_registry: [UInt64: Schema] = [
+  0x0154_2aaa_833a_2511: Schema(
+    id: 0x0154_2aaa_833a_2511, typeParams: [],
+    kind: .enum(
+      name: "Status",
+      variants: [
+        VariantSchema(name: "Active", index: 0, payload: .unit),
+        VariantSchema(name: "Inactive", index: 1, payload: .unit),
+      ])),
+  0x0930_935d_500f_9629: Schema(
+    id: 0x0930_935d_500f_9629, typeParams: [],
+    kind: .struct(
+      name: "Measurement",
+      fields: [
+        FieldSchema(name: "unit", typeRef: .concrete(0x6d7d_ce91_4ee1_50e8), required: true),
+        FieldSchema(name: "value", typeRef: .concrete(0x3f2e_589d_b81e_95bf), required: true),
+      ])),
+  0x0a96_b404_b4d7_9d67: Schema(
+    id: 0x0a96_b404_b4d7_9d67, typeParams: ["T"], kind: .list(element: .var(name: "T"))),
+  0x16d9_2ac9_e3bd_73ba: Schema(
+    id: 0x16d9_2ac9_e3bd_73ba, typeParams: [],
+    kind: .enum(
+      name: "LookupError",
+      variants: [
+        VariantSchema(name: "NotFound", index: 0, payload: .unit),
+        VariantSchema(name: "AccessDenied", index: 1, payload: .unit),
+      ])),
+  0x1783_67a8_7f66_fb46: Schema(id: 0x1783_67a8_7f66_fb46, typeParams: [], kind: .primitive(.bool)),
+  0x1b57_cc77_42fa_beb0: Schema(
+    id: 0x1b57_cc77_42fa_beb0, typeParams: [],
+    kind: .enum(
+      name: "Color",
+      variants: [
+        VariantSchema(name: "Red", index: 0, payload: .unit),
+        VariantSchema(name: "Green", index: 1, payload: .unit),
+        VariantSchema(name: "Blue", index: 2, payload: .unit),
+      ])),
+  0x2218_55c9_65fb_31e1: Schema(
+    id: 0x2218_55c9_65fb_31e1, typeParams: [],
+    kind: .struct(
+      name: "Canvas",
+      fields: [
+        FieldSchema(name: "name", typeRef: .concrete(0x6d7d_ce91_4ee1_50e8), required: true),
+        FieldSchema(
+          name: "shapes",
+          typeRef: .generic(0x0a96_b404_b4d7_9d67, args: [.concrete(0xe407_302c_560d_a502)]),
+          required: true),
+        FieldSchema(name: "background", typeRef: .concrete(0x1b57_cc77_42fa_beb0), required: true),
+      ])),
+  0x281c_5be4_f2ee_63b4: Schema(id: 0x281c_5be4_f2ee_63b4, typeParams: [], kind: .primitive(.u32)),
+  0x2c8d_54f2_314d_0f20: Schema(id: 0x2c8d_54f2_314d_0f20, typeParams: [], kind: .primitive(.u8)),
+  0x2ef9_3123_176c_696c: Schema(
+    id: 0x2ef9_3123_176c_696c, typeParams: [],
+    kind: .struct(
+      name: "Record",
+      fields: [
+        FieldSchema(name: "alpha", typeRef: .concrete(0x361f_4536_eee9_f991), required: true),
+        FieldSchema(name: "beta", typeRef: .concrete(0x6d7d_ce91_4ee1_50e8), required: true),
+        FieldSchema(name: "gamma", typeRef: .concrete(0x3f2e_589d_b81e_95bf), required: true),
+      ])),
+  0x361f_4536_eee9_f991: Schema(id: 0x361f_4536_eee9_f991, typeParams: [], kind: .primitive(.i32)),
+  0x3f2e_589d_b81e_95bf: Schema(id: 0x3f2e_589d_b81e_95bf, typeParams: [], kind: .primitive(.f64)),
+  0x4204_6de6_63be_eef0: Schema(
+    id: 0x4204_6de6_63be_eef0, typeParams: ["T", "E"],
+    kind: .enum(
+      name: "Result",
+      variants: [
+        VariantSchema(name: "Ok", index: 0, payload: .newtype(typeRef: .var(name: "T"))),
+        VariantSchema(name: "Err", index: 1, payload: .newtype(typeRef: .var(name: "E"))),
+      ])),
+  0x4620_db6c_5c62_7787: Schema(
+    id: 0x4620_db6c_5c62_7787, typeParams: [],
+    kind: .struct(
+      name: "Tag",
+      fields: [
+        FieldSchema(name: "label", typeRef: .concrete(0x6d7d_ce91_4ee1_50e8), required: true),
+        FieldSchema(name: "priority", typeRef: .concrete(0x281c_5be4_f2ee_63b4), required: true),
+        FieldSchema(name: "note", typeRef: .concrete(0x6d7d_ce91_4ee1_50e8), required: true),
+      ])),
+  0x5db7_0a39_4660_f3e6: Schema(
+    id: 0x5db7_0a39_4660_f3e6, typeParams: [], kind: .primitive(.never)),
+  0x6847_ab90_feda_71c1: Schema(
+    id: 0x6847_ab90_feda_71c1, typeParams: ["T0"], kind: .tuple(elements: [.var(name: "T0")])),
+  0x6d7d_ce91_4ee1_50e8: Schema(
+    id: 0x6d7d_ce91_4ee1_50e8, typeParams: [], kind: .primitive(.string)),
+  0x6ecf_4fe3_76e2_3113: Schema(
+    id: 0x6ecf_4fe3_76e2_3113, typeParams: [],
+    kind: .struct(
+      name: "Rectangle",
+      fields: [
+        FieldSchema(name: "top_left", typeRef: .concrete(0xb923_32c6_7187_108f), required: true),
+        FieldSchema(
+          name: "bottom_right", typeRef: .concrete(0xb923_32c6_7187_108f), required: true),
+        FieldSchema(
+          name: "label",
+          typeRef: .generic(0xdcaf_d4de_6b79_69bb, args: [.concrete(0x6d7d_ce91_4ee1_50e8)]),
+          required: true),
+      ])),
+  0x7f14_5c7b_0ede_dd20: Schema(
+    id: 0x7f14_5c7b_0ede_dd20, typeParams: [],
+    kind: .struct(
+      name: "TaggedPoint",
+      fields: [
+        FieldSchema(name: "label", typeRef: .concrete(0x6d7d_ce91_4ee1_50e8), required: true),
+        FieldSchema(name: "x", typeRef: .concrete(0x361f_4536_eee9_f991), required: true),
+        FieldSchema(name: "y", typeRef: .concrete(0x361f_4536_eee9_f991), required: true),
+        FieldSchema(name: "active", typeRef: .concrete(0x1783_67a8_7f66_fb46), required: true),
+      ])),
+  0x915c_6fb5_b64f_270b: Schema(
+    id: 0x915c_6fb5_b64f_270b, typeParams: ["T0", "T1", "T2", "T3"],
+    kind: .tuple(elements: [.var(name: "T0"), .var(name: "T1"), .var(name: "T2"), .var(name: "T3")])
+  ),
+  0x967a_48ac_345e_2f5e: Schema(
+    id: 0x967a_48ac_345e_2f5e, typeParams: ["T"],
+    kind: .channel(direction: .rx, element: .var(name: "T"))),
+  0xaa51_0ab0_7d34_f141: Schema(
+    id: 0xaa51_0ab0_7d34_f141, typeParams: ["T0", "T1", "T2"],
+    kind: .tuple(elements: [.var(name: "T0"), .var(name: "T1"), .var(name: "T2")])),
+  0xb923_32c6_7187_108f: Schema(
+    id: 0xb923_32c6_7187_108f, typeParams: [],
+    kind: .struct(
+      name: "Point",
+      fields: [
+        FieldSchema(name: "x", typeRef: .concrete(0x361f_4536_eee9_f991), required: true),
+        FieldSchema(name: "y", typeRef: .concrete(0x361f_4536_eee9_f991), required: true),
+      ])),
+  0xba04_96aa_8cee_7a4c: Schema(
+    id: 0xba04_96aa_8cee_7a4c, typeParams: ["T0", "T1"],
+    kind: .tuple(elements: [.var(name: "T0"), .var(name: "T1")])),
+  0xba81_2587_6d63_88b4: Schema(
+    id: 0xba81_2587_6d63_88b4, typeParams: [], kind: .primitive(.bytes)),
+  0xbc2c_d703_968e_7d0d: Schema(
+    id: 0xbc2c_d703_968e_7d0d, typeParams: [],
+    kind: .struct(
+      name: "Profile",
+      fields: [
+        FieldSchema(name: "name", typeRef: .concrete(0x6d7d_ce91_4ee1_50e8), required: true),
+        FieldSchema(name: "bio", typeRef: .concrete(0x6d7d_ce91_4ee1_50e8), required: true),
+      ])),
+  0xbc5c_3324_9a2d_c720: Schema(id: 0xbc5c_3324_9a2d_c720, typeParams: [], kind: .primitive(.unit)),
+  0xbda7_7ebf_97f3_45a9: Schema(
+    id: 0xbda7_7ebf_97f3_45a9, typeParams: [],
+    kind: .enum(
+      name: "Message",
+      variants: [
+        VariantSchema(
+          name: "Text", index: 0, payload: .newtype(typeRef: .concrete(0x6d7d_ce91_4ee1_50e8))),
+        VariantSchema(
+          name: "Number", index: 1, payload: .newtype(typeRef: .concrete(0xc6eb_8c46_f1e1_7fba))),
+        VariantSchema(
+          name: "Data", index: 2, payload: .newtype(typeRef: .concrete(0xba81_2587_6d63_88b4))),
+      ])),
+  0xc6eb_8c46_f1e1_7fba: Schema(id: 0xc6eb_8c46_f1e1_7fba, typeParams: [], kind: .primitive(.i64)),
+  0xc841_530b_759b_8ed0: Schema(
+    id: 0xc841_530b_759b_8ed0, typeParams: [],
+    kind: .struct(
+      name: "Person",
+      fields: [
+        FieldSchema(name: "name", typeRef: .concrete(0x6d7d_ce91_4ee1_50e8), required: true),
+        FieldSchema(name: "age", typeRef: .concrete(0x2c8d_54f2_314d_0f20), required: true),
+        FieldSchema(
+          name: "email",
+          typeRef: .generic(0xdcaf_d4de_6b79_69bb, args: [.concrete(0x6d7d_ce91_4ee1_50e8)]),
+          required: true),
+      ])),
+  0xc886_545a_493d_06eb: Schema(
+    id: 0xc886_545a_493d_06eb, typeParams: ["T"],
+    kind: .channel(direction: .tx, element: .var(name: "T"))),
+  0xd354_d13a_3635_6a5a: Schema(
+    id: 0xd354_d13a_3635_6a5a, typeParams: ["E"],
+    kind: .enum(
+      name: "TelexError",
+      variants: [
+        VariantSchema(name: "User", index: 0, payload: .newtype(typeRef: .var(name: "E"))),
+        VariantSchema(name: "UnknownMethod", index: 1, payload: .unit),
+        VariantSchema(
+          name: "InvalidPayload", index: 2,
+          payload: .newtype(typeRef: .concrete(0x6d7d_ce91_4ee1_50e8))),
+        VariantSchema(name: "Cancelled", index: 3, payload: .unit),
+        VariantSchema(name: "ConnectionClosed", index: 4, payload: .unit),
+        VariantSchema(name: "SessionShutdown", index: 5, payload: .unit),
+        VariantSchema(name: "SendFailed", index: 6, payload: .unit),
+        VariantSchema(name: "Indeterminate", index: 7, payload: .unit),
+      ])),
+  0xd935_6298_b816_39ac: Schema(id: 0xd935_6298_b816_39ac, typeParams: [], kind: .primitive(.u64)),
+  0xd9d7_8670_738e_6064: Schema(
+    id: 0xd9d7_8670_738e_6064, typeParams: [],
+    kind: .enum(
+      name: "MathError",
+      variants: [
+        VariantSchema(name: "DivisionByZero", index: 0, payload: .unit),
+        VariantSchema(name: "Overflow", index: 1, payload: .unit),
+      ])),
+  0xdcaf_d4de_6b79_69bb: Schema(
+    id: 0xdcaf_d4de_6b79_69bb, typeParams: ["T"], kind: .option(element: .var(name: "T"))),
+  0xe407_302c_560d_a502: Schema(
+    id: 0xe407_302c_560d_a502, typeParams: [],
+    kind: .enum(
+      name: "Shape",
+      variants: [
+        VariantSchema(
+          name: "Circle", index: 0,
+          payload: .struct(fields: [
+            FieldSchema(name: "radius", typeRef: .concrete(0x3f2e_589d_b81e_95bf), required: true)
+          ])),
+        VariantSchema(
+          name: "Rectangle", index: 1,
+          payload: .struct(fields: [
+            FieldSchema(name: "width", typeRef: .concrete(0x3f2e_589d_b81e_95bf), required: true),
+            FieldSchema(name: "height", typeRef: .concrete(0x3f2e_589d_b81e_95bf), required: true),
+          ])), VariantSchema(name: "Point", index: 2, payload: .unit),
+      ])),
+  0xec27_64b2_5ae6_ef1e: Schema(
+    id: 0xec27_64b2_5ae6_ef1e, typeParams: [],
+    kind: .struct(
+      name: "Config",
+      fields: [
+        FieldSchema(name: "key", typeRef: .concrete(0x6d7d_ce91_4ee1_50e8), required: true),
+        FieldSchema(name: "value", typeRef: .concrete(0x6d7d_ce91_4ee1_50e8), required: true),
+      ])),
+]
+
+/// Per-method schema information for wire protocol.
+public let testbed_method_schemas: [UInt64: MethodSchemaInfo] = [
+  0x880b_c4ee_e235_74be: MethodSchemaInfo(
+    argsSchemaIds: [0x6d7d_ce91_4ee1_50e8, 0x6847_ab90_feda_71c1],
+    argsRoot: .generic(0x6847_ab90_feda_71c1, args: [.concrete(0x6d7d_ce91_4ee1_50e8)]),
+    responseSchemaIds: [
+      0x1783_67a8_7f66_fb46, 0x281c_5be4_f2ee_63b4, 0x4204_6de6_63be_eef0, 0x5db7_0a39_4660_f3e6,
+      0x6d7d_ce91_4ee1_50e8, 0xd354_d13a_3635_6a5a,
+    ],
+    responseRoot: .generic(
+      0x4204_6de6_63be_eef0,
+      args: [
+        .concrete(0x6d7d_ce91_4ee1_50e8),
+        .generic(0xd354_d13a_3635_6a5a, args: [.concrete(0x5db7_0a39_4660_f3e6)]),
+      ])
+  ),
+  0x1c22_3f30_e180_392a: MethodSchemaInfo(
+    argsSchemaIds: [0x6d7d_ce91_4ee1_50e8, 0x6847_ab90_feda_71c1],
+    argsRoot: .generic(0x6847_ab90_feda_71c1, args: [.concrete(0x6d7d_ce91_4ee1_50e8)]),
+    responseSchemaIds: [
+      0x1783_67a8_7f66_fb46, 0x281c_5be4_f2ee_63b4, 0x4204_6de6_63be_eef0, 0x5db7_0a39_4660_f3e6,
+      0x6d7d_ce91_4ee1_50e8, 0xd354_d13a_3635_6a5a,
+    ],
+    responseRoot: .generic(
+      0x4204_6de6_63be_eef0,
+      args: [
+        .concrete(0x6d7d_ce91_4ee1_50e8),
+        .generic(0xd354_d13a_3635_6a5a, args: [.concrete(0x5db7_0a39_4660_f3e6)]),
+      ])
+  ),
+  0xfb68_d931_8f83_0875: MethodSchemaInfo(
+    argsSchemaIds: [0xc6eb_8c46_f1e1_7fba, 0xba04_96aa_8cee_7a4c],
+    argsRoot: .generic(
+      0xba04_96aa_8cee_7a4c,
+      args: [.concrete(0xc6eb_8c46_f1e1_7fba), .concrete(0xc6eb_8c46_f1e1_7fba)]),
+    responseSchemaIds: [
+      0x1783_67a8_7f66_fb46, 0x281c_5be4_f2ee_63b4, 0x4204_6de6_63be_eef0, 0x5db7_0a39_4660_f3e6,
+      0x6d7d_ce91_4ee1_50e8, 0xd354_d13a_3635_6a5a, 0xc6eb_8c46_f1e1_7fba, 0xd9d7_8670_738e_6064,
+    ],
+    responseRoot: .generic(
+      0x4204_6de6_63be_eef0,
+      args: [
+        .concrete(0xc6eb_8c46_f1e1_7fba),
+        .generic(0xd354_d13a_3635_6a5a, args: [.concrete(0xd9d7_8670_738e_6064)]),
+      ])
+  ),
+  0xa15f_f520_9471_2a3b: MethodSchemaInfo(
+    argsSchemaIds: [0x281c_5be4_f2ee_63b4, 0x6847_ab90_feda_71c1],
+    argsRoot: .generic(0x6847_ab90_feda_71c1, args: [.concrete(0x281c_5be4_f2ee_63b4)]),
+    responseSchemaIds: [
+      0x1783_67a8_7f66_fb46, 0x281c_5be4_f2ee_63b4, 0x4204_6de6_63be_eef0, 0x5db7_0a39_4660_f3e6,
+      0x6d7d_ce91_4ee1_50e8, 0xd354_d13a_3635_6a5a, 0x2c8d_54f2_314d_0f20, 0xdcaf_d4de_6b79_69bb,
+      0xc841_530b_759b_8ed0, 0x16d9_2ac9_e3bd_73ba,
+    ],
+    responseRoot: .generic(
+      0x4204_6de6_63be_eef0,
+      args: [
+        .concrete(0xc841_530b_759b_8ed0),
+        .generic(0xd354_d13a_3635_6a5a, args: [.concrete(0x16d9_2ac9_e3bd_73ba)]),
+      ])
+  ),
+  0x51f9_cfd8_e865_77c9: MethodSchemaInfo(
+    argsSchemaIds: [0x361f_4536_eee9_f991, 0x967a_48ac_345e_2f5e, 0x6847_ab90_feda_71c1],
+    argsRoot: .generic(
+      0x6847_ab90_feda_71c1,
+      args: [.generic(0x967a_48ac_345e_2f5e, args: [.concrete(0x361f_4536_eee9_f991)])]),
+    responseSchemaIds: [
+      0x1783_67a8_7f66_fb46, 0x281c_5be4_f2ee_63b4, 0x4204_6de6_63be_eef0, 0x5db7_0a39_4660_f3e6,
+      0x6d7d_ce91_4ee1_50e8, 0xd354_d13a_3635_6a5a, 0xc6eb_8c46_f1e1_7fba,
+    ],
+    responseRoot: .generic(
+      0x4204_6de6_63be_eef0,
+      args: [
+        .concrete(0xc6eb_8c46_f1e1_7fba),
+        .generic(0xd354_d13a_3635_6a5a, args: [.concrete(0x5db7_0a39_4660_f3e6)]),
+      ])
+  ),
+  0x239e_5b99_b1f8_207a: MethodSchemaInfo(
+    argsSchemaIds: [
+      0x281c_5be4_f2ee_63b4, 0x361f_4536_eee9_f991, 0xc886_545a_493d_06eb, 0xba04_96aa_8cee_7a4c,
+    ],
+    argsRoot: .generic(
+      0xba04_96aa_8cee_7a4c,
+      args: [
+        .concrete(0x281c_5be4_f2ee_63b4),
+        .generic(0xc886_545a_493d_06eb, args: [.concrete(0x361f_4536_eee9_f991)]),
+      ]),
+    responseSchemaIds: [
+      0x1783_67a8_7f66_fb46, 0x281c_5be4_f2ee_63b4, 0x4204_6de6_63be_eef0, 0x5db7_0a39_4660_f3e6,
+      0x6d7d_ce91_4ee1_50e8, 0xd354_d13a_3635_6a5a, 0xbc5c_3324_9a2d_c720,
+    ],
+    responseRoot: .generic(
+      0x4204_6de6_63be_eef0,
+      args: [
+        .concrete(0xbc5c_3324_9a2d_c720),
+        .generic(0xd354_d13a_3635_6a5a, args: [.concrete(0x5db7_0a39_4660_f3e6)]),
+      ])
+  ),
+  0x3441_9529_478c_c7b8: MethodSchemaInfo(
+    argsSchemaIds: [
+      0x281c_5be4_f2ee_63b4, 0x361f_4536_eee9_f991, 0xc886_545a_493d_06eb, 0xba04_96aa_8cee_7a4c,
+    ],
+    argsRoot: .generic(
+      0xba04_96aa_8cee_7a4c,
+      args: [
+        .concrete(0x281c_5be4_f2ee_63b4),
+        .generic(0xc886_545a_493d_06eb, args: [.concrete(0x361f_4536_eee9_f991)]),
+      ]),
+    responseSchemaIds: [
+      0x1783_67a8_7f66_fb46, 0x281c_5be4_f2ee_63b4, 0x4204_6de6_63be_eef0, 0x5db7_0a39_4660_f3e6,
+      0x6d7d_ce91_4ee1_50e8, 0xd354_d13a_3635_6a5a, 0xbc5c_3324_9a2d_c720,
+    ],
+    responseRoot: .generic(
+      0x4204_6de6_63be_eef0,
+      args: [
+        .concrete(0xbc5c_3324_9a2d_c720),
+        .generic(0xd354_d13a_3635_6a5a, args: [.concrete(0x5db7_0a39_4660_f3e6)]),
+      ])
+  ),
+  0xe2d2_7fd9_098c_6ea2: MethodSchemaInfo(
+    argsSchemaIds: [
+      0x281c_5be4_f2ee_63b4, 0x361f_4536_eee9_f991, 0xc886_545a_493d_06eb, 0xba04_96aa_8cee_7a4c,
+    ],
+    argsRoot: .generic(
+      0xba04_96aa_8cee_7a4c,
+      args: [
+        .concrete(0x281c_5be4_f2ee_63b4),
+        .generic(0xc886_545a_493d_06eb, args: [.concrete(0x361f_4536_eee9_f991)]),
+      ]),
+    responseSchemaIds: [
+      0x1783_67a8_7f66_fb46, 0x281c_5be4_f2ee_63b4, 0x4204_6de6_63be_eef0, 0x5db7_0a39_4660_f3e6,
+      0x6d7d_ce91_4ee1_50e8, 0xd354_d13a_3635_6a5a, 0xbc5c_3324_9a2d_c720,
+    ],
+    responseRoot: .generic(
+      0x4204_6de6_63be_eef0,
+      args: [
+        .concrete(0xbc5c_3324_9a2d_c720),
+        .generic(0xd354_d13a_3635_6a5a, args: [.concrete(0x5db7_0a39_4660_f3e6)]),
+      ])
+  ),
+  0xcb46_9cff_8d79_8feb: MethodSchemaInfo(
+    argsSchemaIds: [
+      0x6d7d_ce91_4ee1_50e8, 0x967a_48ac_345e_2f5e, 0xc886_545a_493d_06eb, 0xba04_96aa_8cee_7a4c,
+    ],
+    argsRoot: .generic(
+      0xba04_96aa_8cee_7a4c,
+      args: [
+        .generic(0x967a_48ac_345e_2f5e, args: [.concrete(0x6d7d_ce91_4ee1_50e8)]),
+        .generic(0xc886_545a_493d_06eb, args: [.concrete(0x6d7d_ce91_4ee1_50e8)]),
+      ]),
+    responseSchemaIds: [
+      0x1783_67a8_7f66_fb46, 0x281c_5be4_f2ee_63b4, 0x4204_6de6_63be_eef0, 0x5db7_0a39_4660_f3e6,
+      0x6d7d_ce91_4ee1_50e8, 0xd354_d13a_3635_6a5a, 0xbc5c_3324_9a2d_c720,
+    ],
+    responseRoot: .generic(
+      0x4204_6de6_63be_eef0,
+      args: [
+        .concrete(0xbc5c_3324_9a2d_c720),
+        .generic(0xd354_d13a_3635_6a5a, args: [.concrete(0x5db7_0a39_4660_f3e6)]),
+      ])
+  ),
+  0x81f5_386d_589d_fbe4: MethodSchemaInfo(
+    argsSchemaIds: [0x361f_4536_eee9_f991, 0xb923_32c6_7187_108f, 0x6847_ab90_feda_71c1],
+    argsRoot: .generic(0x6847_ab90_feda_71c1, args: [.concrete(0xb923_32c6_7187_108f)]),
+    responseSchemaIds: [
+      0x1783_67a8_7f66_fb46, 0x281c_5be4_f2ee_63b4, 0x4204_6de6_63be_eef0, 0x5db7_0a39_4660_f3e6,
+      0x6d7d_ce91_4ee1_50e8, 0xd354_d13a_3635_6a5a, 0x361f_4536_eee9_f991, 0xb923_32c6_7187_108f,
+    ],
+    responseRoot: .generic(
+      0x4204_6de6_63be_eef0,
+      args: [
+        .concrete(0xb923_32c6_7187_108f),
+        .generic(0xd354_d13a_3635_6a5a, args: [.concrete(0x5db7_0a39_4660_f3e6)]),
+      ])
+  ),
+  0x68ff_a90b_7728_bde7: MethodSchemaInfo(
+    argsSchemaIds: [
+      0x6d7d_ce91_4ee1_50e8, 0x2c8d_54f2_314d_0f20, 0xdcaf_d4de_6b79_69bb, 0xaa51_0ab0_7d34_f141,
+    ],
+    argsRoot: .generic(
+      0xaa51_0ab0_7d34_f141,
+      args: [
+        .concrete(0x6d7d_ce91_4ee1_50e8), .concrete(0x2c8d_54f2_314d_0f20),
+        .generic(0xdcaf_d4de_6b79_69bb, args: [.concrete(0x6d7d_ce91_4ee1_50e8)]),
+      ]),
+    responseSchemaIds: [
+      0x1783_67a8_7f66_fb46, 0x281c_5be4_f2ee_63b4, 0x4204_6de6_63be_eef0, 0x5db7_0a39_4660_f3e6,
+      0x6d7d_ce91_4ee1_50e8, 0xd354_d13a_3635_6a5a, 0x2c8d_54f2_314d_0f20, 0xdcaf_d4de_6b79_69bb,
+      0xc841_530b_759b_8ed0,
+    ],
+    responseRoot: .generic(
+      0x4204_6de6_63be_eef0,
+      args: [
+        .concrete(0xc841_530b_759b_8ed0),
+        .generic(0xd354_d13a_3635_6a5a, args: [.concrete(0x5db7_0a39_4660_f3e6)]),
+      ])
+  ),
+  0x223f_e028_2d26_3107: MethodSchemaInfo(
+    argsSchemaIds: [
+      0x361f_4536_eee9_f991, 0xb923_32c6_7187_108f, 0x6d7d_ce91_4ee1_50e8, 0xdcaf_d4de_6b79_69bb,
+      0x6ecf_4fe3_76e2_3113, 0x6847_ab90_feda_71c1,
+    ],
+    argsRoot: .generic(0x6847_ab90_feda_71c1, args: [.concrete(0x6ecf_4fe3_76e2_3113)]),
+    responseSchemaIds: [
+      0x1783_67a8_7f66_fb46, 0x281c_5be4_f2ee_63b4, 0x4204_6de6_63be_eef0, 0x5db7_0a39_4660_f3e6,
+      0x6d7d_ce91_4ee1_50e8, 0xd354_d13a_3635_6a5a, 0x3f2e_589d_b81e_95bf,
+    ],
+    responseRoot: .generic(
+      0x4204_6de6_63be_eef0,
+      args: [
+        .concrete(0x3f2e_589d_b81e_95bf),
+        .generic(0xd354_d13a_3635_6a5a, args: [.concrete(0x5db7_0a39_4660_f3e6)]),
+      ])
+  ),
+  0xd4f1_6ea9_eca1_32e6: MethodSchemaInfo(
+    argsSchemaIds: [0x6d7d_ce91_4ee1_50e8, 0x6847_ab90_feda_71c1],
+    argsRoot: .generic(0x6847_ab90_feda_71c1, args: [.concrete(0x6d7d_ce91_4ee1_50e8)]),
+    responseSchemaIds: [
+      0x1783_67a8_7f66_fb46, 0x281c_5be4_f2ee_63b4, 0x4204_6de6_63be_eef0, 0x5db7_0a39_4660_f3e6,
+      0x6d7d_ce91_4ee1_50e8, 0xd354_d13a_3635_6a5a, 0x1b57_cc77_42fa_beb0, 0xdcaf_d4de_6b79_69bb,
+    ],
+    responseRoot: .generic(
+      0x4204_6de6_63be_eef0,
+      args: [
+        .generic(0xdcaf_d4de_6b79_69bb, args: [.concrete(0x1b57_cc77_42fa_beb0)]),
+        .generic(0xd354_d13a_3635_6a5a, args: [.concrete(0x5db7_0a39_4660_f3e6)]),
+      ])
+  ),
+  0x0438_5a4b_e2a8_82f5: MethodSchemaInfo(
+    argsSchemaIds: [0x3f2e_589d_b81e_95bf, 0xe407_302c_560d_a502, 0x6847_ab90_feda_71c1],
+    argsRoot: .generic(0x6847_ab90_feda_71c1, args: [.concrete(0xe407_302c_560d_a502)]),
+    responseSchemaIds: [
+      0x1783_67a8_7f66_fb46, 0x281c_5be4_f2ee_63b4, 0x4204_6de6_63be_eef0, 0x5db7_0a39_4660_f3e6,
+      0x6d7d_ce91_4ee1_50e8, 0xd354_d13a_3635_6a5a, 0x3f2e_589d_b81e_95bf,
+    ],
+    responseRoot: .generic(
+      0x4204_6de6_63be_eef0,
+      args: [
+        .concrete(0x3f2e_589d_b81e_95bf),
+        .generic(0xd354_d13a_3635_6a5a, args: [.concrete(0x5db7_0a39_4660_f3e6)]),
+      ])
+  ),
+  0xef42_1eb5_b08c_973a: MethodSchemaInfo(
+    argsSchemaIds: [
+      0x6d7d_ce91_4ee1_50e8, 0x3f2e_589d_b81e_95bf, 0xe407_302c_560d_a502, 0x0a96_b404_b4d7_9d67,
+      0x1b57_cc77_42fa_beb0, 0xaa51_0ab0_7d34_f141,
+    ],
+    argsRoot: .generic(
+      0xaa51_0ab0_7d34_f141,
+      args: [
+        .concrete(0x6d7d_ce91_4ee1_50e8),
+        .generic(0x0a96_b404_b4d7_9d67, args: [.concrete(0xe407_302c_560d_a502)]),
+        .concrete(0x1b57_cc77_42fa_beb0),
+      ]),
+    responseSchemaIds: [
+      0x1783_67a8_7f66_fb46, 0x281c_5be4_f2ee_63b4, 0x4204_6de6_63be_eef0, 0x5db7_0a39_4660_f3e6,
+      0x6d7d_ce91_4ee1_50e8, 0xd354_d13a_3635_6a5a, 0x3f2e_589d_b81e_95bf, 0xe407_302c_560d_a502,
+      0x0a96_b404_b4d7_9d67, 0x1b57_cc77_42fa_beb0, 0x2218_55c9_65fb_31e1,
+    ],
+    responseRoot: .generic(
+      0x4204_6de6_63be_eef0,
+      args: [
+        .concrete(0x2218_55c9_65fb_31e1),
+        .generic(0xd354_d13a_3635_6a5a, args: [.concrete(0x5db7_0a39_4660_f3e6)]),
+      ])
+  ),
+  0xe08f_0f52_54e7_a997: MethodSchemaInfo(
+    argsSchemaIds: [
+      0x6d7d_ce91_4ee1_50e8, 0xc6eb_8c46_f1e1_7fba, 0xba81_2587_6d63_88b4, 0xbda7_7ebf_97f3_45a9,
+      0x6847_ab90_feda_71c1,
+    ],
+    argsRoot: .generic(0x6847_ab90_feda_71c1, args: [.concrete(0xbda7_7ebf_97f3_45a9)]),
+    responseSchemaIds: [
+      0x1783_67a8_7f66_fb46, 0x281c_5be4_f2ee_63b4, 0x4204_6de6_63be_eef0, 0x5db7_0a39_4660_f3e6,
+      0x6d7d_ce91_4ee1_50e8, 0xd354_d13a_3635_6a5a, 0xc6eb_8c46_f1e1_7fba, 0xba81_2587_6d63_88b4,
+      0xbda7_7ebf_97f3_45a9,
+    ],
+    responseRoot: .generic(
+      0x4204_6de6_63be_eef0,
+      args: [
+        .concrete(0xbda7_7ebf_97f3_45a9),
+        .generic(0xd354_d13a_3635_6a5a, args: [.concrete(0x5db7_0a39_4660_f3e6)]),
+      ])
+  ),
+  0x5985_1852_3a62_66bf: MethodSchemaInfo(
+    argsSchemaIds: [0x281c_5be4_f2ee_63b4, 0x6847_ab90_feda_71c1],
+    argsRoot: .generic(0x6847_ab90_feda_71c1, args: [.concrete(0x281c_5be4_f2ee_63b4)]),
+    responseSchemaIds: [
+      0x1783_67a8_7f66_fb46, 0x281c_5be4_f2ee_63b4, 0x4204_6de6_63be_eef0, 0x5db7_0a39_4660_f3e6,
+      0x6d7d_ce91_4ee1_50e8, 0xd354_d13a_3635_6a5a, 0x361f_4536_eee9_f991, 0xb923_32c6_7187_108f,
+      0x0a96_b404_b4d7_9d67,
+    ],
+    responseRoot: .generic(
+      0x4204_6de6_63be_eef0,
+      args: [
+        .generic(0x0a96_b404_b4d7_9d67, args: [.concrete(0xb923_32c6_7187_108f)]),
+        .generic(0xd354_d13a_3635_6a5a, args: [.concrete(0x5db7_0a39_4660_f3e6)]),
+      ])
+  ),
+  0x7d55_a713_ad61_2bf2: MethodSchemaInfo(
+    argsSchemaIds: [
+      0x361f_4536_eee9_f991, 0x6d7d_ce91_4ee1_50e8, 0xba04_96aa_8cee_7a4c, 0x6847_ab90_feda_71c1,
+    ],
+    argsRoot: .generic(
+      0x6847_ab90_feda_71c1,
+      args: [
+        .generic(
+          0xba04_96aa_8cee_7a4c,
+          args: [.concrete(0x361f_4536_eee9_f991), .concrete(0x6d7d_ce91_4ee1_50e8)])
+      ]),
+    responseSchemaIds: [
+      0x1783_67a8_7f66_fb46, 0x281c_5be4_f2ee_63b4, 0x4204_6de6_63be_eef0, 0x5db7_0a39_4660_f3e6,
+      0x6d7d_ce91_4ee1_50e8, 0xd354_d13a_3635_6a5a, 0x361f_4536_eee9_f991, 0xba04_96aa_8cee_7a4c,
+    ],
+    responseRoot: .generic(
+      0x4204_6de6_63be_eef0,
+      args: [
+        .generic(
+          0xba04_96aa_8cee_7a4c,
+          args: [.concrete(0x6d7d_ce91_4ee1_50e8), .concrete(0x361f_4536_eee9_f991)]),
+        .generic(0xd354_d13a_3635_6a5a, args: [.concrete(0x5db7_0a39_4660_f3e6)]),
+      ])
+  ),
+  0x4405_6c78_42fa_336c: MethodSchemaInfo(
+    argsSchemaIds: [0xba81_2587_6d63_88b4, 0x6847_ab90_feda_71c1],
+    argsRoot: .generic(0x6847_ab90_feda_71c1, args: [.concrete(0xba81_2587_6d63_88b4)]),
+    responseSchemaIds: [
+      0x1783_67a8_7f66_fb46, 0x281c_5be4_f2ee_63b4, 0x4204_6de6_63be_eef0, 0x5db7_0a39_4660_f3e6,
+      0x6d7d_ce91_4ee1_50e8, 0xd354_d13a_3635_6a5a, 0xba81_2587_6d63_88b4,
+    ],
+    responseRoot: .generic(
+      0x4204_6de6_63be_eef0,
+      args: [
+        .concrete(0xba81_2587_6d63_88b4),
+        .generic(0xd354_d13a_3635_6a5a, args: [.concrete(0x5db7_0a39_4660_f3e6)]),
+      ])
+  ),
+  0x5136_d8f0_1a5f_496c: MethodSchemaInfo(
+    argsSchemaIds: [0x1783_67a8_7f66_fb46, 0x6847_ab90_feda_71c1],
+    argsRoot: .generic(0x6847_ab90_feda_71c1, args: [.concrete(0x1783_67a8_7f66_fb46)]),
+    responseSchemaIds: [
+      0x1783_67a8_7f66_fb46, 0x281c_5be4_f2ee_63b4, 0x4204_6de6_63be_eef0, 0x5db7_0a39_4660_f3e6,
+      0x6d7d_ce91_4ee1_50e8, 0xd354_d13a_3635_6a5a,
+    ],
+    responseRoot: .generic(
+      0x4204_6de6_63be_eef0,
+      args: [
+        .concrete(0x1783_67a8_7f66_fb46),
+        .generic(0xd354_d13a_3635_6a5a, args: [.concrete(0x5db7_0a39_4660_f3e6)]),
+      ])
+  ),
+  0x85e2_380d_bf7f_fe65: MethodSchemaInfo(
+    argsSchemaIds: [0xd935_6298_b816_39ac, 0x6847_ab90_feda_71c1],
+    argsRoot: .generic(0x6847_ab90_feda_71c1, args: [.concrete(0xd935_6298_b816_39ac)]),
+    responseSchemaIds: [
+      0x1783_67a8_7f66_fb46, 0x281c_5be4_f2ee_63b4, 0x4204_6de6_63be_eef0, 0x5db7_0a39_4660_f3e6,
+      0x6d7d_ce91_4ee1_50e8, 0xd354_d13a_3635_6a5a, 0xd935_6298_b816_39ac,
+    ],
+    responseRoot: .generic(
+      0x4204_6de6_63be_eef0,
+      args: [
+        .concrete(0xd935_6298_b816_39ac),
+        .generic(0xd354_d13a_3635_6a5a, args: [.concrete(0x5db7_0a39_4660_f3e6)]),
+      ])
+  ),
+  0xb1a5_bfd2_05b3_fbfc: MethodSchemaInfo(
+    argsSchemaIds: [0x6d7d_ce91_4ee1_50e8, 0xdcaf_d4de_6b79_69bb, 0x6847_ab90_feda_71c1],
+    argsRoot: .generic(
+      0x6847_ab90_feda_71c1,
+      args: [.generic(0xdcaf_d4de_6b79_69bb, args: [.concrete(0x6d7d_ce91_4ee1_50e8)])]),
+    responseSchemaIds: [
+      0x1783_67a8_7f66_fb46, 0x281c_5be4_f2ee_63b4, 0x4204_6de6_63be_eef0, 0x5db7_0a39_4660_f3e6,
+      0x6d7d_ce91_4ee1_50e8, 0xd354_d13a_3635_6a5a, 0xdcaf_d4de_6b79_69bb,
+    ],
+    responseRoot: .generic(
+      0x4204_6de6_63be_eef0,
+      args: [
+        .generic(0xdcaf_d4de_6b79_69bb, args: [.concrete(0x6d7d_ce91_4ee1_50e8)]),
+        .generic(0xd354_d13a_3635_6a5a, args: [.concrete(0x5db7_0a39_4660_f3e6)]),
+      ])
+  ),
+  0x9a7b_ed54_5e08_8054: MethodSchemaInfo(
+    argsSchemaIds: [0x361f_4536_eee9_f991, 0x967a_48ac_345e_2f5e, 0x6847_ab90_feda_71c1],
+    argsRoot: .generic(
+      0x6847_ab90_feda_71c1,
+      args: [.generic(0x967a_48ac_345e_2f5e, args: [.concrete(0x361f_4536_eee9_f991)])]),
+    responseSchemaIds: [
+      0x1783_67a8_7f66_fb46, 0x281c_5be4_f2ee_63b4, 0x4204_6de6_63be_eef0, 0x5db7_0a39_4660_f3e6,
+      0x6d7d_ce91_4ee1_50e8, 0xd354_d13a_3635_6a5a, 0xc6eb_8c46_f1e1_7fba,
+    ],
+    responseRoot: .generic(
+      0x4204_6de6_63be_eef0,
+      args: [
+        .concrete(0xc6eb_8c46_f1e1_7fba),
+        .generic(0xd354_d13a_3635_6a5a, args: [.concrete(0x5db7_0a39_4660_f3e6)]),
+      ])
+  ),
+  0x8edf_bd65_d162_f685: MethodSchemaInfo(
+    argsSchemaIds: [
+      0x281c_5be4_f2ee_63b4, 0x361f_4536_eee9_f991, 0xc886_545a_493d_06eb, 0xba04_96aa_8cee_7a4c,
+    ],
+    argsRoot: .generic(
+      0xba04_96aa_8cee_7a4c,
+      args: [
+        .concrete(0x281c_5be4_f2ee_63b4),
+        .generic(0xc886_545a_493d_06eb, args: [.concrete(0x361f_4536_eee9_f991)]),
+      ]),
+    responseSchemaIds: [
+      0x1783_67a8_7f66_fb46, 0x281c_5be4_f2ee_63b4, 0x4204_6de6_63be_eef0, 0x5db7_0a39_4660_f3e6,
+      0x6d7d_ce91_4ee1_50e8, 0xd354_d13a_3635_6a5a, 0xbc5c_3324_9a2d_c720,
+    ],
+    responseRoot: .generic(
+      0x4204_6de6_63be_eef0,
+      args: [
+        .concrete(0xbc5c_3324_9a2d_c720),
+        .generic(0xd354_d13a_3635_6a5a, args: [.concrete(0x5db7_0a39_4660_f3e6)]),
+      ])
+  ),
+  0xfbfb_05bb_caad_e4a0: MethodSchemaInfo(
+    argsSchemaIds: [0xbc5c_3324_9a2d_c720],
+    argsRoot: .concrete(0xbc5c_3324_9a2d_c720),
+    responseSchemaIds: [
+      0x1783_67a8_7f66_fb46, 0x281c_5be4_f2ee_63b4, 0x4204_6de6_63be_eef0, 0x5db7_0a39_4660_f3e6,
+      0x6d7d_ce91_4ee1_50e8, 0xd354_d13a_3635_6a5a, 0x1b57_cc77_42fa_beb0, 0x0a96_b404_b4d7_9d67,
+    ],
+    responseRoot: .generic(
+      0x4204_6de6_63be_eef0,
+      args: [
+        .generic(0x0a96_b404_b4d7_9d67, args: [.concrete(0x1b57_cc77_42fa_beb0)]),
+        .generic(0xd354_d13a_3635_6a5a, args: [.concrete(0x5db7_0a39_4660_f3e6)]),
+      ])
+  ),
+  0x62fe_b14a_8fcf_9b6d: MethodSchemaInfo(
+    argsSchemaIds: [
+      0x6d7d_ce91_4ee1_50e8, 0x361f_4536_eee9_f991, 0x1783_67a8_7f66_fb46, 0x915c_6fb5_b64f_270b,
+    ],
+    argsRoot: .generic(
+      0x915c_6fb5_b64f_270b,
+      args: [
+        .concrete(0x6d7d_ce91_4ee1_50e8), .concrete(0x361f_4536_eee9_f991),
+        .concrete(0x361f_4536_eee9_f991), .concrete(0x1783_67a8_7f66_fb46),
+      ]),
+    responseSchemaIds: [
+      0x1783_67a8_7f66_fb46, 0x281c_5be4_f2ee_63b4, 0x4204_6de6_63be_eef0, 0x5db7_0a39_4660_f3e6,
+      0x6d7d_ce91_4ee1_50e8, 0xd354_d13a_3635_6a5a, 0x361f_4536_eee9_f991, 0x7f14_5c7b_0ede_dd20,
+    ],
+    responseRoot: .generic(
+      0x4204_6de6_63be_eef0,
+      args: [
+        .concrete(0x7f14_5c7b_0ede_dd20),
+        .generic(0xd354_d13a_3635_6a5a, args: [.concrete(0x5db7_0a39_4660_f3e6)]),
+      ])
+  ),
+  0x4125_b5e6_78b7_b4a5: MethodSchemaInfo(
+    argsSchemaIds: [0x3f2e_589d_b81e_95bf, 0xe407_302c_560d_a502, 0x6847_ab90_feda_71c1],
+    argsRoot: .generic(0x6847_ab90_feda_71c1, args: [.concrete(0xe407_302c_560d_a502)]),
+    responseSchemaIds: [
+      0x1783_67a8_7f66_fb46, 0x281c_5be4_f2ee_63b4, 0x4204_6de6_63be_eef0, 0x5db7_0a39_4660_f3e6,
+      0x6d7d_ce91_4ee1_50e8, 0xd354_d13a_3635_6a5a, 0x3f2e_589d_b81e_95bf, 0xe407_302c_560d_a502,
+    ],
+    responseRoot: .generic(
+      0x4204_6de6_63be_eef0,
+      args: [
+        .concrete(0xe407_302c_560d_a502),
+        .generic(0xd354_d13a_3635_6a5a, args: [.concrete(0x5db7_0a39_4660_f3e6)]),
+      ])
+  ),
+  0xc7c5_aa84_5cfb_8bf6: MethodSchemaInfo(
+    argsSchemaIds: [0x0154_2aaa_833a_2511, 0x6847_ab90_feda_71c1],
+    argsRoot: .generic(0x6847_ab90_feda_71c1, args: [.concrete(0x0154_2aaa_833a_2511)]),
+    responseSchemaIds: [
+      0x1783_67a8_7f66_fb46, 0x281c_5be4_f2ee_63b4, 0x4204_6de6_63be_eef0, 0x5db7_0a39_4660_f3e6,
+      0x6d7d_ce91_4ee1_50e8, 0xd354_d13a_3635_6a5a, 0x0154_2aaa_833a_2511,
+    ],
+    responseRoot: .generic(
+      0x4204_6de6_63be_eef0,
+      args: [
+        .concrete(0x0154_2aaa_833a_2511),
+        .generic(0xd354_d13a_3635_6a5a, args: [.concrete(0x5db7_0a39_4660_f3e6)]),
+      ])
+  ),
+  0x6619_071b_e5d5_c259: MethodSchemaInfo(
+    argsSchemaIds: [
+      0x6d7d_ce91_4ee1_50e8, 0x281c_5be4_f2ee_63b4, 0x4620_db6c_5c62_7787, 0x6847_ab90_feda_71c1,
+    ],
+    argsRoot: .generic(0x6847_ab90_feda_71c1, args: [.concrete(0x4620_db6c_5c62_7787)]),
+    responseSchemaIds: [
+      0x1783_67a8_7f66_fb46, 0x281c_5be4_f2ee_63b4, 0x4204_6de6_63be_eef0, 0x5db7_0a39_4660_f3e6,
+      0x6d7d_ce91_4ee1_50e8, 0xd354_d13a_3635_6a5a, 0x4620_db6c_5c62_7787,
+    ],
+    responseRoot: .generic(
+      0x4204_6de6_63be_eef0,
+      args: [
+        .concrete(0x4620_db6c_5c62_7787),
+        .generic(0xd354_d13a_3635_6a5a, args: [.concrete(0x5db7_0a39_4660_f3e6)]),
+      ])
+  ),
+  0xbd9b_cabd_deeb_eb04: MethodSchemaInfo(
+    argsSchemaIds: [0x6d7d_ce91_4ee1_50e8, 0xbc2c_d703_968e_7d0d, 0x6847_ab90_feda_71c1],
+    argsRoot: .generic(0x6847_ab90_feda_71c1, args: [.concrete(0xbc2c_d703_968e_7d0d)]),
+    responseSchemaIds: [
+      0x1783_67a8_7f66_fb46, 0x281c_5be4_f2ee_63b4, 0x4204_6de6_63be_eef0, 0x5db7_0a39_4660_f3e6,
+      0x6d7d_ce91_4ee1_50e8, 0xd354_d13a_3635_6a5a, 0xbc2c_d703_968e_7d0d,
+    ],
+    responseRoot: .generic(
+      0x4204_6de6_63be_eef0,
+      args: [
+        .concrete(0xbc2c_d703_968e_7d0d),
+        .generic(0xd354_d13a_3635_6a5a, args: [.concrete(0x5db7_0a39_4660_f3e6)]),
+      ])
+  ),
+  0x100b_0e08_da4b_8f1a: MethodSchemaInfo(
+    argsSchemaIds: [
+      0x361f_4536_eee9_f991, 0x6d7d_ce91_4ee1_50e8, 0x3f2e_589d_b81e_95bf, 0x2ef9_3123_176c_696c,
+      0x6847_ab90_feda_71c1,
+    ],
+    argsRoot: .generic(0x6847_ab90_feda_71c1, args: [.concrete(0x2ef9_3123_176c_696c)]),
+    responseSchemaIds: [
+      0x1783_67a8_7f66_fb46, 0x281c_5be4_f2ee_63b4, 0x4204_6de6_63be_eef0, 0x5db7_0a39_4660_f3e6,
+      0x6d7d_ce91_4ee1_50e8, 0xd354_d13a_3635_6a5a, 0x361f_4536_eee9_f991, 0x3f2e_589d_b81e_95bf,
+      0x2ef9_3123_176c_696c,
+    ],
+    responseRoot: .generic(
+      0x4204_6de6_63be_eef0,
+      args: [
+        .concrete(0x2ef9_3123_176c_696c),
+        .generic(0xd354_d13a_3635_6a5a, args: [.concrete(0x5db7_0a39_4660_f3e6)]),
+      ])
+  ),
+  0x6975_90d3_ffc3_6703: MethodSchemaInfo(
+    argsSchemaIds: [0x0154_2aaa_833a_2511, 0x6847_ab90_feda_71c1],
+    argsRoot: .generic(0x6847_ab90_feda_71c1, args: [.concrete(0x0154_2aaa_833a_2511)]),
+    responseSchemaIds: [
+      0x1783_67a8_7f66_fb46, 0x281c_5be4_f2ee_63b4, 0x4204_6de6_63be_eef0, 0x5db7_0a39_4660_f3e6,
+      0x6d7d_ce91_4ee1_50e8, 0xd354_d13a_3635_6a5a, 0x0154_2aaa_833a_2511,
+    ],
+    responseRoot: .generic(
+      0x4204_6de6_63be_eef0,
+      args: [
+        .concrete(0x0154_2aaa_833a_2511),
+        .generic(0xd354_d13a_3635_6a5a, args: [.concrete(0x5db7_0a39_4660_f3e6)]),
+      ])
+  ),
+  0x2bd1_b314_9d73_ce97: MethodSchemaInfo(
+    argsSchemaIds: [
+      0x6d7d_ce91_4ee1_50e8, 0x281c_5be4_f2ee_63b4, 0x4620_db6c_5c62_7787, 0x6847_ab90_feda_71c1,
+    ],
+    argsRoot: .generic(0x6847_ab90_feda_71c1, args: [.concrete(0x4620_db6c_5c62_7787)]),
+    responseSchemaIds: [
+      0x1783_67a8_7f66_fb46, 0x281c_5be4_f2ee_63b4, 0x4204_6de6_63be_eef0, 0x5db7_0a39_4660_f3e6,
+      0x6d7d_ce91_4ee1_50e8, 0xd354_d13a_3635_6a5a, 0x4620_db6c_5c62_7787,
+    ],
+    responseRoot: .generic(
+      0x4204_6de6_63be_eef0,
+      args: [
+        .concrete(0x4620_db6c_5c62_7787),
+        .generic(0xd354_d13a_3635_6a5a, args: [.concrete(0x5db7_0a39_4660_f3e6)]),
+      ])
+  ),
+  0x3b3d_22b0_15fa_1a3f: MethodSchemaInfo(
+    argsSchemaIds: [
+      0x6d7d_ce91_4ee1_50e8, 0x3f2e_589d_b81e_95bf, 0x0930_935d_500f_9629, 0x6847_ab90_feda_71c1,
+    ],
+    argsRoot: .generic(0x6847_ab90_feda_71c1, args: [.concrete(0x0930_935d_500f_9629)]),
+    responseSchemaIds: [
+      0x1783_67a8_7f66_fb46, 0x281c_5be4_f2ee_63b4, 0x4204_6de6_63be_eef0, 0x5db7_0a39_4660_f3e6,
+      0x6d7d_ce91_4ee1_50e8, 0xd354_d13a_3635_6a5a, 0x3f2e_589d_b81e_95bf, 0x0930_935d_500f_9629,
+    ],
+    responseRoot: .generic(
+      0x4204_6de6_63be_eef0,
+      args: [
+        .concrete(0x0930_935d_500f_9629),
+        .generic(0xd354_d13a_3635_6a5a, args: [.concrete(0x5db7_0a39_4660_f3e6)]),
+      ])
+  ),
+  0xe13a_477f_b964_ce28: MethodSchemaInfo(
+    argsSchemaIds: [0x6d7d_ce91_4ee1_50e8, 0xec27_64b2_5ae6_ef1e, 0x6847_ab90_feda_71c1],
+    argsRoot: .generic(0x6847_ab90_feda_71c1, args: [.concrete(0xec27_64b2_5ae6_ef1e)]),
+    responseSchemaIds: [
+      0x1783_67a8_7f66_fb46, 0x281c_5be4_f2ee_63b4, 0x4204_6de6_63be_eef0, 0x5db7_0a39_4660_f3e6,
+      0x6d7d_ce91_4ee1_50e8, 0xd354_d13a_3635_6a5a, 0xec27_64b2_5ae6_ef1e,
+    ],
+    responseRoot: .generic(
+      0x4204_6de6_63be_eef0,
+      args: [
+        .concrete(0xec27_64b2_5ae6_ef1e),
+        .generic(0xd354_d13a_3635_6a5a, args: [.concrete(0x5db7_0a39_4660_f3e6)]),
+      ])
   ),
 ]
 

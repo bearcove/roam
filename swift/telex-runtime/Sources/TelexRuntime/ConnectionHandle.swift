@@ -41,7 +41,8 @@ final class ConnectionHandle: @unchecked Sendable {
         retry: RetryPolicy = .volatile,
         timeout: TimeInterval? = nil,
         prepareRetry: (@Sendable () async -> PreparedRetryRequest)? = nil,
-        finalizeChannels: (@Sendable () -> Void)? = nil
+        finalizeChannels: (@Sendable () -> Void)? = nil,
+        schemaInfo: ClientSchemaInfo? = nil
     ) async throws -> [UInt8] {
         if let semaphore = requestSemaphore {
             try await semaphore.acquire()
@@ -74,7 +75,8 @@ final class ConnectionHandle: @unchecked Sendable {
                     retry: retry,
                     timeout: timeout,
                     prepareRetry: prepareRetry,
-                    responseTx: { result in responseTx(result) }
+                    responseTx: { result in responseTx(result) },
+                    schemaInfo: schemaInfo
                 ))
             guard accepted else {
                 responseTx(.failure(.connectionClosed))

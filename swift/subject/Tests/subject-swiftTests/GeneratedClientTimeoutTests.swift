@@ -31,7 +31,8 @@ private final class CapturingConnection: TelexConnection, @unchecked Sendable {
         retry _: RetryPolicy,
         timeout: TimeInterval?,
         prepareRetry _: (@Sendable () async -> PreparedRetryRequest)?,
-        finalizeChannels: (@Sendable () -> Void)?
+        finalizeChannels: (@Sendable () -> Void)?,
+        schemaInfo _: ClientSchemaInfo?
     ) async throws -> Data {
         await recorder.append(methodId: methodId, timeout: timeout)
         finalizeChannels?()

@@ -82,7 +82,7 @@ extension Driver {
         switch cmd {
         case .call(
             let requestId, let methodId, let metadata, let payload, let retry,
-            let timeout, let prepareRetry, let responseTx):
+            let timeout, let prepareRetry, let responseTx, let schemaInfo):
             let isClosed = await state.isConnectionClosed()
             guard !isClosed else {
                 responseTx(.failure(.connectionClosed))
@@ -96,7 +96,8 @@ extension Driver {
                 payload: payload,
                 retry: retry,
                 timeout: timeout,
-                prepareRetry: prepareRetry
+                prepareRetry: prepareRetry,
+                schemaInfo: schemaInfo
             )
 
             let inserted = await state.addPendingResponse(
@@ -110,11 +111,25 @@ extension Driver {
                 return
             }
 
+            // Build schema bytes for the request
+            let schemas: [UInt8]
+            if let schemaInfo {
+                let fullPayload = schemaInfo.methodInfo.buildPayload(
+                    direction: .args,
+                    registry: schemaInfo.schemaRegistry
+                )
+                let filteredPayload = schemaSendTracker.filterForSending(fullPayload)
+                schemas = filteredPayload.encodeCbor()
+            } else {
+                schemas = []
+            }
+
             let msg = Message.request(
                 connId: 0,
                 requestId: requestId,
                 methodId: methodId,
                 metadata: metadata,
+                schemas: schemas,
                 payload: payload
             )
             do {
@@ -188,10 +203,24 @@ extension Driver {
                     payload: rebuilt.payload,
                     retry: call.retry,
                     timeout: call.timeout,
-                    prepareRetry: call.prepareRetry
+                    prepareRetry: call.prepareRetry,
+                    schemaInfo: call.schemaInfo
                 )
             } else {
                 replayCall = call
+            }
+
+            // Build schema bytes for the request (on replay, schemas may have been sent already)
+            let schemas: [UInt8]
+            if let schemaInfo = replayCall.schemaInfo {
+                let fullPayload = schemaInfo.methodInfo.buildPayload(
+                    direction: .args,
+                    registry: schemaInfo.schemaRegistry
+                )
+                let filteredPayload = schemaSendTracker.filterForSending(fullPayload)
+                schemas = filteredPayload.encodeCbor()
+            } else {
+                schemas = []
             }
 
             let msg = Message.request(
@@ -199,6 +228,7 @@ extension Driver {
                 requestId: replayCall.requestId,
                 methodId: replayCall.methodId,
                 metadata: replayCall.metadata,
+                schemas: schemas,
                 payload: replayCall.payload
             )
 
