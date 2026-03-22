@@ -6,9 +6,9 @@ import type {
   Dispatcher,
   MethodDescriptor,
   RequestContext,
-  TelexCall,
   ServiceDescriptor,
   SessionTransportOptions,
+  TelexCall,
 } from "@bearcove/telex-core";
 import { session } from "@bearcove/telex-core";
 import { wsConnector } from "@bearcove/telex-ws";
@@ -284,8 +284,8 @@ export const testbed_send_schemas: import("@bearcove/telex-core").ServiceSendSch
       type_params: [],
       kind: { tag: "primitive", primitive_type: "string" },
     }],
-    [0xae570b7750005a79n, {
-      id: 0xae570b7750005a79n,
+    [0xd354d13a36356a5an, {
+      id: 0xd354d13a36356a5an,
       type_params: ["E"],
       kind: {
         tag: "enum",
@@ -425,7 +425,7 @@ export const testbed_send_schemas: import("@bearcove/telex-core").ServiceSendSch
         type_id: 0x42046de663beeef0n,
         args: [{ tag: "concrete", type_id: 0xa44004e457ac50dcn, args: [] }, {
           tag: "concrete",
-          type_id: 0xae570b7750005a79n,
+          type_id: 0xd354d13a36356a5an,
           args: [{ tag: "concrete", type_id: 0x5db70a394660f3e6n, args: [] }],
         }],
       },
@@ -441,7 +441,7 @@ export const testbed_send_schemas: import("@bearcove/telex-core").ServiceSendSch
         type_id: 0x42046de663beeef0n,
         args: [{ tag: "concrete", type_id: 0x192310b3d2edcbbbn, args: [] }, {
           tag: "concrete",
-          type_id: 0xae570b7750005a79n,
+          type_id: 0xd354d13a36356a5an,
           args: [{ tag: "concrete", type_id: 0x5db70a394660f3e6n, args: [] }],
         }],
       },
@@ -457,7 +457,7 @@ export const testbed_send_schemas: import("@bearcove/telex-core").ServiceSendSch
         type_id: 0x42046de663beeef0n,
         args: [{ tag: "concrete", type_id: 0x2f0ff266dde23386n, args: [] }, {
           tag: "concrete",
-          type_id: 0xae570b7750005a79n,
+          type_id: 0xd354d13a36356a5an,
           args: [{ tag: "concrete", type_id: 0x5db70a394660f3e6n, args: [] }],
         }],
       },
@@ -473,7 +473,7 @@ export const testbed_send_schemas: import("@bearcove/telex-core").ServiceSendSch
         type_id: 0x42046de663beeef0n,
         args: [{ tag: "concrete", type_id: 0x0eefcca6337b755dn, args: [] }, {
           tag: "concrete",
-          type_id: 0xae570b7750005a79n,
+          type_id: 0xd354d13a36356a5an,
           args: [{ tag: "concrete", type_id: 0x5db70a394660f3e6n, args: [] }],
         }],
       },
@@ -489,7 +489,7 @@ export const testbed_send_schemas: import("@bearcove/telex-core").ServiceSendSch
         type_id: 0x42046de663beeef0n,
         args: [{ tag: "concrete", type_id: 0x4f3c1dd93ca2d25fn, args: [] }, {
           tag: "concrete",
-          type_id: 0xae570b7750005a79n,
+          type_id: 0xd354d13a36356a5an,
           args: [{ tag: "concrete", type_id: 0x5db70a394660f3e6n, args: [] }],
         }],
       },
@@ -505,7 +505,7 @@ export const testbed_send_schemas: import("@bearcove/telex-core").ServiceSendSch
         type_id: 0x42046de663beeef0n,
         args: [{ tag: "concrete", type_id: 0x4d9687f8912787een, args: [] }, {
           tag: "concrete",
-          type_id: 0xae570b7750005a79n,
+          type_id: 0xd354d13a36356a5an,
           args: [{ tag: "concrete", type_id: 0x5db70a394660f3e6n, args: [] }],
         }],
       },

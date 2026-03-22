@@ -9,7 +9,7 @@ use crate::BareConduit;
 /// - [`BareConduit`] → identity (pass-through)
 /// - [`crate::StableConduit`] → identity (pass-through)
 ///
-/// This allows [`crate::session::initiator`] and [`crate::session::acceptor`]
+/// This allows [`crate::Session`] connection handling methods
 /// to accept raw links directly, without requiring callers to wrap them in
 /// `BareConduit::new()` manually.
 pub trait IntoConduit {

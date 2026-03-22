@@ -6,9 +6,9 @@ import type {
   Dispatcher,
   MethodDescriptor,
   RequestContext,
-  TelexCall,
   ServiceDescriptor,
   SessionTransportOptions,
+  TelexCall,
 } from "@bearcove/telex-core";
 import { session } from "@bearcove/telex-core";
 import { RpcError } from "@bearcove/telex-core";
@@ -1354,8 +1354,8 @@ export const testbed_send_schemas: import("@bearcove/telex-core").ServiceSendSch
       type_params: [],
       kind: { tag: "primitive", primitive_type: "string" },
     }],
-    [0xae570b7750005a79n, {
-      id: 0xae570b7750005a79n,
+    [0xd354d13a36356a5an, {
+      id: 0xd354d13a36356a5an,
       type_params: ["E"],
       kind: {
         tag: "enum",
@@ -1743,7 +1743,7 @@ export const testbed_send_schemas: import("@bearcove/telex-core").ServiceSendSch
         type_id: 0x42046de663beeef0n,
         args: [{ tag: "concrete", type_id: 0x6d7dce914ee150e8n, args: [] }, {
           tag: "concrete",
-          type_id: 0xae570b7750005a79n,
+          type_id: 0xd354d13a36356a5an,
           args: [{ tag: "concrete", type_id: 0x5db70a394660f3e6n, args: [] }],
         }],
       },
@@ -1759,7 +1759,7 @@ export const testbed_send_schemas: import("@bearcove/telex-core").ServiceSendSch
         type_id: 0x42046de663beeef0n,
         args: [{ tag: "concrete", type_id: 0x6d7dce914ee150e8n, args: [] }, {
           tag: "concrete",
-          type_id: 0xae570b7750005a79n,
+          type_id: 0xd354d13a36356a5an,
           args: [{ tag: "concrete", type_id: 0x5db70a394660f3e6n, args: [] }],
         }],
       },
@@ -1779,7 +1779,7 @@ export const testbed_send_schemas: import("@bearcove/telex-core").ServiceSendSch
         type_id: 0x42046de663beeef0n,
         args: [{ tag: "concrete", type_id: 0xc6eb8c46f1e17fban, args: [] }, {
           tag: "concrete",
-          type_id: 0xae570b7750005a79n,
+          type_id: 0xd354d13a36356a5an,
           args: [{ tag: "concrete", type_id: 0xd9d78670738e6064n, args: [] }],
         }],
       },
@@ -1795,7 +1795,7 @@ export const testbed_send_schemas: import("@bearcove/telex-core").ServiceSendSch
         type_id: 0x42046de663beeef0n,
         args: [{ tag: "concrete", type_id: 0xc841530b759b8ed0n, args: [] }, {
           tag: "concrete",
-          type_id: 0xae570b7750005a79n,
+          type_id: 0xd354d13a36356a5an,
           args: [{ tag: "concrete", type_id: 0x16d92ac9e3bd73ban, args: [] }],
         }],
       },
@@ -1815,7 +1815,7 @@ export const testbed_send_schemas: import("@bearcove/telex-core").ServiceSendSch
         type_id: 0x42046de663beeef0n,
         args: [{ tag: "concrete", type_id: 0xc6eb8c46f1e17fban, args: [] }, {
           tag: "concrete",
-          type_id: 0xae570b7750005a79n,
+          type_id: 0xd354d13a36356a5an,
           args: [{ tag: "concrete", type_id: 0x5db70a394660f3e6n, args: [] }],
         }],
       },
@@ -1835,7 +1835,7 @@ export const testbed_send_schemas: import("@bearcove/telex-core").ServiceSendSch
         type_id: 0x42046de663beeef0n,
         args: [{ tag: "concrete", type_id: 0xbc5c33249a2dc720n, args: [] }, {
           tag: "concrete",
-          type_id: 0xae570b7750005a79n,
+          type_id: 0xd354d13a36356a5an,
           args: [{ tag: "concrete", type_id: 0x5db70a394660f3e6n, args: [] }],
         }],
       },
@@ -1855,7 +1855,7 @@ export const testbed_send_schemas: import("@bearcove/telex-core").ServiceSendSch
         type_id: 0x42046de663beeef0n,
         args: [{ tag: "concrete", type_id: 0xbc5c33249a2dc720n, args: [] }, {
           tag: "concrete",
-          type_id: 0xae570b7750005a79n,
+          type_id: 0xd354d13a36356a5an,
           args: [{ tag: "concrete", type_id: 0x5db70a394660f3e6n, args: [] }],
         }],
       },
@@ -1875,7 +1875,7 @@ export const testbed_send_schemas: import("@bearcove/telex-core").ServiceSendSch
         type_id: 0x42046de663beeef0n,
         args: [{ tag: "concrete", type_id: 0xbc5c33249a2dc720n, args: [] }, {
           tag: "concrete",
-          type_id: 0xae570b7750005a79n,
+          type_id: 0xd354d13a36356a5an,
           args: [{ tag: "concrete", type_id: 0x5db70a394660f3e6n, args: [] }],
         }],
       },
@@ -1899,7 +1899,7 @@ export const testbed_send_schemas: import("@bearcove/telex-core").ServiceSendSch
         type_id: 0x42046de663beeef0n,
         args: [{ tag: "concrete", type_id: 0xbc5c33249a2dc720n, args: [] }, {
           tag: "concrete",
-          type_id: 0xae570b7750005a79n,
+          type_id: 0xd354d13a36356a5an,
           args: [{ tag: "concrete", type_id: 0x5db70a394660f3e6n, args: [] }],
         }],
       },
@@ -1915,7 +1915,7 @@ export const testbed_send_schemas: import("@bearcove/telex-core").ServiceSendSch
         type_id: 0x42046de663beeef0n,
         args: [{ tag: "concrete", type_id: 0xb92332c67187108fn, args: [] }, {
           tag: "concrete",
-          type_id: 0xae570b7750005a79n,
+          type_id: 0xd354d13a36356a5an,
           args: [{ tag: "concrete", type_id: 0x5db70a394660f3e6n, args: [] }],
         }],
       },
@@ -1939,7 +1939,7 @@ export const testbed_send_schemas: import("@bearcove/telex-core").ServiceSendSch
         type_id: 0x42046de663beeef0n,
         args: [{ tag: "concrete", type_id: 0xc841530b759b8ed0n, args: [] }, {
           tag: "concrete",
-          type_id: 0xae570b7750005a79n,
+          type_id: 0xd354d13a36356a5an,
           args: [{ tag: "concrete", type_id: 0x5db70a394660f3e6n, args: [] }],
         }],
       },
@@ -1955,7 +1955,7 @@ export const testbed_send_schemas: import("@bearcove/telex-core").ServiceSendSch
         type_id: 0x42046de663beeef0n,
         args: [{ tag: "concrete", type_id: 0x3f2e589db81e95bfn, args: [] }, {
           tag: "concrete",
-          type_id: 0xae570b7750005a79n,
+          type_id: 0xd354d13a36356a5an,
           args: [{ tag: "concrete", type_id: 0x5db70a394660f3e6n, args: [] }],
         }],
       },
@@ -1975,7 +1975,7 @@ export const testbed_send_schemas: import("@bearcove/telex-core").ServiceSendSch
           args: [{ tag: "concrete", type_id: 0x1b57cc7742fabeb0n, args: [] }],
         }, {
           tag: "concrete",
-          type_id: 0xae570b7750005a79n,
+          type_id: 0xd354d13a36356a5an,
           args: [{ tag: "concrete", type_id: 0x5db70a394660f3e6n, args: [] }],
         }],
       },
@@ -1991,7 +1991,7 @@ export const testbed_send_schemas: import("@bearcove/telex-core").ServiceSendSch
         type_id: 0x42046de663beeef0n,
         args: [{ tag: "concrete", type_id: 0x3f2e589db81e95bfn, args: [] }, {
           tag: "concrete",
-          type_id: 0xae570b7750005a79n,
+          type_id: 0xd354d13a36356a5an,
           args: [{ tag: "concrete", type_id: 0x5db70a394660f3e6n, args: [] }],
         }],
       },
@@ -2011,7 +2011,7 @@ export const testbed_send_schemas: import("@bearcove/telex-core").ServiceSendSch
         type_id: 0x42046de663beeef0n,
         args: [{ tag: "concrete", type_id: 0x221855c965fb31e1n, args: [] }, {
           tag: "concrete",
-          type_id: 0xae570b7750005a79n,
+          type_id: 0xd354d13a36356a5an,
           args: [{ tag: "concrete", type_id: 0x5db70a394660f3e6n, args: [] }],
         }],
       },
@@ -2027,7 +2027,7 @@ export const testbed_send_schemas: import("@bearcove/telex-core").ServiceSendSch
         type_id: 0x42046de663beeef0n,
         args: [{ tag: "concrete", type_id: 0xbda77ebf97f345a9n, args: [] }, {
           tag: "concrete",
-          type_id: 0xae570b7750005a79n,
+          type_id: 0xd354d13a36356a5an,
           args: [{ tag: "concrete", type_id: 0x5db70a394660f3e6n, args: [] }],
         }],
       },
@@ -2047,7 +2047,7 @@ export const testbed_send_schemas: import("@bearcove/telex-core").ServiceSendSch
           args: [{ tag: "concrete", type_id: 0xb92332c67187108fn, args: [] }],
         }, {
           tag: "concrete",
-          type_id: 0xae570b7750005a79n,
+          type_id: 0xd354d13a36356a5an,
           args: [{ tag: "concrete", type_id: 0x5db70a394660f3e6n, args: [] }],
         }],
       },
@@ -2079,7 +2079,7 @@ export const testbed_send_schemas: import("@bearcove/telex-core").ServiceSendSch
           }],
         }, {
           tag: "concrete",
-          type_id: 0xae570b7750005a79n,
+          type_id: 0xd354d13a36356a5an,
           args: [{ tag: "concrete", type_id: 0x5db70a394660f3e6n, args: [] }],
         }],
       },
@@ -2095,7 +2095,7 @@ export const testbed_send_schemas: import("@bearcove/telex-core").ServiceSendSch
         type_id: 0x42046de663beeef0n,
         args: [{ tag: "concrete", type_id: 0xba8125876d6388b4n, args: [] }, {
           tag: "concrete",
-          type_id: 0xae570b7750005a79n,
+          type_id: 0xd354d13a36356a5an,
           args: [{ tag: "concrete", type_id: 0x5db70a394660f3e6n, args: [] }],
         }],
       },
@@ -2111,7 +2111,7 @@ export const testbed_send_schemas: import("@bearcove/telex-core").ServiceSendSch
         type_id: 0x42046de663beeef0n,
         args: [{ tag: "concrete", type_id: 0x178367a87f66fb46n, args: [] }, {
           tag: "concrete",
-          type_id: 0xae570b7750005a79n,
+          type_id: 0xd354d13a36356a5an,
           args: [{ tag: "concrete", type_id: 0x5db70a394660f3e6n, args: [] }],
         }],
       },
@@ -2127,7 +2127,7 @@ export const testbed_send_schemas: import("@bearcove/telex-core").ServiceSendSch
         type_id: 0x42046de663beeef0n,
         args: [{ tag: "concrete", type_id: 0xd9356298b81639acn, args: [] }, {
           tag: "concrete",
-          type_id: 0xae570b7750005a79n,
+          type_id: 0xd354d13a36356a5an,
           args: [{ tag: "concrete", type_id: 0x5db70a394660f3e6n, args: [] }],
         }],
       },
@@ -2151,7 +2151,7 @@ export const testbed_send_schemas: import("@bearcove/telex-core").ServiceSendSch
           args: [{ tag: "concrete", type_id: 0x6d7dce914ee150e8n, args: [] }],
         }, {
           tag: "concrete",
-          type_id: 0xae570b7750005a79n,
+          type_id: 0xd354d13a36356a5an,
           args: [{ tag: "concrete", type_id: 0x5db70a394660f3e6n, args: [] }],
         }],
       },
@@ -2171,7 +2171,7 @@ export const testbed_send_schemas: import("@bearcove/telex-core").ServiceSendSch
         type_id: 0x42046de663beeef0n,
         args: [{ tag: "concrete", type_id: 0xc6eb8c46f1e17fban, args: [] }, {
           tag: "concrete",
-          type_id: 0xae570b7750005a79n,
+          type_id: 0xd354d13a36356a5an,
           args: [{ tag: "concrete", type_id: 0x5db70a394660f3e6n, args: [] }],
         }],
       },
@@ -2191,7 +2191,7 @@ export const testbed_send_schemas: import("@bearcove/telex-core").ServiceSendSch
         type_id: 0x42046de663beeef0n,
         args: [{ tag: "concrete", type_id: 0xbc5c33249a2dc720n, args: [] }, {
           tag: "concrete",
-          type_id: 0xae570b7750005a79n,
+          type_id: 0xd354d13a36356a5an,
           args: [{ tag: "concrete", type_id: 0x5db70a394660f3e6n, args: [] }],
         }],
       },
@@ -2207,7 +2207,7 @@ export const testbed_send_schemas: import("@bearcove/telex-core").ServiceSendSch
           args: [{ tag: "concrete", type_id: 0x1b57cc7742fabeb0n, args: [] }],
         }, {
           tag: "concrete",
-          type_id: 0xae570b7750005a79n,
+          type_id: 0xd354d13a36356a5an,
           args: [{ tag: "concrete", type_id: 0x5db70a394660f3e6n, args: [] }],
         }],
       },
@@ -2228,7 +2228,7 @@ export const testbed_send_schemas: import("@bearcove/telex-core").ServiceSendSch
         type_id: 0x42046de663beeef0n,
         args: [{ tag: "concrete", type_id: 0x7f145c7b0ededd20n, args: [] }, {
           tag: "concrete",
-          type_id: 0xae570b7750005a79n,
+          type_id: 0xd354d13a36356a5an,
           args: [{ tag: "concrete", type_id: 0x5db70a394660f3e6n, args: [] }],
         }],
       },
@@ -2244,7 +2244,7 @@ export const testbed_send_schemas: import("@bearcove/telex-core").ServiceSendSch
         type_id: 0x42046de663beeef0n,
         args: [{ tag: "concrete", type_id: 0xe407302c560da502n, args: [] }, {
           tag: "concrete",
-          type_id: 0xae570b7750005a79n,
+          type_id: 0xd354d13a36356a5an,
           args: [{ tag: "concrete", type_id: 0x5db70a394660f3e6n, args: [] }],
         }],
       },
@@ -2260,7 +2260,7 @@ export const testbed_send_schemas: import("@bearcove/telex-core").ServiceSendSch
         type_id: 0x42046de663beeef0n,
         args: [{ tag: "concrete", type_id: 0x01542aaa833a2511n, args: [] }, {
           tag: "concrete",
-          type_id: 0xae570b7750005a79n,
+          type_id: 0xd354d13a36356a5an,
           args: [{ tag: "concrete", type_id: 0x5db70a394660f3e6n, args: [] }],
         }],
       },
@@ -2276,7 +2276,7 @@ export const testbed_send_schemas: import("@bearcove/telex-core").ServiceSendSch
         type_id: 0x42046de663beeef0n,
         args: [{ tag: "concrete", type_id: 0x4620db6c5c627787n, args: [] }, {
           tag: "concrete",
-          type_id: 0xae570b7750005a79n,
+          type_id: 0xd354d13a36356a5an,
           args: [{ tag: "concrete", type_id: 0x5db70a394660f3e6n, args: [] }],
         }],
       },
@@ -2292,7 +2292,7 @@ export const testbed_send_schemas: import("@bearcove/telex-core").ServiceSendSch
         type_id: 0x42046de663beeef0n,
         args: [{ tag: "concrete", type_id: 0xbc2cd703968e7d0dn, args: [] }, {
           tag: "concrete",
-          type_id: 0xae570b7750005a79n,
+          type_id: 0xd354d13a36356a5an,
           args: [{ tag: "concrete", type_id: 0x5db70a394660f3e6n, args: [] }],
         }],
       },
@@ -2308,7 +2308,7 @@ export const testbed_send_schemas: import("@bearcove/telex-core").ServiceSendSch
         type_id: 0x42046de663beeef0n,
         args: [{ tag: "concrete", type_id: 0x2ef93123176c696cn, args: [] }, {
           tag: "concrete",
-          type_id: 0xae570b7750005a79n,
+          type_id: 0xd354d13a36356a5an,
           args: [{ tag: "concrete", type_id: 0x5db70a394660f3e6n, args: [] }],
         }],
       },
@@ -2324,7 +2324,7 @@ export const testbed_send_schemas: import("@bearcove/telex-core").ServiceSendSch
         type_id: 0x42046de663beeef0n,
         args: [{ tag: "concrete", type_id: 0x01542aaa833a2511n, args: [] }, {
           tag: "concrete",
-          type_id: 0xae570b7750005a79n,
+          type_id: 0xd354d13a36356a5an,
           args: [{ tag: "concrete", type_id: 0x5db70a394660f3e6n, args: [] }],
         }],
       },
@@ -2340,7 +2340,7 @@ export const testbed_send_schemas: import("@bearcove/telex-core").ServiceSendSch
         type_id: 0x42046de663beeef0n,
         args: [{ tag: "concrete", type_id: 0x4620db6c5c627787n, args: [] }, {
           tag: "concrete",
-          type_id: 0xae570b7750005a79n,
+          type_id: 0xd354d13a36356a5an,
           args: [{ tag: "concrete", type_id: 0x5db70a394660f3e6n, args: [] }],
         }],
       },
@@ -2356,7 +2356,7 @@ export const testbed_send_schemas: import("@bearcove/telex-core").ServiceSendSch
         type_id: 0x42046de663beeef0n,
         args: [{ tag: "concrete", type_id: 0x0930935d500f9629n, args: [] }, {
           tag: "concrete",
-          type_id: 0xae570b7750005a79n,
+          type_id: 0xd354d13a36356a5an,
           args: [{ tag: "concrete", type_id: 0x5db70a394660f3e6n, args: [] }],
         }],
       },
@@ -2372,7 +2372,7 @@ export const testbed_send_schemas: import("@bearcove/telex-core").ServiceSendSch
         type_id: 0x42046de663beeef0n,
         args: [{ tag: "concrete", type_id: 0xec2764b25ae6ef1en, args: [] }, {
           tag: "concrete",
-          type_id: 0xae570b7750005a79n,
+          type_id: 0xd354d13a36356a5an,
           args: [{ tag: "concrete", type_id: 0x5db70a394660f3e6n, args: [] }],
         }],
       },

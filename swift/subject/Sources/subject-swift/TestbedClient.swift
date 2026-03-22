@@ -304,8 +304,7 @@ public final class TestbedClient: TestbedCaller, Sendable {
     payloadBytes += encodeString(message)
     let payload = Data(payloadBytes)
     let response = try await connection.call(
-      methodId: 0x880b_c4ee_e235_74be, payload: payload, channels: [], retry: .volatile,
-      timeout: timeout)
+      methodId: 0x880b_c4ee_e235_74be, payload: payload, retry: .volatile, timeout: timeout)
     var cursor = 0
     let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
     switch _cursor_resultDisc {
@@ -338,8 +337,7 @@ public final class TestbedClient: TestbedCaller, Sendable {
     payloadBytes += encodeString(message)
     let payload = Data(payloadBytes)
     let response = try await connection.call(
-      methodId: 0x1c22_3f30_e180_392a, payload: payload, channels: [], retry: .volatile,
-      timeout: timeout)
+      methodId: 0x1c22_3f30_e180_392a, payload: payload, retry: .volatile, timeout: timeout)
     var cursor = 0
     let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
     switch _cursor_resultDisc {
@@ -373,8 +371,7 @@ public final class TestbedClient: TestbedCaller, Sendable {
     payloadBytes += encodeI64(divisor)
     let payload = Data(payloadBytes)
     let response = try await connection.call(
-      methodId: 0xfb68_d931_8f83_0875, payload: payload, channels: [], retry: .volatile,
-      timeout: timeout)
+      methodId: 0xfb68_d931_8f83_0875, payload: payload, retry: .volatile, timeout: timeout)
     var cursor = 0
     let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
     switch _cursor_resultDisc {
@@ -417,8 +414,7 @@ public final class TestbedClient: TestbedCaller, Sendable {
     payloadBytes += encodeU32(id)
     let payload = Data(payloadBytes)
     let response = try await connection.call(
-      methodId: 0xa15f_f520_9471_2a3b, payload: payload, channels: [], retry: .volatile,
-      timeout: timeout)
+      methodId: 0xa15f_f520_9471_2a3b, payload: payload, retry: .volatile, timeout: timeout)
     var cursor = 0
     let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
     switch _cursor_resultDisc {
@@ -473,15 +469,15 @@ public final class TestbedClient: TestbedCaller, Sendable {
       )
 
       var payloadBytes: [UInt8] = []
+      payloadBytes += encodeVarint(numbers.channelId)
       let payload = Data(payloadBytes)
-      let channels = collectChannelIds(schemas: testbed_schemas["sum"]!.args, args: [numbers])
-      return PreparedRetryRequest(payload: Array(payload), channels: channels)
+      return PreparedRetryRequest(payload: Array(payload))
     }
     let prepared = await prepareRetry()
 
     let response = try await connection.call(
-      methodId: 0x51f9_cfd8_e865_77c9, payload: Data(prepared.payload), channels: prepared.channels,
-      retry: .volatile, timeout: timeout, prepareRetry: prepareRetry,
+      methodId: 0x51f9_cfd8_e865_77c9, payload: Data(prepared.payload), retry: .volatile,
+      timeout: timeout, prepareRetry: prepareRetry,
       finalizeChannels: {
         finalizeBoundChannels(schemas: testbed_schemas["sum"]!.args, args: [numbers])
       })
@@ -525,16 +521,15 @@ public final class TestbedClient: TestbedCaller, Sendable {
 
       var payloadBytes: [UInt8] = []
       payloadBytes += encodeU32(count)
+      payloadBytes += encodeVarint(output.channelId)
       let payload = Data(payloadBytes)
-      let channels = collectChannelIds(
-        schemas: testbed_schemas["generate"]!.args, args: [count, output])
-      return PreparedRetryRequest(payload: Array(payload), channels: channels)
+      return PreparedRetryRequest(payload: Array(payload))
     }
     let prepared = await prepareRetry()
 
     let response = try await connection.call(
-      methodId: 0x239e_5b99_b1f8_207a, payload: Data(prepared.payload), channels: prepared.channels,
-      retry: .volatile, timeout: timeout, prepareRetry: prepareRetry,
+      methodId: 0x239e_5b99_b1f8_207a, payload: Data(prepared.payload), retry: .volatile,
+      timeout: timeout, prepareRetry: prepareRetry,
       finalizeChannels: {
         finalizeBoundChannels(schemas: testbed_schemas["generate"]!.args, args: [count, output])
       })
@@ -577,16 +572,15 @@ public final class TestbedClient: TestbedCaller, Sendable {
 
       var payloadBytes: [UInt8] = []
       payloadBytes += encodeU32(count)
+      payloadBytes += encodeVarint(output.channelId)
       let payload = Data(payloadBytes)
-      let channels = collectChannelIds(
-        schemas: testbed_schemas["generateRetryNonIdem"]!.args, args: [count, output])
-      return PreparedRetryRequest(payload: Array(payload), channels: channels)
+      return PreparedRetryRequest(payload: Array(payload))
     }
     let prepared = await prepareRetry()
 
     let response = try await connection.call(
-      methodId: 0x3441_9529_478c_c7b8, payload: Data(prepared.payload), channels: prepared.channels,
-      retry: .volatile, timeout: timeout, prepareRetry: prepareRetry,
+      methodId: 0x3441_9529_478c_c7b8, payload: Data(prepared.payload), retry: .volatile,
+      timeout: timeout, prepareRetry: prepareRetry,
       finalizeChannels: {
         finalizeBoundChannels(
           schemas: testbed_schemas["generateRetryNonIdem"]!.args, args: [count, output])
@@ -630,16 +624,15 @@ public final class TestbedClient: TestbedCaller, Sendable {
 
       var payloadBytes: [UInt8] = []
       payloadBytes += encodeU32(count)
+      payloadBytes += encodeVarint(output.channelId)
       let payload = Data(payloadBytes)
-      let channels = collectChannelIds(
-        schemas: testbed_schemas["generateRetryIdem"]!.args, args: [count, output])
-      return PreparedRetryRequest(payload: Array(payload), channels: channels)
+      return PreparedRetryRequest(payload: Array(payload))
     }
     let prepared = await prepareRetry()
 
     let response = try await connection.call(
-      methodId: 0xe2d2_7fd9_098c_6ea2, payload: Data(prepared.payload), channels: prepared.channels,
-      retry: .idem, timeout: timeout, prepareRetry: prepareRetry,
+      methodId: 0xe2d2_7fd9_098c_6ea2, payload: Data(prepared.payload), retry: .idem,
+      timeout: timeout, prepareRetry: prepareRetry,
       finalizeChannels: {
         finalizeBoundChannels(
           schemas: testbed_schemas["generateRetryIdem"]!.args, args: [count, output])
@@ -682,16 +675,16 @@ public final class TestbedClient: TestbedCaller, Sendable {
       )
 
       var payloadBytes: [UInt8] = []
+      payloadBytes += encodeVarint(input.channelId)
+      payloadBytes += encodeVarint(output.channelId)
       let payload = Data(payloadBytes)
-      let channels = collectChannelIds(
-        schemas: testbed_schemas["transform"]!.args, args: [input, output])
-      return PreparedRetryRequest(payload: Array(payload), channels: channels)
+      return PreparedRetryRequest(payload: Array(payload))
     }
     let prepared = await prepareRetry()
 
     let response = try await connection.call(
-      methodId: 0xcb46_9cff_8d79_8feb, payload: Data(prepared.payload), channels: prepared.channels,
-      retry: .volatile, timeout: timeout, prepareRetry: prepareRetry,
+      methodId: 0xcb46_9cff_8d79_8feb, payload: Data(prepared.payload), retry: .volatile,
+      timeout: timeout, prepareRetry: prepareRetry,
       finalizeChannels: {
         finalizeBoundChannels(schemas: testbed_schemas["transform"]!.args, args: [input, output])
       })
@@ -726,8 +719,7 @@ public final class TestbedClient: TestbedCaller, Sendable {
     payloadBytes += encodeI32(point.x) + encodeI32(point.y)
     let payload = Data(payloadBytes)
     let response = try await connection.call(
-      methodId: 0x81f5_386d_589d_fbe4, payload: payload, channels: [], retry: .volatile,
-      timeout: timeout)
+      methodId: 0x81f5_386d_589d_fbe4, payload: payload, retry: .volatile, timeout: timeout)
     var cursor = 0
     let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
     switch _cursor_resultDisc {
@@ -764,8 +756,7 @@ public final class TestbedClient: TestbedCaller, Sendable {
     payloadBytes += encodeOption(email, encoder: { encodeString($0) })
     let payload = Data(payloadBytes)
     let response = try await connection.call(
-      methodId: 0x68ff_a90b_7728_bde7, payload: payload, channels: [], retry: .volatile,
-      timeout: timeout)
+      methodId: 0x68ff_a90b_7728_bde7, payload: payload, retry: .volatile, timeout: timeout)
     var cursor = 0
     let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
     switch _cursor_resultDisc {
@@ -805,8 +796,7 @@ public final class TestbedClient: TestbedCaller, Sendable {
       + encodeI32(rect.bottomRight.y) + encodeOption(rect.label, encoder: { encodeString($0) })
     let payload = Data(payloadBytes)
     let response = try await connection.call(
-      methodId: 0x223f_e028_2d26_3107, payload: payload, channels: [], retry: .volatile,
-      timeout: timeout)
+      methodId: 0x223f_e028_2d26_3107, payload: payload, retry: .volatile, timeout: timeout)
     var cursor = 0
     let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
     switch _cursor_resultDisc {
@@ -839,8 +829,7 @@ public final class TestbedClient: TestbedCaller, Sendable {
     payloadBytes += encodeString(name)
     let payload = Data(payloadBytes)
     let response = try await connection.call(
-      methodId: 0xd4f1_6ea9_eca1_32e6, payload: payload, channels: [], retry: .volatile,
-      timeout: timeout)
+      methodId: 0xd4f1_6ea9_eca1_32e6, payload: payload, retry: .volatile, timeout: timeout)
     var cursor = 0
     let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
     switch _cursor_resultDisc {
@@ -898,8 +887,7 @@ public final class TestbedClient: TestbedCaller, Sendable {
     }(shape)
     let payload = Data(payloadBytes)
     let response = try await connection.call(
-      methodId: 0x0438_5a4b_e2a8_82f5, payload: payload, channels: [], retry: .volatile,
-      timeout: timeout)
+      methodId: 0x0438_5a4b_e2a8_82f5, payload: payload, retry: .volatile, timeout: timeout)
     var cursor = 0
     let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
     switch _cursor_resultDisc {
@@ -955,8 +943,7 @@ public final class TestbedClient: TestbedCaller, Sendable {
     }(background)
     let payload = Data(payloadBytes)
     let response = try await connection.call(
-      methodId: 0xef42_1eb5_b08c_973a, payload: payload, channels: [], retry: .volatile,
-      timeout: timeout)
+      methodId: 0xef42_1eb5_b08c_973a, payload: payload, retry: .volatile, timeout: timeout)
     var cursor = 0
     let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
     switch _cursor_resultDisc {
@@ -1032,8 +1019,7 @@ public final class TestbedClient: TestbedCaller, Sendable {
     }(msg)
     let payload = Data(payloadBytes)
     let response = try await connection.call(
-      methodId: 0xe08f_0f52_54e7_a997, payload: payload, channels: [], retry: .volatile,
-      timeout: timeout)
+      methodId: 0xe08f_0f52_54e7_a997, payload: payload, retry: .volatile, timeout: timeout)
     var cursor = 0
     let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
     switch _cursor_resultDisc {
@@ -1080,8 +1066,7 @@ public final class TestbedClient: TestbedCaller, Sendable {
     payloadBytes += encodeU32(count)
     let payload = Data(payloadBytes)
     let response = try await connection.call(
-      methodId: 0x5985_1852_3a62_66bf, payload: payload, channels: [], retry: .volatile,
-      timeout: timeout)
+      methodId: 0x5985_1852_3a62_66bf, payload: payload, retry: .volatile, timeout: timeout)
     var cursor = 0
     let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
     switch _cursor_resultDisc {
@@ -1120,8 +1105,7 @@ public final class TestbedClient: TestbedCaller, Sendable {
     payloadBytes += { encodeI32($0) }(pair.0) + { encodeString($0) }(pair.1)
     let payload = Data(payloadBytes)
     let response = try await connection.call(
-      methodId: 0x7d55_a713_ad61_2bf2, payload: payload, channels: [], retry: .volatile,
-      timeout: timeout)
+      methodId: 0x7d55_a713_ad61_2bf2, payload: payload, retry: .volatile, timeout: timeout)
     var cursor = 0
     let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
     switch _cursor_resultDisc {
@@ -1157,8 +1141,7 @@ public final class TestbedClient: TestbedCaller, Sendable {
     payloadBytes += encodeBytes(Array(data))
     let payload = Data(payloadBytes)
     let response = try await connection.call(
-      methodId: 0x4405_6c78_42fa_336c, payload: payload, channels: [], retry: .volatile,
-      timeout: timeout)
+      methodId: 0x4405_6c78_42fa_336c, payload: payload, retry: .volatile, timeout: timeout)
     var cursor = 0
     let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
     switch _cursor_resultDisc {
@@ -1191,8 +1174,7 @@ public final class TestbedClient: TestbedCaller, Sendable {
     payloadBytes += encodeBool(b)
     let payload = Data(payloadBytes)
     let response = try await connection.call(
-      methodId: 0x5136_d8f0_1a5f_496c, payload: payload, channels: [], retry: .volatile,
-      timeout: timeout)
+      methodId: 0x5136_d8f0_1a5f_496c, payload: payload, retry: .volatile, timeout: timeout)
     var cursor = 0
     let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
     switch _cursor_resultDisc {
@@ -1225,8 +1207,7 @@ public final class TestbedClient: TestbedCaller, Sendable {
     payloadBytes += encodeVarint(n)
     let payload = Data(payloadBytes)
     let response = try await connection.call(
-      methodId: 0x85e2_380d_bf7f_fe65, payload: payload, channels: [], retry: .volatile,
-      timeout: timeout)
+      methodId: 0x85e2_380d_bf7f_fe65, payload: payload, retry: .volatile, timeout: timeout)
     var cursor = 0
     let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
     switch _cursor_resultDisc {
@@ -1259,8 +1240,7 @@ public final class TestbedClient: TestbedCaller, Sendable {
     payloadBytes += encodeOption(s, encoder: { encodeString($0) })
     let payload = Data(payloadBytes)
     let response = try await connection.call(
-      methodId: 0xb1a5_bfd2_05b3_fbfc, payload: payload, channels: [], retry: .volatile,
-      timeout: timeout)
+      methodId: 0xb1a5_bfd2_05b3_fbfc, payload: payload, retry: .volatile, timeout: timeout)
     var cursor = 0
     let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
     switch _cursor_resultDisc {
@@ -1302,15 +1282,15 @@ public final class TestbedClient: TestbedCaller, Sendable {
       )
 
       var payloadBytes: [UInt8] = []
+      payloadBytes += encodeVarint(numbers.channelId)
       let payload = Data(payloadBytes)
-      let channels = collectChannelIds(schemas: testbed_schemas["sumLarge"]!.args, args: [numbers])
-      return PreparedRetryRequest(payload: Array(payload), channels: channels)
+      return PreparedRetryRequest(payload: Array(payload))
     }
     let prepared = await prepareRetry()
 
     let response = try await connection.call(
-      methodId: 0x9a7b_ed54_5e08_8054, payload: Data(prepared.payload), channels: prepared.channels,
-      retry: .volatile, timeout: timeout, prepareRetry: prepareRetry,
+      methodId: 0x9a7b_ed54_5e08_8054, payload: Data(prepared.payload), retry: .volatile,
+      timeout: timeout, prepareRetry: prepareRetry,
       finalizeChannels: {
         finalizeBoundChannels(schemas: testbed_schemas["sumLarge"]!.args, args: [numbers])
       })
@@ -1354,16 +1334,15 @@ public final class TestbedClient: TestbedCaller, Sendable {
 
       var payloadBytes: [UInt8] = []
       payloadBytes += encodeU32(count)
+      payloadBytes += encodeVarint(output.channelId)
       let payload = Data(payloadBytes)
-      let channels = collectChannelIds(
-        schemas: testbed_schemas["generateLarge"]!.args, args: [count, output])
-      return PreparedRetryRequest(payload: Array(payload), channels: channels)
+      return PreparedRetryRequest(payload: Array(payload))
     }
     let prepared = await prepareRetry()
 
     let response = try await connection.call(
-      methodId: 0x8edf_bd65_d162_f685, payload: Data(prepared.payload), channels: prepared.channels,
-      retry: .volatile, timeout: timeout, prepareRetry: prepareRetry,
+      methodId: 0x8edf_bd65_d162_f685, payload: Data(prepared.payload), retry: .volatile,
+      timeout: timeout, prepareRetry: prepareRetry,
       finalizeChannels: {
         finalizeBoundChannels(
           schemas: testbed_schemas["generateLarge"]!.args, args: [count, output])
@@ -1397,8 +1376,7 @@ public final class TestbedClient: TestbedCaller, Sendable {
   public func allColors() async throws -> [Color] {
     let payload = Data()
     let response = try await connection.call(
-      methodId: 0xfbfb_05bb_caad_e4a0, payload: payload, channels: [], retry: .volatile,
-      timeout: timeout)
+      methodId: 0xfbfb_05bb_caad_e4a0, payload: payload, retry: .volatile, timeout: timeout)
     var cursor = 0
     let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
     switch _cursor_resultDisc {
@@ -1452,8 +1430,7 @@ public final class TestbedClient: TestbedCaller, Sendable {
     payloadBytes += encodeBool(active)
     let payload = Data(payloadBytes)
     let response = try await connection.call(
-      methodId: 0x62fe_b14a_8fcf_9b6d, payload: payload, channels: [], retry: .volatile,
-      timeout: timeout)
+      methodId: 0x62fe_b14a_8fcf_9b6d, payload: payload, retry: .volatile, timeout: timeout)
     var cursor = 0
     let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
     switch _cursor_resultDisc {
@@ -1500,8 +1477,7 @@ public final class TestbedClient: TestbedCaller, Sendable {
     }(shape)
     let payload = Data(payloadBytes)
     let response = try await connection.call(
-      methodId: 0x4125_b5e6_78b7_b4a5, payload: payload, channels: [], retry: .volatile,
-      timeout: timeout)
+      methodId: 0x4125_b5e6_78b7_b4a5, payload: payload, retry: .volatile, timeout: timeout)
     var cursor = 0
     let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
     switch _cursor_resultDisc {
@@ -1555,8 +1531,7 @@ public final class TestbedClient: TestbedCaller, Sendable {
     }(status)
     let payload = Data(payloadBytes)
     let response = try await connection.call(
-      methodId: 0xc7c5_aa84_5cfb_8bf6, payload: payload, channels: [], retry: .volatile,
-      timeout: timeout)
+      methodId: 0xc7c5_aa84_5cfb_8bf6, payload: payload, retry: .volatile, timeout: timeout)
     var cursor = 0
     let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
     switch _cursor_resultDisc {
@@ -1598,8 +1573,7 @@ public final class TestbedClient: TestbedCaller, Sendable {
     payloadBytes += encodeString(tag.label) + encodeU32(tag.priority) + encodeString(tag.note)
     let payload = Data(payloadBytes)
     let response = try await connection.call(
-      methodId: 0x6619_071b_e5d5_c259, payload: payload, channels: [], retry: .volatile,
-      timeout: timeout)
+      methodId: 0x6619_071b_e5d5_c259, payload: payload, retry: .volatile, timeout: timeout)
     var cursor = 0
     let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
     switch _cursor_resultDisc {
@@ -1635,8 +1609,7 @@ public final class TestbedClient: TestbedCaller, Sendable {
     payloadBytes += encodeString(profile.name) + encodeString(profile.bio)
     let payload = Data(payloadBytes)
     let response = try await connection.call(
-      methodId: 0xbd9b_cabd_deeb_eb04, payload: payload, channels: [], retry: .volatile,
-      timeout: timeout)
+      methodId: 0xbd9b_cabd_deeb_eb04, payload: payload, retry: .volatile, timeout: timeout)
     var cursor = 0
     let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
     switch _cursor_resultDisc {
@@ -1671,8 +1644,7 @@ public final class TestbedClient: TestbedCaller, Sendable {
     payloadBytes += encodeI32(record.alpha) + encodeString(record.beta) + encodeF64(record.gamma)
     let payload = Data(payloadBytes)
     let response = try await connection.call(
-      methodId: 0x100b_0e08_da4b_8f1a, payload: payload, channels: [], retry: .volatile,
-      timeout: timeout)
+      methodId: 0x100b_0e08_da4b_8f1a, payload: payload, retry: .volatile, timeout: timeout)
     var cursor = 0
     let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
     switch _cursor_resultDisc {
@@ -1715,8 +1687,7 @@ public final class TestbedClient: TestbedCaller, Sendable {
     }(status)
     let payload = Data(payloadBytes)
     let response = try await connection.call(
-      methodId: 0x6975_90d3_ffc3_6703, payload: payload, channels: [], retry: .volatile,
-      timeout: timeout)
+      methodId: 0x6975_90d3_ffc3_6703, payload: payload, retry: .volatile, timeout: timeout)
     var cursor = 0
     let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
     switch _cursor_resultDisc {
@@ -1758,8 +1729,7 @@ public final class TestbedClient: TestbedCaller, Sendable {
     payloadBytes += encodeString(tag.label) + encodeU32(tag.priority) + encodeString(tag.note)
     let payload = Data(payloadBytes)
     let response = try await connection.call(
-      methodId: 0x2bd1_b314_9d73_ce97, payload: payload, channels: [], retry: .volatile,
-      timeout: timeout)
+      methodId: 0x2bd1_b314_9d73_ce97, payload: payload, retry: .volatile, timeout: timeout)
     var cursor = 0
     let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
     switch _cursor_resultDisc {
@@ -1795,8 +1765,7 @@ public final class TestbedClient: TestbedCaller, Sendable {
     payloadBytes += encodeString(m.unit) + encodeF64(m.value)
     let payload = Data(payloadBytes)
     let response = try await connection.call(
-      methodId: 0x3b3d_22b0_15fa_1a3f, payload: payload, channels: [], retry: .volatile,
-      timeout: timeout)
+      methodId: 0x3b3d_22b0_15fa_1a3f, payload: payload, retry: .volatile, timeout: timeout)
     var cursor = 0
     let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
     switch _cursor_resultDisc {
@@ -1831,8 +1800,7 @@ public final class TestbedClient: TestbedCaller, Sendable {
     payloadBytes += encodeString(c.key) + encodeString(c.value)
     let payload = Data(payloadBytes)
     let response = try await connection.call(
-      methodId: 0xe13a_477f_b964_ce28, payload: payload, channels: [], retry: .volatile,
-      timeout: timeout)
+      methodId: 0xe13a_477f_b964_ce28, payload: payload, retry: .volatile, timeout: timeout)
     var cursor = 0
     let _cursor_resultDisc = try decodeVarint(from: response, offset: &cursor)
     switch _cursor_resultDisc {
@@ -1865,71 +1833,75 @@ public final class TestbedClient: TestbedCaller, Sendable {
 
 // MARK: - Testbed Schemas
 
-public let testbed_schemas: [String: MethodSchema] = [
-  "echo": MethodSchema(args: [.string]),
-  "reverse": MethodSchema(args: [.string]),
-  "divide": MethodSchema(args: [.i64, .i64]),
-  "lookup": MethodSchema(args: [.u32]),
-  "sum": MethodSchema(args: [.rx(element: .i32)]),
-  "generate": MethodSchema(args: [.u32, .tx(element: .i32)]),
-  "generateRetryNonIdem": MethodSchema(args: [.u32, .tx(element: .i32)]),
-  "generateRetryIdem": MethodSchema(args: [.u32, .tx(element: .i32)]),
-  "transform": MethodSchema(args: [.rx(element: .string), .tx(element: .string)]),
-  "echoPoint": MethodSchema(args: [.struct(fields: [("x", .i32), ("y", .i32)])]),
-  "createPerson": MethodSchema(args: [.string, .u8, .option(inner: .string)]),
-  "rectangleArea": MethodSchema(args: [
+public let testbed_schemas: [String: MethodBindingSchema] = [
+  "echo": MethodBindingSchema(args: [.string]),
+  "reverse": MethodBindingSchema(args: [.string]),
+  "divide": MethodBindingSchema(args: [.i64, .i64]),
+  "lookup": MethodBindingSchema(args: [.u32]),
+  "sum": MethodBindingSchema(args: [.rx(element: .i32)]),
+  "generate": MethodBindingSchema(args: [.u32, .tx(element: .i32)]),
+  "generateRetryNonIdem": MethodBindingSchema(args: [.u32, .tx(element: .i32)]),
+  "generateRetryIdem": MethodBindingSchema(args: [.u32, .tx(element: .i32)]),
+  "transform": MethodBindingSchema(args: [.rx(element: .string), .tx(element: .string)]),
+  "echoPoint": MethodBindingSchema(args: [.struct(fields: [("x", .i32), ("y", .i32)])]),
+  "createPerson": MethodBindingSchema(args: [.string, .u8, .option(inner: .string)]),
+  "rectangleArea": MethodBindingSchema(args: [
     .struct(fields: [
       ("top_left", .struct(fields: [("x", .i32), ("y", .i32)])),
       ("bottom_right", .struct(fields: [("x", .i32), ("y", .i32)])),
       ("label", .option(inner: .string)),
     ])
   ]),
-  "parseColor": MethodSchema(args: [.string]),
-  "shapeArea": MethodSchema(args: [
+  "parseColor": MethodBindingSchema(args: [.string]),
+  "shapeArea": MethodBindingSchema(args: [
     .enum(variants: [("Circle", [.f64]), ("Rectangle", [.f64, .f64]), ("Point", [])])
   ]),
-  "createCanvas": MethodSchema(args: [
+  "createCanvas": MethodBindingSchema(args: [
     .string,
     .vec(
       element: .enum(variants: [("Circle", [.f64]), ("Rectangle", [.f64, .f64]), ("Point", [])])),
     .enum(variants: [("Red", []), ("Green", []), ("Blue", [])]),
   ]),
-  "processMessage": MethodSchema(args: [
+  "processMessage": MethodBindingSchema(args: [
     .enum(variants: [("Text", [.string]), ("Number", [.i64]), ("Data", [.bytes])])
   ]),
-  "getPoints": MethodSchema(args: [.u32]),
-  "swapPair": MethodSchema(args: [.bytes]),
-  "echoBytes": MethodSchema(args: [.bytes]),
-  "echoBool": MethodSchema(args: [.bool]),
-  "echoU64": MethodSchema(args: [.u64]),
-  "echoOptionString": MethodSchema(args: [.option(inner: .string)]),
-  "sumLarge": MethodSchema(args: [.rx(element: .i32)]),
-  "generateLarge": MethodSchema(args: [.u32, .tx(element: .i32)]),
-  "allColors": MethodSchema(args: []),
-  "describePoint": MethodSchema(args: [.string, .i32, .i32, .bool]),
-  "echoShape": MethodSchema(args: [
+  "getPoints": MethodBindingSchema(args: [.u32]),
+  "swapPair": MethodBindingSchema(args: [.bytes]),
+  "echoBytes": MethodBindingSchema(args: [.bytes]),
+  "echoBool": MethodBindingSchema(args: [.bool]),
+  "echoU64": MethodBindingSchema(args: [.u64]),
+  "echoOptionString": MethodBindingSchema(args: [.option(inner: .string)]),
+  "sumLarge": MethodBindingSchema(args: [.rx(element: .i32)]),
+  "generateLarge": MethodBindingSchema(args: [.u32, .tx(element: .i32)]),
+  "allColors": MethodBindingSchema(args: []),
+  "describePoint": MethodBindingSchema(args: [.string, .i32, .i32, .bool]),
+  "echoShape": MethodBindingSchema(args: [
     .enum(variants: [("Circle", [.f64]), ("Rectangle", [.f64, .f64]), ("Point", [])])
   ]),
-  "echoStatusV1": MethodSchema(args: [.enum(variants: [("Active", []), ("Inactive", [])])]),
-  "echoTagV1": MethodSchema(args: [
+  "echoStatusV1": MethodBindingSchema(args: [.enum(variants: [("Active", []), ("Inactive", [])])]),
+  "echoTagV1": MethodBindingSchema(args: [
     .struct(fields: [("label", .string), ("priority", .u32), ("note", .string)])
   ]),
-  "echoProfile": MethodSchema(args: [.struct(fields: [("name", .string), ("bio", .string)])]),
-  "echoRecord": MethodSchema(args: [
+  "echoProfile": MethodBindingSchema(args: [.struct(fields: [("name", .string), ("bio", .string)])]
+  ),
+  "echoRecord": MethodBindingSchema(args: [
     .struct(fields: [("alpha", .i32), ("beta", .string), ("gamma", .f64)])
   ]),
-  "echoStatus": MethodSchema(args: [.enum(variants: [("Active", []), ("Inactive", [])])]),
-  "echoTag": MethodSchema(args: [
+  "echoStatus": MethodBindingSchema(args: [.enum(variants: [("Active", []), ("Inactive", [])])]),
+  "echoTag": MethodBindingSchema(args: [
     .struct(fields: [("label", .string), ("priority", .u32), ("note", .string)])
   ]),
-  "echoMeasurement": MethodSchema(args: [.struct(fields: [("unit", .string), ("value", .f64)])]),
-  "echoConfig": MethodSchema(args: [.struct(fields: [("key", .string), ("value", .string)])]),
+  "echoMeasurement": MethodBindingSchema(args: [
+    .struct(fields: [("unit", .string), ("value", .f64)])
+  ]),
+  "echoConfig": MethodBindingSchema(args: [.struct(fields: [("key", .string), ("value", .string)])]
+  ),
 ]
 
 public struct TestbedSerializers: BindingSerializers {
   public init() {}
 
-  public func txSerializer(for schema: Schema) -> @Sendable (Any) -> [UInt8] {
+  public func txSerializer(for schema: BindingSchema) -> @Sendable (Any) -> [UInt8] {
     switch schema {
     case .bool: return { encodeBool($0 as! Bool) }
     case .u8: return { encodeU8($0 as! UInt8) }
@@ -1949,7 +1921,7 @@ public struct TestbedSerializers: BindingSerializers {
     }
   }
 
-  public func rxDeserializer(for schema: Schema) -> @Sendable ([UInt8]) throws -> Any {
+  public func rxDeserializer(for schema: BindingSchema) -> @Sendable ([UInt8]) throws -> Any {
     switch schema {
     case .bool:
       return {

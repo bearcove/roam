@@ -1735,7 +1735,7 @@ export const session = {
   },
 
   async initiatorOn(
-    transport: Link,
+    transport: SessionTransport,
     options: SessionTransportOptions = {},
   ): Promise<Session> {
     const established = await makeInitiatorEstablishedTransport(transport, options);
@@ -1751,7 +1751,7 @@ export const session = {
   },
 
   async acceptorOn(
-    transport: Link,
+    transport: SessionTransport,
     options: SessionTransportOptions = {},
   ): Promise<Session> {
     const established = await makeAcceptorEstablishedTransport(transport, {
@@ -1770,7 +1770,7 @@ export const session = {
   },
 
   async acceptorOnOrResume(
-    transport: Link,
+    transport: SessionTransport,
     registry: SessionRegistry,
     options: SessionTransportOptions = {},
   ): Promise<SessionAcceptOutcome> {

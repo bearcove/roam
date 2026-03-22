@@ -303,80 +303,78 @@ public final class TestbedChannelingDispatcher {
     self.taskSender = taskSender
   }
 
-  public func dispatch(methodId: UInt64, requestId: UInt64, channels: [UInt64], payload: Data) async
-  {
+  public func dispatch(methodId: UInt64, requestId: UInt64, payload: Data) async {
     switch methodId {
     case 0x880b_c4ee_e235_74be:
-      await dispatch_echo(requestId: requestId, channels: channels, payload: payload)
+      await dispatch_echo(requestId: requestId, payload: payload)
     case 0x1c22_3f30_e180_392a:
-      await dispatch_reverse(requestId: requestId, channels: channels, payload: payload)
+      await dispatch_reverse(requestId: requestId, payload: payload)
     case 0xfb68_d931_8f83_0875:
-      await dispatch_divide(requestId: requestId, channels: channels, payload: payload)
+      await dispatch_divide(requestId: requestId, payload: payload)
     case 0xa15f_f520_9471_2a3b:
-      await dispatch_lookup(requestId: requestId, channels: channels, payload: payload)
+      await dispatch_lookup(requestId: requestId, payload: payload)
     case 0x51f9_cfd8_e865_77c9:
-      await dispatch_sum(requestId: requestId, channels: channels, payload: payload)
+      await dispatch_sum(requestId: requestId, payload: payload)
     case 0x239e_5b99_b1f8_207a:
-      await dispatch_generate(requestId: requestId, channels: channels, payload: payload)
+      await dispatch_generate(requestId: requestId, payload: payload)
     case 0x3441_9529_478c_c7b8:
-      await dispatch_generateRetryNonIdem(
-        requestId: requestId, channels: channels, payload: payload)
+      await dispatch_generateRetryNonIdem(requestId: requestId, payload: payload)
     case 0xe2d2_7fd9_098c_6ea2:
-      await dispatch_generateRetryIdem(requestId: requestId, channels: channels, payload: payload)
+      await dispatch_generateRetryIdem(requestId: requestId, payload: payload)
     case 0xcb46_9cff_8d79_8feb:
-      await dispatch_transform(requestId: requestId, channels: channels, payload: payload)
+      await dispatch_transform(requestId: requestId, payload: payload)
     case 0x81f5_386d_589d_fbe4:
-      await dispatch_echoPoint(requestId: requestId, channels: channels, payload: payload)
+      await dispatch_echoPoint(requestId: requestId, payload: payload)
     case 0x68ff_a90b_7728_bde7:
-      await dispatch_createPerson(requestId: requestId, channels: channels, payload: payload)
+      await dispatch_createPerson(requestId: requestId, payload: payload)
     case 0x223f_e028_2d26_3107:
-      await dispatch_rectangleArea(requestId: requestId, channels: channels, payload: payload)
+      await dispatch_rectangleArea(requestId: requestId, payload: payload)
     case 0xd4f1_6ea9_eca1_32e6:
-      await dispatch_parseColor(requestId: requestId, channels: channels, payload: payload)
+      await dispatch_parseColor(requestId: requestId, payload: payload)
     case 0x0438_5a4b_e2a8_82f5:
-      await dispatch_shapeArea(requestId: requestId, channels: channels, payload: payload)
+      await dispatch_shapeArea(requestId: requestId, payload: payload)
     case 0xef42_1eb5_b08c_973a:
-      await dispatch_createCanvas(requestId: requestId, channels: channels, payload: payload)
+      await dispatch_createCanvas(requestId: requestId, payload: payload)
     case 0xe08f_0f52_54e7_a997:
-      await dispatch_processMessage(requestId: requestId, channels: channels, payload: payload)
+      await dispatch_processMessage(requestId: requestId, payload: payload)
     case 0x5985_1852_3a62_66bf:
-      await dispatch_getPoints(requestId: requestId, channels: channels, payload: payload)
+      await dispatch_getPoints(requestId: requestId, payload: payload)
     case 0x7d55_a713_ad61_2bf2:
-      await dispatch_swapPair(requestId: requestId, channels: channels, payload: payload)
+      await dispatch_swapPair(requestId: requestId, payload: payload)
     case 0x4405_6c78_42fa_336c:
-      await dispatch_echoBytes(requestId: requestId, channels: channels, payload: payload)
+      await dispatch_echoBytes(requestId: requestId, payload: payload)
     case 0x5136_d8f0_1a5f_496c:
-      await dispatch_echoBool(requestId: requestId, channels: channels, payload: payload)
+      await dispatch_echoBool(requestId: requestId, payload: payload)
     case 0x85e2_380d_bf7f_fe65:
-      await dispatch_echoU64(requestId: requestId, channels: channels, payload: payload)
+      await dispatch_echoU64(requestId: requestId, payload: payload)
     case 0xb1a5_bfd2_05b3_fbfc:
-      await dispatch_echoOptionString(requestId: requestId, channels: channels, payload: payload)
+      await dispatch_echoOptionString(requestId: requestId, payload: payload)
     case 0x9a7b_ed54_5e08_8054:
-      await dispatch_sumLarge(requestId: requestId, channels: channels, payload: payload)
+      await dispatch_sumLarge(requestId: requestId, payload: payload)
     case 0x8edf_bd65_d162_f685:
-      await dispatch_generateLarge(requestId: requestId, channels: channels, payload: payload)
+      await dispatch_generateLarge(requestId: requestId, payload: payload)
     case 0xfbfb_05bb_caad_e4a0:
-      await dispatch_allColors(requestId: requestId, channels: channels, payload: payload)
+      await dispatch_allColors(requestId: requestId, payload: payload)
     case 0x62fe_b14a_8fcf_9b6d:
-      await dispatch_describePoint(requestId: requestId, channels: channels, payload: payload)
+      await dispatch_describePoint(requestId: requestId, payload: payload)
     case 0x4125_b5e6_78b7_b4a5:
-      await dispatch_echoShape(requestId: requestId, channels: channels, payload: payload)
+      await dispatch_echoShape(requestId: requestId, payload: payload)
     case 0xc7c5_aa84_5cfb_8bf6:
-      await dispatch_echoStatusV1(requestId: requestId, channels: channels, payload: payload)
+      await dispatch_echoStatusV1(requestId: requestId, payload: payload)
     case 0x6619_071b_e5d5_c259:
-      await dispatch_echoTagV1(requestId: requestId, channels: channels, payload: payload)
+      await dispatch_echoTagV1(requestId: requestId, payload: payload)
     case 0xbd9b_cabd_deeb_eb04:
-      await dispatch_echoProfile(requestId: requestId, channels: channels, payload: payload)
+      await dispatch_echoProfile(requestId: requestId, payload: payload)
     case 0x100b_0e08_da4b_8f1a:
-      await dispatch_echoRecord(requestId: requestId, channels: channels, payload: payload)
+      await dispatch_echoRecord(requestId: requestId, payload: payload)
     case 0x6975_90d3_ffc3_6703:
-      await dispatch_echoStatus(requestId: requestId, channels: channels, payload: payload)
+      await dispatch_echoStatus(requestId: requestId, payload: payload)
     case 0x2bd1_b314_9d73_ce97:
-      await dispatch_echoTag(requestId: requestId, channels: channels, payload: payload)
+      await dispatch_echoTag(requestId: requestId, payload: payload)
     case 0x3b3d_22b0_15fa_1a3f:
-      await dispatch_echoMeasurement(requestId: requestId, channels: channels, payload: payload)
+      await dispatch_echoMeasurement(requestId: requestId, payload: payload)
     case 0xe13a_477f_b964_ce28:
-      await dispatch_echoConfig(requestId: requestId, channels: channels, payload: payload)
+      await dispatch_echoConfig(requestId: requestId, payload: payload)
     default:
       taskSender(.response(requestId: requestId, payload: encodeUnknownMethodError()))
     }
@@ -459,45 +457,76 @@ public final class TestbedChannelingDispatcher {
     }
   }
 
-  /// Pre-register Rx channel IDs from request channels.
+  /// Pre-register Rx channel IDs from request payloads.
   /// Call this synchronously before spawning the dispatch task to avoid
   /// race conditions where Data arrives before channels are registered.
-  public static func preregisterChannels(
-    methodId: UInt64, channels: [UInt64], registry: ChannelRegistry
-  ) async {
+  public static func preregisterChannels(methodId: UInt64, payload: Data, registry: ChannelRegistry)
+    async
+  {
     switch methodId {
     case 0x51f9_cfd8_e865_77c9:
-      guard channels.count >= 1 else {
+      do {
+        var preregisterCursor = 0
+        let numbersChannelId = try decodeVarint(from: payload, offset: &preregisterCursor)
+        await registry.markKnown(numbersChannelId)
+      } catch {
         return
       }
-      var channelCursor = 0
-      let numbersChannelId = channels[channelCursor]
-      channelCursor += 1
-      await registry.markKnown(numbersChannelId)
+    case 0x239e_5b99_b1f8_207a:
+      do {
+        var preregisterCursor = 0
+        let _discard_count = try decodeU32(from: payload, offset: &preregisterCursor)
+        _ = try decodeVarint(from: payload, offset: &preregisterCursor)
+      } catch {
+        return
+      }
+    case 0x3441_9529_478c_c7b8:
+      do {
+        var preregisterCursor = 0
+        let _discard_count = try decodeU32(from: payload, offset: &preregisterCursor)
+        _ = try decodeVarint(from: payload, offset: &preregisterCursor)
+      } catch {
+        return
+      }
+    case 0xe2d2_7fd9_098c_6ea2:
+      do {
+        var preregisterCursor = 0
+        let _discard_count = try decodeU32(from: payload, offset: &preregisterCursor)
+        _ = try decodeVarint(from: payload, offset: &preregisterCursor)
+      } catch {
+        return
+      }
     case 0xcb46_9cff_8d79_8feb:
-      guard channels.count >= 2 else {
+      do {
+        var preregisterCursor = 0
+        let inputChannelId = try decodeVarint(from: payload, offset: &preregisterCursor)
+        await registry.markKnown(inputChannelId)
+        _ = try decodeVarint(from: payload, offset: &preregisterCursor)
+      } catch {
         return
       }
-      var channelCursor = 0
-      let inputChannelId = channels[channelCursor]
-      channelCursor += 1
-      await registry.markKnown(inputChannelId)
-      _ = channels[channelCursor]  // output
-      channelCursor += 1
     case 0x9a7b_ed54_5e08_8054:
-      guard channels.count >= 1 else {
+      do {
+        var preregisterCursor = 0
+        let numbersChannelId = try decodeVarint(from: payload, offset: &preregisterCursor)
+        await registry.markKnown(numbersChannelId)
+      } catch {
         return
       }
-      var channelCursor = 0
-      let numbersChannelId = channels[channelCursor]
-      channelCursor += 1
-      await registry.markKnown(numbersChannelId)
+    case 0x8edf_bd65_d162_f685:
+      do {
+        var preregisterCursor = 0
+        let _discard_count = try decodeU32(from: payload, offset: &preregisterCursor)
+        _ = try decodeVarint(from: payload, offset: &preregisterCursor)
+      } catch {
+        return
+      }
     default:
       break
     }
   }
 
-  private func dispatch_echo(requestId: UInt64, channels: [UInt64], payload: Data) async {
+  private func dispatch_echo(requestId: UInt64, payload: Data) async {
     do {
       var cursor = 0
       let message = try decodeString(from: payload, offset: &cursor)
@@ -514,7 +543,7 @@ public final class TestbedChannelingDispatcher {
     }
   }
 
-  private func dispatch_reverse(requestId: UInt64, channels: [UInt64], payload: Data) async {
+  private func dispatch_reverse(requestId: UInt64, payload: Data) async {
     do {
       var cursor = 0
       let message = try decodeString(from: payload, offset: &cursor)
@@ -531,7 +560,7 @@ public final class TestbedChannelingDispatcher {
     }
   }
 
-  private func dispatch_divide(requestId: UInt64, channels: [UInt64], payload: Data) async {
+  private func dispatch_divide(requestId: UInt64, payload: Data) async {
     do {
       var cursor = 0
       let dividend = try decodeI64(from: payload, offset: &cursor)
@@ -564,7 +593,7 @@ public final class TestbedChannelingDispatcher {
     }
   }
 
-  private func dispatch_lookup(requestId: UInt64, channels: [UInt64], payload: Data) async {
+  private func dispatch_lookup(requestId: UInt64, payload: Data) async {
     do {
       var cursor = 0
       let id = try decodeU32(from: payload, offset: &cursor)
@@ -601,14 +630,10 @@ public final class TestbedChannelingDispatcher {
     }
   }
 
-  private func dispatch_sum(requestId: UInt64, channels: [UInt64], payload: Data) async {
+  private func dispatch_sum(requestId: UInt64, payload: Data) async {
     do {
-      var channelCursor = 0
-      guard channelCursor < channels.count else {
-        throw TelexError.decodeError("missing channel id for numbers")
-      }
-      let numbersChannelId = channels[channelCursor]
-      channelCursor += 1
+      var cursor = 0
+      let numbersChannelId = try decodeVarint(from: payload, offset: &cursor)
       let numbersReceiver = await registry.register(
         numbersChannelId, initialCredit: 16,
         onConsumed: { [taskSender = self.taskSender] additional in
@@ -633,16 +658,11 @@ public final class TestbedChannelingDispatcher {
     }
   }
 
-  private func dispatch_generate(requestId: UInt64, channels: [UInt64], payload: Data) async {
+  private func dispatch_generate(requestId: UInt64, payload: Data) async {
     do {
       var cursor = 0
-      var channelCursor = 0
       let count = try decodeU32(from: payload, offset: &cursor)
-      guard channelCursor < channels.count else {
-        throw TelexError.decodeError("missing channel id for output")
-      }
-      let outputChannelId = channels[channelCursor]
-      channelCursor += 1
+      let outputChannelId = try decodeVarint(from: payload, offset: &cursor)
       let output = await createServerTx(
         channelId: outputChannelId, taskSender: taskSender, registry: registry, initialCredit: 16,
         serialize: ({ encodeI32($0) }))
@@ -659,18 +679,11 @@ public final class TestbedChannelingDispatcher {
     }
   }
 
-  private func dispatch_generateRetryNonIdem(requestId: UInt64, channels: [UInt64], payload: Data)
-    async
-  {
+  private func dispatch_generateRetryNonIdem(requestId: UInt64, payload: Data) async {
     do {
       var cursor = 0
-      var channelCursor = 0
       let count = try decodeU32(from: payload, offset: &cursor)
-      guard channelCursor < channels.count else {
-        throw TelexError.decodeError("missing channel id for output")
-      }
-      let outputChannelId = channels[channelCursor]
-      channelCursor += 1
+      let outputChannelId = try decodeVarint(from: payload, offset: &cursor)
       let output = await createServerTx(
         channelId: outputChannelId, taskSender: taskSender, registry: registry, initialCredit: 16,
         serialize: ({ encodeI32($0) }))
@@ -687,18 +700,11 @@ public final class TestbedChannelingDispatcher {
     }
   }
 
-  private func dispatch_generateRetryIdem(requestId: UInt64, channels: [UInt64], payload: Data)
-    async
-  {
+  private func dispatch_generateRetryIdem(requestId: UInt64, payload: Data) async {
     do {
       var cursor = 0
-      var channelCursor = 0
       let count = try decodeU32(from: payload, offset: &cursor)
-      guard channelCursor < channels.count else {
-        throw TelexError.decodeError("missing channel id for output")
-      }
-      let outputChannelId = channels[channelCursor]
-      channelCursor += 1
+      let outputChannelId = try decodeVarint(from: payload, offset: &cursor)
       let output = await createServerTx(
         channelId: outputChannelId, taskSender: taskSender, registry: registry, initialCredit: 16,
         serialize: ({ encodeI32($0) }))
@@ -715,14 +721,10 @@ public final class TestbedChannelingDispatcher {
     }
   }
 
-  private func dispatch_transform(requestId: UInt64, channels: [UInt64], payload: Data) async {
+  private func dispatch_transform(requestId: UInt64, payload: Data) async {
     do {
-      var channelCursor = 0
-      guard channelCursor < channels.count else {
-        throw TelexError.decodeError("missing channel id for input")
-      }
-      let inputChannelId = channels[channelCursor]
-      channelCursor += 1
+      var cursor = 0
+      let inputChannelId = try decodeVarint(from: payload, offset: &cursor)
       let inputReceiver = await registry.register(
         inputChannelId, initialCredit: 16,
         onConsumed: { [taskSender = self.taskSender] additional in
@@ -734,11 +736,7 @@ public final class TestbedChannelingDispatcher {
           var off = 0
           return try decodeString(from: Data(bytes), offset: &off)
         })
-      guard channelCursor < channels.count else {
-        throw TelexError.decodeError("missing channel id for output")
-      }
-      let outputChannelId = channels[channelCursor]
-      channelCursor += 1
+      let outputChannelId = try decodeVarint(from: payload, offset: &cursor)
       let output = await createServerTx(
         channelId: outputChannelId, taskSender: taskSender, registry: registry, initialCredit: 16,
         serialize: ({ encodeString($0) }))
@@ -755,7 +753,7 @@ public final class TestbedChannelingDispatcher {
     }
   }
 
-  private func dispatch_echoPoint(requestId: UInt64, channels: [UInt64], payload: Data) async {
+  private func dispatch_echoPoint(requestId: UInt64, payload: Data) async {
     do {
       var cursor = 0
       let _point_x = try decodeI32(from: payload, offset: &cursor)
@@ -775,7 +773,7 @@ public final class TestbedChannelingDispatcher {
     }
   }
 
-  private func dispatch_createPerson(requestId: UInt64, channels: [UInt64], payload: Data) async {
+  private func dispatch_createPerson(requestId: UInt64, payload: Data) async {
     do {
       var cursor = 0
       let name = try decodeString(from: payload, offset: &cursor)
@@ -802,7 +800,7 @@ public final class TestbedChannelingDispatcher {
     }
   }
 
-  private func dispatch_rectangleArea(requestId: UInt64, channels: [UInt64], payload: Data) async {
+  private func dispatch_rectangleArea(requestId: UInt64, payload: Data) async {
     do {
       var cursor = 0
       let __rect_topLeft_x = try decodeI32(from: payload, offset: &cursor)
@@ -829,7 +827,7 @@ public final class TestbedChannelingDispatcher {
     }
   }
 
-  private func dispatch_parseColor(requestId: UInt64, channels: [UInt64], payload: Data) async {
+  private func dispatch_parseColor(requestId: UInt64, payload: Data) async {
     do {
       var cursor = 0
       let name = try decodeString(from: payload, offset: &cursor)
@@ -862,7 +860,7 @@ public final class TestbedChannelingDispatcher {
     }
   }
 
-  private func dispatch_shapeArea(requestId: UInt64, channels: [UInt64], payload: Data) async {
+  private func dispatch_shapeArea(requestId: UInt64, payload: Data) async {
     do {
       var cursor = 0
       let _shape_disc = try decodeVarint(from: payload, offset: &cursor)
@@ -893,7 +891,7 @@ public final class TestbedChannelingDispatcher {
     }
   }
 
-  private func dispatch_createCanvas(requestId: UInt64, channels: [UInt64], payload: Data) async {
+  private func dispatch_createCanvas(requestId: UInt64, payload: Data) async {
     do {
       var cursor = 0
       let name = try decodeString(from: payload, offset: &cursor)
@@ -970,7 +968,7 @@ public final class TestbedChannelingDispatcher {
     }
   }
 
-  private func dispatch_processMessage(requestId: UInt64, channels: [UInt64], payload: Data) async {
+  private func dispatch_processMessage(requestId: UInt64, payload: Data) async {
     do {
       var cursor = 0
       let _msg_disc = try decodeVarint(from: payload, offset: &cursor)
@@ -1013,7 +1011,7 @@ public final class TestbedChannelingDispatcher {
     }
   }
 
-  private func dispatch_getPoints(requestId: UInt64, channels: [UInt64], payload: Data) async {
+  private func dispatch_getPoints(requestId: UInt64, payload: Data) async {
     do {
       var cursor = 0
       let count = try decodeU32(from: payload, offset: &cursor)
@@ -1032,7 +1030,7 @@ public final class TestbedChannelingDispatcher {
     }
   }
 
-  private func dispatch_swapPair(requestId: UInt64, channels: [UInt64], payload: Data) async {
+  private func dispatch_swapPair(requestId: UInt64, payload: Data) async {
     do {
       var cursor = 0
       let pair = try decodeTuple2(
@@ -1054,7 +1052,7 @@ public final class TestbedChannelingDispatcher {
     }
   }
 
-  private func dispatch_echoBytes(requestId: UInt64, channels: [UInt64], payload: Data) async {
+  private func dispatch_echoBytes(requestId: UInt64, payload: Data) async {
     do {
       var cursor = 0
       let data = try decodeBytes(from: payload, offset: &cursor)
@@ -1072,7 +1070,7 @@ public final class TestbedChannelingDispatcher {
     }
   }
 
-  private func dispatch_echoBool(requestId: UInt64, channels: [UInt64], payload: Data) async {
+  private func dispatch_echoBool(requestId: UInt64, payload: Data) async {
     do {
       var cursor = 0
       let b = try decodeBool(from: payload, offset: &cursor)
@@ -1089,7 +1087,7 @@ public final class TestbedChannelingDispatcher {
     }
   }
 
-  private func dispatch_echoU64(requestId: UInt64, channels: [UInt64], payload: Data) async {
+  private func dispatch_echoU64(requestId: UInt64, payload: Data) async {
     do {
       var cursor = 0
       let n = try decodeVarint(from: payload, offset: &cursor)
@@ -1106,8 +1104,7 @@ public final class TestbedChannelingDispatcher {
     }
   }
 
-  private func dispatch_echoOptionString(requestId: UInt64, channels: [UInt64], payload: Data) async
-  {
+  private func dispatch_echoOptionString(requestId: UInt64, payload: Data) async {
     do {
       var cursor = 0
       let s = try decodeOption(
@@ -1128,14 +1125,10 @@ public final class TestbedChannelingDispatcher {
     }
   }
 
-  private func dispatch_sumLarge(requestId: UInt64, channels: [UInt64], payload: Data) async {
+  private func dispatch_sumLarge(requestId: UInt64, payload: Data) async {
     do {
-      var channelCursor = 0
-      guard channelCursor < channels.count else {
-        throw TelexError.decodeError("missing channel id for numbers")
-      }
-      let numbersChannelId = channels[channelCursor]
-      channelCursor += 1
+      var cursor = 0
+      let numbersChannelId = try decodeVarint(from: payload, offset: &cursor)
       let numbersReceiver = await registry.register(
         numbersChannelId, initialCredit: 16,
         onConsumed: { [taskSender = self.taskSender] additional in
@@ -1160,16 +1153,11 @@ public final class TestbedChannelingDispatcher {
     }
   }
 
-  private func dispatch_generateLarge(requestId: UInt64, channels: [UInt64], payload: Data) async {
+  private func dispatch_generateLarge(requestId: UInt64, payload: Data) async {
     do {
       var cursor = 0
-      var channelCursor = 0
       let count = try decodeU32(from: payload, offset: &cursor)
-      guard channelCursor < channels.count else {
-        throw TelexError.decodeError("missing channel id for output")
-      }
-      let outputChannelId = channels[channelCursor]
-      channelCursor += 1
+      let outputChannelId = try decodeVarint(from: payload, offset: &cursor)
       let output = await createServerTx(
         channelId: outputChannelId, taskSender: taskSender, registry: registry, initialCredit: 16,
         serialize: ({ encodeI32($0) }))
@@ -1186,7 +1174,7 @@ public final class TestbedChannelingDispatcher {
     }
   }
 
-  private func dispatch_allColors(requestId: UInt64, channels: [UInt64], payload: Data) async {
+  private func dispatch_allColors(requestId: UInt64, payload: Data) async {
     do {
       do {
         let result = try await handler.allColors()
@@ -1217,7 +1205,7 @@ public final class TestbedChannelingDispatcher {
     }
   }
 
-  private func dispatch_describePoint(requestId: UInt64, channels: [UInt64], payload: Data) async {
+  private func dispatch_describePoint(requestId: UInt64, payload: Data) async {
     do {
       var cursor = 0
       let label = try decodeString(from: payload, offset: &cursor)
@@ -1242,7 +1230,7 @@ public final class TestbedChannelingDispatcher {
     }
   }
 
-  private func dispatch_echoShape(requestId: UInt64, channels: [UInt64], payload: Data) async {
+  private func dispatch_echoShape(requestId: UInt64, payload: Data) async {
     do {
       var cursor = 0
       let _shape_disc = try decodeVarint(from: payload, offset: &cursor)
@@ -1285,7 +1273,7 @@ public final class TestbedChannelingDispatcher {
     }
   }
 
-  private func dispatch_echoStatusV1(requestId: UInt64, channels: [UInt64], payload: Data) async {
+  private func dispatch_echoStatusV1(requestId: UInt64, payload: Data) async {
     do {
       var cursor = 0
       let _status_disc = try decodeVarint(from: payload, offset: &cursor)
@@ -1321,7 +1309,7 @@ public final class TestbedChannelingDispatcher {
     }
   }
 
-  private func dispatch_echoTagV1(requestId: UInt64, channels: [UInt64], payload: Data) async {
+  private func dispatch_echoTagV1(requestId: UInt64, payload: Data) async {
     do {
       var cursor = 0
       let _tag_label = try decodeString(from: payload, offset: &cursor)
@@ -1345,7 +1333,7 @@ public final class TestbedChannelingDispatcher {
     }
   }
 
-  private func dispatch_echoProfile(requestId: UInt64, channels: [UInt64], payload: Data) async {
+  private func dispatch_echoProfile(requestId: UInt64, payload: Data) async {
     do {
       var cursor = 0
       let _profile_name = try decodeString(from: payload, offset: &cursor)
@@ -1366,7 +1354,7 @@ public final class TestbedChannelingDispatcher {
     }
   }
 
-  private func dispatch_echoRecord(requestId: UInt64, channels: [UInt64], payload: Data) async {
+  private func dispatch_echoRecord(requestId: UInt64, payload: Data) async {
     do {
       var cursor = 0
       let _record_alpha = try decodeI32(from: payload, offset: &cursor)
@@ -1389,7 +1377,7 @@ public final class TestbedChannelingDispatcher {
     }
   }
 
-  private func dispatch_echoStatus(requestId: UInt64, channels: [UInt64], payload: Data) async {
+  private func dispatch_echoStatus(requestId: UInt64, payload: Data) async {
     do {
       var cursor = 0
       let _status_disc = try decodeVarint(from: payload, offset: &cursor)
@@ -1425,7 +1413,7 @@ public final class TestbedChannelingDispatcher {
     }
   }
 
-  private func dispatch_echoTag(requestId: UInt64, channels: [UInt64], payload: Data) async {
+  private func dispatch_echoTag(requestId: UInt64, payload: Data) async {
     do {
       var cursor = 0
       let _tag_label = try decodeString(from: payload, offset: &cursor)
@@ -1449,8 +1437,7 @@ public final class TestbedChannelingDispatcher {
     }
   }
 
-  private func dispatch_echoMeasurement(requestId: UInt64, channels: [UInt64], payload: Data) async
-  {
+  private func dispatch_echoMeasurement(requestId: UInt64, payload: Data) async {
     do {
       var cursor = 0
       let _m_unit = try decodeString(from: payload, offset: &cursor)
@@ -1471,7 +1458,7 @@ public final class TestbedChannelingDispatcher {
     }
   }
 
-  private func dispatch_echoConfig(requestId: UInt64, channels: [UInt64], payload: Data) async {
+  private func dispatch_echoConfig(requestId: UInt64, payload: Data) async {
     do {
       var cursor = 0
       let _c_key = try decodeString(from: payload, offset: &cursor)
@@ -1496,71 +1483,75 @@ public final class TestbedChannelingDispatcher {
 
 // MARK: - Testbed Schemas
 
-public let testbed_schemas: [String: MethodSchema] = [
-  "echo": MethodSchema(args: [.string]),
-  "reverse": MethodSchema(args: [.string]),
-  "divide": MethodSchema(args: [.i64, .i64]),
-  "lookup": MethodSchema(args: [.u32]),
-  "sum": MethodSchema(args: [.rx(element: .i32)]),
-  "generate": MethodSchema(args: [.u32, .tx(element: .i32)]),
-  "generateRetryNonIdem": MethodSchema(args: [.u32, .tx(element: .i32)]),
-  "generateRetryIdem": MethodSchema(args: [.u32, .tx(element: .i32)]),
-  "transform": MethodSchema(args: [.rx(element: .string), .tx(element: .string)]),
-  "echoPoint": MethodSchema(args: [.struct(fields: [("x", .i32), ("y", .i32)])]),
-  "createPerson": MethodSchema(args: [.string, .u8, .option(inner: .string)]),
-  "rectangleArea": MethodSchema(args: [
+public let testbed_schemas: [String: MethodBindingSchema] = [
+  "echo": MethodBindingSchema(args: [.string]),
+  "reverse": MethodBindingSchema(args: [.string]),
+  "divide": MethodBindingSchema(args: [.i64, .i64]),
+  "lookup": MethodBindingSchema(args: [.u32]),
+  "sum": MethodBindingSchema(args: [.rx(element: .i32)]),
+  "generate": MethodBindingSchema(args: [.u32, .tx(element: .i32)]),
+  "generateRetryNonIdem": MethodBindingSchema(args: [.u32, .tx(element: .i32)]),
+  "generateRetryIdem": MethodBindingSchema(args: [.u32, .tx(element: .i32)]),
+  "transform": MethodBindingSchema(args: [.rx(element: .string), .tx(element: .string)]),
+  "echoPoint": MethodBindingSchema(args: [.struct(fields: [("x", .i32), ("y", .i32)])]),
+  "createPerson": MethodBindingSchema(args: [.string, .u8, .option(inner: .string)]),
+  "rectangleArea": MethodBindingSchema(args: [
     .struct(fields: [
       ("top_left", .struct(fields: [("x", .i32), ("y", .i32)])),
       ("bottom_right", .struct(fields: [("x", .i32), ("y", .i32)])),
       ("label", .option(inner: .string)),
     ])
   ]),
-  "parseColor": MethodSchema(args: [.string]),
-  "shapeArea": MethodSchema(args: [
+  "parseColor": MethodBindingSchema(args: [.string]),
+  "shapeArea": MethodBindingSchema(args: [
     .enum(variants: [("Circle", [.f64]), ("Rectangle", [.f64, .f64]), ("Point", [])])
   ]),
-  "createCanvas": MethodSchema(args: [
+  "createCanvas": MethodBindingSchema(args: [
     .string,
     .vec(
       element: .enum(variants: [("Circle", [.f64]), ("Rectangle", [.f64, .f64]), ("Point", [])])),
     .enum(variants: [("Red", []), ("Green", []), ("Blue", [])]),
   ]),
-  "processMessage": MethodSchema(args: [
+  "processMessage": MethodBindingSchema(args: [
     .enum(variants: [("Text", [.string]), ("Number", [.i64]), ("Data", [.bytes])])
   ]),
-  "getPoints": MethodSchema(args: [.u32]),
-  "swapPair": MethodSchema(args: [.bytes]),
-  "echoBytes": MethodSchema(args: [.bytes]),
-  "echoBool": MethodSchema(args: [.bool]),
-  "echoU64": MethodSchema(args: [.u64]),
-  "echoOptionString": MethodSchema(args: [.option(inner: .string)]),
-  "sumLarge": MethodSchema(args: [.rx(element: .i32)]),
-  "generateLarge": MethodSchema(args: [.u32, .tx(element: .i32)]),
-  "allColors": MethodSchema(args: []),
-  "describePoint": MethodSchema(args: [.string, .i32, .i32, .bool]),
-  "echoShape": MethodSchema(args: [
+  "getPoints": MethodBindingSchema(args: [.u32]),
+  "swapPair": MethodBindingSchema(args: [.bytes]),
+  "echoBytes": MethodBindingSchema(args: [.bytes]),
+  "echoBool": MethodBindingSchema(args: [.bool]),
+  "echoU64": MethodBindingSchema(args: [.u64]),
+  "echoOptionString": MethodBindingSchema(args: [.option(inner: .string)]),
+  "sumLarge": MethodBindingSchema(args: [.rx(element: .i32)]),
+  "generateLarge": MethodBindingSchema(args: [.u32, .tx(element: .i32)]),
+  "allColors": MethodBindingSchema(args: []),
+  "describePoint": MethodBindingSchema(args: [.string, .i32, .i32, .bool]),
+  "echoShape": MethodBindingSchema(args: [
     .enum(variants: [("Circle", [.f64]), ("Rectangle", [.f64, .f64]), ("Point", [])])
   ]),
-  "echoStatusV1": MethodSchema(args: [.enum(variants: [("Active", []), ("Inactive", [])])]),
-  "echoTagV1": MethodSchema(args: [
+  "echoStatusV1": MethodBindingSchema(args: [.enum(variants: [("Active", []), ("Inactive", [])])]),
+  "echoTagV1": MethodBindingSchema(args: [
     .struct(fields: [("label", .string), ("priority", .u32), ("note", .string)])
   ]),
-  "echoProfile": MethodSchema(args: [.struct(fields: [("name", .string), ("bio", .string)])]),
-  "echoRecord": MethodSchema(args: [
+  "echoProfile": MethodBindingSchema(args: [.struct(fields: [("name", .string), ("bio", .string)])]
+  ),
+  "echoRecord": MethodBindingSchema(args: [
     .struct(fields: [("alpha", .i32), ("beta", .string), ("gamma", .f64)])
   ]),
-  "echoStatus": MethodSchema(args: [.enum(variants: [("Active", []), ("Inactive", [])])]),
-  "echoTag": MethodSchema(args: [
+  "echoStatus": MethodBindingSchema(args: [.enum(variants: [("Active", []), ("Inactive", [])])]),
+  "echoTag": MethodBindingSchema(args: [
     .struct(fields: [("label", .string), ("priority", .u32), ("note", .string)])
   ]),
-  "echoMeasurement": MethodSchema(args: [.struct(fields: [("unit", .string), ("value", .f64)])]),
-  "echoConfig": MethodSchema(args: [.struct(fields: [("key", .string), ("value", .string)])]),
+  "echoMeasurement": MethodBindingSchema(args: [
+    .struct(fields: [("unit", .string), ("value", .f64)])
+  ]),
+  "echoConfig": MethodBindingSchema(args: [.struct(fields: [("key", .string), ("value", .string)])]
+  ),
 ]
 
 public struct TestbedSerializers: BindingSerializers {
   public init() {}
 
-  public func txSerializer(for schema: Schema) -> @Sendable (Any) -> [UInt8] {
+  public func txSerializer(for schema: BindingSchema) -> @Sendable (Any) -> [UInt8] {
     switch schema {
     case .bool: return { encodeBool($0 as! Bool) }
     case .u8: return { encodeU8($0 as! UInt8) }
@@ -1580,7 +1571,7 @@ public struct TestbedSerializers: BindingSerializers {
     }
   }
 
-  public func rxDeserializer(for schema: Schema) -> @Sendable ([UInt8]) throws -> Any {
+  public func rxDeserializer(for schema: BindingSchema) -> @Sendable ([UInt8]) throws -> Any {
     switch schema {
     case .bool:
       return {

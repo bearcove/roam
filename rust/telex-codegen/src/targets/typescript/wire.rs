@@ -4,7 +4,7 @@
 //! - interfaces and tagged unions for all named types
 //! - discriminant constants for all named enums (auto-derived)
 //! - narrowed per-variant type aliases for all named enums (auto-derived)
-//! - messageSchemasCbor: CBOR-encoded Vec<Schema> for the handshake
+//! - messageSchemasCbor: CBOR-encoded `Vec<Schema>` for the handshake
 //! - messageRootRef / messageSchemaRegistry: canonical local message schema graph
 
 use std::collections::HashSet;
