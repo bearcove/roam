@@ -105,12 +105,13 @@ fn generate_channeling_dispatcher(service: &ServiceDescriptor) -> String {
         w.writeln("private let taskSender: TaskSender").unwrap();
         w.writeln("private let schemaSendTracker: SchemaSendTracker")
             .unwrap();
-        cw_writeln!(w, "private let wireSchemas: [UInt64: MethodWireSchemas]").unwrap();
+        cw_writeln!(w, "private let schemaRegistry: [UInt64: Schema]").unwrap();
+        cw_writeln!(w, "private let methodSchemas: [UInt64: MethodSchemaInfo]").unwrap();
         w.blank_line().unwrap();
 
         cw_writeln!(
             w,
-            "public init(handler: {service_name}Handler, registry: IncomingChannelRegistry, taskSender: @escaping TaskSender, schemaSendTracker: SchemaSendTracker = SchemaSendTracker(), wireSchemas: [UInt64: MethodWireSchemas] = {service_name_lower}_wire_schemas) {{"
+            "public init(handler: {service_name}Handler, registry: IncomingChannelRegistry, taskSender: @escaping TaskSender, schemaSendTracker: SchemaSendTracker, schemaRegistry: [UInt64: Schema] = {service_name_lower}_schema_registry, methodSchemas: [UInt64: MethodSchemaInfo] = {service_name_lower}_method_schemas) {{"
         )
         .unwrap();
         {
@@ -120,7 +121,8 @@ fn generate_channeling_dispatcher(service: &ServiceDescriptor) -> String {
             w.writeln("self.taskSender = taskSender").unwrap();
             w.writeln("self.schemaSendTracker = schemaSendTracker")
                 .unwrap();
-            w.writeln("self.wireSchemas = wireSchemas").unwrap();
+            w.writeln("self.schemaRegistry = schemaRegistry").unwrap();
+            w.writeln("self.methodSchemas = methodSchemas").unwrap();
         }
         w.writeln("}").unwrap();
         w.blank_line().unwrap();
@@ -276,8 +278,17 @@ fn generate_channeling_dispatch_method(w: &mut CodeWriter<&mut String>, method: 
     .unwrap();
     {
         let _indent = w.indent();
-        // Get schemas for this method's response
-        w.writeln("let responseSchemas = schemaSendTracker.prepareSchemas(methodId: methodId, direction: .response, wireSchemas: wireSchemas)").unwrap();
+        // Build and filter schema payload for this method's response
+        w.writeln("guard let methodInfo = methodSchemas[methodId] else {")
+            .unwrap();
+        w.writeln("    taskSender(.response(requestId: requestId, payload: encodeUnknownMethodError(), schemas: []))").unwrap();
+        w.writeln("    return").unwrap();
+        w.writeln("}").unwrap();
+        w.writeln("let fullPayload = methodInfo.buildPayload(direction: .response, registry: schemaRegistry)").unwrap();
+        w.writeln("let filteredPayload = schemaSendTracker.filterForSending(fullPayload)")
+            .unwrap();
+        w.writeln("let responseSchemas = filteredPayload.encodeCbor()")
+            .unwrap();
         w.writeln("do {").unwrap();
         {
             let _indent = w.indent();

@@ -180,6 +180,7 @@ extension Driver {
                 payload: payload,
                 requestId: requestId,
                 registry: serverRegistry,
+                schemaSendTracker: schemaSendTracker,
                 taskTx: taskTx
             )
         }

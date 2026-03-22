@@ -1,5 +1,7 @@
 import Foundation
+#if canImport(OSLog)
 import OSLog
+#endif
 
 private let debugEnabled = ProcessInfo.processInfo.environment["TELEX_DEBUG"] != nil
 private let traceCategories = parseTraceCategories()
@@ -28,9 +30,11 @@ private func parseTraceCategories() -> Set<TraceCategory> {
     return Set(tokens.compactMap(TraceCategory.init(rawValue:)))
 }
 
+#if canImport(OSLog)
 private func logger(category: String) -> Logger {
     Logger(subsystem: subsystem, category: category)
 }
+#endif
 
 private func writeStderr(_ line: String) {
     guard let data = (line + "\n").data(using: .utf8) else {
@@ -62,7 +66,9 @@ func traceLog(_ category: TraceCategory, _ message: @autoclosure () -> String) {
         return
     }
     let rendered = message()
+    #if canImport(OSLog)
     logger(category: category.rawValue).debug("\(rendered, privacy: .public)")
+    #endif
     if traceToStderr {
         writeStderr("[trace:\(category.rawValue)] \(rendered)")
     }
@@ -71,7 +77,9 @@ func traceLog(_ category: TraceCategory, _ message: @autoclosure () -> String) {
 
 func debugLog(_ message: String) {
     if debugEnabled {
+        #if canImport(OSLog)
         logger(category: "debug").debug("\(message, privacy: .public)")
+        #endif
         if traceToStderr {
             writeStderr("[debug] \(message)")
         }
@@ -80,7 +88,9 @@ func debugLog(_ message: String) {
 }
 
 func warnLog(_ message: String) {
+    #if canImport(OSLog)
     logger(category: "warn").warning("\(message, privacy: .public)")
+    #endif
     if traceToStderr {
         writeStderr("[warn] \(message)")
     }

@@ -196,6 +196,7 @@ private struct NoopDispatcher: ServiceDispatcher {
         payload _: [UInt8],
         requestId _: UInt64,
         registry _: ChannelRegistry,
+        schemaSendTracker _: SchemaSendTracker,
         taskTx _: @escaping @Sendable (TaskMessage) -> Void
     ) async {}
 }
@@ -212,6 +213,7 @@ private struct ImmediateResponseDispatcher: ServiceDispatcher {
         payload _: [UInt8],
         requestId: UInt64,
         registry _: ChannelRegistry,
+        schemaSendTracker _: SchemaSendTracker,
         taskTx: @escaping @Sendable (TaskMessage) -> Void
     ) async {
         taskTx(.response(requestId: requestId, payload: [0x01]))
@@ -265,6 +267,7 @@ private struct BlockingResponseDispatcher: ServiceDispatcher {
         payload _: [UInt8],
         requestId: UInt64,
         registry _: ChannelRegistry,
+        schemaSendTracker _: SchemaSendTracker,
         taskTx: @escaping @Sendable (TaskMessage) -> Void
     ) async {
         await probe.waitForRelease()

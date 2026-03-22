@@ -33,9 +33,11 @@ struct InteropDispatcher: ServiceDispatcher {
         payload: [UInt8],
         requestId: UInt64,
         registry: ChannelRegistry,
+        schemaSendTracker: SchemaSendTracker,
         taskTx: @escaping @Sendable (TaskMessage) -> Void
     ) async {
         _ = registry
+        _ = schemaSendTracker
         switch methodId {
         case 1:
             let input = String(decoding: payload, as: UTF8.self)

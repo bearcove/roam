@@ -70,6 +70,8 @@ extension Driver {
                         if generation != seenResumeGeneration {
                             seenResumeGeneration = generation
                             traceLog(.driver, "resume generation advanced to \(generation)")
+                            // Reset schema tracker - type IDs are per-connection and must not carry over
+                            schemaSendTracker.reset()
                             let interruptedRequestIds = await state.clearIncomingInFlightForResume()
                             for requestId in interruptedRequestIds {
                                 _ = await operations.failWithoutReply(ownerRequestId: requestId)

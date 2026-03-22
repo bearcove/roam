@@ -75,7 +75,7 @@ private actor TaskMessageRecorder {
 
     func firstResponse() -> (UInt64, [UInt8])? {
         for message in messages {
-            if case .response(let requestId, let payload) = message {
+            if case .response(let requestId, let payload, _) = message {
                 return (requestId, payload)
             }
         }
@@ -428,6 +428,7 @@ struct ServerAndDispatcherIntegrationTests {
             payload: encodeString("swift-subject"),
             requestId: requestId,
             registry: registry,
+            schemaSendTracker: SchemaSendTracker(),
             taskTx: { msg in
                 Task { await recorder.append(msg) }
             }

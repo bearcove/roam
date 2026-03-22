@@ -250,12 +250,14 @@ final class TestbedDispatcherAdapter: ServiceDispatcher, @unchecked Sendable {
         payload: [UInt8],
         requestId: UInt64,
         registry: ChannelRegistry,
+        schemaSendTracker: SchemaSendTracker,
         taskTx: @escaping @Sendable (TaskMessage) -> Void
     ) async {
         let dispatcher = TestbedChannelingDispatcher(
             handler: handler,
             registry: registry,
-            taskSender: taskTx
+            taskSender: taskTx,
+            schemaSendTracker: schemaSendTracker
         )
 
         // Dispatch the request

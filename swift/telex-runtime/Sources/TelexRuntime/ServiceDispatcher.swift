@@ -17,6 +17,7 @@ public protocol ServiceDispatcher: Sendable {
         payload: [UInt8],
         requestId: UInt64,
         registry: ChannelRegistry,
+        schemaSendTracker: SchemaSendTracker,
         taskTx: @escaping @Sendable (TaskMessage) -> Void
     ) async
 }

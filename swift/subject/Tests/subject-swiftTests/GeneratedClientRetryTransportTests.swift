@@ -170,6 +170,7 @@ private struct RetryNoopDispatcher: ServiceDispatcher {
         payload _: [UInt8],
         requestId _: UInt64,
         registry _: ChannelRegistry,
+        schemaSendTracker _: SchemaSendTracker,
         taskTx _: @escaping @Sendable (TaskMessage) -> Void
     ) async {}
 }
@@ -218,8 +219,10 @@ private struct RetryProbeDispatcher: ServiceDispatcher {
         payload: [UInt8],
         requestId: UInt64,
         registry: ChannelRegistry,
+        schemaSendTracker: SchemaSendTracker,
         taskTx: @escaping @Sendable (TaskMessage) -> Void
         ) async {
+            _ = schemaSendTracker
             do {
                 var cursor = 0
                 let payloadData = Data(payload)

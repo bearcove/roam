@@ -398,5 +398,5 @@ jobs:
       - name: Build subject
         run: cargo build -p subject-rust
 
-      - name: Test workspace
-        run: cargo nextest run --workspace
+      - name: Test workspace (Rust-only, no cross-language)
+        run: cargo nextest run --workspace -E 'not test(/lang_.*(typescript|swift)/)'

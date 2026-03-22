@@ -24,6 +24,7 @@ public final class Driver: @unchecked Sendable {
     let serverRegistry: ChannelRegistry
     let state: DriverState
     let virtualConnState: VirtualConnectionState
+    let schemaSendTracker: SchemaSendTracker
 
     let eventContinuation: AsyncStream<DriverEvent>.Continuation
     let eventStream: AsyncStream<DriverEvent>
@@ -53,6 +54,7 @@ public final class Driver: @unchecked Sendable {
         self.serverRegistry = ChannelRegistry()
         self.state = DriverState()
         self.virtualConnState = VirtualConnectionState()
+        self.schemaSendTracker = SchemaSendTracker()
         self.commandQueue = LockedQueue<HandleCommand>()
         self.taskQueue = LockedQueue<TaskMessage>()
 
@@ -77,7 +79,8 @@ public final class Driver: @unchecked Sendable {
         eventStream: AsyncStream<DriverEvent>,
         eventContinuation: AsyncStream<DriverEvent>.Continuation,
         commandQueue: LockedQueue<HandleCommand>,
-        taskQueue: LockedQueue<TaskMessage>
+        taskQueue: LockedQueue<TaskMessage>,
+        schemaSendTracker: SchemaSendTracker = SchemaSendTracker()
     ) {
         self.conduit = conduit
         self.dispatcher = dispatcher
@@ -90,6 +93,7 @@ public final class Driver: @unchecked Sendable {
         self.serverRegistry = ChannelRegistry()
         self.state = DriverState()
         self.virtualConnState = VirtualConnectionState()
+        self.schemaSendTracker = schemaSendTracker
         self.eventStream = eventStream
         self.eventContinuation = eventContinuation
         self.commandQueue = commandQueue

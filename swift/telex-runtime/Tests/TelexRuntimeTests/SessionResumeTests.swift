@@ -124,6 +124,7 @@ private struct ResumeNoopDispatcher: ServiceDispatcher {
         payload _: [UInt8],
         requestId _: UInt64,
         registry _: ChannelRegistry,
+        schemaSendTracker _: SchemaSendTracker,
         taskTx _: @escaping @Sendable (TaskMessage) -> Void
     ) async {}
 }
@@ -169,6 +170,7 @@ private struct ResumeBlockingDispatcher: ServiceDispatcher {
         payload _: [UInt8],
         requestId: UInt64,
         registry _: ChannelRegistry,
+        schemaSendTracker _: SchemaSendTracker,
         taskTx: @escaping @Sendable (TaskMessage) -> Void
     ) async {
         await probe.waitForRelease()
