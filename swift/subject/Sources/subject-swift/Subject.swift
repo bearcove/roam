@@ -6,6 +6,12 @@
 import Foundation
 import TelexRuntime
 
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
+
 // MARK: - Testbed Service Implementation
 
 /// Implementation of the Testbed service.
@@ -916,8 +922,8 @@ final class SocketLink: Link, @unchecked Sendable {
                     return wasClosed
                 }
                 if !wasClosed {
-                    _ = Darwin.shutdown(self.fd, SHUT_RDWR)
-                    Darwin.close(self.fd)
+                    _ = shutdown(self.fd, SHUT_RDWR)
+                    close(self.fd)
                 }
                 continuation.resume()
             }

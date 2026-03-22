@@ -477,6 +477,23 @@ public actor ChannelRegistry {
             await credit.grant(bytes)
         }
     }
+
+    /// Close all channels. Called on session resume.
+    ///
+    /// r[impl retry.channel.disconnect.closes] - Channel handles become invalid on disconnect.
+    public func closeAllChannels() async {
+        for (_, receiver) in receivers {
+            receiver.deliverReset()
+        }
+        receivers.removeAll()
+        for (_, credit) in outgoingCredits {
+            await credit.close()
+        }
+        outgoingCredits.removeAll()
+        knownChannels.removeAll()
+        pendingData.removeAll()
+        pendingClose.removeAll()
+    }
 }
 
 // MARK: - Errors

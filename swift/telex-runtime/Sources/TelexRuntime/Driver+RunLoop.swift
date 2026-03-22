@@ -92,6 +92,12 @@ extension Driver {
         // Reset schema tracker - type IDs are per-connection and must not carry over
         schemaSendTracker.reset()
 
+        // r[impl retry.channel.disconnect.closes] - Close all channels on resume.
+        // Channel handles become invalid on disconnect. When idem methods with channels
+        // are re-run, fresh channels will be allocated and the handles will be rebound.
+        await serverRegistry.closeAllChannels()
+        await handle.channelRegistry.closeAllChannels()
+
         // Note: We do NOT clear incoming in-flight requests on the acceptor side.
         // Handlers that are still processing should complete and send their responses
         // on the new conduit. The inFlightRequests map is kept intact so responseMessage()
