@@ -1200,6 +1200,7 @@ public enum SchemaProtocolError: Error, Equatable {
 /// Per-connection, must be reset on resume.
 public final class SchemaSendTracker: @unchecked Sendable {
     private var sentSchemaIds: Set<SchemaHash> = []
+    private var fullySentMethods: Set<UInt64> = []
     private let lock = NSLock()
 
     public init() {}
@@ -1207,9 +1208,16 @@ public final class SchemaSendTracker: @unchecked Sendable {
     /// Filter a SchemaPayload to only include schemas not yet sent.
     /// Returns a new payload with only unsent schemas (root is always included).
     /// Marks the included schemas as sent.
-    public func filterForSending(_ payload: SchemaPayload) -> SchemaPayload {
+    ///
+    /// When `methodId` is provided, this tracker keeps a fast path for methods that
+    /// have already sent all their schemas on this connection.
+    public func filterForSending(_ payload: SchemaPayload, methodId: UInt64? = nil) -> SchemaPayload {
         lock.lock()
         defer { lock.unlock() }
+
+        if let methodId, fullySentMethods.contains(methodId) {
+            return SchemaPayload(schemas: [], root: payload.root)
+        }
 
         var unsent: [Schema] = []
         for schema in payload.schemas {
@@ -1217,6 +1225,10 @@ public final class SchemaSendTracker: @unchecked Sendable {
                 sentSchemaIds.insert(schema.id)
                 unsent.append(schema)
             }
+        }
+
+        if let methodId {
+            fullySentMethods.insert(methodId)
         }
 
         return SchemaPayload(schemas: unsent, root: payload.root)
@@ -1234,6 +1246,7 @@ public final class SchemaSendTracker: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         sentSchemaIds.removeAll()
+        fullySentMethods.removeAll()
     }
 
     // MARK: - Legacy API (for generated code compatibility)

@@ -105,7 +105,9 @@ where
         method_id: ::vox::MethodId,
     ) -> Option<&'static ::vox::facet::Shape> {
         if method_id == calc_service_descriptor().methods[0usize].id {
-            return Some (< Result < f64 , :: vox :: VoxError < DivError >> as :: vox :: facet :: Facet < 'static >> :: SHAPE ,) ;
+            return Some(
+                <Result<f64, ::vox::VoxError<DivError>> as ::vox::facet::Facet<'static>>::SHAPE,
+            );
         }
         None
     }
@@ -150,11 +152,11 @@ where
                         e
                     );
                     reply
-                        .send_typed_error::<f64, ::core::convert::Infallible>(
-                            ::vox::VoxError::<::core::convert::Infallible>::InvalidPayload(
-                                e.to_string(),
-                            ),
-                        )
+                        .send_typed_error::<f64, ::core::convert::Infallible>(::vox::VoxError::<
+                            ::core::convert::Infallible,
+                        >::InvalidPayload(
+                            e.to_string()
+                        ))
                         .await;
                     return;
                 }
@@ -229,9 +231,7 @@ impl CalcClient {
             Ok(with_tracker) => with_tracker,
             Err(e) => {
                 return Err(match e {
-                    ::vox::VoxError::UnknownMethod => {
-                        ::vox::VoxError::<DivError>::UnknownMethod
-                    }
+                    ::vox::VoxError::UnknownMethod => ::vox::VoxError::<DivError>::UnknownMethod,
                     ::vox::VoxError::InvalidPayload(msg) => {
                         ::vox::VoxError::<DivError>::InvalidPayload(msg)
                     }
@@ -243,9 +243,7 @@ impl CalcClient {
                         ::vox::VoxError::<DivError>::SessionShutdown
                     }
                     ::vox::VoxError::SendFailed => ::vox::VoxError::<DivError>::SendFailed,
-                    ::vox::VoxError::Indeterminate => {
-                        ::vox::VoxError::<DivError>::Indeterminate
-                    }
+                    ::vox::VoxError::Indeterminate => ::vox::VoxError::<DivError>::Indeterminate,
                     ::vox::VoxError::User(never) => match never {},
                 });
             }

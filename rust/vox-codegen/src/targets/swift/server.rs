@@ -103,15 +103,13 @@ fn generate_channeling_dispatcher(service: &ServiceDescriptor) -> String {
         w.writeln("private let registry: IncomingChannelRegistry")
             .unwrap();
         w.writeln("private let taskSender: TaskSender").unwrap();
-        w.writeln("private let schemaSendTracker: SchemaSendTracker")
-            .unwrap();
         cw_writeln!(w, "private let schemaRegistry: [UInt64: Schema]").unwrap();
         cw_writeln!(w, "private let methodSchemas: [UInt64: MethodSchemaInfo]").unwrap();
         w.blank_line().unwrap();
 
         cw_writeln!(
             w,
-            "public init(handler: {service_name}Handler, registry: IncomingChannelRegistry, taskSender: @escaping TaskSender, schemaSendTracker: SchemaSendTracker, schemaRegistry: [UInt64: Schema] = {service_name_lower}_schema_registry, methodSchemas: [UInt64: MethodSchemaInfo] = {service_name_lower}_method_schemas) {{"
+            "public init(handler: {service_name}Handler, registry: IncomingChannelRegistry, taskSender: @escaping TaskSender, schemaSendTracker _: SchemaSendTracker, schemaRegistry: [UInt64: Schema] = {service_name_lower}_schema_registry, methodSchemas: [UInt64: MethodSchemaInfo] = {service_name_lower}_method_schemas) {{"
         )
         .unwrap();
         {
@@ -119,8 +117,6 @@ fn generate_channeling_dispatcher(service: &ServiceDescriptor) -> String {
             w.writeln("self.handler = handler").unwrap();
             w.writeln("self.registry = registry").unwrap();
             w.writeln("self.taskSender = taskSender").unwrap();
-            w.writeln("self.schemaSendTracker = schemaSendTracker")
-                .unwrap();
             w.writeln("self.schemaRegistry = schemaRegistry").unwrap();
             w.writeln("self.methodSchemas = methodSchemas").unwrap();
         }
@@ -278,16 +274,18 @@ fn generate_channeling_dispatch_method(w: &mut CodeWriter<&mut String>, method: 
     .unwrap();
     {
         let _indent = w.indent();
-        // Build and filter schema payload for this method's response
+        // Build response schema payload for this method.
         w.writeln("guard let methodInfo = methodSchemas[methodId] else {")
             .unwrap();
-        w.writeln("    taskSender(.response(requestId: requestId, payload: encodeUnknownMethodError(), schemas: []))").unwrap();
+        w.writeln(
+            "    taskSender(.response(requestId: requestId, payload: encodeUnknownMethodError()))",
+        )
+        .unwrap();
         w.writeln("    return").unwrap();
         w.writeln("}").unwrap();
-        w.writeln("let fullPayload = methodInfo.buildPayload(direction: .response, registry: schemaRegistry)").unwrap();
-        w.writeln("let filteredPayload = schemaSendTracker.filterForSending(fullPayload)")
-            .unwrap();
-        w.writeln("let responseSchemas = filteredPayload.encodeCbor()")
+        w.writeln(
+            "let responseSchemaPayload = methodInfo.buildPayload(direction: .response, registry: schemaRegistry)",
+        )
             .unwrap();
         w.writeln("do {").unwrap();
         {
@@ -343,12 +341,15 @@ fn generate_channeling_dispatch_method(w: &mut CodeWriter<&mut String>, method: 
                     }
 
                     if ret_type == "Void" {
-                        w.writeln("taskSender(.response(requestId: requestId, payload: encodeResultOk((), encoder: { _ in [] }), schemas: responseSchemas))").unwrap();
+                        w.writeln(
+                            "taskSender(.response(requestId: requestId, payload: encodeResultOk((), encoder: { _ in [] }), methodId: methodId, schemaPayload: responseSchemaPayload))",
+                        )
+                        .unwrap();
                     } else {
                         let encode_closure = generate_encode_closure(method.return_shape);
                         cw_writeln!(
                             w,
-                            "taskSender(.response(requestId: requestId, payload: encodeResultOk(result, encoder: {encode_closure}), schemas: responseSchemas))"
+                            "taskSender(.response(requestId: requestId, payload: encodeResultOk(result, encoder: {encode_closure}), methodId: methodId, schemaPayload: responseSchemaPayload))"
                         )
                         .unwrap();
                     }
@@ -359,7 +360,10 @@ fn generate_channeling_dispatch_method(w: &mut CodeWriter<&mut String>, method: 
                         arg_names.join(", ")
                     )
                     .unwrap();
-                    w.writeln("taskSender(.response(requestId: requestId, payload: encodeResultOk((), encoder: { _ in [] }), schemas: responseSchemas))").unwrap();
+                    w.writeln(
+                        "taskSender(.response(requestId: requestId, payload: encodeResultOk((), encoder: { _ in [] }), methodId: methodId, schemaPayload: responseSchemaPayload))",
+                    )
+                    .unwrap();
                 } else {
                     cw_writeln!(
                         w,
@@ -372,14 +376,14 @@ fn generate_channeling_dispatch_method(w: &mut CodeWriter<&mut String>, method: 
                         let err_encode = generate_encode_closure(err);
                         cw_writeln!(
                             w,
-                            "taskSender(.response(requestId: requestId, payload: {{ switch result {{ case .success(let v): return [UInt8(0)] + {ok_encode}(v); case .failure(let e): return [UInt8(1), UInt8(0)] + {err_encode}(e) }} }}(), schemas: responseSchemas))"
+                            "taskSender(.response(requestId: requestId, payload: {{ switch result {{ case .success(let v): return [UInt8(0)] + {ok_encode}(v); case .failure(let e): return [UInt8(1), UInt8(0)] + {err_encode}(e) }} }}(), methodId: methodId, schemaPayload: responseSchemaPayload))"
                         )
                         .unwrap();
                     } else {
                         let encode_closure = generate_encode_closure(method.return_shape);
                         cw_writeln!(
                             w,
-                            "taskSender(.response(requestId: requestId, payload: encodeResultOk(result, encoder: {encode_closure}), schemas: responseSchemas))"
+                            "taskSender(.response(requestId: requestId, payload: encodeResultOk(result, encoder: {encode_closure}), methodId: methodId, schemaPayload: responseSchemaPayload))"
                         )
                         .unwrap();
                     }
@@ -390,7 +394,7 @@ fn generate_channeling_dispatch_method(w: &mut CodeWriter<&mut String>, method: 
                 let _indent = w.indent();
                 cw_writeln!(
                     w,
-                    "taskSender(.response(requestId: requestId, payload: {handler_error_payload}, schemas: responseSchemas))"
+                    "taskSender(.response(requestId: requestId, payload: {handler_error_payload}, methodId: methodId, schemaPayload: responseSchemaPayload))"
                 )
                 .unwrap();
             }
@@ -400,7 +404,7 @@ fn generate_channeling_dispatch_method(w: &mut CodeWriter<&mut String>, method: 
         {
             let _indent = w.indent();
             w.writeln(
-                "taskSender(.response(requestId: requestId, payload: encodeInvalidPayloadError(), schemas: responseSchemas))",
+                "taskSender(.response(requestId: requestId, payload: encodeInvalidPayloadError(), methodId: methodId, schemaPayload: responseSchemaPayload))",
             )
             .unwrap();
         }

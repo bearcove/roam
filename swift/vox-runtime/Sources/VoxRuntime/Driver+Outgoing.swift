@@ -41,7 +41,7 @@ extension Driver {
             wireMsg = .close(connId: 0, channelId: channelId)
         case .grantCredit(let channelId, let bytes):
             wireMsg = .credit(connId: 0, channelId: channelId, bytes: bytes)
-        case .response(let requestId, let payload, let schemas):
+        case .response(let requestId, let payload, let methodId, let schemaPayload):
             let checkedPayload: [UInt8]
             if payload.count > Int(negotiated.maxPayloadSize) {
                 debugLog(
@@ -50,6 +50,16 @@ extension Driver {
                 checkedPayload = encodeCancelledError()
             } else {
                 checkedPayload = payload
+            }
+            let schemas: [UInt8]
+            if let schemaPayload {
+                let filteredPayload = schemaSendTracker.filterForSending(
+                    schemaPayload,
+                    methodId: methodId
+                )
+                schemas = filteredPayload.encodeCbor()
+            } else {
+                schemas = []
             }
             let waiters = await operations.seal(ownerRequestId: requestId, payload: checkedPayload)
             if !waiters.isEmpty {
@@ -118,7 +128,10 @@ extension Driver {
                     direction: .args,
                     registry: schemaInfo.schemaRegistry
                 )
-                let filteredPayload = schemaSendTracker.filterForSending(fullPayload)
+                let filteredPayload = schemaSendTracker.filterForSending(
+                    fullPayload,
+                    methodId: methodId
+                )
                 schemas = filteredPayload.encodeCbor()
             } else {
                 schemas = []
@@ -217,7 +230,10 @@ extension Driver {
                     direction: .args,
                     registry: schemaInfo.schemaRegistry
                 )
-                let filteredPayload = schemaSendTracker.filterForSending(fullPayload)
+                let filteredPayload = schemaSendTracker.filterForSending(
+                    fullPayload,
+                    methodId: replayCall.methodId
+                )
                 schemas = filteredPayload.encodeCbor()
             } else {
                 schemas = []

@@ -1,6 +1,6 @@
 ---
 source: rust/vox-macros-core/src/lib.rs
-expression: "generate(quote!\n{\n    trait Audit\n    {\n        #[vox::context] async fn record(&self, payload: String) -> &'vox\n        str; async fn ping(&self) -> u64;\n    }\n})"
+expression: "generate(quote!\n{\n    trait Audit\n    {\n        #[vox::context] async fn record(&self, payload: String) -> &'vox str;\n        async fn ping(&self) -> u64;\n    }\n})"
 ---
 #[allow(non_snake_case, clippy::all)]
 pub fn audit_service_descriptor() -> &'static ::vox::session::ServiceDescriptor {
@@ -224,11 +224,11 @@ where
                         e
                     );
                     reply
-                        .send_typed_error::<u64, ::core::convert::Infallible>(
-                            ::vox::VoxError::<::core::convert::Infallible>::InvalidPayload(
-                                e.to_string(),
-                            ),
-                        )
+                        .send_typed_error::<u64, ::core::convert::Infallible>(::vox::VoxError::<
+                            ::core::convert::Infallible,
+                        >::InvalidPayload(
+                            e.to_string()
+                        ))
                         .await;
                     return;
                 }
@@ -351,9 +351,7 @@ impl AuditClient {
                     Result<&'static str, ::vox::VoxError<::core::convert::Infallible>>,
                 >(ret_bytes, method_id, &schema_tracker)
                 .map_err(|e| {
-                    ::vox::VoxError::<::core::convert::Infallible>::InvalidPayload(
-                        e.to_string(),
-                    )
+                    ::vox::VoxError::<::core::convert::Infallible>::InvalidPayload(e.to_string())
                 })?;
             match result {
                 Ok(ret) => Ok(ret),

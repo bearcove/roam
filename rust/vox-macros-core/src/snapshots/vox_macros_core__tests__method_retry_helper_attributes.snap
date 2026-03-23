@@ -6,38 +6,7 @@ expression: "generate(quote!\n{\n    trait Billing\n    {\n        #[vox(idem)] 
 pub fn billing_service_descriptor() -> &'static ::vox::session::ServiceDescriptor {
     static DESCRIPTOR: std::sync::OnceLock<&'static ::vox::session::ServiceDescriptor> =
         std::sync::OnceLock::new();
-    DESCRIPTOR.get_or_init(|| {
-        let methods: Vec<&'static ::vox::session::MethodDescriptor> = vec![
-            ::vox::hash::method_descriptor_with_retry::<(String,), u64>(
-                "Billing",
-                "get_balance",
-                &["account"],
-                None,
-                ::vox::RetryPolicy {
-                    persist: false,
-                    idem: true,
-                },
-            ),
-            ::vox::hash::method_descriptor_with_retry::<
-                (String, String),
-                Result<u64, TransferError>,
-            >(
-                "Billing",
-                "send_money",
-                &["from", "to"],
-                None,
-                ::vox::RetryPolicy {
-                    persist: true,
-                    idem: false,
-                },
-            ),
-        ];
-        Box::leak(Box::new(::vox::session::ServiceDescriptor {
-            service_name: "Billing",
-            methods: Box::leak(methods.into_boxed_slice()),
-            doc: None,
-        }))
-    })
+    DESCRIPTOR . get_or_init (|| { let methods : Vec < & 'static :: vox :: session :: MethodDescriptor > = vec ! [:: vox :: hash :: method_descriptor_with_retry :: < (String ,) , u64 > ("Billing" , "get_balance" , & ["account"] , None , :: vox :: RetryPolicy { persist : false , idem : true , } ,) , :: vox :: hash :: method_descriptor_with_retry :: < (String , String ,) , Result < u64 , TransferError > > ("Billing" , "send_money" , & ["from" , "to"] , None , :: vox :: RetryPolicy { persist : true , idem : false , } ,)] ; Box :: leak (Box :: new (:: vox :: session :: ServiceDescriptor { service_name : "Billing" , methods : Box :: leak (methods . into_boxed_slice ()) , doc : None , })) })
 }
 pub trait Billing
 where
@@ -134,11 +103,7 @@ where
             return Some (< Result < u64 , :: vox :: VoxError < :: core :: convert :: Infallible >> as :: vox :: facet :: Facet < 'static >> :: SHAPE ,) ;
         }
         if method_id == billing_service_descriptor().methods[1usize].id {
-            return Some(
-                <Result<u64, ::vox::VoxError<TransferError>> as ::vox::facet::Facet<
-                    'static,
-                >>::SHAPE,
-            );
+            return Some (< Result < u64 , :: vox :: VoxError < TransferError >> as :: vox :: facet :: Facet < 'static >> :: SHAPE ,) ;
         }
         None
     }
@@ -183,11 +148,11 @@ where
                         e
                     );
                     reply
-                        .send_typed_error::<u64, ::core::convert::Infallible>(
-                            ::vox::VoxError::<::core::convert::Infallible>::InvalidPayload(
-                                e.to_string(),
-                            ),
-                        )
+                        .send_typed_error::<u64, ::core::convert::Infallible>(::vox::VoxError::<
+                            ::core::convert::Infallible,
+                        >::InvalidPayload(
+                            e.to_string()
+                        ))
                         .await;
                     return;
                 }
@@ -234,11 +199,11 @@ where
                         e
                     );
                     reply
-                        .send_typed_error::<u64, ::core::convert::Infallible>(
-                            ::vox::VoxError::<::core::convert::Infallible>::InvalidPayload(
-                                e.to_string(),
-                            ),
-                        )
+                        .send_typed_error::<u64, ::core::convert::Infallible>(::vox::VoxError::<
+                            ::core::convert::Infallible,
+                        >::InvalidPayload(
+                            e.to_string()
+                        ))
                         .await;
                     return;
                 }
@@ -389,18 +354,14 @@ impl BillingClient {
                     ::vox::VoxError::InvalidPayload(msg) => {
                         ::vox::VoxError::<TransferError>::InvalidPayload(msg)
                     }
-                    ::vox::VoxError::Cancelled => {
-                        ::vox::VoxError::<TransferError>::Cancelled
-                    }
+                    ::vox::VoxError::Cancelled => ::vox::VoxError::<TransferError>::Cancelled,
                     ::vox::VoxError::ConnectionClosed => {
                         ::vox::VoxError::<TransferError>::ConnectionClosed
                     }
                     ::vox::VoxError::SessionShutdown => {
                         ::vox::VoxError::<TransferError>::SessionShutdown
                     }
-                    ::vox::VoxError::SendFailed => {
-                        ::vox::VoxError::<TransferError>::SendFailed
-                    }
+                    ::vox::VoxError::SendFailed => ::vox::VoxError::<TransferError>::SendFailed,
                     ::vox::VoxError::Indeterminate => {
                         ::vox::VoxError::<TransferError>::Indeterminate
                     }

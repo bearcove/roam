@@ -143,11 +143,11 @@ where
                         e
                     );
                     reply
-                        .send_typed_error::<u64, ::core::convert::Infallible>(
-                            ::vox::VoxError::<::core::convert::Infallible>::InvalidPayload(
-                                e.to_string(),
-                            ),
-                        )
+                        .send_typed_error::<u64, ::core::convert::Infallible>(::vox::VoxError::<
+                            ::core::convert::Infallible,
+                        >::InvalidPayload(
+                            e.to_string()
+                        ))
                         .await;
                     return;
                 }

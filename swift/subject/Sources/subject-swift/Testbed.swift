@@ -2065,20 +2065,18 @@ public final class TestbedChannelingDispatcher {
   private let handler: TestbedHandler
   private let registry: IncomingChannelRegistry
   private let taskSender: TaskSender
-  private let schemaSendTracker: SchemaSendTracker
   private let schemaRegistry: [UInt64: Schema]
   private let methodSchemas: [UInt64: MethodSchemaInfo]
 
   public init(
     handler: TestbedHandler, registry: IncomingChannelRegistry, taskSender: @escaping TaskSender,
-    schemaSendTracker: SchemaSendTracker,
+    schemaSendTracker _: SchemaSendTracker,
     schemaRegistry: [UInt64: Schema] = testbed_schema_registry,
     methodSchemas: [UInt64: MethodSchemaInfo] = testbed_method_schemas
   ) {
     self.handler = handler
     self.registry = registry
     self.taskSender = taskSender
-    self.schemaSendTracker = schemaSendTracker
     self.schemaRegistry = schemaRegistry
     self.methodSchemas = methodSchemas
   }
@@ -2309,12 +2307,11 @@ public final class TestbedChannelingDispatcher {
 
   private func dispatch_echo(methodId: UInt64, requestId: UInt64, payload: Data) async {
     guard let methodInfo = methodSchemas[methodId] else {
-      taskSender(.response(requestId: requestId, payload: encodeUnknownMethodError(), schemas: []))
+      taskSender(.response(requestId: requestId, payload: encodeUnknownMethodError()))
       return
     }
-    let fullPayload = methodInfo.buildPayload(direction: .response, registry: schemaRegistry)
-    let filteredPayload = schemaSendTracker.filterForSending(fullPayload)
-    let responseSchemas = filteredPayload.encodeCbor()
+    let responseSchemaPayload = methodInfo.buildPayload(
+      direction: .response, registry: schemaRegistry)
     do {
       var cursor = 0
       let message = try decodeString(from: payload, offset: &cursor)
@@ -2323,27 +2320,28 @@ public final class TestbedChannelingDispatcher {
         taskSender(
           .response(
             requestId: requestId, payload: encodeResultOk(result, encoder: { encodeString($0) }),
-            schemas: responseSchemas))
+            methodId: methodId, schemaPayload: responseSchemaPayload))
       } catch {
         taskSender(
           .response(
-            requestId: requestId, payload: encodeInvalidPayloadError(), schemas: responseSchemas))
+            requestId: requestId, payload: encodeInvalidPayloadError(), methodId: methodId,
+            schemaPayload: responseSchemaPayload))
       }
     } catch {
       taskSender(
         .response(
-          requestId: requestId, payload: encodeInvalidPayloadError(), schemas: responseSchemas))
+          requestId: requestId, payload: encodeInvalidPayloadError(), methodId: methodId,
+          schemaPayload: responseSchemaPayload))
     }
   }
 
   private func dispatch_reverse(methodId: UInt64, requestId: UInt64, payload: Data) async {
     guard let methodInfo = methodSchemas[methodId] else {
-      taskSender(.response(requestId: requestId, payload: encodeUnknownMethodError(), schemas: []))
+      taskSender(.response(requestId: requestId, payload: encodeUnknownMethodError()))
       return
     }
-    let fullPayload = methodInfo.buildPayload(direction: .response, registry: schemaRegistry)
-    let filteredPayload = schemaSendTracker.filterForSending(fullPayload)
-    let responseSchemas = filteredPayload.encodeCbor()
+    let responseSchemaPayload = methodInfo.buildPayload(
+      direction: .response, registry: schemaRegistry)
     do {
       var cursor = 0
       let message = try decodeString(from: payload, offset: &cursor)
@@ -2352,27 +2350,28 @@ public final class TestbedChannelingDispatcher {
         taskSender(
           .response(
             requestId: requestId, payload: encodeResultOk(result, encoder: { encodeString($0) }),
-            schemas: responseSchemas))
+            methodId: methodId, schemaPayload: responseSchemaPayload))
       } catch {
         taskSender(
           .response(
-            requestId: requestId, payload: encodeInvalidPayloadError(), schemas: responseSchemas))
+            requestId: requestId, payload: encodeInvalidPayloadError(), methodId: methodId,
+            schemaPayload: responseSchemaPayload))
       }
     } catch {
       taskSender(
         .response(
-          requestId: requestId, payload: encodeInvalidPayloadError(), schemas: responseSchemas))
+          requestId: requestId, payload: encodeInvalidPayloadError(), methodId: methodId,
+          schemaPayload: responseSchemaPayload))
     }
   }
 
   private func dispatch_divide(methodId: UInt64, requestId: UInt64, payload: Data) async {
     guard let methodInfo = methodSchemas[methodId] else {
-      taskSender(.response(requestId: requestId, payload: encodeUnknownMethodError(), schemas: []))
+      taskSender(.response(requestId: requestId, payload: encodeUnknownMethodError()))
       return
     }
-    let fullPayload = methodInfo.buildPayload(direction: .response, registry: schemaRegistry)
-    let filteredPayload = schemaSendTracker.filterForSending(fullPayload)
-    let responseSchemas = filteredPayload.encodeCbor()
+    let responseSchemaPayload = methodInfo.buildPayload(
+      direction: .response, registry: schemaRegistry)
     do {
       var cursor = 0
       let dividend = try decodeI64(from: payload, offset: &cursor)
@@ -2396,27 +2395,28 @@ public final class TestbedChannelingDispatcher {
                     }
                   }(e)
               }
-            }(), schemas: responseSchemas))
+            }(), methodId: methodId, schemaPayload: responseSchemaPayload))
       } catch {
         taskSender(
           .response(
-            requestId: requestId, payload: encodeInvalidPayloadError(), schemas: responseSchemas))
+            requestId: requestId, payload: encodeInvalidPayloadError(), methodId: methodId,
+            schemaPayload: responseSchemaPayload))
       }
     } catch {
       taskSender(
         .response(
-          requestId: requestId, payload: encodeInvalidPayloadError(), schemas: responseSchemas))
+          requestId: requestId, payload: encodeInvalidPayloadError(), methodId: methodId,
+          schemaPayload: responseSchemaPayload))
     }
   }
 
   private func dispatch_lookup(methodId: UInt64, requestId: UInt64, payload: Data) async {
     guard let methodInfo = methodSchemas[methodId] else {
-      taskSender(.response(requestId: requestId, payload: encodeUnknownMethodError(), schemas: []))
+      taskSender(.response(requestId: requestId, payload: encodeUnknownMethodError()))
       return
     }
-    let fullPayload = methodInfo.buildPayload(direction: .response, registry: schemaRegistry)
-    let filteredPayload = schemaSendTracker.filterForSending(fullPayload)
-    let responseSchemas = filteredPayload.encodeCbor()
+    let responseSchemaPayload = methodInfo.buildPayload(
+      direction: .response, registry: schemaRegistry)
     do {
       var cursor = 0
       let id = try decodeU32(from: payload, offset: &cursor)
@@ -2444,27 +2444,28 @@ public final class TestbedChannelingDispatcher {
                     }
                   }(e)
               }
-            }(), schemas: responseSchemas))
+            }(), methodId: methodId, schemaPayload: responseSchemaPayload))
       } catch {
         taskSender(
           .response(
-            requestId: requestId, payload: encodeInvalidPayloadError(), schemas: responseSchemas))
+            requestId: requestId, payload: encodeInvalidPayloadError(), methodId: methodId,
+            schemaPayload: responseSchemaPayload))
       }
     } catch {
       taskSender(
         .response(
-          requestId: requestId, payload: encodeInvalidPayloadError(), schemas: responseSchemas))
+          requestId: requestId, payload: encodeInvalidPayloadError(), methodId: methodId,
+          schemaPayload: responseSchemaPayload))
     }
   }
 
   private func dispatch_sum(methodId: UInt64, requestId: UInt64, payload: Data) async {
     guard let methodInfo = methodSchemas[methodId] else {
-      taskSender(.response(requestId: requestId, payload: encodeUnknownMethodError(), schemas: []))
+      taskSender(.response(requestId: requestId, payload: encodeUnknownMethodError()))
       return
     }
-    let fullPayload = methodInfo.buildPayload(direction: .response, registry: schemaRegistry)
-    let filteredPayload = schemaSendTracker.filterForSending(fullPayload)
-    let responseSchemas = filteredPayload.encodeCbor()
+    let responseSchemaPayload = methodInfo.buildPayload(
+      direction: .response, registry: schemaRegistry)
     do {
       var cursor = 0
       let numbersChannelId = try decodeVarint(from: payload, offset: &cursor)
@@ -2484,27 +2485,28 @@ public final class TestbedChannelingDispatcher {
         taskSender(
           .response(
             requestId: requestId, payload: encodeResultOk(result, encoder: { encodeI64($0) }),
-            schemas: responseSchemas))
+            methodId: methodId, schemaPayload: responseSchemaPayload))
       } catch {
         taskSender(
           .response(
-            requestId: requestId, payload: encodeInvalidPayloadError(), schemas: responseSchemas))
+            requestId: requestId, payload: encodeInvalidPayloadError(), methodId: methodId,
+            schemaPayload: responseSchemaPayload))
       }
     } catch {
       taskSender(
         .response(
-          requestId: requestId, payload: encodeInvalidPayloadError(), schemas: responseSchemas))
+          requestId: requestId, payload: encodeInvalidPayloadError(), methodId: methodId,
+          schemaPayload: responseSchemaPayload))
     }
   }
 
   private func dispatch_generate(methodId: UInt64, requestId: UInt64, payload: Data) async {
     guard let methodInfo = methodSchemas[methodId] else {
-      taskSender(.response(requestId: requestId, payload: encodeUnknownMethodError(), schemas: []))
+      taskSender(.response(requestId: requestId, payload: encodeUnknownMethodError()))
       return
     }
-    let fullPayload = methodInfo.buildPayload(direction: .response, registry: schemaRegistry)
-    let filteredPayload = schemaSendTracker.filterForSending(fullPayload)
-    let responseSchemas = filteredPayload.encodeCbor()
+    let responseSchemaPayload = methodInfo.buildPayload(
+      direction: .response, registry: schemaRegistry)
     do {
       var cursor = 0
       let count = try decodeU32(from: payload, offset: &cursor)
@@ -2518,16 +2520,18 @@ public final class TestbedChannelingDispatcher {
         taskSender(
           .response(
             requestId: requestId, payload: encodeResultOk((), encoder: { _ in [] }),
-            schemas: responseSchemas))
+            methodId: methodId, schemaPayload: responseSchemaPayload))
       } catch {
         taskSender(
           .response(
-            requestId: requestId, payload: encodeInvalidPayloadError(), schemas: responseSchemas))
+            requestId: requestId, payload: encodeInvalidPayloadError(), methodId: methodId,
+            schemaPayload: responseSchemaPayload))
       }
     } catch {
       taskSender(
         .response(
-          requestId: requestId, payload: encodeInvalidPayloadError(), schemas: responseSchemas))
+          requestId: requestId, payload: encodeInvalidPayloadError(), methodId: methodId,
+          schemaPayload: responseSchemaPayload))
     }
   }
 
@@ -2535,12 +2539,11 @@ public final class TestbedChannelingDispatcher {
     async
   {
     guard let methodInfo = methodSchemas[methodId] else {
-      taskSender(.response(requestId: requestId, payload: encodeUnknownMethodError(), schemas: []))
+      taskSender(.response(requestId: requestId, payload: encodeUnknownMethodError()))
       return
     }
-    let fullPayload = methodInfo.buildPayload(direction: .response, registry: schemaRegistry)
-    let filteredPayload = schemaSendTracker.filterForSending(fullPayload)
-    let responseSchemas = filteredPayload.encodeCbor()
+    let responseSchemaPayload = methodInfo.buildPayload(
+      direction: .response, registry: schemaRegistry)
     do {
       var cursor = 0
       let count = try decodeU32(from: payload, offset: &cursor)
@@ -2554,28 +2557,29 @@ public final class TestbedChannelingDispatcher {
         taskSender(
           .response(
             requestId: requestId, payload: encodeResultOk((), encoder: { _ in [] }),
-            schemas: responseSchemas))
+            methodId: methodId, schemaPayload: responseSchemaPayload))
       } catch {
         taskSender(
           .response(
-            requestId: requestId, payload: encodeInvalidPayloadError(), schemas: responseSchemas))
+            requestId: requestId, payload: encodeInvalidPayloadError(), methodId: methodId,
+            schemaPayload: responseSchemaPayload))
       }
     } catch {
       taskSender(
         .response(
-          requestId: requestId, payload: encodeInvalidPayloadError(), schemas: responseSchemas))
+          requestId: requestId, payload: encodeInvalidPayloadError(), methodId: methodId,
+          schemaPayload: responseSchemaPayload))
     }
   }
 
   private func dispatch_generateRetryIdem(methodId: UInt64, requestId: UInt64, payload: Data) async
   {
     guard let methodInfo = methodSchemas[methodId] else {
-      taskSender(.response(requestId: requestId, payload: encodeUnknownMethodError(), schemas: []))
+      taskSender(.response(requestId: requestId, payload: encodeUnknownMethodError()))
       return
     }
-    let fullPayload = methodInfo.buildPayload(direction: .response, registry: schemaRegistry)
-    let filteredPayload = schemaSendTracker.filterForSending(fullPayload)
-    let responseSchemas = filteredPayload.encodeCbor()
+    let responseSchemaPayload = methodInfo.buildPayload(
+      direction: .response, registry: schemaRegistry)
     do {
       var cursor = 0
       let count = try decodeU32(from: payload, offset: &cursor)
@@ -2589,27 +2593,28 @@ public final class TestbedChannelingDispatcher {
         taskSender(
           .response(
             requestId: requestId, payload: encodeResultOk((), encoder: { _ in [] }),
-            schemas: responseSchemas))
+            methodId: methodId, schemaPayload: responseSchemaPayload))
       } catch {
         taskSender(
           .response(
-            requestId: requestId, payload: encodeInvalidPayloadError(), schemas: responseSchemas))
+            requestId: requestId, payload: encodeInvalidPayloadError(), methodId: methodId,
+            schemaPayload: responseSchemaPayload))
       }
     } catch {
       taskSender(
         .response(
-          requestId: requestId, payload: encodeInvalidPayloadError(), schemas: responseSchemas))
+          requestId: requestId, payload: encodeInvalidPayloadError(), methodId: methodId,
+          schemaPayload: responseSchemaPayload))
     }
   }
 
   private func dispatch_transform(methodId: UInt64, requestId: UInt64, payload: Data) async {
     guard let methodInfo = methodSchemas[methodId] else {
-      taskSender(.response(requestId: requestId, payload: encodeUnknownMethodError(), schemas: []))
+      taskSender(.response(requestId: requestId, payload: encodeUnknownMethodError()))
       return
     }
-    let fullPayload = methodInfo.buildPayload(direction: .response, registry: schemaRegistry)
-    let filteredPayload = schemaSendTracker.filterForSending(fullPayload)
-    let responseSchemas = filteredPayload.encodeCbor()
+    let responseSchemaPayload = methodInfo.buildPayload(
+      direction: .response, registry: schemaRegistry)
     do {
       var cursor = 0
       let inputChannelId = try decodeVarint(from: payload, offset: &cursor)
@@ -2634,27 +2639,28 @@ public final class TestbedChannelingDispatcher {
         taskSender(
           .response(
             requestId: requestId, payload: encodeResultOk((), encoder: { _ in [] }),
-            schemas: responseSchemas))
+            methodId: methodId, schemaPayload: responseSchemaPayload))
       } catch {
         taskSender(
           .response(
-            requestId: requestId, payload: encodeInvalidPayloadError(), schemas: responseSchemas))
+            requestId: requestId, payload: encodeInvalidPayloadError(), methodId: methodId,
+            schemaPayload: responseSchemaPayload))
       }
     } catch {
       taskSender(
         .response(
-          requestId: requestId, payload: encodeInvalidPayloadError(), schemas: responseSchemas))
+          requestId: requestId, payload: encodeInvalidPayloadError(), methodId: methodId,
+          schemaPayload: responseSchemaPayload))
     }
   }
 
   private func dispatch_echoPoint(methodId: UInt64, requestId: UInt64, payload: Data) async {
     guard let methodInfo = methodSchemas[methodId] else {
-      taskSender(.response(requestId: requestId, payload: encodeUnknownMethodError(), schemas: []))
+      taskSender(.response(requestId: requestId, payload: encodeUnknownMethodError()))
       return
     }
-    let fullPayload = methodInfo.buildPayload(direction: .response, registry: schemaRegistry)
-    let filteredPayload = schemaSendTracker.filterForSending(fullPayload)
-    let responseSchemas = filteredPayload.encodeCbor()
+    let responseSchemaPayload = methodInfo.buildPayload(
+      direction: .response, registry: schemaRegistry)
     do {
       var cursor = 0
       let _point_x = try decodeI32(from: payload, offset: &cursor)
@@ -2666,27 +2672,28 @@ public final class TestbedChannelingDispatcher {
           .response(
             requestId: requestId,
             payload: encodeResultOk(result, encoder: { encodeI32($0.x) + encodeI32($0.y) }),
-            schemas: responseSchemas))
+            methodId: methodId, schemaPayload: responseSchemaPayload))
       } catch {
         taskSender(
           .response(
-            requestId: requestId, payload: encodeInvalidPayloadError(), schemas: responseSchemas))
+            requestId: requestId, payload: encodeInvalidPayloadError(), methodId: methodId,
+            schemaPayload: responseSchemaPayload))
       }
     } catch {
       taskSender(
         .response(
-          requestId: requestId, payload: encodeInvalidPayloadError(), schemas: responseSchemas))
+          requestId: requestId, payload: encodeInvalidPayloadError(), methodId: methodId,
+          schemaPayload: responseSchemaPayload))
     }
   }
 
   private func dispatch_createPerson(methodId: UInt64, requestId: UInt64, payload: Data) async {
     guard let methodInfo = methodSchemas[methodId] else {
-      taskSender(.response(requestId: requestId, payload: encodeUnknownMethodError(), schemas: []))
+      taskSender(.response(requestId: requestId, payload: encodeUnknownMethodError()))
       return
     }
-    let fullPayload = methodInfo.buildPayload(direction: .response, registry: schemaRegistry)
-    let filteredPayload = schemaSendTracker.filterForSending(fullPayload)
-    let responseSchemas = filteredPayload.encodeCbor()
+    let responseSchemaPayload = methodInfo.buildPayload(
+      direction: .response, registry: schemaRegistry)
     do {
       var cursor = 0
       let name = try decodeString(from: payload, offset: &cursor)
@@ -2704,27 +2711,28 @@ public final class TestbedChannelingDispatcher {
               encoder: {
                 encodeString($0.name) + encodeU8($0.age)
                   + encodeOption($0.email, encoder: { encodeString($0) })
-              }), schemas: responseSchemas))
+              }), methodId: methodId, schemaPayload: responseSchemaPayload))
       } catch {
         taskSender(
           .response(
-            requestId: requestId, payload: encodeInvalidPayloadError(), schemas: responseSchemas))
+            requestId: requestId, payload: encodeInvalidPayloadError(), methodId: methodId,
+            schemaPayload: responseSchemaPayload))
       }
     } catch {
       taskSender(
         .response(
-          requestId: requestId, payload: encodeInvalidPayloadError(), schemas: responseSchemas))
+          requestId: requestId, payload: encodeInvalidPayloadError(), methodId: methodId,
+          schemaPayload: responseSchemaPayload))
     }
   }
 
   private func dispatch_rectangleArea(methodId: UInt64, requestId: UInt64, payload: Data) async {
     guard let methodInfo = methodSchemas[methodId] else {
-      taskSender(.response(requestId: requestId, payload: encodeUnknownMethodError(), schemas: []))
+      taskSender(.response(requestId: requestId, payload: encodeUnknownMethodError()))
       return
     }
-    let fullPayload = methodInfo.buildPayload(direction: .response, registry: schemaRegistry)
-    let filteredPayload = schemaSendTracker.filterForSending(fullPayload)
-    let responseSchemas = filteredPayload.encodeCbor()
+    let responseSchemaPayload = methodInfo.buildPayload(
+      direction: .response, registry: schemaRegistry)
     do {
       var cursor = 0
       let __rect_topLeft_x = try decodeI32(from: payload, offset: &cursor)
@@ -2743,27 +2751,28 @@ public final class TestbedChannelingDispatcher {
         taskSender(
           .response(
             requestId: requestId, payload: encodeResultOk(result, encoder: { encodeF64($0) }),
-            schemas: responseSchemas))
+            methodId: methodId, schemaPayload: responseSchemaPayload))
       } catch {
         taskSender(
           .response(
-            requestId: requestId, payload: encodeInvalidPayloadError(), schemas: responseSchemas))
+            requestId: requestId, payload: encodeInvalidPayloadError(), methodId: methodId,
+            schemaPayload: responseSchemaPayload))
       }
     } catch {
       taskSender(
         .response(
-          requestId: requestId, payload: encodeInvalidPayloadError(), schemas: responseSchemas))
+          requestId: requestId, payload: encodeInvalidPayloadError(), methodId: methodId,
+          schemaPayload: responseSchemaPayload))
     }
   }
 
   private func dispatch_parseColor(methodId: UInt64, requestId: UInt64, payload: Data) async {
     guard let methodInfo = methodSchemas[methodId] else {
-      taskSender(.response(requestId: requestId, payload: encodeUnknownMethodError(), schemas: []))
+      taskSender(.response(requestId: requestId, payload: encodeUnknownMethodError()))
       return
     }
-    let fullPayload = methodInfo.buildPayload(direction: .response, registry: schemaRegistry)
-    let filteredPayload = schemaSendTracker.filterForSending(fullPayload)
-    let responseSchemas = filteredPayload.encodeCbor()
+    let responseSchemaPayload = methodInfo.buildPayload(
+      direction: .response, registry: schemaRegistry)
     do {
       var cursor = 0
       let name = try decodeString(from: payload, offset: &cursor)
@@ -2787,27 +2796,28 @@ public final class TestbedChannelingDispatcher {
                       return encodeVarint(UInt64(2))
                     }
                   })
-              }), schemas: responseSchemas))
+              }), methodId: methodId, schemaPayload: responseSchemaPayload))
       } catch {
         taskSender(
           .response(
-            requestId: requestId, payload: encodeInvalidPayloadError(), schemas: responseSchemas))
+            requestId: requestId, payload: encodeInvalidPayloadError(), methodId: methodId,
+            schemaPayload: responseSchemaPayload))
       }
     } catch {
       taskSender(
         .response(
-          requestId: requestId, payload: encodeInvalidPayloadError(), schemas: responseSchemas))
+          requestId: requestId, payload: encodeInvalidPayloadError(), methodId: methodId,
+          schemaPayload: responseSchemaPayload))
     }
   }
 
   private func dispatch_shapeArea(methodId: UInt64, requestId: UInt64, payload: Data) async {
     guard let methodInfo = methodSchemas[methodId] else {
-      taskSender(.response(requestId: requestId, payload: encodeUnknownMethodError(), schemas: []))
+      taskSender(.response(requestId: requestId, payload: encodeUnknownMethodError()))
       return
     }
-    let fullPayload = methodInfo.buildPayload(direction: .response, registry: schemaRegistry)
-    let filteredPayload = schemaSendTracker.filterForSending(fullPayload)
-    let responseSchemas = filteredPayload.encodeCbor()
+    let responseSchemaPayload = methodInfo.buildPayload(
+      direction: .response, registry: schemaRegistry)
     do {
       var cursor = 0
       let _shape_disc = try decodeVarint(from: payload, offset: &cursor)
@@ -2830,27 +2840,28 @@ public final class TestbedChannelingDispatcher {
         taskSender(
           .response(
             requestId: requestId, payload: encodeResultOk(result, encoder: { encodeF64($0) }),
-            schemas: responseSchemas))
+            methodId: methodId, schemaPayload: responseSchemaPayload))
       } catch {
         taskSender(
           .response(
-            requestId: requestId, payload: encodeInvalidPayloadError(), schemas: responseSchemas))
+            requestId: requestId, payload: encodeInvalidPayloadError(), methodId: methodId,
+            schemaPayload: responseSchemaPayload))
       }
     } catch {
       taskSender(
         .response(
-          requestId: requestId, payload: encodeInvalidPayloadError(), schemas: responseSchemas))
+          requestId: requestId, payload: encodeInvalidPayloadError(), methodId: methodId,
+          schemaPayload: responseSchemaPayload))
     }
   }
 
   private func dispatch_createCanvas(methodId: UInt64, requestId: UInt64, payload: Data) async {
     guard let methodInfo = methodSchemas[methodId] else {
-      taskSender(.response(requestId: requestId, payload: encodeUnknownMethodError(), schemas: []))
+      taskSender(.response(requestId: requestId, payload: encodeUnknownMethodError()))
       return
     }
-    let fullPayload = methodInfo.buildPayload(direction: .response, registry: schemaRegistry)
-    let filteredPayload = schemaSendTracker.filterForSending(fullPayload)
-    let responseSchemas = filteredPayload.encodeCbor()
+    let responseSchemaPayload = methodInfo.buildPayload(
+      direction: .response, registry: schemaRegistry)
     do {
       var cursor = 0
       let name = try decodeString(from: payload, offset: &cursor)
@@ -2918,27 +2929,28 @@ public final class TestbedChannelingDispatcher {
                       return encodeVarint(UInt64(2))
                     }
                   }($0.background)
-              }), schemas: responseSchemas))
+              }), methodId: methodId, schemaPayload: responseSchemaPayload))
       } catch {
         taskSender(
           .response(
-            requestId: requestId, payload: encodeInvalidPayloadError(), schemas: responseSchemas))
+            requestId: requestId, payload: encodeInvalidPayloadError(), methodId: methodId,
+            schemaPayload: responseSchemaPayload))
       }
     } catch {
       taskSender(
         .response(
-          requestId: requestId, payload: encodeInvalidPayloadError(), schemas: responseSchemas))
+          requestId: requestId, payload: encodeInvalidPayloadError(), methodId: methodId,
+          schemaPayload: responseSchemaPayload))
     }
   }
 
   private func dispatch_processMessage(methodId: UInt64, requestId: UInt64, payload: Data) async {
     guard let methodInfo = methodSchemas[methodId] else {
-      taskSender(.response(requestId: requestId, payload: encodeUnknownMethodError(), schemas: []))
+      taskSender(.response(requestId: requestId, payload: encodeUnknownMethodError()))
       return
     }
-    let fullPayload = methodInfo.buildPayload(direction: .response, registry: schemaRegistry)
-    let filteredPayload = schemaSendTracker.filterForSending(fullPayload)
-    let responseSchemas = filteredPayload.encodeCbor()
+    let responseSchemaPayload = methodInfo.buildPayload(
+      direction: .response, registry: schemaRegistry)
     do {
       var cursor = 0
       let _msg_disc = try decodeVarint(from: payload, offset: &cursor)
@@ -2972,27 +2984,28 @@ public final class TestbedChannelingDispatcher {
                 case .data(let val):
                   return encodeVarint(UInt64(2)) + encodeBytes(Array(val))
                 }
-              }), schemas: responseSchemas))
+              }), methodId: methodId, schemaPayload: responseSchemaPayload))
       } catch {
         taskSender(
           .response(
-            requestId: requestId, payload: encodeInvalidPayloadError(), schemas: responseSchemas))
+            requestId: requestId, payload: encodeInvalidPayloadError(), methodId: methodId,
+            schemaPayload: responseSchemaPayload))
       }
     } catch {
       taskSender(
         .response(
-          requestId: requestId, payload: encodeInvalidPayloadError(), schemas: responseSchemas))
+          requestId: requestId, payload: encodeInvalidPayloadError(), methodId: methodId,
+          schemaPayload: responseSchemaPayload))
     }
   }
 
   private func dispatch_getPoints(methodId: UInt64, requestId: UInt64, payload: Data) async {
     guard let methodInfo = methodSchemas[methodId] else {
-      taskSender(.response(requestId: requestId, payload: encodeUnknownMethodError(), schemas: []))
+      taskSender(.response(requestId: requestId, payload: encodeUnknownMethodError()))
       return
     }
-    let fullPayload = methodInfo.buildPayload(direction: .response, registry: schemaRegistry)
-    let filteredPayload = schemaSendTracker.filterForSending(fullPayload)
-    let responseSchemas = filteredPayload.encodeCbor()
+    let responseSchemaPayload = methodInfo.buildPayload(
+      direction: .response, registry: schemaRegistry)
     do {
       var cursor = 0
       let count = try decodeU32(from: payload, offset: &cursor)
@@ -3003,27 +3016,28 @@ public final class TestbedChannelingDispatcher {
             requestId: requestId,
             payload: encodeResultOk(
               result, encoder: { encodeVec($0, encoder: { encodeI32($0.x) + encodeI32($0.y) }) }),
-            schemas: responseSchemas))
+            methodId: methodId, schemaPayload: responseSchemaPayload))
       } catch {
         taskSender(
           .response(
-            requestId: requestId, payload: encodeInvalidPayloadError(), schemas: responseSchemas))
+            requestId: requestId, payload: encodeInvalidPayloadError(), methodId: methodId,
+            schemaPayload: responseSchemaPayload))
       }
     } catch {
       taskSender(
         .response(
-          requestId: requestId, payload: encodeInvalidPayloadError(), schemas: responseSchemas))
+          requestId: requestId, payload: encodeInvalidPayloadError(), methodId: methodId,
+          schemaPayload: responseSchemaPayload))
     }
   }
 
   private func dispatch_swapPair(methodId: UInt64, requestId: UInt64, payload: Data) async {
     guard let methodInfo = methodSchemas[methodId] else {
-      taskSender(.response(requestId: requestId, payload: encodeUnknownMethodError(), schemas: []))
+      taskSender(.response(requestId: requestId, payload: encodeUnknownMethodError()))
       return
     }
-    let fullPayload = methodInfo.buildPayload(direction: .response, registry: schemaRegistry)
-    let filteredPayload = schemaSendTracker.filterForSending(fullPayload)
-    let responseSchemas = filteredPayload.encodeCbor()
+    let responseSchemaPayload = methodInfo.buildPayload(
+      direction: .response, registry: schemaRegistry)
     do {
       var cursor = 0
       let pair = try decodeTuple2(
@@ -3037,27 +3051,28 @@ public final class TestbedChannelingDispatcher {
             requestId: requestId,
             payload: encodeResultOk(
               result, encoder: { { encodeString($0) }($0.0) + { encodeI32($0) }($0.1) }),
-            schemas: responseSchemas))
+            methodId: methodId, schemaPayload: responseSchemaPayload))
       } catch {
         taskSender(
           .response(
-            requestId: requestId, payload: encodeInvalidPayloadError(), schemas: responseSchemas))
+            requestId: requestId, payload: encodeInvalidPayloadError(), methodId: methodId,
+            schemaPayload: responseSchemaPayload))
       }
     } catch {
       taskSender(
         .response(
-          requestId: requestId, payload: encodeInvalidPayloadError(), schemas: responseSchemas))
+          requestId: requestId, payload: encodeInvalidPayloadError(), methodId: methodId,
+          schemaPayload: responseSchemaPayload))
     }
   }
 
   private func dispatch_echoBytes(methodId: UInt64, requestId: UInt64, payload: Data) async {
     guard let methodInfo = methodSchemas[methodId] else {
-      taskSender(.response(requestId: requestId, payload: encodeUnknownMethodError(), schemas: []))
+      taskSender(.response(requestId: requestId, payload: encodeUnknownMethodError()))
       return
     }
-    let fullPayload = methodInfo.buildPayload(direction: .response, registry: schemaRegistry)
-    let filteredPayload = schemaSendTracker.filterForSending(fullPayload)
-    let responseSchemas = filteredPayload.encodeCbor()
+    let responseSchemaPayload = methodInfo.buildPayload(
+      direction: .response, registry: schemaRegistry)
     do {
       var cursor = 0
       let data = try decodeBytes(from: payload, offset: &cursor)
@@ -3067,27 +3082,28 @@ public final class TestbedChannelingDispatcher {
           .response(
             requestId: requestId,
             payload: encodeResultOk(result, encoder: { encodeBytes(Array($0)) }),
-            schemas: responseSchemas))
+            methodId: methodId, schemaPayload: responseSchemaPayload))
       } catch {
         taskSender(
           .response(
-            requestId: requestId, payload: encodeInvalidPayloadError(), schemas: responseSchemas))
+            requestId: requestId, payload: encodeInvalidPayloadError(), methodId: methodId,
+            schemaPayload: responseSchemaPayload))
       }
     } catch {
       taskSender(
         .response(
-          requestId: requestId, payload: encodeInvalidPayloadError(), schemas: responseSchemas))
+          requestId: requestId, payload: encodeInvalidPayloadError(), methodId: methodId,
+          schemaPayload: responseSchemaPayload))
     }
   }
 
   private func dispatch_echoBool(methodId: UInt64, requestId: UInt64, payload: Data) async {
     guard let methodInfo = methodSchemas[methodId] else {
-      taskSender(.response(requestId: requestId, payload: encodeUnknownMethodError(), schemas: []))
+      taskSender(.response(requestId: requestId, payload: encodeUnknownMethodError()))
       return
     }
-    let fullPayload = methodInfo.buildPayload(direction: .response, registry: schemaRegistry)
-    let filteredPayload = schemaSendTracker.filterForSending(fullPayload)
-    let responseSchemas = filteredPayload.encodeCbor()
+    let responseSchemaPayload = methodInfo.buildPayload(
+      direction: .response, registry: schemaRegistry)
     do {
       var cursor = 0
       let b = try decodeBool(from: payload, offset: &cursor)
@@ -3096,27 +3112,28 @@ public final class TestbedChannelingDispatcher {
         taskSender(
           .response(
             requestId: requestId, payload: encodeResultOk(result, encoder: { encodeBool($0) }),
-            schemas: responseSchemas))
+            methodId: methodId, schemaPayload: responseSchemaPayload))
       } catch {
         taskSender(
           .response(
-            requestId: requestId, payload: encodeInvalidPayloadError(), schemas: responseSchemas))
+            requestId: requestId, payload: encodeInvalidPayloadError(), methodId: methodId,
+            schemaPayload: responseSchemaPayload))
       }
     } catch {
       taskSender(
         .response(
-          requestId: requestId, payload: encodeInvalidPayloadError(), schemas: responseSchemas))
+          requestId: requestId, payload: encodeInvalidPayloadError(), methodId: methodId,
+          schemaPayload: responseSchemaPayload))
     }
   }
 
   private func dispatch_echoU64(methodId: UInt64, requestId: UInt64, payload: Data) async {
     guard let methodInfo = methodSchemas[methodId] else {
-      taskSender(.response(requestId: requestId, payload: encodeUnknownMethodError(), schemas: []))
+      taskSender(.response(requestId: requestId, payload: encodeUnknownMethodError()))
       return
     }
-    let fullPayload = methodInfo.buildPayload(direction: .response, registry: schemaRegistry)
-    let filteredPayload = schemaSendTracker.filterForSending(fullPayload)
-    let responseSchemas = filteredPayload.encodeCbor()
+    let responseSchemaPayload = methodInfo.buildPayload(
+      direction: .response, registry: schemaRegistry)
     do {
       var cursor = 0
       let n = try decodeVarint(from: payload, offset: &cursor)
@@ -3125,27 +3142,28 @@ public final class TestbedChannelingDispatcher {
         taskSender(
           .response(
             requestId: requestId, payload: encodeResultOk(result, encoder: { encodeVarint($0) }),
-            schemas: responseSchemas))
+            methodId: methodId, schemaPayload: responseSchemaPayload))
       } catch {
         taskSender(
           .response(
-            requestId: requestId, payload: encodeInvalidPayloadError(), schemas: responseSchemas))
+            requestId: requestId, payload: encodeInvalidPayloadError(), methodId: methodId,
+            schemaPayload: responseSchemaPayload))
       }
     } catch {
       taskSender(
         .response(
-          requestId: requestId, payload: encodeInvalidPayloadError(), schemas: responseSchemas))
+          requestId: requestId, payload: encodeInvalidPayloadError(), methodId: methodId,
+          schemaPayload: responseSchemaPayload))
     }
   }
 
   private func dispatch_echoOptionString(methodId: UInt64, requestId: UInt64, payload: Data) async {
     guard let methodInfo = methodSchemas[methodId] else {
-      taskSender(.response(requestId: requestId, payload: encodeUnknownMethodError(), schemas: []))
+      taskSender(.response(requestId: requestId, payload: encodeUnknownMethodError()))
       return
     }
-    let fullPayload = methodInfo.buildPayload(direction: .response, registry: schemaRegistry)
-    let filteredPayload = schemaSendTracker.filterForSending(fullPayload)
-    let responseSchemas = filteredPayload.encodeCbor()
+    let responseSchemaPayload = methodInfo.buildPayload(
+      direction: .response, registry: schemaRegistry)
     do {
       var cursor = 0
       let s = try decodeOption(
@@ -3158,27 +3176,28 @@ public final class TestbedChannelingDispatcher {
             requestId: requestId,
             payload: encodeResultOk(
               result, encoder: { encodeOption($0, encoder: { encodeString($0) }) }),
-            schemas: responseSchemas))
+            methodId: methodId, schemaPayload: responseSchemaPayload))
       } catch {
         taskSender(
           .response(
-            requestId: requestId, payload: encodeInvalidPayloadError(), schemas: responseSchemas))
+            requestId: requestId, payload: encodeInvalidPayloadError(), methodId: methodId,
+            schemaPayload: responseSchemaPayload))
       }
     } catch {
       taskSender(
         .response(
-          requestId: requestId, payload: encodeInvalidPayloadError(), schemas: responseSchemas))
+          requestId: requestId, payload: encodeInvalidPayloadError(), methodId: methodId,
+          schemaPayload: responseSchemaPayload))
     }
   }
 
   private func dispatch_sumLarge(methodId: UInt64, requestId: UInt64, payload: Data) async {
     guard let methodInfo = methodSchemas[methodId] else {
-      taskSender(.response(requestId: requestId, payload: encodeUnknownMethodError(), schemas: []))
+      taskSender(.response(requestId: requestId, payload: encodeUnknownMethodError()))
       return
     }
-    let fullPayload = methodInfo.buildPayload(direction: .response, registry: schemaRegistry)
-    let filteredPayload = schemaSendTracker.filterForSending(fullPayload)
-    let responseSchemas = filteredPayload.encodeCbor()
+    let responseSchemaPayload = methodInfo.buildPayload(
+      direction: .response, registry: schemaRegistry)
     do {
       var cursor = 0
       let numbersChannelId = try decodeVarint(from: payload, offset: &cursor)
@@ -3198,27 +3217,28 @@ public final class TestbedChannelingDispatcher {
         taskSender(
           .response(
             requestId: requestId, payload: encodeResultOk(result, encoder: { encodeI64($0) }),
-            schemas: responseSchemas))
+            methodId: methodId, schemaPayload: responseSchemaPayload))
       } catch {
         taskSender(
           .response(
-            requestId: requestId, payload: encodeInvalidPayloadError(), schemas: responseSchemas))
+            requestId: requestId, payload: encodeInvalidPayloadError(), methodId: methodId,
+            schemaPayload: responseSchemaPayload))
       }
     } catch {
       taskSender(
         .response(
-          requestId: requestId, payload: encodeInvalidPayloadError(), schemas: responseSchemas))
+          requestId: requestId, payload: encodeInvalidPayloadError(), methodId: methodId,
+          schemaPayload: responseSchemaPayload))
     }
   }
 
   private func dispatch_generateLarge(methodId: UInt64, requestId: UInt64, payload: Data) async {
     guard let methodInfo = methodSchemas[methodId] else {
-      taskSender(.response(requestId: requestId, payload: encodeUnknownMethodError(), schemas: []))
+      taskSender(.response(requestId: requestId, payload: encodeUnknownMethodError()))
       return
     }
-    let fullPayload = methodInfo.buildPayload(direction: .response, registry: schemaRegistry)
-    let filteredPayload = schemaSendTracker.filterForSending(fullPayload)
-    let responseSchemas = filteredPayload.encodeCbor()
+    let responseSchemaPayload = methodInfo.buildPayload(
+      direction: .response, registry: schemaRegistry)
     do {
       var cursor = 0
       let count = try decodeU32(from: payload, offset: &cursor)
@@ -3232,27 +3252,28 @@ public final class TestbedChannelingDispatcher {
         taskSender(
           .response(
             requestId: requestId, payload: encodeResultOk((), encoder: { _ in [] }),
-            schemas: responseSchemas))
+            methodId: methodId, schemaPayload: responseSchemaPayload))
       } catch {
         taskSender(
           .response(
-            requestId: requestId, payload: encodeInvalidPayloadError(), schemas: responseSchemas))
+            requestId: requestId, payload: encodeInvalidPayloadError(), methodId: methodId,
+            schemaPayload: responseSchemaPayload))
       }
     } catch {
       taskSender(
         .response(
-          requestId: requestId, payload: encodeInvalidPayloadError(), schemas: responseSchemas))
+          requestId: requestId, payload: encodeInvalidPayloadError(), methodId: methodId,
+          schemaPayload: responseSchemaPayload))
     }
   }
 
   private func dispatch_allColors(methodId: UInt64, requestId: UInt64, payload: Data) async {
     guard let methodInfo = methodSchemas[methodId] else {
-      taskSender(.response(requestId: requestId, payload: encodeUnknownMethodError(), schemas: []))
+      taskSender(.response(requestId: requestId, payload: encodeUnknownMethodError()))
       return
     }
-    let fullPayload = methodInfo.buildPayload(direction: .response, registry: schemaRegistry)
-    let filteredPayload = schemaSendTracker.filterForSending(fullPayload)
-    let responseSchemas = filteredPayload.encodeCbor()
+    let responseSchemaPayload = methodInfo.buildPayload(
+      direction: .response, registry: schemaRegistry)
     do {
       do {
         let result = try await handler.allColors()
@@ -3274,27 +3295,28 @@ public final class TestbedChannelingDispatcher {
                       return encodeVarint(UInt64(2))
                     }
                   })
-              }), schemas: responseSchemas))
+              }), methodId: methodId, schemaPayload: responseSchemaPayload))
       } catch {
         taskSender(
           .response(
-            requestId: requestId, payload: encodeInvalidPayloadError(), schemas: responseSchemas))
+            requestId: requestId, payload: encodeInvalidPayloadError(), methodId: methodId,
+            schemaPayload: responseSchemaPayload))
       }
     } catch {
       taskSender(
         .response(
-          requestId: requestId, payload: encodeInvalidPayloadError(), schemas: responseSchemas))
+          requestId: requestId, payload: encodeInvalidPayloadError(), methodId: methodId,
+          schemaPayload: responseSchemaPayload))
     }
   }
 
   private func dispatch_describePoint(methodId: UInt64, requestId: UInt64, payload: Data) async {
     guard let methodInfo = methodSchemas[methodId] else {
-      taskSender(.response(requestId: requestId, payload: encodeUnknownMethodError(), schemas: []))
+      taskSender(.response(requestId: requestId, payload: encodeUnknownMethodError()))
       return
     }
-    let fullPayload = methodInfo.buildPayload(direction: .response, registry: schemaRegistry)
-    let filteredPayload = schemaSendTracker.filterForSending(fullPayload)
-    let responseSchemas = filteredPayload.encodeCbor()
+    let responseSchemaPayload = methodInfo.buildPayload(
+      direction: .response, registry: schemaRegistry)
     do {
       var cursor = 0
       let label = try decodeString(from: payload, offset: &cursor)
@@ -3310,27 +3332,28 @@ public final class TestbedChannelingDispatcher {
               result,
               encoder: {
                 encodeString($0.label) + encodeI32($0.x) + encodeI32($0.y) + encodeBool($0.active)
-              }), schemas: responseSchemas))
+              }), methodId: methodId, schemaPayload: responseSchemaPayload))
       } catch {
         taskSender(
           .response(
-            requestId: requestId, payload: encodeInvalidPayloadError(), schemas: responseSchemas))
+            requestId: requestId, payload: encodeInvalidPayloadError(), methodId: methodId,
+            schemaPayload: responseSchemaPayload))
       }
     } catch {
       taskSender(
         .response(
-          requestId: requestId, payload: encodeInvalidPayloadError(), schemas: responseSchemas))
+          requestId: requestId, payload: encodeInvalidPayloadError(), methodId: methodId,
+          schemaPayload: responseSchemaPayload))
     }
   }
 
   private func dispatch_echoShape(methodId: UInt64, requestId: UInt64, payload: Data) async {
     guard let methodInfo = methodSchemas[methodId] else {
-      taskSender(.response(requestId: requestId, payload: encodeUnknownMethodError(), schemas: []))
+      taskSender(.response(requestId: requestId, payload: encodeUnknownMethodError()))
       return
     }
-    let fullPayload = methodInfo.buildPayload(direction: .response, registry: schemaRegistry)
-    let filteredPayload = schemaSendTracker.filterForSending(fullPayload)
-    let responseSchemas = filteredPayload.encodeCbor()
+    let responseSchemaPayload = methodInfo.buildPayload(
+      direction: .response, registry: schemaRegistry)
     do {
       var cursor = 0
       let _shape_disc = try decodeVarint(from: payload, offset: &cursor)
@@ -3364,27 +3387,28 @@ public final class TestbedChannelingDispatcher {
                 case .point:
                   return encodeVarint(UInt64(2))
                 }
-              }), schemas: responseSchemas))
+              }), methodId: methodId, schemaPayload: responseSchemaPayload))
       } catch {
         taskSender(
           .response(
-            requestId: requestId, payload: encodeInvalidPayloadError(), schemas: responseSchemas))
+            requestId: requestId, payload: encodeInvalidPayloadError(), methodId: methodId,
+            schemaPayload: responseSchemaPayload))
       }
     } catch {
       taskSender(
         .response(
-          requestId: requestId, payload: encodeInvalidPayloadError(), schemas: responseSchemas))
+          requestId: requestId, payload: encodeInvalidPayloadError(), methodId: methodId,
+          schemaPayload: responseSchemaPayload))
     }
   }
 
   private func dispatch_echoStatusV1(methodId: UInt64, requestId: UInt64, payload: Data) async {
     guard let methodInfo = methodSchemas[methodId] else {
-      taskSender(.response(requestId: requestId, payload: encodeUnknownMethodError(), schemas: []))
+      taskSender(.response(requestId: requestId, payload: encodeUnknownMethodError()))
       return
     }
-    let fullPayload = methodInfo.buildPayload(direction: .response, registry: schemaRegistry)
-    let filteredPayload = schemaSendTracker.filterForSending(fullPayload)
-    let responseSchemas = filteredPayload.encodeCbor()
+    let responseSchemaPayload = methodInfo.buildPayload(
+      direction: .response, registry: schemaRegistry)
     do {
       var cursor = 0
       let _status_disc = try decodeVarint(from: payload, offset: &cursor)
@@ -3411,27 +3435,28 @@ public final class TestbedChannelingDispatcher {
                 case .inactive:
                   return encodeVarint(UInt64(1))
                 }
-              }), schemas: responseSchemas))
+              }), methodId: methodId, schemaPayload: responseSchemaPayload))
       } catch {
         taskSender(
           .response(
-            requestId: requestId, payload: encodeInvalidPayloadError(), schemas: responseSchemas))
+            requestId: requestId, payload: encodeInvalidPayloadError(), methodId: methodId,
+            schemaPayload: responseSchemaPayload))
       }
     } catch {
       taskSender(
         .response(
-          requestId: requestId, payload: encodeInvalidPayloadError(), schemas: responseSchemas))
+          requestId: requestId, payload: encodeInvalidPayloadError(), methodId: methodId,
+          schemaPayload: responseSchemaPayload))
     }
   }
 
   private func dispatch_echoTagV1(methodId: UInt64, requestId: UInt64, payload: Data) async {
     guard let methodInfo = methodSchemas[methodId] else {
-      taskSender(.response(requestId: requestId, payload: encodeUnknownMethodError(), schemas: []))
+      taskSender(.response(requestId: requestId, payload: encodeUnknownMethodError()))
       return
     }
-    let fullPayload = methodInfo.buildPayload(direction: .response, registry: schemaRegistry)
-    let filteredPayload = schemaSendTracker.filterForSending(fullPayload)
-    let responseSchemas = filteredPayload.encodeCbor()
+    let responseSchemaPayload = methodInfo.buildPayload(
+      direction: .response, registry: schemaRegistry)
     do {
       var cursor = 0
       let _tag_label = try decodeString(from: payload, offset: &cursor)
@@ -3446,27 +3471,28 @@ public final class TestbedChannelingDispatcher {
             payload: encodeResultOk(
               result,
               encoder: { encodeString($0.label) + encodeU32($0.priority) + encodeString($0.note) }),
-            schemas: responseSchemas))
+            methodId: methodId, schemaPayload: responseSchemaPayload))
       } catch {
         taskSender(
           .response(
-            requestId: requestId, payload: encodeInvalidPayloadError(), schemas: responseSchemas))
+            requestId: requestId, payload: encodeInvalidPayloadError(), methodId: methodId,
+            schemaPayload: responseSchemaPayload))
       }
     } catch {
       taskSender(
         .response(
-          requestId: requestId, payload: encodeInvalidPayloadError(), schemas: responseSchemas))
+          requestId: requestId, payload: encodeInvalidPayloadError(), methodId: methodId,
+          schemaPayload: responseSchemaPayload))
     }
   }
 
   private func dispatch_echoProfile(methodId: UInt64, requestId: UInt64, payload: Data) async {
     guard let methodInfo = methodSchemas[methodId] else {
-      taskSender(.response(requestId: requestId, payload: encodeUnknownMethodError(), schemas: []))
+      taskSender(.response(requestId: requestId, payload: encodeUnknownMethodError()))
       return
     }
-    let fullPayload = methodInfo.buildPayload(direction: .response, registry: schemaRegistry)
-    let filteredPayload = schemaSendTracker.filterForSending(fullPayload)
-    let responseSchemas = filteredPayload.encodeCbor()
+    let responseSchemaPayload = methodInfo.buildPayload(
+      direction: .response, registry: schemaRegistry)
     do {
       var cursor = 0
       let _profile_name = try decodeString(from: payload, offset: &cursor)
@@ -3479,27 +3505,28 @@ public final class TestbedChannelingDispatcher {
             requestId: requestId,
             payload: encodeResultOk(
               result, encoder: { encodeString($0.name) + encodeString($0.bio) }),
-            schemas: responseSchemas))
+            methodId: methodId, schemaPayload: responseSchemaPayload))
       } catch {
         taskSender(
           .response(
-            requestId: requestId, payload: encodeInvalidPayloadError(), schemas: responseSchemas))
+            requestId: requestId, payload: encodeInvalidPayloadError(), methodId: methodId,
+            schemaPayload: responseSchemaPayload))
       }
     } catch {
       taskSender(
         .response(
-          requestId: requestId, payload: encodeInvalidPayloadError(), schemas: responseSchemas))
+          requestId: requestId, payload: encodeInvalidPayloadError(), methodId: methodId,
+          schemaPayload: responseSchemaPayload))
     }
   }
 
   private func dispatch_echoRecord(methodId: UInt64, requestId: UInt64, payload: Data) async {
     guard let methodInfo = methodSchemas[methodId] else {
-      taskSender(.response(requestId: requestId, payload: encodeUnknownMethodError(), schemas: []))
+      taskSender(.response(requestId: requestId, payload: encodeUnknownMethodError()))
       return
     }
-    let fullPayload = methodInfo.buildPayload(direction: .response, registry: schemaRegistry)
-    let filteredPayload = schemaSendTracker.filterForSending(fullPayload)
-    let responseSchemas = filteredPayload.encodeCbor()
+    let responseSchemaPayload = methodInfo.buildPayload(
+      direction: .response, registry: schemaRegistry)
     do {
       var cursor = 0
       let _record_alpha = try decodeI32(from: payload, offset: &cursor)
@@ -3513,27 +3540,28 @@ public final class TestbedChannelingDispatcher {
             requestId: requestId,
             payload: encodeResultOk(
               result, encoder: { encodeI32($0.alpha) + encodeString($0.beta) + encodeF64($0.gamma) }
-            ), schemas: responseSchemas))
+            ), methodId: methodId, schemaPayload: responseSchemaPayload))
       } catch {
         taskSender(
           .response(
-            requestId: requestId, payload: encodeInvalidPayloadError(), schemas: responseSchemas))
+            requestId: requestId, payload: encodeInvalidPayloadError(), methodId: methodId,
+            schemaPayload: responseSchemaPayload))
       }
     } catch {
       taskSender(
         .response(
-          requestId: requestId, payload: encodeInvalidPayloadError(), schemas: responseSchemas))
+          requestId: requestId, payload: encodeInvalidPayloadError(), methodId: methodId,
+          schemaPayload: responseSchemaPayload))
     }
   }
 
   private func dispatch_echoStatus(methodId: UInt64, requestId: UInt64, payload: Data) async {
     guard let methodInfo = methodSchemas[methodId] else {
-      taskSender(.response(requestId: requestId, payload: encodeUnknownMethodError(), schemas: []))
+      taskSender(.response(requestId: requestId, payload: encodeUnknownMethodError()))
       return
     }
-    let fullPayload = methodInfo.buildPayload(direction: .response, registry: schemaRegistry)
-    let filteredPayload = schemaSendTracker.filterForSending(fullPayload)
-    let responseSchemas = filteredPayload.encodeCbor()
+    let responseSchemaPayload = methodInfo.buildPayload(
+      direction: .response, registry: schemaRegistry)
     do {
       var cursor = 0
       let _status_disc = try decodeVarint(from: payload, offset: &cursor)
@@ -3560,27 +3588,28 @@ public final class TestbedChannelingDispatcher {
                 case .inactive:
                   return encodeVarint(UInt64(1))
                 }
-              }), schemas: responseSchemas))
+              }), methodId: methodId, schemaPayload: responseSchemaPayload))
       } catch {
         taskSender(
           .response(
-            requestId: requestId, payload: encodeInvalidPayloadError(), schemas: responseSchemas))
+            requestId: requestId, payload: encodeInvalidPayloadError(), methodId: methodId,
+            schemaPayload: responseSchemaPayload))
       }
     } catch {
       taskSender(
         .response(
-          requestId: requestId, payload: encodeInvalidPayloadError(), schemas: responseSchemas))
+          requestId: requestId, payload: encodeInvalidPayloadError(), methodId: methodId,
+          schemaPayload: responseSchemaPayload))
     }
   }
 
   private func dispatch_echoTag(methodId: UInt64, requestId: UInt64, payload: Data) async {
     guard let methodInfo = methodSchemas[methodId] else {
-      taskSender(.response(requestId: requestId, payload: encodeUnknownMethodError(), schemas: []))
+      taskSender(.response(requestId: requestId, payload: encodeUnknownMethodError()))
       return
     }
-    let fullPayload = methodInfo.buildPayload(direction: .response, registry: schemaRegistry)
-    let filteredPayload = schemaSendTracker.filterForSending(fullPayload)
-    let responseSchemas = filteredPayload.encodeCbor()
+    let responseSchemaPayload = methodInfo.buildPayload(
+      direction: .response, registry: schemaRegistry)
     do {
       var cursor = 0
       let _tag_label = try decodeString(from: payload, offset: &cursor)
@@ -3595,27 +3624,28 @@ public final class TestbedChannelingDispatcher {
             payload: encodeResultOk(
               result,
               encoder: { encodeString($0.label) + encodeU32($0.priority) + encodeString($0.note) }),
-            schemas: responseSchemas))
+            methodId: methodId, schemaPayload: responseSchemaPayload))
       } catch {
         taskSender(
           .response(
-            requestId: requestId, payload: encodeInvalidPayloadError(), schemas: responseSchemas))
+            requestId: requestId, payload: encodeInvalidPayloadError(), methodId: methodId,
+            schemaPayload: responseSchemaPayload))
       }
     } catch {
       taskSender(
         .response(
-          requestId: requestId, payload: encodeInvalidPayloadError(), schemas: responseSchemas))
+          requestId: requestId, payload: encodeInvalidPayloadError(), methodId: methodId,
+          schemaPayload: responseSchemaPayload))
     }
   }
 
   private func dispatch_echoMeasurement(methodId: UInt64, requestId: UInt64, payload: Data) async {
     guard let methodInfo = methodSchemas[methodId] else {
-      taskSender(.response(requestId: requestId, payload: encodeUnknownMethodError(), schemas: []))
+      taskSender(.response(requestId: requestId, payload: encodeUnknownMethodError()))
       return
     }
-    let fullPayload = methodInfo.buildPayload(direction: .response, registry: schemaRegistry)
-    let filteredPayload = schemaSendTracker.filterForSending(fullPayload)
-    let responseSchemas = filteredPayload.encodeCbor()
+    let responseSchemaPayload = methodInfo.buildPayload(
+      direction: .response, registry: schemaRegistry)
     do {
       var cursor = 0
       let _m_unit = try decodeString(from: payload, offset: &cursor)
@@ -3627,28 +3657,29 @@ public final class TestbedChannelingDispatcher {
           .response(
             requestId: requestId,
             payload: encodeResultOk(
-              result, encoder: { encodeString($0.unit) + encodeF64($0.value) }),
-            schemas: responseSchemas))
+              result, encoder: { encodeString($0.unit) + encodeF64($0.value) }), methodId: methodId,
+            schemaPayload: responseSchemaPayload))
       } catch {
         taskSender(
           .response(
-            requestId: requestId, payload: encodeInvalidPayloadError(), schemas: responseSchemas))
+            requestId: requestId, payload: encodeInvalidPayloadError(), methodId: methodId,
+            schemaPayload: responseSchemaPayload))
       }
     } catch {
       taskSender(
         .response(
-          requestId: requestId, payload: encodeInvalidPayloadError(), schemas: responseSchemas))
+          requestId: requestId, payload: encodeInvalidPayloadError(), methodId: methodId,
+          schemaPayload: responseSchemaPayload))
     }
   }
 
   private func dispatch_echoConfig(methodId: UInt64, requestId: UInt64, payload: Data) async {
     guard let methodInfo = methodSchemas[methodId] else {
-      taskSender(.response(requestId: requestId, payload: encodeUnknownMethodError(), schemas: []))
+      taskSender(.response(requestId: requestId, payload: encodeUnknownMethodError()))
       return
     }
-    let fullPayload = methodInfo.buildPayload(direction: .response, registry: schemaRegistry)
-    let filteredPayload = schemaSendTracker.filterForSending(fullPayload)
-    let responseSchemas = filteredPayload.encodeCbor()
+    let responseSchemaPayload = methodInfo.buildPayload(
+      direction: .response, registry: schemaRegistry)
     do {
       var cursor = 0
       let _c_key = try decodeString(from: payload, offset: &cursor)
@@ -3661,16 +3692,18 @@ public final class TestbedChannelingDispatcher {
             requestId: requestId,
             payload: encodeResultOk(
               result, encoder: { encodeString($0.key) + encodeString($0.value) }),
-            schemas: responseSchemas))
+            methodId: methodId, schemaPayload: responseSchemaPayload))
       } catch {
         taskSender(
           .response(
-            requestId: requestId, payload: encodeInvalidPayloadError(), schemas: responseSchemas))
+            requestId: requestId, payload: encodeInvalidPayloadError(), methodId: methodId,
+            schemaPayload: responseSchemaPayload))
       }
     } catch {
       taskSender(
         .response(
-          requestId: requestId, payload: encodeInvalidPayloadError(), schemas: responseSchemas))
+          requestId: requestId, payload: encodeInvalidPayloadError(), methodId: methodId,
+          schemaPayload: responseSchemaPayload))
     }
   }
 
@@ -3823,6 +3856,22 @@ public let testbed_schema_registry: [UInt64: Schema] = [
         FieldSchema(name: "priority", typeRef: .concrete(0x281c_5be4_f2ee_63b4), required: true),
         FieldSchema(name: "note", typeRef: .concrete(0x6d7d_ce91_4ee1_50e8), required: true),
       ])),
+  0x4cf4_b2ae_b98a_1939: Schema(
+    id: 0x4cf4_b2ae_b98a_1939, typeParams: ["E"],
+    kind: .enum(
+      name: "VoxError",
+      variants: [
+        VariantSchema(name: "User", index: 0, payload: .newtype(typeRef: .var(name: "E"))),
+        VariantSchema(name: "UnknownMethod", index: 1, payload: .unit),
+        VariantSchema(
+          name: "InvalidPayload", index: 2,
+          payload: .newtype(typeRef: .concrete(0x6d7d_ce91_4ee1_50e8))),
+        VariantSchema(name: "Cancelled", index: 3, payload: .unit),
+        VariantSchema(name: "ConnectionClosed", index: 4, payload: .unit),
+        VariantSchema(name: "SessionShutdown", index: 5, payload: .unit),
+        VariantSchema(name: "SendFailed", index: 6, payload: .unit),
+        VariantSchema(name: "Indeterminate", index: 7, payload: .unit),
+      ])),
   0x5db7_0a39_4660_f3e6: Schema(
     id: 0x5db7_0a39_4660_f3e6, typeParams: [], kind: .primitive(.never)),
   0x6847_ab90_feda_71c1: Schema(
@@ -3912,22 +3961,6 @@ public let testbed_schema_registry: [UInt64: Schema] = [
   0xc886_545a_493d_06eb: Schema(
     id: 0xc886_545a_493d_06eb, typeParams: ["T"],
     kind: .channel(direction: .tx, element: .var(name: "T"))),
-  0xd354_d13a_3635_6a5a: Schema(
-    id: 0xd354_d13a_3635_6a5a, typeParams: ["E"],
-    kind: .enum(
-      name: "VoxError",
-      variants: [
-        VariantSchema(name: "User", index: 0, payload: .newtype(typeRef: .var(name: "E"))),
-        VariantSchema(name: "UnknownMethod", index: 1, payload: .unit),
-        VariantSchema(
-          name: "InvalidPayload", index: 2,
-          payload: .newtype(typeRef: .concrete(0x6d7d_ce91_4ee1_50e8))),
-        VariantSchema(name: "Cancelled", index: 3, payload: .unit),
-        VariantSchema(name: "ConnectionClosed", index: 4, payload: .unit),
-        VariantSchema(name: "SessionShutdown", index: 5, payload: .unit),
-        VariantSchema(name: "SendFailed", index: 6, payload: .unit),
-        VariantSchema(name: "Indeterminate", index: 7, payload: .unit),
-      ])),
   0xd935_6298_b816_39ac: Schema(id: 0xd935_6298_b816_39ac, typeParams: [], kind: .primitive(.u64)),
   0xd9d7_8670_738e_6064: Schema(
     id: 0xd9d7_8670_738e_6064, typeParams: [],
@@ -3973,13 +4006,13 @@ public let testbed_method_schemas: [UInt64: MethodSchemaInfo] = [
     argsRoot: .generic(0x6847_ab90_feda_71c1, args: [.concrete(0x6d7d_ce91_4ee1_50e8)]),
     responseSchemaIds: [
       0x1783_67a8_7f66_fb46, 0x281c_5be4_f2ee_63b4, 0x4204_6de6_63be_eef0, 0x5db7_0a39_4660_f3e6,
-      0x6d7d_ce91_4ee1_50e8, 0xd354_d13a_3635_6a5a,
+      0x6d7d_ce91_4ee1_50e8, 0x4cf4_b2ae_b98a_1939,
     ],
     responseRoot: .generic(
       0x4204_6de6_63be_eef0,
       args: [
         .concrete(0x6d7d_ce91_4ee1_50e8),
-        .generic(0xd354_d13a_3635_6a5a, args: [.concrete(0x5db7_0a39_4660_f3e6)]),
+        .generic(0x4cf4_b2ae_b98a_1939, args: [.concrete(0x5db7_0a39_4660_f3e6)]),
       ])
   ),
   0x1c22_3f30_e180_392a: MethodSchemaInfo(
@@ -3987,13 +4020,13 @@ public let testbed_method_schemas: [UInt64: MethodSchemaInfo] = [
     argsRoot: .generic(0x6847_ab90_feda_71c1, args: [.concrete(0x6d7d_ce91_4ee1_50e8)]),
     responseSchemaIds: [
       0x1783_67a8_7f66_fb46, 0x281c_5be4_f2ee_63b4, 0x4204_6de6_63be_eef0, 0x5db7_0a39_4660_f3e6,
-      0x6d7d_ce91_4ee1_50e8, 0xd354_d13a_3635_6a5a,
+      0x6d7d_ce91_4ee1_50e8, 0x4cf4_b2ae_b98a_1939,
     ],
     responseRoot: .generic(
       0x4204_6de6_63be_eef0,
       args: [
         .concrete(0x6d7d_ce91_4ee1_50e8),
-        .generic(0xd354_d13a_3635_6a5a, args: [.concrete(0x5db7_0a39_4660_f3e6)]),
+        .generic(0x4cf4_b2ae_b98a_1939, args: [.concrete(0x5db7_0a39_4660_f3e6)]),
       ])
   ),
   0xfb68_d931_8f83_0875: MethodSchemaInfo(
@@ -4003,13 +4036,13 @@ public let testbed_method_schemas: [UInt64: MethodSchemaInfo] = [
       args: [.concrete(0xc6eb_8c46_f1e1_7fba), .concrete(0xc6eb_8c46_f1e1_7fba)]),
     responseSchemaIds: [
       0x1783_67a8_7f66_fb46, 0x281c_5be4_f2ee_63b4, 0x4204_6de6_63be_eef0, 0x5db7_0a39_4660_f3e6,
-      0x6d7d_ce91_4ee1_50e8, 0xd354_d13a_3635_6a5a, 0xc6eb_8c46_f1e1_7fba, 0xd9d7_8670_738e_6064,
+      0x6d7d_ce91_4ee1_50e8, 0x4cf4_b2ae_b98a_1939, 0xc6eb_8c46_f1e1_7fba, 0xd9d7_8670_738e_6064,
     ],
     responseRoot: .generic(
       0x4204_6de6_63be_eef0,
       args: [
         .concrete(0xc6eb_8c46_f1e1_7fba),
-        .generic(0xd354_d13a_3635_6a5a, args: [.concrete(0xd9d7_8670_738e_6064)]),
+        .generic(0x4cf4_b2ae_b98a_1939, args: [.concrete(0xd9d7_8670_738e_6064)]),
       ])
   ),
   0xa15f_f520_9471_2a3b: MethodSchemaInfo(
@@ -4017,14 +4050,14 @@ public let testbed_method_schemas: [UInt64: MethodSchemaInfo] = [
     argsRoot: .generic(0x6847_ab90_feda_71c1, args: [.concrete(0x281c_5be4_f2ee_63b4)]),
     responseSchemaIds: [
       0x1783_67a8_7f66_fb46, 0x281c_5be4_f2ee_63b4, 0x4204_6de6_63be_eef0, 0x5db7_0a39_4660_f3e6,
-      0x6d7d_ce91_4ee1_50e8, 0xd354_d13a_3635_6a5a, 0x2c8d_54f2_314d_0f20, 0xdcaf_d4de_6b79_69bb,
+      0x6d7d_ce91_4ee1_50e8, 0x4cf4_b2ae_b98a_1939, 0x2c8d_54f2_314d_0f20, 0xdcaf_d4de_6b79_69bb,
       0xc841_530b_759b_8ed0, 0x16d9_2ac9_e3bd_73ba,
     ],
     responseRoot: .generic(
       0x4204_6de6_63be_eef0,
       args: [
         .concrete(0xc841_530b_759b_8ed0),
-        .generic(0xd354_d13a_3635_6a5a, args: [.concrete(0x16d9_2ac9_e3bd_73ba)]),
+        .generic(0x4cf4_b2ae_b98a_1939, args: [.concrete(0x16d9_2ac9_e3bd_73ba)]),
       ])
   ),
   0x51f9_cfd8_e865_77c9: MethodSchemaInfo(
@@ -4034,13 +4067,13 @@ public let testbed_method_schemas: [UInt64: MethodSchemaInfo] = [
       args: [.generic(0x967a_48ac_345e_2f5e, args: [.concrete(0x361f_4536_eee9_f991)])]),
     responseSchemaIds: [
       0x1783_67a8_7f66_fb46, 0x281c_5be4_f2ee_63b4, 0x4204_6de6_63be_eef0, 0x5db7_0a39_4660_f3e6,
-      0x6d7d_ce91_4ee1_50e8, 0xd354_d13a_3635_6a5a, 0xc6eb_8c46_f1e1_7fba,
+      0x6d7d_ce91_4ee1_50e8, 0x4cf4_b2ae_b98a_1939, 0xc6eb_8c46_f1e1_7fba,
     ],
     responseRoot: .generic(
       0x4204_6de6_63be_eef0,
       args: [
         .concrete(0xc6eb_8c46_f1e1_7fba),
-        .generic(0xd354_d13a_3635_6a5a, args: [.concrete(0x5db7_0a39_4660_f3e6)]),
+        .generic(0x4cf4_b2ae_b98a_1939, args: [.concrete(0x5db7_0a39_4660_f3e6)]),
       ])
   ),
   0x239e_5b99_b1f8_207a: MethodSchemaInfo(
@@ -4055,13 +4088,13 @@ public let testbed_method_schemas: [UInt64: MethodSchemaInfo] = [
       ]),
     responseSchemaIds: [
       0x1783_67a8_7f66_fb46, 0x281c_5be4_f2ee_63b4, 0x4204_6de6_63be_eef0, 0x5db7_0a39_4660_f3e6,
-      0x6d7d_ce91_4ee1_50e8, 0xd354_d13a_3635_6a5a, 0xbc5c_3324_9a2d_c720,
+      0x6d7d_ce91_4ee1_50e8, 0x4cf4_b2ae_b98a_1939, 0xbc5c_3324_9a2d_c720,
     ],
     responseRoot: .generic(
       0x4204_6de6_63be_eef0,
       args: [
         .concrete(0xbc5c_3324_9a2d_c720),
-        .generic(0xd354_d13a_3635_6a5a, args: [.concrete(0x5db7_0a39_4660_f3e6)]),
+        .generic(0x4cf4_b2ae_b98a_1939, args: [.concrete(0x5db7_0a39_4660_f3e6)]),
       ])
   ),
   0x3441_9529_478c_c7b8: MethodSchemaInfo(
@@ -4076,13 +4109,13 @@ public let testbed_method_schemas: [UInt64: MethodSchemaInfo] = [
       ]),
     responseSchemaIds: [
       0x1783_67a8_7f66_fb46, 0x281c_5be4_f2ee_63b4, 0x4204_6de6_63be_eef0, 0x5db7_0a39_4660_f3e6,
-      0x6d7d_ce91_4ee1_50e8, 0xd354_d13a_3635_6a5a, 0xbc5c_3324_9a2d_c720,
+      0x6d7d_ce91_4ee1_50e8, 0x4cf4_b2ae_b98a_1939, 0xbc5c_3324_9a2d_c720,
     ],
     responseRoot: .generic(
       0x4204_6de6_63be_eef0,
       args: [
         .concrete(0xbc5c_3324_9a2d_c720),
-        .generic(0xd354_d13a_3635_6a5a, args: [.concrete(0x5db7_0a39_4660_f3e6)]),
+        .generic(0x4cf4_b2ae_b98a_1939, args: [.concrete(0x5db7_0a39_4660_f3e6)]),
       ])
   ),
   0xe2d2_7fd9_098c_6ea2: MethodSchemaInfo(
@@ -4097,13 +4130,13 @@ public let testbed_method_schemas: [UInt64: MethodSchemaInfo] = [
       ]),
     responseSchemaIds: [
       0x1783_67a8_7f66_fb46, 0x281c_5be4_f2ee_63b4, 0x4204_6de6_63be_eef0, 0x5db7_0a39_4660_f3e6,
-      0x6d7d_ce91_4ee1_50e8, 0xd354_d13a_3635_6a5a, 0xbc5c_3324_9a2d_c720,
+      0x6d7d_ce91_4ee1_50e8, 0x4cf4_b2ae_b98a_1939, 0xbc5c_3324_9a2d_c720,
     ],
     responseRoot: .generic(
       0x4204_6de6_63be_eef0,
       args: [
         .concrete(0xbc5c_3324_9a2d_c720),
-        .generic(0xd354_d13a_3635_6a5a, args: [.concrete(0x5db7_0a39_4660_f3e6)]),
+        .generic(0x4cf4_b2ae_b98a_1939, args: [.concrete(0x5db7_0a39_4660_f3e6)]),
       ])
   ),
   0xcb46_9cff_8d79_8feb: MethodSchemaInfo(
@@ -4118,13 +4151,13 @@ public let testbed_method_schemas: [UInt64: MethodSchemaInfo] = [
       ]),
     responseSchemaIds: [
       0x1783_67a8_7f66_fb46, 0x281c_5be4_f2ee_63b4, 0x4204_6de6_63be_eef0, 0x5db7_0a39_4660_f3e6,
-      0x6d7d_ce91_4ee1_50e8, 0xd354_d13a_3635_6a5a, 0xbc5c_3324_9a2d_c720,
+      0x6d7d_ce91_4ee1_50e8, 0x4cf4_b2ae_b98a_1939, 0xbc5c_3324_9a2d_c720,
     ],
     responseRoot: .generic(
       0x4204_6de6_63be_eef0,
       args: [
         .concrete(0xbc5c_3324_9a2d_c720),
-        .generic(0xd354_d13a_3635_6a5a, args: [.concrete(0x5db7_0a39_4660_f3e6)]),
+        .generic(0x4cf4_b2ae_b98a_1939, args: [.concrete(0x5db7_0a39_4660_f3e6)]),
       ])
   ),
   0x81f5_386d_589d_fbe4: MethodSchemaInfo(
@@ -4132,13 +4165,13 @@ public let testbed_method_schemas: [UInt64: MethodSchemaInfo] = [
     argsRoot: .generic(0x6847_ab90_feda_71c1, args: [.concrete(0xb923_32c6_7187_108f)]),
     responseSchemaIds: [
       0x1783_67a8_7f66_fb46, 0x281c_5be4_f2ee_63b4, 0x4204_6de6_63be_eef0, 0x5db7_0a39_4660_f3e6,
-      0x6d7d_ce91_4ee1_50e8, 0xd354_d13a_3635_6a5a, 0x361f_4536_eee9_f991, 0xb923_32c6_7187_108f,
+      0x6d7d_ce91_4ee1_50e8, 0x4cf4_b2ae_b98a_1939, 0x361f_4536_eee9_f991, 0xb923_32c6_7187_108f,
     ],
     responseRoot: .generic(
       0x4204_6de6_63be_eef0,
       args: [
         .concrete(0xb923_32c6_7187_108f),
-        .generic(0xd354_d13a_3635_6a5a, args: [.concrete(0x5db7_0a39_4660_f3e6)]),
+        .generic(0x4cf4_b2ae_b98a_1939, args: [.concrete(0x5db7_0a39_4660_f3e6)]),
       ])
   ),
   0x68ff_a90b_7728_bde7: MethodSchemaInfo(
@@ -4153,14 +4186,14 @@ public let testbed_method_schemas: [UInt64: MethodSchemaInfo] = [
       ]),
     responseSchemaIds: [
       0x1783_67a8_7f66_fb46, 0x281c_5be4_f2ee_63b4, 0x4204_6de6_63be_eef0, 0x5db7_0a39_4660_f3e6,
-      0x6d7d_ce91_4ee1_50e8, 0xd354_d13a_3635_6a5a, 0x2c8d_54f2_314d_0f20, 0xdcaf_d4de_6b79_69bb,
+      0x6d7d_ce91_4ee1_50e8, 0x4cf4_b2ae_b98a_1939, 0x2c8d_54f2_314d_0f20, 0xdcaf_d4de_6b79_69bb,
       0xc841_530b_759b_8ed0,
     ],
     responseRoot: .generic(
       0x4204_6de6_63be_eef0,
       args: [
         .concrete(0xc841_530b_759b_8ed0),
-        .generic(0xd354_d13a_3635_6a5a, args: [.concrete(0x5db7_0a39_4660_f3e6)]),
+        .generic(0x4cf4_b2ae_b98a_1939, args: [.concrete(0x5db7_0a39_4660_f3e6)]),
       ])
   ),
   0x223f_e028_2d26_3107: MethodSchemaInfo(
@@ -4171,13 +4204,13 @@ public let testbed_method_schemas: [UInt64: MethodSchemaInfo] = [
     argsRoot: .generic(0x6847_ab90_feda_71c1, args: [.concrete(0x6ecf_4fe3_76e2_3113)]),
     responseSchemaIds: [
       0x1783_67a8_7f66_fb46, 0x281c_5be4_f2ee_63b4, 0x4204_6de6_63be_eef0, 0x5db7_0a39_4660_f3e6,
-      0x6d7d_ce91_4ee1_50e8, 0xd354_d13a_3635_6a5a, 0x3f2e_589d_b81e_95bf,
+      0x6d7d_ce91_4ee1_50e8, 0x4cf4_b2ae_b98a_1939, 0x3f2e_589d_b81e_95bf,
     ],
     responseRoot: .generic(
       0x4204_6de6_63be_eef0,
       args: [
         .concrete(0x3f2e_589d_b81e_95bf),
-        .generic(0xd354_d13a_3635_6a5a, args: [.concrete(0x5db7_0a39_4660_f3e6)]),
+        .generic(0x4cf4_b2ae_b98a_1939, args: [.concrete(0x5db7_0a39_4660_f3e6)]),
       ])
   ),
   0xd4f1_6ea9_eca1_32e6: MethodSchemaInfo(
@@ -4185,13 +4218,13 @@ public let testbed_method_schemas: [UInt64: MethodSchemaInfo] = [
     argsRoot: .generic(0x6847_ab90_feda_71c1, args: [.concrete(0x6d7d_ce91_4ee1_50e8)]),
     responseSchemaIds: [
       0x1783_67a8_7f66_fb46, 0x281c_5be4_f2ee_63b4, 0x4204_6de6_63be_eef0, 0x5db7_0a39_4660_f3e6,
-      0x6d7d_ce91_4ee1_50e8, 0xd354_d13a_3635_6a5a, 0x1b57_cc77_42fa_beb0, 0xdcaf_d4de_6b79_69bb,
+      0x6d7d_ce91_4ee1_50e8, 0x4cf4_b2ae_b98a_1939, 0x1b57_cc77_42fa_beb0, 0xdcaf_d4de_6b79_69bb,
     ],
     responseRoot: .generic(
       0x4204_6de6_63be_eef0,
       args: [
         .generic(0xdcaf_d4de_6b79_69bb, args: [.concrete(0x1b57_cc77_42fa_beb0)]),
-        .generic(0xd354_d13a_3635_6a5a, args: [.concrete(0x5db7_0a39_4660_f3e6)]),
+        .generic(0x4cf4_b2ae_b98a_1939, args: [.concrete(0x5db7_0a39_4660_f3e6)]),
       ])
   ),
   0x0438_5a4b_e2a8_82f5: MethodSchemaInfo(
@@ -4199,13 +4232,13 @@ public let testbed_method_schemas: [UInt64: MethodSchemaInfo] = [
     argsRoot: .generic(0x6847_ab90_feda_71c1, args: [.concrete(0xe407_302c_560d_a502)]),
     responseSchemaIds: [
       0x1783_67a8_7f66_fb46, 0x281c_5be4_f2ee_63b4, 0x4204_6de6_63be_eef0, 0x5db7_0a39_4660_f3e6,
-      0x6d7d_ce91_4ee1_50e8, 0xd354_d13a_3635_6a5a, 0x3f2e_589d_b81e_95bf,
+      0x6d7d_ce91_4ee1_50e8, 0x4cf4_b2ae_b98a_1939, 0x3f2e_589d_b81e_95bf,
     ],
     responseRoot: .generic(
       0x4204_6de6_63be_eef0,
       args: [
         .concrete(0x3f2e_589d_b81e_95bf),
-        .generic(0xd354_d13a_3635_6a5a, args: [.concrete(0x5db7_0a39_4660_f3e6)]),
+        .generic(0x4cf4_b2ae_b98a_1939, args: [.concrete(0x5db7_0a39_4660_f3e6)]),
       ])
   ),
   0xef42_1eb5_b08c_973a: MethodSchemaInfo(
@@ -4222,14 +4255,14 @@ public let testbed_method_schemas: [UInt64: MethodSchemaInfo] = [
       ]),
     responseSchemaIds: [
       0x1783_67a8_7f66_fb46, 0x281c_5be4_f2ee_63b4, 0x4204_6de6_63be_eef0, 0x5db7_0a39_4660_f3e6,
-      0x6d7d_ce91_4ee1_50e8, 0xd354_d13a_3635_6a5a, 0x3f2e_589d_b81e_95bf, 0xe407_302c_560d_a502,
+      0x6d7d_ce91_4ee1_50e8, 0x4cf4_b2ae_b98a_1939, 0x3f2e_589d_b81e_95bf, 0xe407_302c_560d_a502,
       0x0a96_b404_b4d7_9d67, 0x1b57_cc77_42fa_beb0, 0x2218_55c9_65fb_31e1,
     ],
     responseRoot: .generic(
       0x4204_6de6_63be_eef0,
       args: [
         .concrete(0x2218_55c9_65fb_31e1),
-        .generic(0xd354_d13a_3635_6a5a, args: [.concrete(0x5db7_0a39_4660_f3e6)]),
+        .generic(0x4cf4_b2ae_b98a_1939, args: [.concrete(0x5db7_0a39_4660_f3e6)]),
       ])
   ),
   0xe08f_0f52_54e7_a997: MethodSchemaInfo(
@@ -4240,14 +4273,14 @@ public let testbed_method_schemas: [UInt64: MethodSchemaInfo] = [
     argsRoot: .generic(0x6847_ab90_feda_71c1, args: [.concrete(0xbda7_7ebf_97f3_45a9)]),
     responseSchemaIds: [
       0x1783_67a8_7f66_fb46, 0x281c_5be4_f2ee_63b4, 0x4204_6de6_63be_eef0, 0x5db7_0a39_4660_f3e6,
-      0x6d7d_ce91_4ee1_50e8, 0xd354_d13a_3635_6a5a, 0xc6eb_8c46_f1e1_7fba, 0xba81_2587_6d63_88b4,
+      0x6d7d_ce91_4ee1_50e8, 0x4cf4_b2ae_b98a_1939, 0xc6eb_8c46_f1e1_7fba, 0xba81_2587_6d63_88b4,
       0xbda7_7ebf_97f3_45a9,
     ],
     responseRoot: .generic(
       0x4204_6de6_63be_eef0,
       args: [
         .concrete(0xbda7_7ebf_97f3_45a9),
-        .generic(0xd354_d13a_3635_6a5a, args: [.concrete(0x5db7_0a39_4660_f3e6)]),
+        .generic(0x4cf4_b2ae_b98a_1939, args: [.concrete(0x5db7_0a39_4660_f3e6)]),
       ])
   ),
   0x5985_1852_3a62_66bf: MethodSchemaInfo(
@@ -4255,14 +4288,14 @@ public let testbed_method_schemas: [UInt64: MethodSchemaInfo] = [
     argsRoot: .generic(0x6847_ab90_feda_71c1, args: [.concrete(0x281c_5be4_f2ee_63b4)]),
     responseSchemaIds: [
       0x1783_67a8_7f66_fb46, 0x281c_5be4_f2ee_63b4, 0x4204_6de6_63be_eef0, 0x5db7_0a39_4660_f3e6,
-      0x6d7d_ce91_4ee1_50e8, 0xd354_d13a_3635_6a5a, 0x361f_4536_eee9_f991, 0xb923_32c6_7187_108f,
+      0x6d7d_ce91_4ee1_50e8, 0x4cf4_b2ae_b98a_1939, 0x361f_4536_eee9_f991, 0xb923_32c6_7187_108f,
       0x0a96_b404_b4d7_9d67,
     ],
     responseRoot: .generic(
       0x4204_6de6_63be_eef0,
       args: [
         .generic(0x0a96_b404_b4d7_9d67, args: [.concrete(0xb923_32c6_7187_108f)]),
-        .generic(0xd354_d13a_3635_6a5a, args: [.concrete(0x5db7_0a39_4660_f3e6)]),
+        .generic(0x4cf4_b2ae_b98a_1939, args: [.concrete(0x5db7_0a39_4660_f3e6)]),
       ])
   ),
   0x7d55_a713_ad61_2bf2: MethodSchemaInfo(
@@ -4278,7 +4311,7 @@ public let testbed_method_schemas: [UInt64: MethodSchemaInfo] = [
       ]),
     responseSchemaIds: [
       0x1783_67a8_7f66_fb46, 0x281c_5be4_f2ee_63b4, 0x4204_6de6_63be_eef0, 0x5db7_0a39_4660_f3e6,
-      0x6d7d_ce91_4ee1_50e8, 0xd354_d13a_3635_6a5a, 0x361f_4536_eee9_f991, 0xba04_96aa_8cee_7a4c,
+      0x6d7d_ce91_4ee1_50e8, 0x4cf4_b2ae_b98a_1939, 0x361f_4536_eee9_f991, 0xba04_96aa_8cee_7a4c,
     ],
     responseRoot: .generic(
       0x4204_6de6_63be_eef0,
@@ -4286,7 +4319,7 @@ public let testbed_method_schemas: [UInt64: MethodSchemaInfo] = [
         .generic(
           0xba04_96aa_8cee_7a4c,
           args: [.concrete(0x6d7d_ce91_4ee1_50e8), .concrete(0x361f_4536_eee9_f991)]),
-        .generic(0xd354_d13a_3635_6a5a, args: [.concrete(0x5db7_0a39_4660_f3e6)]),
+        .generic(0x4cf4_b2ae_b98a_1939, args: [.concrete(0x5db7_0a39_4660_f3e6)]),
       ])
   ),
   0x4405_6c78_42fa_336c: MethodSchemaInfo(
@@ -4294,13 +4327,13 @@ public let testbed_method_schemas: [UInt64: MethodSchemaInfo] = [
     argsRoot: .generic(0x6847_ab90_feda_71c1, args: [.concrete(0xba81_2587_6d63_88b4)]),
     responseSchemaIds: [
       0x1783_67a8_7f66_fb46, 0x281c_5be4_f2ee_63b4, 0x4204_6de6_63be_eef0, 0x5db7_0a39_4660_f3e6,
-      0x6d7d_ce91_4ee1_50e8, 0xd354_d13a_3635_6a5a, 0xba81_2587_6d63_88b4,
+      0x6d7d_ce91_4ee1_50e8, 0x4cf4_b2ae_b98a_1939, 0xba81_2587_6d63_88b4,
     ],
     responseRoot: .generic(
       0x4204_6de6_63be_eef0,
       args: [
         .concrete(0xba81_2587_6d63_88b4),
-        .generic(0xd354_d13a_3635_6a5a, args: [.concrete(0x5db7_0a39_4660_f3e6)]),
+        .generic(0x4cf4_b2ae_b98a_1939, args: [.concrete(0x5db7_0a39_4660_f3e6)]),
       ])
   ),
   0x5136_d8f0_1a5f_496c: MethodSchemaInfo(
@@ -4308,13 +4341,13 @@ public let testbed_method_schemas: [UInt64: MethodSchemaInfo] = [
     argsRoot: .generic(0x6847_ab90_feda_71c1, args: [.concrete(0x1783_67a8_7f66_fb46)]),
     responseSchemaIds: [
       0x1783_67a8_7f66_fb46, 0x281c_5be4_f2ee_63b4, 0x4204_6de6_63be_eef0, 0x5db7_0a39_4660_f3e6,
-      0x6d7d_ce91_4ee1_50e8, 0xd354_d13a_3635_6a5a,
+      0x6d7d_ce91_4ee1_50e8, 0x4cf4_b2ae_b98a_1939,
     ],
     responseRoot: .generic(
       0x4204_6de6_63be_eef0,
       args: [
         .concrete(0x1783_67a8_7f66_fb46),
-        .generic(0xd354_d13a_3635_6a5a, args: [.concrete(0x5db7_0a39_4660_f3e6)]),
+        .generic(0x4cf4_b2ae_b98a_1939, args: [.concrete(0x5db7_0a39_4660_f3e6)]),
       ])
   ),
   0x85e2_380d_bf7f_fe65: MethodSchemaInfo(
@@ -4322,13 +4355,13 @@ public let testbed_method_schemas: [UInt64: MethodSchemaInfo] = [
     argsRoot: .generic(0x6847_ab90_feda_71c1, args: [.concrete(0xd935_6298_b816_39ac)]),
     responseSchemaIds: [
       0x1783_67a8_7f66_fb46, 0x281c_5be4_f2ee_63b4, 0x4204_6de6_63be_eef0, 0x5db7_0a39_4660_f3e6,
-      0x6d7d_ce91_4ee1_50e8, 0xd354_d13a_3635_6a5a, 0xd935_6298_b816_39ac,
+      0x6d7d_ce91_4ee1_50e8, 0x4cf4_b2ae_b98a_1939, 0xd935_6298_b816_39ac,
     ],
     responseRoot: .generic(
       0x4204_6de6_63be_eef0,
       args: [
         .concrete(0xd935_6298_b816_39ac),
-        .generic(0xd354_d13a_3635_6a5a, args: [.concrete(0x5db7_0a39_4660_f3e6)]),
+        .generic(0x4cf4_b2ae_b98a_1939, args: [.concrete(0x5db7_0a39_4660_f3e6)]),
       ])
   ),
   0xb1a5_bfd2_05b3_fbfc: MethodSchemaInfo(
@@ -4338,13 +4371,13 @@ public let testbed_method_schemas: [UInt64: MethodSchemaInfo] = [
       args: [.generic(0xdcaf_d4de_6b79_69bb, args: [.concrete(0x6d7d_ce91_4ee1_50e8)])]),
     responseSchemaIds: [
       0x1783_67a8_7f66_fb46, 0x281c_5be4_f2ee_63b4, 0x4204_6de6_63be_eef0, 0x5db7_0a39_4660_f3e6,
-      0x6d7d_ce91_4ee1_50e8, 0xd354_d13a_3635_6a5a, 0xdcaf_d4de_6b79_69bb,
+      0x6d7d_ce91_4ee1_50e8, 0x4cf4_b2ae_b98a_1939, 0xdcaf_d4de_6b79_69bb,
     ],
     responseRoot: .generic(
       0x4204_6de6_63be_eef0,
       args: [
         .generic(0xdcaf_d4de_6b79_69bb, args: [.concrete(0x6d7d_ce91_4ee1_50e8)]),
-        .generic(0xd354_d13a_3635_6a5a, args: [.concrete(0x5db7_0a39_4660_f3e6)]),
+        .generic(0x4cf4_b2ae_b98a_1939, args: [.concrete(0x5db7_0a39_4660_f3e6)]),
       ])
   ),
   0x9a7b_ed54_5e08_8054: MethodSchemaInfo(
@@ -4354,13 +4387,13 @@ public let testbed_method_schemas: [UInt64: MethodSchemaInfo] = [
       args: [.generic(0x967a_48ac_345e_2f5e, args: [.concrete(0x361f_4536_eee9_f991)])]),
     responseSchemaIds: [
       0x1783_67a8_7f66_fb46, 0x281c_5be4_f2ee_63b4, 0x4204_6de6_63be_eef0, 0x5db7_0a39_4660_f3e6,
-      0x6d7d_ce91_4ee1_50e8, 0xd354_d13a_3635_6a5a, 0xc6eb_8c46_f1e1_7fba,
+      0x6d7d_ce91_4ee1_50e8, 0x4cf4_b2ae_b98a_1939, 0xc6eb_8c46_f1e1_7fba,
     ],
     responseRoot: .generic(
       0x4204_6de6_63be_eef0,
       args: [
         .concrete(0xc6eb_8c46_f1e1_7fba),
-        .generic(0xd354_d13a_3635_6a5a, args: [.concrete(0x5db7_0a39_4660_f3e6)]),
+        .generic(0x4cf4_b2ae_b98a_1939, args: [.concrete(0x5db7_0a39_4660_f3e6)]),
       ])
   ),
   0x8edf_bd65_d162_f685: MethodSchemaInfo(
@@ -4375,13 +4408,13 @@ public let testbed_method_schemas: [UInt64: MethodSchemaInfo] = [
       ]),
     responseSchemaIds: [
       0x1783_67a8_7f66_fb46, 0x281c_5be4_f2ee_63b4, 0x4204_6de6_63be_eef0, 0x5db7_0a39_4660_f3e6,
-      0x6d7d_ce91_4ee1_50e8, 0xd354_d13a_3635_6a5a, 0xbc5c_3324_9a2d_c720,
+      0x6d7d_ce91_4ee1_50e8, 0x4cf4_b2ae_b98a_1939, 0xbc5c_3324_9a2d_c720,
     ],
     responseRoot: .generic(
       0x4204_6de6_63be_eef0,
       args: [
         .concrete(0xbc5c_3324_9a2d_c720),
-        .generic(0xd354_d13a_3635_6a5a, args: [.concrete(0x5db7_0a39_4660_f3e6)]),
+        .generic(0x4cf4_b2ae_b98a_1939, args: [.concrete(0x5db7_0a39_4660_f3e6)]),
       ])
   ),
   0xfbfb_05bb_caad_e4a0: MethodSchemaInfo(
@@ -4389,13 +4422,13 @@ public let testbed_method_schemas: [UInt64: MethodSchemaInfo] = [
     argsRoot: .concrete(0xbc5c_3324_9a2d_c720),
     responseSchemaIds: [
       0x1783_67a8_7f66_fb46, 0x281c_5be4_f2ee_63b4, 0x4204_6de6_63be_eef0, 0x5db7_0a39_4660_f3e6,
-      0x6d7d_ce91_4ee1_50e8, 0xd354_d13a_3635_6a5a, 0x1b57_cc77_42fa_beb0, 0x0a96_b404_b4d7_9d67,
+      0x6d7d_ce91_4ee1_50e8, 0x4cf4_b2ae_b98a_1939, 0x1b57_cc77_42fa_beb0, 0x0a96_b404_b4d7_9d67,
     ],
     responseRoot: .generic(
       0x4204_6de6_63be_eef0,
       args: [
         .generic(0x0a96_b404_b4d7_9d67, args: [.concrete(0x1b57_cc77_42fa_beb0)]),
-        .generic(0xd354_d13a_3635_6a5a, args: [.concrete(0x5db7_0a39_4660_f3e6)]),
+        .generic(0x4cf4_b2ae_b98a_1939, args: [.concrete(0x5db7_0a39_4660_f3e6)]),
       ])
   ),
   0x62fe_b14a_8fcf_9b6d: MethodSchemaInfo(
@@ -4410,13 +4443,13 @@ public let testbed_method_schemas: [UInt64: MethodSchemaInfo] = [
       ]),
     responseSchemaIds: [
       0x1783_67a8_7f66_fb46, 0x281c_5be4_f2ee_63b4, 0x4204_6de6_63be_eef0, 0x5db7_0a39_4660_f3e6,
-      0x6d7d_ce91_4ee1_50e8, 0xd354_d13a_3635_6a5a, 0x361f_4536_eee9_f991, 0x7f14_5c7b_0ede_dd20,
+      0x6d7d_ce91_4ee1_50e8, 0x4cf4_b2ae_b98a_1939, 0x361f_4536_eee9_f991, 0x7f14_5c7b_0ede_dd20,
     ],
     responseRoot: .generic(
       0x4204_6de6_63be_eef0,
       args: [
         .concrete(0x7f14_5c7b_0ede_dd20),
-        .generic(0xd354_d13a_3635_6a5a, args: [.concrete(0x5db7_0a39_4660_f3e6)]),
+        .generic(0x4cf4_b2ae_b98a_1939, args: [.concrete(0x5db7_0a39_4660_f3e6)]),
       ])
   ),
   0x4125_b5e6_78b7_b4a5: MethodSchemaInfo(
@@ -4424,13 +4457,13 @@ public let testbed_method_schemas: [UInt64: MethodSchemaInfo] = [
     argsRoot: .generic(0x6847_ab90_feda_71c1, args: [.concrete(0xe407_302c_560d_a502)]),
     responseSchemaIds: [
       0x1783_67a8_7f66_fb46, 0x281c_5be4_f2ee_63b4, 0x4204_6de6_63be_eef0, 0x5db7_0a39_4660_f3e6,
-      0x6d7d_ce91_4ee1_50e8, 0xd354_d13a_3635_6a5a, 0x3f2e_589d_b81e_95bf, 0xe407_302c_560d_a502,
+      0x6d7d_ce91_4ee1_50e8, 0x4cf4_b2ae_b98a_1939, 0x3f2e_589d_b81e_95bf, 0xe407_302c_560d_a502,
     ],
     responseRoot: .generic(
       0x4204_6de6_63be_eef0,
       args: [
         .concrete(0xe407_302c_560d_a502),
-        .generic(0xd354_d13a_3635_6a5a, args: [.concrete(0x5db7_0a39_4660_f3e6)]),
+        .generic(0x4cf4_b2ae_b98a_1939, args: [.concrete(0x5db7_0a39_4660_f3e6)]),
       ])
   ),
   0xc7c5_aa84_5cfb_8bf6: MethodSchemaInfo(
@@ -4438,13 +4471,13 @@ public let testbed_method_schemas: [UInt64: MethodSchemaInfo] = [
     argsRoot: .generic(0x6847_ab90_feda_71c1, args: [.concrete(0x0154_2aaa_833a_2511)]),
     responseSchemaIds: [
       0x1783_67a8_7f66_fb46, 0x281c_5be4_f2ee_63b4, 0x4204_6de6_63be_eef0, 0x5db7_0a39_4660_f3e6,
-      0x6d7d_ce91_4ee1_50e8, 0xd354_d13a_3635_6a5a, 0x0154_2aaa_833a_2511,
+      0x6d7d_ce91_4ee1_50e8, 0x4cf4_b2ae_b98a_1939, 0x0154_2aaa_833a_2511,
     ],
     responseRoot: .generic(
       0x4204_6de6_63be_eef0,
       args: [
         .concrete(0x0154_2aaa_833a_2511),
-        .generic(0xd354_d13a_3635_6a5a, args: [.concrete(0x5db7_0a39_4660_f3e6)]),
+        .generic(0x4cf4_b2ae_b98a_1939, args: [.concrete(0x5db7_0a39_4660_f3e6)]),
       ])
   ),
   0x6619_071b_e5d5_c259: MethodSchemaInfo(
@@ -4454,13 +4487,13 @@ public let testbed_method_schemas: [UInt64: MethodSchemaInfo] = [
     argsRoot: .generic(0x6847_ab90_feda_71c1, args: [.concrete(0x4620_db6c_5c62_7787)]),
     responseSchemaIds: [
       0x1783_67a8_7f66_fb46, 0x281c_5be4_f2ee_63b4, 0x4204_6de6_63be_eef0, 0x5db7_0a39_4660_f3e6,
-      0x6d7d_ce91_4ee1_50e8, 0xd354_d13a_3635_6a5a, 0x4620_db6c_5c62_7787,
+      0x6d7d_ce91_4ee1_50e8, 0x4cf4_b2ae_b98a_1939, 0x4620_db6c_5c62_7787,
     ],
     responseRoot: .generic(
       0x4204_6de6_63be_eef0,
       args: [
         .concrete(0x4620_db6c_5c62_7787),
-        .generic(0xd354_d13a_3635_6a5a, args: [.concrete(0x5db7_0a39_4660_f3e6)]),
+        .generic(0x4cf4_b2ae_b98a_1939, args: [.concrete(0x5db7_0a39_4660_f3e6)]),
       ])
   ),
   0xbd9b_cabd_deeb_eb04: MethodSchemaInfo(
@@ -4468,13 +4501,13 @@ public let testbed_method_schemas: [UInt64: MethodSchemaInfo] = [
     argsRoot: .generic(0x6847_ab90_feda_71c1, args: [.concrete(0xbc2c_d703_968e_7d0d)]),
     responseSchemaIds: [
       0x1783_67a8_7f66_fb46, 0x281c_5be4_f2ee_63b4, 0x4204_6de6_63be_eef0, 0x5db7_0a39_4660_f3e6,
-      0x6d7d_ce91_4ee1_50e8, 0xd354_d13a_3635_6a5a, 0xbc2c_d703_968e_7d0d,
+      0x6d7d_ce91_4ee1_50e8, 0x4cf4_b2ae_b98a_1939, 0xbc2c_d703_968e_7d0d,
     ],
     responseRoot: .generic(
       0x4204_6de6_63be_eef0,
       args: [
         .concrete(0xbc2c_d703_968e_7d0d),
-        .generic(0xd354_d13a_3635_6a5a, args: [.concrete(0x5db7_0a39_4660_f3e6)]),
+        .generic(0x4cf4_b2ae_b98a_1939, args: [.concrete(0x5db7_0a39_4660_f3e6)]),
       ])
   ),
   0x100b_0e08_da4b_8f1a: MethodSchemaInfo(
@@ -4485,14 +4518,14 @@ public let testbed_method_schemas: [UInt64: MethodSchemaInfo] = [
     argsRoot: .generic(0x6847_ab90_feda_71c1, args: [.concrete(0x2ef9_3123_176c_696c)]),
     responseSchemaIds: [
       0x1783_67a8_7f66_fb46, 0x281c_5be4_f2ee_63b4, 0x4204_6de6_63be_eef0, 0x5db7_0a39_4660_f3e6,
-      0x6d7d_ce91_4ee1_50e8, 0xd354_d13a_3635_6a5a, 0x361f_4536_eee9_f991, 0x3f2e_589d_b81e_95bf,
+      0x6d7d_ce91_4ee1_50e8, 0x4cf4_b2ae_b98a_1939, 0x361f_4536_eee9_f991, 0x3f2e_589d_b81e_95bf,
       0x2ef9_3123_176c_696c,
     ],
     responseRoot: .generic(
       0x4204_6de6_63be_eef0,
       args: [
         .concrete(0x2ef9_3123_176c_696c),
-        .generic(0xd354_d13a_3635_6a5a, args: [.concrete(0x5db7_0a39_4660_f3e6)]),
+        .generic(0x4cf4_b2ae_b98a_1939, args: [.concrete(0x5db7_0a39_4660_f3e6)]),
       ])
   ),
   0x6975_90d3_ffc3_6703: MethodSchemaInfo(
@@ -4500,13 +4533,13 @@ public let testbed_method_schemas: [UInt64: MethodSchemaInfo] = [
     argsRoot: .generic(0x6847_ab90_feda_71c1, args: [.concrete(0x0154_2aaa_833a_2511)]),
     responseSchemaIds: [
       0x1783_67a8_7f66_fb46, 0x281c_5be4_f2ee_63b4, 0x4204_6de6_63be_eef0, 0x5db7_0a39_4660_f3e6,
-      0x6d7d_ce91_4ee1_50e8, 0xd354_d13a_3635_6a5a, 0x0154_2aaa_833a_2511,
+      0x6d7d_ce91_4ee1_50e8, 0x4cf4_b2ae_b98a_1939, 0x0154_2aaa_833a_2511,
     ],
     responseRoot: .generic(
       0x4204_6de6_63be_eef0,
       args: [
         .concrete(0x0154_2aaa_833a_2511),
-        .generic(0xd354_d13a_3635_6a5a, args: [.concrete(0x5db7_0a39_4660_f3e6)]),
+        .generic(0x4cf4_b2ae_b98a_1939, args: [.concrete(0x5db7_0a39_4660_f3e6)]),
       ])
   ),
   0x2bd1_b314_9d73_ce97: MethodSchemaInfo(
@@ -4516,13 +4549,13 @@ public let testbed_method_schemas: [UInt64: MethodSchemaInfo] = [
     argsRoot: .generic(0x6847_ab90_feda_71c1, args: [.concrete(0x4620_db6c_5c62_7787)]),
     responseSchemaIds: [
       0x1783_67a8_7f66_fb46, 0x281c_5be4_f2ee_63b4, 0x4204_6de6_63be_eef0, 0x5db7_0a39_4660_f3e6,
-      0x6d7d_ce91_4ee1_50e8, 0xd354_d13a_3635_6a5a, 0x4620_db6c_5c62_7787,
+      0x6d7d_ce91_4ee1_50e8, 0x4cf4_b2ae_b98a_1939, 0x4620_db6c_5c62_7787,
     ],
     responseRoot: .generic(
       0x4204_6de6_63be_eef0,
       args: [
         .concrete(0x4620_db6c_5c62_7787),
-        .generic(0xd354_d13a_3635_6a5a, args: [.concrete(0x5db7_0a39_4660_f3e6)]),
+        .generic(0x4cf4_b2ae_b98a_1939, args: [.concrete(0x5db7_0a39_4660_f3e6)]),
       ])
   ),
   0x3b3d_22b0_15fa_1a3f: MethodSchemaInfo(
@@ -4532,13 +4565,13 @@ public let testbed_method_schemas: [UInt64: MethodSchemaInfo] = [
     argsRoot: .generic(0x6847_ab90_feda_71c1, args: [.concrete(0x0930_935d_500f_9629)]),
     responseSchemaIds: [
       0x1783_67a8_7f66_fb46, 0x281c_5be4_f2ee_63b4, 0x4204_6de6_63be_eef0, 0x5db7_0a39_4660_f3e6,
-      0x6d7d_ce91_4ee1_50e8, 0xd354_d13a_3635_6a5a, 0x3f2e_589d_b81e_95bf, 0x0930_935d_500f_9629,
+      0x6d7d_ce91_4ee1_50e8, 0x4cf4_b2ae_b98a_1939, 0x3f2e_589d_b81e_95bf, 0x0930_935d_500f_9629,
     ],
     responseRoot: .generic(
       0x4204_6de6_63be_eef0,
       args: [
         .concrete(0x0930_935d_500f_9629),
-        .generic(0xd354_d13a_3635_6a5a, args: [.concrete(0x5db7_0a39_4660_f3e6)]),
+        .generic(0x4cf4_b2ae_b98a_1939, args: [.concrete(0x5db7_0a39_4660_f3e6)]),
       ])
   ),
   0xe13a_477f_b964_ce28: MethodSchemaInfo(
@@ -4546,13 +4579,13 @@ public let testbed_method_schemas: [UInt64: MethodSchemaInfo] = [
     argsRoot: .generic(0x6847_ab90_feda_71c1, args: [.concrete(0xec27_64b2_5ae6_ef1e)]),
     responseSchemaIds: [
       0x1783_67a8_7f66_fb46, 0x281c_5be4_f2ee_63b4, 0x4204_6de6_63be_eef0, 0x5db7_0a39_4660_f3e6,
-      0x6d7d_ce91_4ee1_50e8, 0xd354_d13a_3635_6a5a, 0xec27_64b2_5ae6_ef1e,
+      0x6d7d_ce91_4ee1_50e8, 0x4cf4_b2ae_b98a_1939, 0xec27_64b2_5ae6_ef1e,
     ],
     responseRoot: .generic(
       0x4204_6de6_63be_eef0,
       args: [
         .concrete(0xec27_64b2_5ae6_ef1e),
-        .generic(0xd354_d13a_3635_6a5a, args: [.concrete(0x5db7_0a39_4660_f3e6)]),
+        .generic(0x4cf4_b2ae_b98a_1939, args: [.concrete(0x5db7_0a39_4660_f3e6)]),
       ])
   ),
 ]

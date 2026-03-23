@@ -6,48 +6,7 @@ expression: "generate(quote!\n{\n    trait WordLab\n    {\n        async fn is_s
 pub fn word_lab_service_descriptor() -> &'static ::vox::session::ServiceDescriptor {
     static DESCRIPTOR: std::sync::OnceLock<&'static ::vox::session::ServiceDescriptor> =
         std::sync::OnceLock::new();
-    DESCRIPTOR.get_or_init(|| {
-        let methods: Vec<&'static ::vox::session::MethodDescriptor> = vec![
-            ::vox::hash::method_descriptor_with_retry::<(&'static str,), bool>(
-                "WordLab",
-                "is_short",
-                &["word"],
-                None,
-                ::vox::RetryPolicy {
-                    persist: false,
-                    idem: false,
-                },
-            ),
-            ::vox::hash::method_descriptor_with_retry::<(String,), &'static str>(
-                "WordLab",
-                "classify",
-                &["word"],
-                None,
-                ::vox::RetryPolicy {
-                    persist: false,
-                    idem: false,
-                },
-            ),
-            ::vox::hash::method_descriptor_with_retry::<
-                (&'static str, Rx<String>, Tx<String>),
-                u32,
-            >(
-                "WordLab",
-                "transform",
-                &["prefix", "input", "output"],
-                None,
-                ::vox::RetryPolicy {
-                    persist: false,
-                    idem: false,
-                },
-            ),
-        ];
-        Box::leak(Box::new(::vox::session::ServiceDescriptor {
-            service_name: "WordLab",
-            methods: Box::leak(methods.into_boxed_slice()),
-            doc: None,
-        }))
-    })
+    DESCRIPTOR . get_or_init (|| { let methods : Vec < & 'static :: vox :: session :: MethodDescriptor > = vec ! [:: vox :: hash :: method_descriptor_with_retry :: < (& 'static str ,) , bool > ("WordLab" , "is_short" , & ["word"] , None , :: vox :: RetryPolicy { persist : false , idem : false , } ,) , :: vox :: hash :: method_descriptor_with_retry :: < (String ,) , & 'static str > ("WordLab" , "classify" , & ["word"] , None , :: vox :: RetryPolicy { persist : false , idem : false , } ,) , :: vox :: hash :: method_descriptor_with_retry :: < (& 'static str , Rx < String > , Tx < String > ,) , u32 > ("WordLab" , "transform" , & ["prefix" , "input" , "output"] , None , :: vox :: RetryPolicy { persist : false , idem : false , } ,)] ; Box :: leak (Box :: new (:: vox :: session :: ServiceDescriptor { service_name : "WordLab" , methods : Box :: leak (methods . into_boxed_slice ()) , doc : None , })) })
 }
 pub trait WordLab
 where
@@ -206,11 +165,11 @@ where
                         e
                     );
                     reply
-                        .send_typed_error::<bool, ::core::convert::Infallible>(
-                            ::vox::VoxError::<::core::convert::Infallible>::InvalidPayload(
-                                e.to_string(),
-                            ),
-                        )
+                        .send_typed_error::<bool, ::core::convert::Infallible>(::vox::VoxError::<
+                            ::core::convert::Infallible,
+                        >::InvalidPayload(
+                            e.to_string()
+                        ))
                         .await;
                     return;
                 }
@@ -311,11 +270,11 @@ where
                         e
                     );
                     reply
-                        .send_typed_error::<u32, ::core::convert::Infallible>(
-                            ::vox::VoxError::<::core::convert::Infallible>::InvalidPayload(
-                                e.to_string(),
-                            ),
-                        )
+                        .send_typed_error::<u32, ::core::convert::Infallible>(::vox::VoxError::<
+                            ::core::convert::Infallible,
+                        >::InvalidPayload(
+                            e.to_string()
+                        ))
                         .await;
                     return;
                 }
@@ -504,9 +463,7 @@ impl WordLabClient {
                     Result<&'static str, ::vox::VoxError<::core::convert::Infallible>>,
                 >(ret_bytes, method_id, &schema_tracker)
                 .map_err(|e| {
-                    ::vox::VoxError::<::core::convert::Infallible>::InvalidPayload(
-                        e.to_string(),
-                    )
+                    ::vox::VoxError::<::core::convert::Infallible>::InvalidPayload(e.to_string())
                 })?;
             match result {
                 Ok(ret) => Ok(ret),
