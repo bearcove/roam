@@ -922,8 +922,13 @@ final class SocketLink: Link, @unchecked Sendable {
                     return wasClosed
                 }
                 if !wasClosed {
-                    _ = shutdown(self.fd, SHUT_RDWR)
-                    close(self.fd)
+                    #if canImport(Darwin)
+                    _ = Darwin.shutdown(self.fd, SHUT_RDWR)
+                    _ = Darwin.close(self.fd)
+                    #else
+                    _ = Glibc.shutdown(self.fd, SHUT_RDWR)
+                    _ = Glibc.close(self.fd)
+                    #endif
                 }
                 continuation.resume()
             }
