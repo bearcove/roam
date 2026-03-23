@@ -375,6 +375,7 @@ private func bindValue(
         // Need to bind Rx for incoming
         if let tx = value as? AnyUnboundTx {
             let channelId = allocator.allocate()
+            traceLog(.driver, "bindChannels: registering incoming channelId=\(channelId)")
             let receiver = await incomingRegistry.register(
                 channelId,
                 initialCredit: initialCredit,

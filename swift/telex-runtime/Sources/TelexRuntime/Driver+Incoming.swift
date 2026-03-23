@@ -195,6 +195,7 @@ extension Driver {
             throw ConnectionError.protocolViolation(rule: "rpc.channel.allocation")
         }
 
+        traceLog(.driver, "handleData: channelId=\(channelId)")
         var delivered = await serverRegistry.deliverData(channelId: channelId, payload: payload)
         if !delivered {
             delivered = await handle.channelRegistry.deliverData(
@@ -202,6 +203,7 @@ extension Driver {
         }
 
         if !delivered {
+            traceLog(.driver, "handleData: unknown channelId=\(channelId)")
             try await sendProtocolError("rpc.metadata.unknown")
             throw ConnectionError.protocolViolation(rule: "rpc.metadata.unknown")
         }

@@ -16,7 +16,7 @@ use telex_types::{
     ChannelCreditReplenisherHandle, ChannelId, ChannelItem, ChannelLivenessHandle, ChannelMessage,
     ChannelRetryMode, ChannelSink, CreditSink, Handler, IdAllocator, IncomingChannelMessage,
     Payload, ReplySink, RequestBody, RequestCall, RequestId, RequestMessage, RequestResponse,
-    TelexError, SelfRef, TxError, ensure_operation_id, metadata_channel_retry_mode,
+    SelfRef, TelexError, TxError, ensure_operation_id, metadata_channel_retry_mode,
     metadata_operation_id,
 };
 
@@ -216,6 +216,11 @@ struct DriverShared {
     /// Credit semaphores for outbound channels (Tx on our side).
     /// The driver's GrantCredit handler adds permits to these.
     channel_credits: SyncMutex<BTreeMap<ChannelId, Arc<Semaphore>>>,
+    /// Channel IDs cleared during session resume. When handler tasks that owned
+    /// these channels are aborted, they may trigger `close_channel_on_drop`, which
+    /// would send a ChannelClose message for a channel the peer no longer knows about.
+    /// We suppress those Close messages by checking this set.
+    stale_close_channels: SyncMutex<std::collections::HashSet<ChannelId>>,
 }
 
 struct CallerDropGuard {
@@ -1011,12 +1016,19 @@ impl ChannelCreditReplenisher for DriverChannelCreditReplenisher {
 
 impl<H: Handler<DriverReplySink>> Driver<H> {
     fn close_all_channel_runtime_state(&self) {
-        for semaphore in self.shared.channel_credits.lock().values() {
+        let mut credits = self.shared.channel_credits.lock();
+        for semaphore in credits.values() {
             semaphore.close();
         }
+        // Track all outbound channel IDs that are being cleared so we can suppress
+        // ChannelClose messages triggered by aborted handler tasks dropping their Tx handles.
+        let mut stale = self.shared.stale_close_channels.lock();
+        stale.extend(credits.keys().copied());
+        credits.clear();
+        drop(credits);
+
         self.shared.channel_senders.lock().clear();
         self.shared.channel_buffers.lock().clear();
-        self.shared.channel_credits.lock().clear();
     }
 
     fn close_outbound_channel(&self, channel_id: ChannelId) {
@@ -1079,6 +1091,10 @@ impl<H: Handler<DriverReplySink>> Driver<H> {
                 channel_senders: SyncMutex::new("driver.channel_senders", BTreeMap::new()),
                 channel_buffers: SyncMutex::new("driver.channel_buffers", BTreeMap::new()),
                 channel_credits: SyncMutex::new("driver.channel_credits", BTreeMap::new()),
+                stale_close_channels: SyncMutex::new(
+                    "driver.stale_close_channels",
+                    std::collections::HashSet::new(),
+                ),
             }),
             in_flight_handlers: BTreeMap::new(),
             live_operations: Arc::new(SyncMutex::new(
@@ -1268,6 +1284,14 @@ impl<H: Handler<DriverReplySink>> Driver<H> {
     async fn handle_local_control(&mut self, control: DriverLocalControl) {
         match control {
             DriverLocalControl::CloseChannel { channel_id } => {
+                // Don't send Close for channels that were cleared during session resume.
+                // When handler tasks are aborted, their dropped Tx handles trigger
+                // close_channel_on_drop, but we should not send Close to the peer
+                // for channels the peer has also cleared.
+                if self.shared.stale_close_channels.lock().remove(&channel_id) {
+                    tracing::debug!(%channel_id, "suppressing ChannelClose for stale channel");
+                    return;
+                }
                 let _ = self
                     .sender
                     .send(ConnectionMessage::Channel(ChannelMessage {
