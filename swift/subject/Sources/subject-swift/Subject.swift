@@ -926,7 +926,7 @@ final class SocketLink: Link, @unchecked Sendable {
                     _ = Darwin.shutdown(self.fd, SHUT_RDWR)
                     _ = Darwin.close(self.fd)
                     #else
-                    _ = Glibc.shutdown(self.fd, SHUT_RDWR)
+                    _ = Glibc.shutdown(self.fd, Int32(SHUT_RDWR))
                     _ = Glibc.close(self.fd)
                     #endif
                 }
@@ -967,7 +967,11 @@ private func readExactlyAllowingEof(fd: Int32, count: Int) throws -> [UInt8]? {
     while offset < count {
         let n = out.withUnsafeMutableBytes { raw -> Int in
             guard let base = raw.baseAddress else { return -1 }
+            #if canImport(Darwin)
             return Darwin.recv(fd, base.advanced(by: offset), count - offset, 0)
+            #else
+            return Glibc.recv(fd, base.advanced(by: offset), count - offset, 0)
+            #endif
         }
         if n == 0 {
             if offset == 0 {
@@ -987,30 +991,48 @@ private func readExactlyAllowingEof(fd: Int32, count: Int) throws -> [UInt8]? {
 }
 
 private func makeTcpListener(port: Int) throws -> (fd: Int32, boundPort: Int) {
+    #if canImport(Glibc)
+    let fd = socket(AF_INET, Int32(SOCK_STREAM.rawValue), 0)
+    #else
     let fd = socket(AF_INET, SOCK_STREAM, 0)
+    #endif
     guard fd >= 0 else {
         throw SubjectError.socketSetupFailed
     }
 
     var yes: Int32 = 1
     guard setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &yes, socklen_t(MemoryLayout<Int32>.size)) == 0 else {
-        close(fd)
+        #if canImport(Darwin)
+        _ = Darwin.close(fd)
+        #else
+        _ = Glibc.close(fd)
+        #endif
         throw SubjectError.socketSetupFailed
     }
 
     var addr = sockaddr_in()
+    #if canImport(Darwin)
     addr.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+    #endif
     addr.sin_family = sa_family_t(AF_INET)
     addr.sin_port = in_port_t(UInt16(port).bigEndian)
     addr.sin_addr = in_addr(s_addr: inet_addr("127.0.0.1"))
 
     let bindResult = withUnsafePointer(to: &addr) { ptr in
         ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sockPtr in
+            #if canImport(Darwin)
             Darwin.bind(fd, sockPtr, socklen_t(MemoryLayout<sockaddr_in>.size))
+            #else
+            Glibc.bind(fd, sockPtr, socklen_t(MemoryLayout<sockaddr_in>.size))
+            #endif
         }
     }
     guard bindResult == 0, listen(fd, 1) == 0 else {
-        close(fd)
+        #if canImport(Darwin)
+        _ = Darwin.close(fd)
+        #else
+        _ = Glibc.close(fd)
+        #endif
         throw SubjectError.socketSetupFailed
     }
 
@@ -1022,7 +1044,11 @@ private func makeTcpListener(port: Int) throws -> (fd: Int32, boundPort: Int) {
         }
     }
     guard nameResult == 0 else {
-        close(fd)
+        #if canImport(Darwin)
+        _ = Darwin.close(fd)
+        #else
+        _ = Glibc.close(fd)
+        #endif
         throw SubjectError.socketSetupFailed
     }
 
@@ -1032,21 +1058,31 @@ private func makeTcpListener(port: Int) throws -> (fd: Int32, boundPort: Int) {
 
 private func acceptTcpConnection(listenerFd: Int32) async throws -> Int32 {
     try await withCheckedThrowingContinuation { continuation in
-        DispatchQueue.global().async {
+        DispatchQueue.global().async(execute: DispatchWorkItem {
+            #if canImport(Darwin)
             let clientFd = Darwin.accept(listenerFd, nil, nil)
+            #else
+            let clientFd = Glibc.accept(listenerFd, nil, nil)
+            #endif
             if clientFd >= 0 {
                 continuation.resume(returning: clientFd)
             } else {
                 continuation.resume(throwing: SubjectError.socketSetupFailed)
             }
-        }
+        })
     }
 }
 
 func runServerListen() async throws {
     let listenPort = ProcessInfo.processInfo.environment["LISTEN_PORT"].flatMap(Int.init) ?? 0
     let (listenerFd, boundPort) = try makeTcpListener(port: listenPort)
-    defer { Darwin.close(listenerFd) }
+    defer {
+        #if canImport(Darwin)
+        _ = Darwin.close(listenerFd)
+        #else
+        _ = Glibc.close(listenerFd)
+        #endif
+    }
 
     FileHandle.standardOutput.write(Data("LISTEN_ADDR=127.0.0.1:\(boundPort)\n".utf8))
     log("server-listen mode: bound to 127.0.0.1:\(boundPort)")
@@ -1220,7 +1256,11 @@ private func writeAll(_ fd: Int32, bytes: [UInt8]) throws {
     while sent < bytes.count {
         let n = bytes.withUnsafeBytes { raw -> Int in
             guard let base = raw.baseAddress else { return -1 }
+            #if canImport(Darwin)
             return Darwin.send(fd, base.advanced(by: sent), bytes.count - sent, 0)
+            #else
+            return Glibc.send(fd, base.advanced(by: sent), bytes.count - sent, 0)
+            #endif
         }
         if n > 0 {
             sent += n
