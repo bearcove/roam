@@ -140,12 +140,12 @@ public final class UnboundTx<T: Sendable>: @unchecked Sendable {
 /// Unbound Rx - created by `channel()`, bound at call time.
 public final class UnboundRx<T: Sendable>: @unchecked Sendable {
     public private(set) var channelId: ChannelId = 0
-    private var receiver: ChannelReceiver?
-    private var logicalReceiver: ChannelReceiver?
     private let deserialize: @Sendable ([UInt8]) throws -> T
     private var bound = false
     private let lock = NSLock()
     private var bindingWaiters: [CheckedContinuation<Void, Never>] = []
+    private var receivers: [ChannelReceiver] = []
+    private var retryFinalized = false
 
     // Weak reference to paired Tx
     weak var pairedTx: AnyObject?
@@ -158,23 +158,16 @@ public final class UnboundRx<T: Sendable>: @unchecked Sendable {
 
     /// Bind for receiving (client-side incoming).
     func bind(channelId: ChannelId, receiver: ChannelReceiver) {
-        let (logical, waiters) = lock.withLock { () -> (ChannelReceiver, [CheckedContinuation<Void, Never>]) in
-            let logical = self.logicalReceiver ?? ChannelReceiver()
-            self.logicalReceiver = logical
+        let waiters = lock.withLock { () -> [CheckedContinuation<Void, Never>] in
             self.channelId = channelId
-            self.receiver = logical
             self.bound = true
+            self.receivers.append(receiver)
             let waiters = self.bindingWaiters
             self.bindingWaiters.removeAll()
-            return (logical, waiters)
+            return waiters
         }
         for waiter in waiters {
             waiter.resume()
-        }
-        Task {
-            while let bytes = await receiver.recv() {
-                logical.deliver(bytes)
-            }
         }
     }
 
@@ -194,29 +187,32 @@ public final class UnboundRx<T: Sendable>: @unchecked Sendable {
 
     /// Receive the next value, or nil if closed.
     public func recv() async throws -> T? {
-        let receiver = try await waitForReceiveBinding()
-        guard let bytes = await receiver.recv() else {
-            return nil
-        }
-        return try deserialize(bytes)
-    }
-
-    private func waitForReceiveBinding() async throws -> ChannelReceiver {
         while true {
-            let state = lock.withLock { () -> (receiver: ChannelReceiver?, bound: Bool) in
-                (receiver, bound)
+            let receiver = lock.withLock { receivers.first }
+            if let receiver {
+                if let bytes = await receiver.recv() {
+                    return try deserialize(bytes)
+                }
+
+                let shouldEnd = lock.withLock { () -> Bool in
+                    if let head = receivers.first, head === receiver {
+                        receivers.removeFirst()
+                    }
+                    return retryFinalized && receivers.isEmpty
+                }
+                if shouldEnd {
+                    return nil
+                }
+                continue
             }
 
-            if let receiver = state.receiver {
-                return receiver
+            let shouldEnd = lock.withLock { retryFinalized && receivers.isEmpty }
+            if shouldEnd {
+                return nil
             }
-            if state.bound {
-                throw ChannelError.notBound
-            }
-
             await withCheckedContinuation { continuation in
                 let shouldResumeImmediately = lock.withLock { () -> Bool in
-                    if receiver != nil || bound {
+                    if !receivers.isEmpty || (retryFinalized && receivers.isEmpty) {
                         return true
                     }
                     bindingWaiters.append(continuation)
@@ -230,8 +226,15 @@ public final class UnboundRx<T: Sendable>: @unchecked Sendable {
     }
 
     func finishRetryBinding() {
-        let logical = lock.withLock { logicalReceiver }
-        logical?.deliverClose()
+        let waiters = lock.withLock { () -> [CheckedContinuation<Void, Never>] in
+            retryFinalized = true
+            let waiters = bindingWaiters
+            bindingWaiters.removeAll()
+            return waiters
+        }
+        for waiter in waiters {
+            waiter.resume()
+        }
     }
 }
 

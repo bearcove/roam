@@ -1,6 +1,26 @@
 import Foundation
 
 extension Driver {
+    private func sendOrEnqueue(_ message: Message) async throws {
+        if !pendingTaskMessages.isEmpty {
+            pendingTaskMessages.append(DriverQueuedTaskMessage(message: message))
+            return
+        }
+
+        do {
+            try await conduit.send(message)
+        } catch TransportError.wouldBlock {
+            pendingTaskMessages.append(DriverQueuedTaskMessage(message: message))
+        } catch {
+            if resumable {
+                pendingTaskMessages.append(DriverQueuedTaskMessage(message: message))
+                _ = eventContinuation.yield(.conduitFailed(String(describing: error)))
+                return
+            }
+            throw error
+        }
+    }
+
     private func responseMessage(
         requestId: UInt64,
         payload: [UInt8],
@@ -67,11 +87,7 @@ extension Driver {
                     guard let replay = await responseMessage(requestId: waiter, payload: checkedPayload, schemas: schemas) else {
                         continue
                     }
-                    do {
-                        try await conduit.send(replay)
-                    } catch TransportError.wouldBlock {
-                        pendingTaskMessages.append(DriverQueuedTaskMessage(message: replay))
-                    }
+                    try await sendOrEnqueue(replay)
                 }
                 return
             }
@@ -80,11 +96,7 @@ extension Driver {
             }
             wireMsg = response
         }
-        do {
-            try await conduit.send(wireMsg)
-        } catch TransportError.wouldBlock {
-            pendingTaskMessages.append(DriverQueuedTaskMessage(message: wireMsg))
-        }
+        try await sendOrEnqueue(wireMsg)
     }
 
     /// Handle a command from ConnectionHandle.
@@ -151,6 +163,11 @@ extension Driver {
                 pendingCalls.append(queuedCall)
                 return
             } catch {
+                if resumable {
+                    pendingCalls.append(queuedCall)
+                    _ = eventContinuation.yield(.conduitFailed(String(describing: error)))
+                    return
+                }
                 let pending = await state.claimPendingResponse(
                     requestId,
                     reason: "conduit-send-failed"
@@ -254,6 +271,11 @@ extension Driver {
                 pendingCalls[0] = replayCall
                 return
             } catch {
+                if resumable {
+                    pendingCalls[0] = replayCall
+                    _ = eventContinuation.yield(.conduitFailed(String(describing: error)))
+                    return
+                }
                 let pending = await state.claimPendingResponse(
                     replayCall.requestId,
                     reason: "conduit-send-failed"
@@ -330,6 +352,10 @@ extension Driver {
             } catch TransportError.wouldBlock {
                 return
             } catch {
+                if resumable {
+                    _ = eventContinuation.yield(.conduitFailed(String(describing: error)))
+                    return
+                }
                 await failAllPending()
                 eventContinuation.finish()
                 return

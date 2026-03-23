@@ -419,6 +419,9 @@ public actor ChannelRegistry {
     /// r[impl rpc.channel.close] - Data after close is rejected.
     /// r[impl rpc.flow-control.credit.exhaustion] - Data size bounded by max_payload_size.
     public func deliverData(channelId: ChannelId, payload: [UInt8]) async -> Bool {
+        if pendingClose.contains(channelId) {
+            return false
+        }
         if let receiver = receivers[channelId] {
             receiver.deliver(payload)
             return true
@@ -435,6 +438,7 @@ public actor ChannelRegistry {
         if let receiver = receivers[channelId] {
             receiver.deliverClose()
             receivers.removeValue(forKey: channelId)
+            pendingClose.insert(channelId)
             if let credit = outgoingCredits[channelId] {
                 await credit.close()
             }

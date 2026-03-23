@@ -146,8 +146,8 @@ extension Driver {
                         traceLog(.resume, "received resume conduit while disconnected")
                         self.conduit = newConduit
                         readerTask.cancel()
-                        readerTask = spawnReaderTask(for: newConduit, continuation: cont)
                         await handleSuccessfulResume(keepaliveRuntime: &keepaliveRuntime)
+                        readerTask = spawnReaderTask(for: newConduit, continuation: cont)
                         isConnected = true
                         continue
 
@@ -158,8 +158,8 @@ extension Driver {
                             if let recovered = await tryRecoverConduit() {
                                 self.conduit = recovered
                                 readerTask.cancel()
-                                readerTask = spawnReaderTask(for: recovered, continuation: cont)
                                 await handleSuccessfulResume(keepaliveRuntime: &keepaliveRuntime)
+                                readerTask = spawnReaderTask(for: recovered, continuation: cont)
                                 isConnected = true
                                 continue
                             }
@@ -203,8 +203,8 @@ extension Driver {
                     traceLog(.resume, "received resume conduit while connected")
                     self.conduit = newConduit
                     readerTask.cancel()
-                    readerTask = spawnReaderTask(for: newConduit, continuation: cont)
                     await handleSuccessfulResume(keepaliveRuntime: &keepaliveRuntime)
+                    readerTask = spawnReaderTask(for: newConduit, continuation: cont)
 
                 case .conduitClosed, .conduitFailed:
                     traceLog(.driver, "conduit broke")
