@@ -4,9 +4,9 @@ import path from 'node:path';
 export default defineConfig({
   resolve: {
     alias: {
-      '@bearcove/telex-core': path.resolve(__dirname, '../../packages/telex-core/src'),
-      '@bearcove/telex-ws': path.resolve(__dirname, '../../packages/telex-ws/src'),
-      '@bearcove/telex-generated': path.resolve(__dirname, '../../generated'),
+      '@bearcove/vox-core': path.resolve(__dirname, '../../packages/vox-core/src'),
+      '@bearcove/vox-ws': path.resolve(__dirname, '../../packages/vox-ws/src'),
+      '@bearcove/vox-generated': path.resolve(__dirname, '../../generated'),
     },
   },
   build: {

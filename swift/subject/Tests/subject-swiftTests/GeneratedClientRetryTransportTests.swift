@@ -1,7 +1,7 @@
 import Foundation
 import Testing
 
-@testable import TelexRuntime
+@testable import VoxRuntime
 @testable import subject_swift
 
 private enum RetryHarnessTimeout: Error {
@@ -435,8 +435,8 @@ struct GeneratedClientRetryTransportTests {
                 try await awaitRetryStep("non-idem call") {
                     try await callTask.value
                 }
-                Issue.record("expected TelexError.indeterminate")
-            } catch TelexError.indeterminate {
+                Issue.record("expected VoxError.indeterminate")
+            } catch VoxError.indeterminate {
                 retryTestLog("non-idem: received indeterminate")
             }
 

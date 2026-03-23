@@ -1,9 +1,9 @@
 +++
-title = "telex"
+title = "vox"
 description = "Rust-native RPC protocol with cross-language codegen and multiple transport backends."
 +++
 
-telex is a Rust-native RPC protocol designed for bidirectional, multiplexed communication.
+vox is a Rust-native RPC protocol designed for bidirectional, multiplexed communication.
 
 Define services in Rust traits and generate clients/servers for other languages.
 

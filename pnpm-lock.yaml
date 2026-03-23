@@ -26,40 +26,40 @@ importers:
 
   typescript/generated:
     dependencies:
-      '@bearcove/telex-core':
+      '@bearcove/vox-core':
         specifier: workspace:*
-        version: link:../packages/telex-core
-      '@bearcove/telex-postcard':
+        version: link:../packages/vox-core
+      '@bearcove/vox-postcard':
         specifier: workspace:*
-        version: link:../packages/telex-postcard
-      '@bearcove/telex-ws':
+        version: link:../packages/vox-postcard
+      '@bearcove/vox-ws':
         specifier: workspace:*
-        version: link:../packages/telex-ws
+        version: link:../packages/vox-ws
 
-  typescript/packages/telex-core:
+  typescript/packages/vox-core:
     dependencies:
-      '@bearcove/telex-postcard':
+      '@bearcove/vox-postcard':
         specifier: workspace:*
-        version: link:../telex-postcard
-      '@bearcove/telex-wire':
+        version: link:../vox-postcard
+      '@bearcove/vox-wire':
         specifier: workspace:*
-        version: link:../telex-wire
+        version: link:../vox-wire
     devDependencies:
       vitest:
         specifier: ^2.1.0
         version: 2.1.9(@types/node@22.19.3)
 
-  typescript/packages/telex-inprocess:
+  typescript/packages/vox-inprocess:
     dependencies:
-      '@bearcove/telex-core':
+      '@bearcove/vox-core':
         specifier: workspace:*
-        version: link:../telex-core
+        version: link:../vox-core
     devDependencies:
       vitest:
         specifier: ^2.1.0
         version: 2.1.9(@types/node@22.19.3)
 
-  typescript/packages/telex-postcard:
+  typescript/packages/vox-postcard:
     devDependencies:
       '@vitest/coverage-v8':
         specifier: ^2.1.0
@@ -68,34 +68,34 @@ importers:
         specifier: ^2.1.0
         version: 2.1.9(@types/node@22.19.3)
 
-  typescript/packages/telex-tcp:
+  typescript/packages/vox-tcp:
     dependencies:
-      '@bearcove/telex-core':
+      '@bearcove/vox-core':
         specifier: workspace:*
-        version: link:../telex-core
+        version: link:../vox-core
     devDependencies:
       '@types/node':
         specifier: ^22
         version: 22.19.3
 
-  typescript/packages/telex-wire:
+  typescript/packages/vox-wire:
     dependencies:
-      '@bearcove/telex-postcard':
+      '@bearcove/vox-postcard':
         specifier: workspace:*
-        version: link:../telex-postcard
+        version: link:../vox-postcard
     devDependencies:
       vitest:
         specifier: ^2.1.0
         version: 2.1.9(@types/node@22.19.3)
 
-  typescript/packages/telex-ws:
+  typescript/packages/vox-ws:
     dependencies:
-      '@bearcove/telex-core':
+      '@bearcove/vox-core':
         specifier: workspace:*
-        version: link:../telex-core
-      '@bearcove/telex-tcp':
+        version: link:../vox-core
+      '@bearcove/vox-tcp':
         specifier: workspace:*
-        version: link:../telex-tcp
+        version: link:../vox-tcp
     devDependencies:
       '@types/node':
         specifier: ^22
@@ -106,18 +106,18 @@ importers:
 
   typescript/subject:
     dependencies:
-      '@bearcove/telex-core':
+      '@bearcove/vox-core':
         specifier: workspace:*
-        version: link:../packages/telex-core
-      '@bearcove/telex-generated':
+        version: link:../packages/vox-core
+      '@bearcove/vox-generated':
         specifier: workspace:*
         version: link:../generated
-      '@bearcove/telex-tcp':
+      '@bearcove/vox-tcp':
         specifier: workspace:*
-        version: link:../packages/telex-tcp
-      '@bearcove/telex-ws':
+        version: link:../packages/vox-tcp
+      '@bearcove/vox-ws':
         specifier: workspace:*
-        version: link:../packages/telex-ws
+        version: link:../packages/vox-ws
     devDependencies:
       '@types/node':
         specifier: ^22
@@ -125,15 +125,15 @@ importers:
 
   typescript/tests/browser:
     dependencies:
-      '@bearcove/telex-core':
+      '@bearcove/vox-core':
         specifier: workspace:*
-        version: link:../../packages/telex-core
-      '@bearcove/telex-generated':
+        version: link:../../packages/vox-core
+      '@bearcove/vox-generated':
         specifier: workspace:*
         version: link:../../generated
-      '@bearcove/telex-ws':
+      '@bearcove/vox-ws':
         specifier: workspace:*
-        version: link:../../packages/telex-ws
+        version: link:../../packages/vox-ws
     devDependencies:
       vite:
         specifier: ^6
@@ -141,15 +141,15 @@ importers:
 
   typescript/tests/browser-inprocess:
     dependencies:
-      '@bearcove/telex-core':
+      '@bearcove/vox-core':
         specifier: workspace:*
-        version: link:../../packages/telex-core
-      '@bearcove/telex-generated':
+        version: link:../../packages/vox-core
+      '@bearcove/vox-generated':
         specifier: workspace:*
         version: link:../../generated
-      '@bearcove/telex-inprocess':
+      '@bearcove/vox-inprocess':
         specifier: workspace:*
-        version: link:../../packages/telex-inprocess
+        version: link:../../packages/vox-inprocess
     devDependencies:
       vite:
         specifier: ^6
@@ -169,10 +169,10 @@ importers:
 
   typescript/tests/playwright:
     devDependencies:
-      '@bearcove/telex-core':
+      '@bearcove/vox-core':
         specifier: workspace:*
-        version: link:../../packages/telex-core
-      '@bearcove/telex-generated':
+        version: link:../../packages/vox-core
+      '@bearcove/vox-generated':
         specifier: workspace:*
         version: link:../../generated
       '@playwright/test':

@@ -1,7 +1,7 @@
 import Foundation
 import Testing
 
-@testable import TelexRuntime
+@testable import VoxRuntime
 @testable import subject_swift
 
 private actor TaskResponseInbox {
@@ -87,7 +87,7 @@ private struct ServerEnvelope: Sendable {
     let inbox: TaskResponseInbox
 }
 
-private final class LoopbackConnection: TelexConnection, @unchecked Sendable {
+private final class LoopbackConnection: VoxConnection, @unchecked Sendable {
     let channelAllocator = ChannelIdAllocator(role: .initiator)
     let incomingChannelRegistry = ChannelRegistry()
 

@@ -1,8 +1,8 @@
 //! WebSocket peer server for testing TypeScript clients.
 //!
-//! This is a full telex implementation that TypeScript browser tests can
-//! connect to. It uses the telex runtime (dispatcher, channels, etc.) to
-//! provide a real telex peer for the TypeScript client to talk to.
+//! This is a full vox implementation that TypeScript browser tests can
+//! connect to. It uses the vox runtime (dispatcher, channels, etc.) to
+//! provide a real vox peer for the TypeScript client to talk to.
 
 use spec_proto::{
     Canvas, Color, Config, LookupError, MathError, Measurement, Message, Person, Point, Profile,
@@ -12,10 +12,10 @@ use spec_proto::{Testbed, TestbedClient, TestbedDispatcher};
 use std::env;
 use std::sync::Arc;
 use std::time::Duration;
-use telex::{Rx, Tx};
-use telex_core::{SessionAcceptOutcome, SessionRegistry, acceptor_transport};
-use telex_websocket::WsLink;
 use tokio::net::TcpListener;
+use vox::{Rx, Tx};
+use vox_core::{SessionAcceptOutcome, SessionRegistry, acceptor_transport};
+use vox_websocket::WsLink;
 
 #[derive(Clone)]
 struct TestbedService;
@@ -29,7 +29,7 @@ async fn stream_retry_probe_values(count: u32, output: Tx<i32>) {
 
 impl Testbed for TestbedService {
     async fn echo(&self, message: String) -> String {
-        if message == "__telex_reconnect__" {
+        if message == "__vox_reconnect__" {
             tokio::time::sleep(Duration::from_millis(250)).await;
         }
         message

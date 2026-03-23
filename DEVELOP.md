@@ -24,11 +24,11 @@ cargo build --package subject-rust
 cd typescript && pnpm install && cd ..
 
 # 3. Build Rust FFI staticlib (needed by Swift)
-cargo build --release -p telex-shm-ffi
+cargo build --release -p vox-shm-ffi
 
 # 4. Build Swift runtime in debug mode (needed by SHM cross-language tests —
 #    the shm-guest-client binary is only looked up under .build/debug/)
-swift build --package-path swift/telex-runtime
+swift build --package-path swift/vox-runtime
 
 # 5. Build Swift subject (needed by Swift spec tests)
 swift build -c release --package-path swift/subject
@@ -91,33 +91,33 @@ just swift
 
 # Build just the Rust FFI staticlib
 just rust-ffi
-# or: cargo build --release -p telex-shm-ffi
+# or: cargo build --release -p vox-shm-ffi
 
 # Run root Swift package tests the same way CI does
-cargo build --release -p telex-shm-ffi
+cargo build --release -p vox-shm-ffi
 swift test --no-parallel -Xlinker -L$(pwd)/target/release
 
 # Build the Swift subject package
 swift build -c release --package-path swift/subject
 
-# If you specifically want the telex-runtime package path form, build the Rust
+# If you specifically want the vox-runtime package path form, build the Rust
 # staticlib first. The root-level `swift test ... -L$(pwd)/target/release`
 # command is the preferred validation path in this repo.
-swift test --package-path swift/telex-runtime --no-parallel -Xlinker -L$(pwd)/target/release
+swift test --package-path swift/vox-runtime --no-parallel -Xlinker -L$(pwd)/target/release
 
 # Run SHM cross-language tests (Rust host, Swift guest)
-cargo nextest run -p telex-shm --test bootstrap_cross_language
+cargo nextest run -p vox-shm --test bootstrap_cross_language
 ```
 
-#### Consuming TelexRuntime from another Swift package
+#### Consuming VoxRuntime from another Swift package
 
-TelexRuntime depends on `libtelex_shm_ffi.a`, a Rust staticlib. Consumers must:
+VoxRuntime depends on `libvox_shm_ffi.a`, a Rust staticlib. Consumers must:
 
-1. Build the staticlib: `cargo build --release -p telex-shm-ffi` (from the telex workspace root)
+1. Build the staticlib: `cargo build --release -p vox-shm-ffi` (from the vox workspace root)
 2. Tell the linker where to find it:
-   - **SPM CLI**: `swift build -Xlinker -L<path-to-telex>/target/release`
-   - **SPM test**: `swift test -Xlinker -L<path-to-telex>/target/release`
-   - **Xcode**: Add `<path-to-telex>/target/release` to `LIBRARY_SEARCH_PATHS`
+   - **SPM CLI**: `swift build -Xlinker -L<path-to-vox>/target/release`
+   - **SPM test**: `swift test -Xlinker -L<path-to-vox>/target/release`
+   - **Xcode**: Add `<path-to-vox>/target/release` to `LIBRARY_SEARCH_PATHS`
 
 ### Code Generation
 
@@ -180,7 +180,7 @@ just fuzz-sand protocol_decode 300
 Current targets:
 - `framing_peek` (SHM frame parser)
 - `shm_link_roundtrip` (SHM send/recv roundtrip)
-- `protocol_decode` (Telex wire message decode/encode)
+- `protocol_decode` (Vox wire message decode/encode)
 - `testbed_mem_session` (generated `spec-proto` RPC traffic over in-memory session/driver)
 
 SAND recipes build three binaries per target under `fuzz/.sand/<target>/`:
@@ -190,14 +190,14 @@ SAND recipes build three binaries per target under `fuzz/.sand/<target>/`:
 
 ## Project Structure
 
-- `rust/` - Rust implementation (telex, telex-session, telex-codegen, etc.)
+- `rust/` - Rust implementation (vox, vox-session, vox-codegen, etc.)
 - `swift/` - Swift implementation
-  - `telex-runtime/` - TelexRuntime Swift package (SHM transport, RPC, codegen)
+  - `vox-runtime/` - VoxRuntime Swift package (SHM transport, RPC, codegen)
   - `subject/` - Test subject for compliance suite
 - `typescript/` - TypeScript implementation
-  - `packages/telex-core/` - Core runtime
-  - `packages/telex-tcp/` - TCP transport
-  - `packages/telex-ws/` - WebSocket transport
+  - `packages/vox-core/` - Core runtime
+  - `packages/vox-tcp/` - TCP transport
+  - `packages/vox-ws/` - WebSocket transport
   - `generated/` - Generated bindings (don't edit manually)
   - `subject/` - Test subject for compliance suite
 - `spec/` - Protocol specification

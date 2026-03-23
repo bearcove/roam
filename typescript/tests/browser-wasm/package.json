@@ -1,5 +1,5 @@
 {
-  "name": "@bearcove/telex-browser-wasm-tests",
+  "name": "@bearcove/vox-browser-wasm-tests",
   "version": "7.3.0",
   "private": true,
   "type": "module",

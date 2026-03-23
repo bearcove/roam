@@ -12,12 +12,12 @@ import type {
   Tag,
   Measurement,
   Config,
-} from "@bearcove/telex-generated/testbed_evolved.generated.ts";
-import { TestbedDispatcher } from "@bearcove/telex-generated/testbed_evolved.generated.ts";
-import { setTelexLogger } from "@bearcove/telex-core";
+} from "@bearcove/vox-generated/testbed_evolved.generated.ts";
+import { TestbedDispatcher } from "@bearcove/vox-generated/testbed_evolved.generated.ts";
+import { setVoxLogger } from "@bearcove/vox-core";
 import { runSubjectServer } from "./harness.ts";
 
-setTelexLogger({
+setVoxLogger({
   debug: (...args) => console.error(...args),
   error: (...args) => console.error(...args),
 });

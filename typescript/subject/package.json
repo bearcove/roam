@@ -1,5 +1,5 @@
 {
-  "name": "@bearcove/telex-subject",
+  "name": "@bearcove/vox-subject",
   "version": "7.3.0",
   "private": true,
   "type": "module",
@@ -7,10 +7,10 @@
     "check": "tsgo --noEmit"
   },
   "dependencies": {
-    "@bearcove/telex-core": "workspace:*",
-    "@bearcove/telex-generated": "workspace:*",
-    "@bearcove/telex-tcp": "workspace:*",
-    "@bearcove/telex-ws": "workspace:*"
+    "@bearcove/vox-core": "workspace:*",
+    "@bearcove/vox-generated": "workspace:*",
+    "@bearcove/vox-tcp": "workspace:*",
+    "@bearcove/vox-ws": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22"

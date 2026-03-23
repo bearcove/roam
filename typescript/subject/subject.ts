@@ -1,7 +1,7 @@
-// Node subject for the telex compliance suite.
+// Node subject for the vox compliance suite.
 //
-// This demonstrates the minimal code needed to implement a telex service
-// using the @telex/tcp transport library.
+// This demonstrates the minimal code needed to implement a vox service
+// using the @vox/tcp transport library.
 
 import type {
   TestbedHandler,
@@ -21,25 +21,25 @@ import type {
   Measurement,
   Config,
   TaggedPoint,
-} from "@bearcove/telex-generated/testbed.generated.ts";
-import { TestbedClient, TestbedDispatcher } from "@bearcove/telex-generated/testbed.generated.ts";
-import { tcpConnector, acceptTcp } from "@bearcove/telex-tcp";
+} from "@bearcove/vox-generated/testbed.generated.ts";
+import { TestbedClient, TestbedDispatcher } from "@bearcove/vox-generated/testbed.generated.ts";
+import { tcpConnector, acceptTcp } from "@bearcove/vox-tcp";
 import { createServer as createTcpServer, type AddressInfo } from "net";
-import { wsConnector } from "@bearcove/telex-ws";
+import { wsConnector } from "@bearcove/vox-ws";
 import {
   Driver,
   RpcErrorCode,
   SessionError,
   channel,
   session,
-  setTelexLogger,
+  setVoxLogger,
   type Tx,
   type Rx,
   type SessionConduitKind,
-} from "@bearcove/telex-core";
+} from "@bearcove/vox-core";
 
-// Enable telex internals logging for test visibility
-setTelexLogger({
+// Enable vox internals logging for test visibility
+setVoxLogger({
   debug: (...args) => console.error(...args),
   error: (...args) => console.error(...args),
 });

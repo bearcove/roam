@@ -2,7 +2,7 @@ import Darwin
 import Foundation
 import Testing
 
-@testable import TelexRuntime
+@testable import VoxRuntime
 @testable import subject_swift
 
 private actor SubjectEnvGate {
@@ -262,7 +262,7 @@ private func writeRawFrame(_ fd: Int32, bytes: [UInt8]) throws {
     try writeAll(fd, bytes: frame)
 }
 
-private func writeFrame(_ fd: Int32, message: TelexRuntime.Message) throws {
+private func writeFrame(_ fd: Int32, message: VoxRuntime.Message) throws {
     try writeRawFrame(fd, bytes: message.encode())
 }
 
@@ -277,11 +277,11 @@ private func readRawFrame(_ fd: Int32) throws -> [UInt8]? {
     return try readExactly(fd, count: Int(frameLen))
 }
 
-private func readFrame(_ fd: Int32) throws -> TelexRuntime.Message? {
+private func readFrame(_ fd: Int32) throws -> VoxRuntime.Message? {
     guard let payload = try readRawFrame(fd) else {
         return nil
     }
-    return try TelexRuntime.Message.decode(from: Data(payload))
+    return try VoxRuntime.Message.decode(from: Data(payload))
 }
 
 private func writeAll(_ fd: Int32, bytes: [UInt8]) throws {

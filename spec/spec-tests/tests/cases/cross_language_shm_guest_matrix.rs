@@ -9,17 +9,17 @@ use std::time::{Duration, Instant};
 use shm_primitives::{FileCleanup, MmapRegion};
 use shm_primitives_async::{MmapAttachMessage, clear_cloexec, create_mmap_control_pair};
 use spec_tests::harness::run_async;
-use telex_postcard::{from_slice_borrowed, to_vec};
-use telex_shm::HostHub;
-use telex_shm::framing::{MmapRef, OwnedFrame, read_frame, write_inline, write_mmap_ref};
-use telex_shm::segment::{Segment, SegmentConfig};
-use telex_shm::varslot::SizeClassConfig;
-use telex_types::{
+use tokio::process::Command as TokioCommand;
+use vox_postcard::{from_slice_borrowed, to_vec};
+use vox_shm::HostHub;
+use vox_shm::framing::{MmapRef, OwnedFrame, read_frame, write_inline, write_mmap_ref};
+use vox_shm::segment::{Segment, SegmentConfig};
+use vox_shm::varslot::SizeClassConfig;
+use vox_types::{
     ChannelBody, ChannelClose, ChannelGrantCredit, ChannelId, ChannelMessage, ConnectionId, Link,
     LinkRx, LinkTx, LinkTxPermit, Message, MessagePayload, Metadata, MetadataEntry, MetadataFlags,
     MetadataValue, Payload, RequestBody, RequestId, RequestMessage, RequestResponse, WriteSlot,
 };
-use tokio::process::Command as TokioCommand;
 
 fn boundary_sizes() -> &'static [usize] {
     &[55, 56, 57, 4091, 4092, 4093, 16 * 1024, 64 * 1024]
@@ -76,7 +76,7 @@ async fn wait_child_with_timeout(
 
 fn swift_runtime_package_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../swift/telex-runtime")
+        .join("../../swift/vox-runtime")
         .canonicalize()
         .expect("swift runtime package path")
 }
@@ -95,7 +95,7 @@ fn swift_shm_guest_client_path() -> PathBuf {
         }
     }
 
-    panic!("shm-guest-client binary not found; build swift/telex-runtime target first")
+    panic!("shm-guest-client binary not found; build swift/vox-runtime target first")
 }
 
 fn read_guest_payloads(

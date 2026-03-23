@@ -1,10 +1,10 @@
 +++
 title = "Swift Guide"
-description = "How to generate Swift bindings from Rust descriptors and wire them with TelexRuntime."
+description = "How to generate Swift bindings from Rust descriptors and wire them with VoxRuntime."
 weight = 22
 +++
 
-Swift usage in Telex is descriptor-driven: define services in Rust, generate Swift code, then run it against `TelexRuntime`.
+Swift usage in Vox is descriptor-driven: define services in Rust, generate Swift code, then run it against `VoxRuntime`.
 
 ## 1) Add runtime dependency
 
@@ -13,13 +13,13 @@ In your Swift package:
 ```swift
 // Package.swift
 .dependencies([
-  .package(path: "../telex-runtime")
+  .package(path: "../vox-runtime")
 ]),
 .targets([
   .executableTarget(
     name: "my-app",
     dependencies: [
-      .product(name: "TelexRuntime", package: "telex-runtime")
+      .product(name: "VoxRuntime", package: "vox-runtime")
     ]
   )
 ])
@@ -28,17 +28,17 @@ In your Swift package:
 Generated Swift files import:
 
 - `Foundation`
-- `TelexRuntime`
+- `VoxRuntime`
 
 ## 1.5) Build the Rust SHM staticlib before testing
 
-`TelexRuntime` links against `libtelex_shm_ffi.a`, which is produced by the Rust
+`VoxRuntime` links against `libvox_shm_ffi.a`, which is produced by the Rust
 workspace.
 
-From the Telex workspace root:
+From the Vox workspace root:
 
 ```bash
-cargo build --release -p telex-shm-ffi
+cargo build --release -p vox-shm-ffi
 swift test --no-parallel -Xlinker -L$(pwd)/target/release
 ```
 
@@ -46,16 +46,16 @@ That root-level `swift test` command is the same validation path used in CI.
 
 ## 2) Generate Swift bindings from Rust
 
-Use `telex-codegen` directly from your own Rust generator/build step:
+Use `vox-codegen` directly from your own Rust generator/build step:
 
 ```rust
 // build.rs
 fn main() {
     let svc = my_proto::greeter_service_descriptor();
 
-    let code = telex_codegen::targets::swift::generate_service_with_bindings(
+    let code = vox_codegen::targets::swift::generate_service_with_bindings(
         svc,
-        telex_codegen::targets::swift::SwiftBindings::ClientAndServer,
+        vox_codegen::targets::swift::SwiftBindings::ClientAndServer,
     );
 
     std::fs::write("../swift/Sources/MyApp/Greeter.swift", code).unwrap();
@@ -72,11 +72,11 @@ Generated Swift output includes:
 
 ## 3) Wire a Swift client
 
-`GreeterClient` takes a `TelexConnection`.
+`GreeterClient` takes a `VoxConnection`.
 
 ```swift
 import Foundation
-import TelexRuntime
+import VoxRuntime
 
 struct NoopDispatcher: ServiceDispatcher {
     func preregister(methodId: UInt64, payload: [UInt8], channels: [UInt64], registry: ChannelRegistry) async {}
@@ -163,4 +163,4 @@ try await driver.run()
 
 ## 5) Keep codegen and runtime versions aligned
 
-Generated Swift code assumes the same protocol/runtime major version as your Rust descriptors and `TelexRuntime`.
+Generated Swift code assumes the same protocol/runtime major version as your Rust descriptors and `VoxRuntime`.

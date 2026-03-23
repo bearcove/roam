@@ -2,7 +2,7 @@
 
 Async operating-system control helpers for shared-memory transport plumbing.
 
-## Role in the Telex stack
+## Role in the Vox stack
 
 `shm-primitives-async` supports low-level SHM transport setup and coordination below the `Link` layer.
 
@@ -14,6 +14,6 @@ Async operating-system control helpers for shared-memory transport plumbing.
 ## Fits with
 
 - `shm-primitives` core data structures
-- `telex-shm` transport orchestration
+- `vox-shm` transport orchestration
 
-Part of the Telex workspace: <https://github.com/bearcove/telex>
+Part of the Vox workspace: <https://github.com/bearcove/vox>

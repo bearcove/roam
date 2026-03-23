@@ -17,24 +17,24 @@ weight = 15
 For Rust users, the current implementation in this repository is based on
 low-level composition:
 
-1. Create/attach the shared segment with `telex_shm::segment::Segment`.
+1. Create/attach the shared segment with `vox_shm::segment::Segment`.
 2. Manage guest slots with `reserve_peer` / `claim_peer` / `attach_peer`.
 3. Build one `ShmLink` per host-guest pair with `ShmLink::for_host` or `ShmLink::for_guest`.
-4. Run the normal telex runtime (`BareConduit` + session builder + `Driver`) on top of that link.
+4. Run the normal vox runtime (`BareConduit` + session builder + `Driver`) on top of that link.
 
 The older monolithic host orchestration API (`ShmHost`, `bootstrap`,
 `MultiPeerHostDriver`) is not the primary shape. Instead, the current runtime
-provides a thin Unix helper module (`telex_shm::host`) that wraps peer reservation/spawn tickets
+provides a thin Unix helper module (`vox_shm::host`) that wraps peer reservation/spawn tickets
 while keeping SHM as a transport primitive.
 
 Host-side sketch (Unix, one peer):
 
 ```rust
 use std::sync::Arc;
-use telex_core::{BareConduit, Driver};
-use telex_core::session::acceptor;
-use telex_shm::{ShmLink, mmap_registry::{MmapChannelRx, MmapChannelTx}, segment::{Segment, SegmentConfig}, varslot::SizeClassConfig};
-use telex_types::Parity;
+use vox_core::{BareConduit, Driver};
+use vox_core::session::acceptor;
+use vox_shm::{ShmLink, mmap_registry::{MmapChannelRx, MmapChannelTx}, segment::{Segment, SegmentConfig}, varslot::SizeClassConfig};
+use vox_types::Parity;
 use shm_primitives::{Doorbell, FileCleanup, MmapControlReceiver, create_mmap_control_pair};
 
 let classes = [SizeClassConfig { slot_size: 4096, slot_count: 16 }];

@@ -2,47 +2,47 @@
 import PackageDescription
 
 let package = Package(
-    name: "telex",
+    name: "vox",
     platforms: [
         .macOS(.v13)
     ],
     products: [
-        .library(name: "TelexRuntime", targets: ["TelexRuntime"])
+        .library(name: "VoxRuntime", targets: ["VoxRuntime"])
     ],
     dependencies: [
         .package(url: "https://github.com/apple/swift-nio.git", from: "2.92.0")
     ],
     targets: [
         .target(
-            name: "TelexRuntime",
+            name: "VoxRuntime",
             dependencies: [
-                "CTelexShm",
-                "CTelexShmFfi",
+                "CVoxShm",
+                "CVoxShmFfi",
                 .product(name: "NIO", package: "swift-nio"),
                 .product(name: "NIOCore", package: "swift-nio"),
                 .product(name: "NIOPosix", package: "swift-nio"),
             ],
-            path: "swift/telex-runtime/Sources/TelexRuntime"
+            path: "swift/vox-runtime/Sources/VoxRuntime"
         ),
         .target(
-            name: "CTelexShm",
-            path: "swift/telex-runtime/Sources/CTelexShm",
+            name: "CVoxShm",
+            path: "swift/vox-runtime/Sources/CVoxShm",
             publicHeadersPath: "include"
         ),
         .target(
-            name: "CTelexShmFfi",
-            path: "swift/telex-runtime/Sources/CTelexShmFfi",
+            name: "CVoxShmFfi",
+            path: "swift/vox-runtime/Sources/CVoxShmFfi",
             publicHeadersPath: "include",
             linkerSettings: [
-                // Consumer must build libtelex_shm_ffi.a (cargo build --release -p telex-shm-ffi)
+                // Consumer must build libvox_shm_ffi.a (cargo build --release -p vox-shm-ffi)
                 // and add its directory to LIBRARY_SEARCH_PATHS or pass -Xlinker -L<path>.
-                .linkedLibrary("telex_shm_ffi"),
+                .linkedLibrary("vox_shm_ffi"),
             ]
         ),
         .testTarget(
-            name: "TelexRuntimeTests",
-            dependencies: ["TelexRuntime"],
-            path: "swift/telex-runtime/Tests/TelexRuntimeTests"
+            name: "VoxRuntimeTests",
+            dependencies: ["VoxRuntime"],
+            path: "swift/vox-runtime/Tests/VoxRuntimeTests"
         ),
     ]
 )

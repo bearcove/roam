@@ -1,5 +1,5 @@
 {
-  "name": "@bearcove/telex-browser-inprocess-tests",
+  "name": "@bearcove/vox-browser-inprocess-tests",
   "version": "7.3.0",
   "private": true,
   "type": "module",
@@ -9,9 +9,9 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@bearcove/telex-core": "workspace:*",
-    "@bearcove/telex-generated": "workspace:*",
-    "@bearcove/telex-inprocess": "workspace:*"
+    "@bearcove/vox-core": "workspace:*",
+    "@bearcove/vox-generated": "workspace:*",
+    "@bearcove/vox-inprocess": "workspace:*"
   },
   "devDependencies": {
     "vite": "^6",

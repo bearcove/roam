@@ -26,7 +26,7 @@ version = "9.1.0"
 });
 
 test("discoverPublicTypeScriptPackages only returns non-private packages", () => {
-  const repoRoot = mkdtempSync(join(tmpdir(), "telex-ts-packages-"));
+  const repoRoot = mkdtempSync(join(tmpdir(), "vox-ts-packages-"));
   const packagesDir = join(repoRoot, "typescript", "packages");
   mkdirSync(join(packagesDir, "public"), { recursive: true });
   mkdirSync(join(packagesDir, "private"), { recursive: true });
@@ -49,10 +49,10 @@ test("discoverPublicTypeScriptPackages only returns non-private packages", () =>
 });
 
 test("syncTypeScriptPackageVersions updates public packages to the Cargo workspace version", () => {
-  const repoRoot = mkdtempSync(join(tmpdir(), "telex-ts-sync-"));
+  const repoRoot = mkdtempSync(join(tmpdir(), "vox-ts-sync-"));
   const packagesDir = join(repoRoot, "typescript", "packages");
-  mkdirSync(join(packagesDir, "telex-core"), { recursive: true });
-  mkdirSync(join(packagesDir, "telex-private"), { recursive: true });
+  mkdirSync(join(packagesDir, "vox-core"), { recursive: true });
+  mkdirSync(join(packagesDir, "vox-private"), { recursive: true });
 
   writeFileSync(
     join(repoRoot, "Cargo.toml"),
@@ -64,12 +64,12 @@ version = "7.2.0"
 `,
   );
 
-  writeJson(join(packagesDir, "telex-core", "package.json"), {
-    name: "@bearcove/telex-core",
+  writeJson(join(packagesDir, "vox-core", "package.json"), {
+    name: "@bearcove/vox-core",
     version: "7.1.0",
   });
-  writeJson(join(packagesDir, "telex-private", "package.json"), {
-    name: "@bearcove/telex-private",
+  writeJson(join(packagesDir, "vox-private", "package.json"), {
+    name: "@bearcove/vox-private",
     private: true,
     version: "1.0.0",
   });
@@ -79,18 +79,18 @@ version = "7.2.0"
   assert.equal(result.version, "7.2.0");
   assert.deepEqual(result.updatedPackages, [
     {
-      name: "@bearcove/telex-core",
+      name: "@bearcove/vox-core",
       previousVersion: "7.1.0",
       version: "7.2.0",
     },
   ]);
 
   assert.equal(
-    JSON.parse(readFileSync(join(packagesDir, "telex-core", "package.json"), "utf8")).version,
+    JSON.parse(readFileSync(join(packagesDir, "vox-core", "package.json"), "utf8")).version,
     "7.2.0",
   );
   assert.equal(
-    JSON.parse(readFileSync(join(packagesDir, "telex-private", "package.json"), "utf8")).version,
+    JSON.parse(readFileSync(join(packagesDir, "vox-private", "package.json"), "utf8")).version,
     "1.0.0",
   );
 });
