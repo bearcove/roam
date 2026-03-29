@@ -559,9 +559,11 @@ fn generate_dispatch_arm(
     let context_setup = {
         quote! {
             let extensions = #vox::Extensions::new();
-            let context = #vox::RequestContext::with_extensions(
+            let context = #vox::RequestContext::with_transport(
                 #descriptor_fn_name().methods[#idx],
                 &call.metadata,
+                reply.request_id(),
+                reply.connection_id(),
                 &extensions,
             );
             if !self.middlewares.is_empty() {

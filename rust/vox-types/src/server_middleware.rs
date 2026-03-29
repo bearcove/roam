@@ -175,6 +175,14 @@ where
     fn channel_binder(&self) -> Option<&dyn crate::ChannelBinder> {
         self.inner.as_ref().and_then(|reply| reply.channel_binder())
     }
+
+    fn request_id(&self) -> Option<crate::RequestId> {
+        self.inner.as_ref().and_then(|reply| reply.request_id())
+    }
+
+    fn connection_id(&self) -> Option<crate::ConnectionId> {
+        self.inner.as_ref().and_then(|reply| reply.connection_id())
+    }
 }
 
 #[cfg(test)]
