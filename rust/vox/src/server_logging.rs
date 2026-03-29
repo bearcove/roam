@@ -1,10 +1,11 @@
 use std::time::Instant;
 
-use tracing::debug;
+use tracing::{debug, trace};
 
 use crate::{
     BoxMiddlewareFuture, MetadataEntry, MetadataFlags, MetadataValue, RequestContext,
-    ServerCallOutcome, ServerMiddleware,
+    ServerCallOutcome, ServerMiddleware, ServerRequest, ServerResponse, ServerResponseContext,
+    ServerResponsePayload,
 };
 
 #[derive(Debug, Clone, Default)]
@@ -29,48 +30,85 @@ impl ServerLogging {
 }
 
 impl ServerMiddleware for ServerLogging {
-    fn pre<'a>(&'a self, context: &'a RequestContext<'a>) -> BoxMiddlewareFuture<'a> {
-        Box::pin(async move {
-            context.extensions().insert(RequestStart(Instant::now()));
-            let method = context.method();
-            if self.options.log_metadata {
-                debug!(
-                    target: "vox::server",
-                    service = method.service_name,
-                    method = method.method_name,
-                    metadata = ?RedactedMetadata(context.metadata()),
-                    "rpc request"
-                );
-            } else {
-                debug!(
-                    target: "vox::server",
-                    service = method.service_name,
-                    method = method.method_name,
-                    "rpc request"
-                );
-            }
-        })
-    }
-
-    fn post<'a>(
-        &'a self,
-        context: &'a RequestContext<'a>,
-        outcome: ServerCallOutcome,
-    ) -> BoxMiddlewareFuture<'a> {
-        Box::pin(async move {
-            let method = context.method();
-            let duration_ms = context
-                .extensions()
-                .with::<RequestStart, _>(|start| start.0.elapsed().as_secs_f64() * 1_000.0);
+    fn pre<'a>(&'a self, request: ServerRequest<'_>) -> BoxMiddlewareFuture<'a> {
+        let context = request.context();
+        context.extensions().insert(RequestStart(Instant::now()));
+        let method = context.method();
+        trace!(
+            target: "vox::server",
+            service = method.service_name,
+            method = method.method_name,
+            args = ?request.args(),
+            "rpc request payload"
+        );
+        if self.options.log_metadata {
             debug!(
                 target: "vox::server",
                 service = method.service_name,
                 method = method.method_name,
-                outcome = ?outcome,
-                duration_ms,
-                "rpc response"
+                metadata = ?RedactedMetadata(context.metadata()),
+                "rpc request"
             );
-        })
+        } else {
+            debug!(
+                target: "vox::server",
+                service = method.service_name,
+                method = method.method_name,
+                "rpc request"
+            );
+        }
+        Box::pin(async {})
+    }
+
+    fn response<'a>(
+        &'a self,
+        context: &ServerResponseContext,
+        response: ServerResponse<'_>,
+    ) -> BoxMiddlewareFuture<'a> {
+        let method = context.method();
+        match response.payload() {
+            ServerResponsePayload::Value(ret) => {
+                trace!(
+                    target: "vox::server",
+                    service = method.service_name,
+                    method = method.method_name,
+                    ret = ?ret,
+                    metadata = ?RedactedMetadata(response.metadata()),
+                    "rpc response payload"
+                );
+            }
+            ServerResponsePayload::PostcardBytes(bytes) => {
+                trace!(
+                    target: "vox::server",
+                    service = method.service_name,
+                    method = method.method_name,
+                    ret_bytes_len = bytes.len(),
+                    metadata = ?RedactedMetadata(response.metadata()),
+                    "rpc response payload"
+                );
+            }
+        }
+        Box::pin(async {})
+    }
+
+    fn post<'a>(
+        &'a self,
+        context: &RequestContext<'_>,
+        outcome: ServerCallOutcome,
+    ) -> BoxMiddlewareFuture<'a> {
+        let method = context.method();
+        let duration_ms = context
+            .extensions()
+            .with::<RequestStart, _>(|start| start.0.elapsed().as_secs_f64() * 1_000.0);
+        debug!(
+            target: "vox::server",
+            service = method.service_name,
+            method = method.method_name,
+            outcome = ?outcome,
+            duration_ms,
+            "rpc response"
+        );
+        Box::pin(async {})
     }
 }
 
@@ -78,7 +116,7 @@ impl ServerMiddleware for ServerLogging {
 struct RequestStart(Instant);
 
 #[derive(Clone, Copy)]
-struct RedactedMetadata<'a>(&'a [MetadataEntry<'static>]);
+struct RedactedMetadata<'a>(&'a [MetadataEntry<'a>]);
 
 impl std::fmt::Debug for RedactedMetadata<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -90,7 +128,7 @@ impl std::fmt::Debug for RedactedMetadata<'_> {
     }
 }
 
-struct MetadataEntryDebug<'a>(&'a MetadataEntry<'static>);
+struct MetadataEntryDebug<'a>(&'a MetadataEntry<'a>);
 
 impl std::fmt::Debug for MetadataEntryDebug<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -139,7 +177,7 @@ mod tests {
     };
     use crate::{
         Extensions, MetadataEntry, MetadataFlags, MetadataValue, RequestContext, ServerCallOutcome,
-        ServerMiddleware,
+        ServerMiddleware, ServerRequest,
     };
 
     #[test]
@@ -190,7 +228,7 @@ mod tests {
                 .without_time()
                 .with_ansi(false)
                 .with_writer(writer.clone())
-                .with_filter(LevelFilter::DEBUG),
+                .with_filter(LevelFilter::TRACE),
         );
         let _guard = tracing::subscriber::set_default(subscriber);
 
@@ -219,18 +257,46 @@ mod tests {
         ];
         let extensions = Extensions::new();
         let context = RequestContext::with_extensions(&METHOD, &metadata, &extensions);
+        let request = ServerRequest::new(context, crate::Peek::new(&()));
+        let response_wire: Result<i32, crate::VoxError<std::convert::Infallible>> = Ok(42);
+        let response = crate::RequestResponse {
+            metadata: vec![MetadataEntry {
+                key: "etag",
+                value: MetadataValue::String("v1"),
+                flags: MetadataFlags::NONE,
+            }],
+            ret: crate::Payload::outgoing(&response_wire),
+            schemas: Default::default(),
+        };
 
         let logging = ServerLogging::new(ServerLoggingOptions { log_metadata: true });
-        logging.pre(&context).await;
-        logging.post(&context, ServerCallOutcome::Replied).await;
+        logging.pre(request).await;
+        logging
+            .response(
+                &crate::ServerResponseContext::new(
+                    request.method(),
+                    request.request_id(),
+                    request.connection_id(),
+                    request.extensions().clone(),
+                ),
+                crate::ServerResponse::new(&response),
+            )
+            .await;
+        logging
+            .post(request.context(), ServerCallOutcome::Replied)
+            .await;
 
         let output = writer.output();
         assert!(output.contains("rpc request"));
+        assert!(output.contains("rpc request payload"));
         assert!(output.contains("rpc response"));
+        assert!(output.contains("rpc response payload"));
         assert!(output.contains("authorization"));
         assert!(output.contains("[REDACTED]"));
         assert!(!output.contains("Bearer secret"));
         assert!(output.contains("attempt"));
+        assert!(output.contains("42"));
+        assert!(output.contains("etag"));
         assert!(output.contains("Replied"));
     }
 

@@ -451,12 +451,6 @@ fn generate_dispatcher(parsed: &ServiceTrait, vox: &TokenStream2) -> TokenStream
                 self
             }
 
-            async fn run_pre_hooks(&self, context: &#vox::RequestContext<'_>) {
-                for middleware in &self.middlewares {
-                    middleware.pre(context).await;
-                }
-            }
-
             async fn run_post_hooks(
                 &self,
                 context: &#vox::RequestContext<'_>,
@@ -567,7 +561,11 @@ fn generate_dispatch_arm(
                 &extensions,
             );
             if !self.middlewares.is_empty() {
-                self.run_pre_hooks(&context).await;
+                for middleware in &self.middlewares {
+                    middleware
+                        .pre(#vox::ServerRequest::new(context, #vox::Peek::new(&args)))
+                        .await;
+                }
             }
         }
     };
@@ -585,7 +583,16 @@ fn generate_dispatch_arm(
 
     let invoke_and_reply = if ok_has_vox_lifetime {
         quote! {
-            let (reply, outcome_handle) = #vox::observe_reply(reply);
+            let (reply, outcome_handle) = #vox::observe_reply(
+                reply,
+                #vox::ServerResponseContext::new(
+                    context.method(),
+                    context.request_id(),
+                    context.connection_id(),
+                    context.extensions().clone(),
+                ),
+                self.middlewares.clone(),
+            );
             let sink_call = #vox::SinkCall::new(reply);
             self.handler.#method_fn(#(#borrowed_handler_args),*).await;
             if !self.middlewares.is_empty() {
@@ -594,7 +601,16 @@ fn generate_dispatch_arm(
         }
     } else if is_fallible {
         quote! {
-            let (reply, outcome_handle) = #vox::observe_reply(reply);
+            let (reply, outcome_handle) = #vox::observe_reply(
+                reply,
+                #vox::ServerResponseContext::new(
+                    context.method(),
+                    context.request_id(),
+                    context.connection_id(),
+                    context.extensions().clone(),
+                ),
+                self.middlewares.clone(),
+            );
             let result = self.handler.#method_fn(#(#plain_handler_args),*).await;
             let sink_call = #vox::SinkCall::new(reply);
             #vox::Call::<'_, #ok_ty, #err_ty>::reply(sink_call, result).await;
@@ -604,7 +620,16 @@ fn generate_dispatch_arm(
         }
     } else {
         quote! {
-            let (reply, outcome_handle) = #vox::observe_reply(reply);
+            let (reply, outcome_handle) = #vox::observe_reply(
+                reply,
+                #vox::ServerResponseContext::new(
+                    context.method(),
+                    context.request_id(),
+                    context.connection_id(),
+                    context.extensions().clone(),
+                ),
+                self.middlewares.clone(),
+            );
             let value = self.handler.#method_fn(#(#plain_handler_args),*).await;
             let sink_call = #vox::SinkCall::new(reply);
             #vox::Call::<'_, #ok_ty, #err_ty>::ok(sink_call, value).await;
@@ -648,8 +673,8 @@ fn generate_dispatch_arm(
                     return;
                 }
             };
-            #destructure
             #context_setup
+            #destructure
             #invoke_and_reply
             return;
         }

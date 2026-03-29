@@ -3454,6 +3454,7 @@ name = "vox"
 version = "0.2.2"
 dependencies = [
  "facet",
+ "facet-reflect",
  "shm-primitives",
  "tempfile",
  "tokio",
@@ -3657,6 +3658,7 @@ dependencies = [
  "facet-cbor",
  "facet-core",
  "facet-path",
+ "facet-reflect",
  "futures-channel",
  "heck 0.5.0",
  "indexmap",
