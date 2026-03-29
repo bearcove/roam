@@ -1,5 +1,6 @@
 use std::time::Instant;
 
+use facet_pretty::{ColorMode, PrettyPrinter};
 use tracing::{debug, trace};
 
 use crate::{
@@ -8,9 +9,27 @@ use crate::{
     ServerResponsePayload,
 };
 
-#[derive(Debug, Clone, Default)]
+const DEFAULT_PAYLOAD_MAX_DEPTH: usize = 4;
+const DEFAULT_PAYLOAD_MAX_CONTENT_LEN: usize = 128;
+const DEFAULT_PAYLOAD_MAX_COLLECTION_LEN: usize = 8;
+
+#[derive(Debug, Clone)]
 pub struct ServerLoggingOptions {
     pub log_metadata: bool,
+    pub payload_max_depth: usize,
+    pub payload_max_content_len: usize,
+    pub payload_max_collection_len: usize,
+}
+
+impl Default for ServerLoggingOptions {
+    fn default() -> Self {
+        Self {
+            log_metadata: false,
+            payload_max_depth: DEFAULT_PAYLOAD_MAX_DEPTH,
+            payload_max_content_len: DEFAULT_PAYLOAD_MAX_CONTENT_LEN,
+            payload_max_collection_len: DEFAULT_PAYLOAD_MAX_COLLECTION_LEN,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -27,6 +46,38 @@ impl ServerLogging {
         self.options.log_metadata = log_metadata;
         self
     }
+
+    pub fn with_payload_max_depth(mut self, payload_max_depth: usize) -> Self {
+        self.options.payload_max_depth = payload_max_depth;
+        self
+    }
+
+    pub fn with_payload_max_content_len(mut self, payload_max_content_len: usize) -> Self {
+        self.options.payload_max_content_len = payload_max_content_len;
+        self
+    }
+
+    pub fn with_payload_max_collection_len(mut self, payload_max_collection_len: usize) -> Self {
+        self.options.payload_max_collection_len = payload_max_collection_len;
+        self
+    }
+
+    fn payload_printer(&self) -> PrettyPrinter {
+        PrettyPrinter::new()
+            .with_colors(ColorMode::Never)
+            .with_max_depth(self.options.payload_max_depth)
+            .with_max_content_len(self.options.payload_max_content_len)
+            .with_max_collection_len(self.options.payload_max_collection_len)
+            .with_minimal_option_names(true)
+    }
+
+    fn format_payload(&self, payload: crate::Peek<'_, 'static>) -> String {
+        self.payload_printer().format_peek(payload)
+    }
+
+    fn format_postcard_bytes(&self, bytes: &[u8]) -> String {
+        self.payload_printer().format(bytes)
+    }
 }
 
 impl ServerMiddleware for ServerLogging {
@@ -38,7 +89,7 @@ impl ServerMiddleware for ServerLogging {
             target: "vox::server",
             service = method.service_name,
             method = method.method_name,
-            args = ?request.args(),
+            args = %self.format_payload(request.args()),
             "rpc request payload"
         );
         if self.options.log_metadata {
@@ -72,7 +123,7 @@ impl ServerMiddleware for ServerLogging {
                     target: "vox::server",
                     service = method.service_name,
                     method = method.method_name,
-                    ret = ?ret,
+                    ret = %self.format_payload(ret),
                     metadata = ?RedactedMetadata(response.metadata()),
                     "rpc response payload"
                 );
@@ -82,7 +133,7 @@ impl ServerMiddleware for ServerLogging {
                     target: "vox::server",
                     service = method.service_name,
                     method = method.method_name,
-                    ret_bytes_len = bytes.len(),
+                    ret = %self.format_postcard_bytes(bytes),
                     metadata = ?RedactedMetadata(response.metadata()),
                     "rpc response payload"
                 );
@@ -269,7 +320,10 @@ mod tests {
             schemas: Default::default(),
         };
 
-        let logging = ServerLogging::new(ServerLoggingOptions { log_metadata: true });
+        let logging = ServerLogging::new(ServerLoggingOptions {
+            log_metadata: true,
+            ..Default::default()
+        });
         logging.pre(request).await;
         logging
             .response(
@@ -298,6 +352,70 @@ mod tests {
         assert!(output.contains("42"));
         assert!(output.contains("etag"));
         assert!(output.contains("Replied"));
+    }
+
+    #[tokio::test]
+    async fn server_logging_truncates_large_payloads() {
+        let writer = SharedWriter::default();
+        let subscriber = tracing_subscriber::registry().with(
+            fmt::layer()
+                .without_time()
+                .with_ansi(false)
+                .with_writer(writer.clone())
+                .with_filter(LevelFilter::TRACE),
+        );
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        static METHOD: crate::MethodDescriptor = crate::MethodDescriptor {
+            id: crate::MethodId(8),
+            service_name: "Audit",
+            method_name: "bulk_record",
+            args_shape: <(Vec<u32>, String) as facet::Facet<'static>>::SHAPE,
+            args: &[],
+            return_shape: <Vec<u32> as facet::Facet<'static>>::SHAPE,
+            retry: crate::RetryPolicy::VOLATILE,
+            doc: None,
+        };
+
+        let args = (
+            vec![1u32, 2, 3, 4, 5],
+            "abcdefghijklmnopqrstuvwxyz".to_string(),
+        );
+        let extensions = Extensions::new();
+        let context = RequestContext::with_extensions(&METHOD, &[], &extensions);
+        let request = ServerRequest::new(context, crate::Peek::new(&args));
+        let response_wire: Result<Vec<u32>, crate::VoxError<std::convert::Infallible>> =
+            Ok(vec![10, 20, 30, 40, 50]);
+        let response = crate::RequestResponse {
+            metadata: vec![],
+            ret: crate::Payload::outgoing(&response_wire),
+            schemas: Default::default(),
+        };
+
+        let logging = ServerLogging::new(ServerLoggingOptions {
+            payload_max_depth: 6,
+            payload_max_content_len: 8,
+            payload_max_collection_len: 3,
+            ..Default::default()
+        });
+        logging.pre(request).await;
+        logging
+            .response(
+                &crate::ServerResponseContext::new(
+                    request.method(),
+                    request.request_id(),
+                    request.connection_id(),
+                    request.extensions().clone(),
+                ),
+                crate::ServerResponse::new(&response),
+            )
+            .await;
+
+        let output = writer.output();
+        assert!(output.contains("rpc request payload"));
+        assert!(output.contains("more items"), "output: {output}");
+        assert!(output.contains("chars"));
+        assert!(output.contains("rpc response payload"));
     }
 
     #[derive(Clone, Default)]
