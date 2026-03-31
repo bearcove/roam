@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.2](https://github.com/bearcove/vox/compare/vox-macros-core-v0.3.1...vox-macros-core-v0.3.2) - 2026-03-31
+
+### Other
+
+- Move service trait bounds
+
 ## [0.3.0](https://github.com/bearcove/vox/compare/vox-macros-core-v0.2.2...vox-macros-core-v0.3.0) - 2026-03-29
 
 ### Other
