@@ -75,6 +75,10 @@ impl vox_link_vtable {
         Ok(())
     }
 
+    /// # Safety
+    ///
+    /// `peer` must point to a valid `FfiVtable` instance that remains alive
+    /// for the duration of the returned reference.
     pub unsafe fn validate_ptr(peer: *const Self) -> io::Result<&'static Self> {
         let peer = unsafe { peer.as_ref() }.ok_or_else(|| {
             io::Error::new(io::ErrorKind::InvalidInput, "ffi vtable pointer was null")

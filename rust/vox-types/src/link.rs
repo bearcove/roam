@@ -78,7 +78,7 @@ pub trait Link {
 /// Sending half of a [`Link`].
 ///
 /// Callers provide an owned payload buffer; the transport applies any framing
-/// and enqueues or writes it asynchronously. Backpressure lives in [`send`].
+/// and enqueues or writes it asynchronously. Backpressure lives in [`LinkTx::send`].
 pub trait LinkTx: MaybeSend + MaybeSync + 'static {
     /// Send one payload.
     ///
