@@ -1,18 +1,20 @@
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
+    future::Future,
+    pin::Pin,
     sync::Arc,
     time::Duration,
 };
 
 use moire::sync::mpsc;
-use tokio::sync::watch;
+use tokio::sync::{mpsc as tokio_mpsc, oneshot as tokio_oneshot, watch};
 use tracing::{trace, warn};
 use vox_types::{
-    BoxFut, ChannelMessage, ConduitRx, ConduitTx, ConduitTxPermit, ConnectionAccept,
-    ConnectionClose, ConnectionId, ConnectionOpen, ConnectionReject, ConnectionSettings, Handler,
-    HandshakeResult, IdAllocator, MaybeSend, MaybeSync, Message, MessageFamily, MessagePayload,
-    Metadata, Parity, RequestBody, RequestId, RequestMessage, RequestResponse, SelfRef,
-    SessionResumeKey, SessionRole,
+    BoxFut, ChannelMessage, ConduitRx, ConduitTx, ConnectionAccept, ConnectionClose, ConnectionId,
+    ConnectionOpen, ConnectionReject, ConnectionSettings, Handler, HandshakeResult, IdAllocator,
+    MaybeSend, MaybeSync, Message, MessageFamily, MessagePayload, Metadata, Parity, RequestBody,
+    RequestId, RequestMessage, RequestResponse, SchemaMessage, SelfRef, SessionResumeKey,
+    SessionRole,
 };
 
 mod builders;
@@ -958,15 +960,17 @@ impl Session {
     ) -> Self
     where
         Tx: ConduitTx<Msg = MessageFamily> + MaybeSend + MaybeSync + 'static,
-        for<'p> <Tx as ConduitTx>::Permit<'p>: MaybeSend,
         Rx: ConduitRx<Msg = MessageFamily> + MaybeSend + 'static,
     {
+        let (outbound_tx, outbound_rx) = tokio_mpsc::channel(256);
         let sess_core = Arc::new(SessionCore {
             inner: std::sync::Mutex::new(SessionCoreInner {
                 tx: Arc::new(tx) as Arc<dyn DynConduitTx>,
                 conns: HashMap::new(),
             }),
+            outbound_tx,
         });
+        spawn_outbound_worker(outbound_rx);
         let (resume_notifier, _resume_rx) = watch::channel(0_u64);
         Session {
             rx: Box::new(rx),
@@ -1280,6 +1284,19 @@ impl Session {
                 if conn_id.is_root() {
                     self.handle_keepalive_pong(pong.nonce, keepalive_runtime);
                 }
+                return;
+            }
+            MessagePayload::SchemaMessage(schema_msg) => {
+                let state = match self.conns.get(&conn_id) {
+                    Some(ConnectionSlot::Active(state)) => state,
+                    _ => return,
+                };
+                let payload = vox_types::SchemaPayload::from_cbor(&schema_msg.schemas.0)
+                    .expect("schema messages must be valid CBOR");
+                state
+                    .schema_recv_tracker
+                    .record_received(schema_msg.method_id, schema_msg.direction, payload)
+                    .expect("received schemas must not contain duplicate type IDs");
                 return;
             }
             _ => {}
@@ -1866,6 +1883,51 @@ impl Session {
 
 pub(crate) struct SessionCore {
     inner: std::sync::Mutex<SessionCoreInner>,
+    outbound_tx: tokio_mpsc::Sender<OutboundBatch>,
+}
+
+pub trait OutboundSendFuture: Future<Output = std::io::Result<()>> + MaybeSend + 'static {}
+impl<T> OutboundSendFuture for T where T: Future<Output = std::io::Result<()>> + MaybeSend + 'static {}
+
+type OutboundSend = Pin<Box<dyn OutboundSendFuture>>;
+
+struct OutboundBatch {
+    sends: Vec<OutboundSend>,
+    result_tx: tokio_oneshot::Sender<std::io::Result<()>>,
+}
+
+async fn run_outbound_worker(mut rx: tokio_mpsc::Receiver<OutboundBatch>) {
+    while let Some(batch) = rx.recv().await {
+        let mut result = Ok(());
+        for send in batch.sends {
+            if let Err(error) = send.await {
+                result = Err(error);
+                break;
+            }
+        }
+        let _ = batch.result_tx.send(result);
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn spawn_outbound_worker(rx: tokio_mpsc::Receiver<OutboundBatch>) {
+    if tokio::runtime::Handle::try_current().is_ok() {
+        tokio::spawn(run_outbound_worker(rx));
+        return;
+    }
+
+    std::thread::spawn(move || {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build outbound worker runtime");
+        runtime.block_on(run_outbound_worker(rx));
+    });
+}
+
+#[cfg(target_arch = "wasm32")]
+fn spawn_outbound_worker(rx: tokio_mpsc::Receiver<OutboundBatch>) {
+    wasm_bindgen_futures::spawn_local(run_outbound_worker(rx));
 }
 
 struct SendConnState {
@@ -1912,9 +1974,10 @@ impl SessionCore {
         binder: Option<&'a dyn vox_types::ChannelBinder>,
         forwarded_schemas: Option<&vox_types::SchemaRecvTracker>,
     ) -> Result<(), ()> {
-        let tx = {
+        let (tx, schema_msgs) = {
             let mut inner = self.inner.lock().expect("session core mutex poisoned");
             let conn_id = msg.connection_id;
+            let mut schema_msgs = Vec::new();
 
             if let MessagePayload::RequestMessage(req) = &mut msg.payload {
                 vox_types::dlog!(
@@ -1941,6 +2004,16 @@ impl SessionCore {
                             call,
                             forwarded_schemas,
                         );
+                        if !call.schemas.is_empty() {
+                            schema_msgs.push(Message {
+                                connection_id: conn_id,
+                                payload: MessagePayload::SchemaMessage(SchemaMessage {
+                                    method_id: call.method_id,
+                                    direction: vox_types::BindingDirection::Args,
+                                    schemas: std::mem::take(&mut call.schemas),
+                                }),
+                            });
+                        }
                     }
                     RequestBody::Response(resp) => {
                         if let Some(method_id) = conn_state.inflight_incoming.remove(&req.id) {
@@ -1951,15 +2024,36 @@ impl SessionCore {
                                 resp,
                                 forwarded_schemas,
                             );
+                            if !resp.schemas.is_empty() {
+                                schema_msgs.push(Message {
+                                    connection_id: conn_id,
+                                    payload: MessagePayload::SchemaMessage(SchemaMessage {
+                                        method_id,
+                                        direction: vox_types::BindingDirection::Response,
+                                        schemas: std::mem::take(&mut resp.schemas),
+                                    }),
+                                });
+                            }
                         }
                     }
                     RequestBody::Cancel(_) => {}
                 }
             }
 
-            inner.tx.clone()
+            (inner.tx.clone(), schema_msgs)
         };
-        tx.send_msg(msg, binder).await.map_err(|_| ())
+        let mut sends = Vec::with_capacity(schema_msgs.len() + 1);
+        for schema_msg in schema_msgs {
+            sends.push(tx.clone().prepare_msg(schema_msg, None).map_err(|_| ())?);
+        }
+        sends.push(tx.prepare_msg(msg, binder).map_err(|_| ())?);
+
+        let (result_tx, result_rx) = tokio_oneshot::channel();
+        self.outbound_tx
+            .send(OutboundBatch { sends, result_tx })
+            .await
+            .map_err(|_| ())?;
+        result_rx.await.map_err(|_| ())?.map_err(|_| ())
     }
 
     /// Record that an incoming call was received, so we can look up the
@@ -2202,11 +2296,11 @@ pub(crate) trait ConduitRecoverer: MaybeSend {
 }
 
 pub trait DynConduitTx: MaybeSend + MaybeSync {
-    fn send_msg<'a>(
-        &'a self,
+    fn prepare_msg<'a>(
+        self: Arc<Self>,
         msg: Message<'a>,
         binder: Option<&'a dyn vox_types::ChannelBinder>,
-    ) -> BoxFut<'a, std::io::Result<()>>;
+    ) -> std::io::Result<OutboundSend>;
 }
 pub trait DynConduitRx: MaybeSend {
     fn recv_msg<'a>(&'a mut self)
@@ -2217,23 +2311,24 @@ pub trait DynConduitRx: MaybeSend {
 // r[impl zerocopy.framing.pipeline.outgoing]
 impl<T> DynConduitTx for T
 where
-    T: ConduitTx<Msg = MessageFamily> + MaybeSend + MaybeSync,
-    for<'p> <T as ConduitTx>::Permit<'p>: MaybeSend,
+    T: ConduitTx<Msg = MessageFamily> + MaybeSend + MaybeSync + 'static,
 {
-    fn send_msg<'a>(
-        &'a self,
+    fn prepare_msg<'a>(
+        self: Arc<Self>,
         msg: Message<'a>,
         binder: Option<&'a dyn vox_types::ChannelBinder>,
-    ) -> BoxFut<'a, std::io::Result<()>> {
-        Box::pin(async move {
-            let permit = self.reserve().await?;
-            let result = if let Some(binder) = binder {
-                vox_types::with_channel_binder(binder, || permit.send(msg))
-            } else {
-                permit.send(msg)
-            };
-            result.map_err(|e| std::io::Error::other(e.to_string()))
-        })
+    ) -> std::io::Result<OutboundSend> {
+        let prepared = if let Some(binder) = binder {
+            vox_types::with_channel_binder(binder, || self.prepare_send(msg))
+        } else {
+            self.prepare_send(msg)
+        };
+        let prepared = prepared.map_err(|e| std::io::Error::other(e.to_string()))?;
+        Ok(Box::pin(async move {
+            self.send_prepared(prepared)
+                .await
+                .map_err(|e| std::io::Error::other(e.to_string()))
+        }))
     }
 }
 
