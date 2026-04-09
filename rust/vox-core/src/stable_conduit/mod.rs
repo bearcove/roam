@@ -566,7 +566,7 @@ where
         prepare_frame::<F, LS>(&self.shared, item)
     }
 
-    async fn send_prepared(&self, prepared: Self::Prepared) -> Result<(), Self::Error> {
+    async fn send_prepared(&self, mut prepared: Self::Prepared) -> Result<(), Self::Error> {
         enum TxReservation<Tx> {
             CheckedOut { tx: Tx },
             Wait,
@@ -600,7 +600,26 @@ where
                 }
             };
 
-            let send_result = tx.send(prepared.frame_bytes.clone()).await;
+            if prepared.framed.is_none() {
+                let framed = {
+                    let mut inner = self.shared.lock_inner()?;
+                    let seq = inner.next_send_seq;
+                    inner.next_send_seq = PacketSeq(seq.0.wrapping_add(1));
+                    let ack = inner
+                        .last_received
+                        .map(|max_delivered| PacketAck { max_delivered });
+                    let frame_bytes = encode_frame_bytes(seq, ack, &prepared.item_bytes)?;
+                    (seq, frame_bytes)
+                };
+                prepared.framed = Some(framed);
+            }
+
+            let (seq, frame_bytes) = prepared
+                .framed
+                .as_ref()
+                .expect("stable prepared messages should be framed before send");
+
+            let send_result = tx.send(frame_bytes.clone()).await;
             let generation = {
                 let mut inner = self.shared.lock_inner()?;
                 let generation = inner.link_generation;
@@ -617,7 +636,7 @@ where
                     self.shared
                         .lock_inner()?
                         .replay
-                        .push(prepared.seq, prepared.frame_bytes);
+                        .push(*seq, frame_bytes.clone());
                     return Ok(());
                 }
                 Err(_) => {
@@ -642,9 +661,32 @@ where
     }
 }
 
-pub struct StablePreparedMessage {
+fn encode_frame_bytes(
     seq: PacketSeq,
-    frame_bytes: Vec<u8>,
+    ack: Option<PacketAck>,
+    item_bytes: &[u8],
+) -> Result<Vec<u8>, StableConduitError> {
+    let frame = Frame {
+        seq,
+        ack,
+        item: Payload::PostcardBytes(item_bytes),
+    };
+    #[allow(unsafe_code)]
+    let peek = unsafe {
+        Peek::unchecked_new(
+            PtrConst::new((&raw const frame).cast::<u8>()),
+            <Frame<'static> as Facet<'static>>::SHAPE,
+        )
+    };
+    let plan = vox_postcard::peek_to_scatter_plan(peek).map_err(StableConduitError::Encode)?;
+    let mut frame_bytes = vec![0u8; plan.total_size()];
+    plan.write_into(&mut frame_bytes);
+    Ok(frame_bytes)
+}
+
+pub struct StablePreparedMessage {
+    item_bytes: Vec<u8>,
+    framed: Option<(PacketSeq, Vec<u8>)>,
 }
 
 // r[impl zerocopy.framing.single-pass]
@@ -659,42 +701,12 @@ fn prepare_frame<F: MsgFamily, LS: LinkSource>(
     shared: &Arc<Shared<LS>>,
     item: F::Msg<'_>,
 ) -> Result<StablePreparedMessage, StableConduitError> {
-    let (seq, ack) = {
-        let mut inner = shared.lock_inner()?;
-        let seq = inner.next_send_seq;
-        inner.next_send_seq = PacketSeq(seq.0.wrapping_add(1));
-        let ack = inner
-            .last_received
-            .map(|max_delivered| PacketAck { max_delivered });
-        (seq, ack)
-    };
-
-    // Wrap the message as an outgoing Payload — the opaque adapter
-    // serializes its bytes inline, giving us one scatter pass for the
-    // whole frame (header + message bytes).
-    let msg_shape = F::shape();
-    #[allow(unsafe_code)]
-    let payload = unsafe {
-        Payload::outgoing_unchecked(PtrConst::new((&raw const item).cast::<u8>()), msg_shape)
-    };
-
-    let frame = Frame {
-        seq,
-        ack,
-        item: payload,
-    };
-
-    #[allow(unsafe_code)]
-    let peek = unsafe {
-        Peek::unchecked_new(
-            PtrConst::new((&raw const frame).cast::<u8>()),
-            <Frame<'static> as Facet<'static>>::SHAPE,
-        )
-    };
-    let plan = vox_postcard::peek_to_scatter_plan(peek).map_err(StableConduitError::Encode)?;
-    let mut frame_bytes = vec![0u8; plan.total_size()];
-    plan.write_into(&mut frame_bytes);
-    Ok(StablePreparedMessage { seq, frame_bytes })
+    let _ = shared;
+    let item_bytes = vox_postcard::to_vec(&item).map_err(StableConduitError::Encode)?;
+    Ok(StablePreparedMessage {
+        item_bytes,
+        framed: None,
+    })
 }
 // ---------------------------------------------------------------------------
 // Rx
