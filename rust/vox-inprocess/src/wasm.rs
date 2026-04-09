@@ -1,12 +1,52 @@
 //! WASM in-process transport implementing [`Link`].
 
-use std::cell::RefCell;
 use std::io;
 
 use futures_channel::mpsc;
-use futures_util::StreamExt;
+use futures_util::{StreamExt, lock::Mutex};
 use vox_types::{Backing, Link, LinkRx, LinkTx};
 use wasm_bindgen::prelude::*;
+
+struct ScratchBuffer {
+    buf_tx: mpsc::Sender<Vec<u8>>,
+    buf: Option<Vec<u8>>,
+}
+
+impl ScratchBuffer {
+    fn new(buf_tx: mpsc::Sender<Vec<u8>>, buf: Vec<u8>) -> Self {
+        Self {
+            buf_tx,
+            buf: Some(buf),
+        }
+    }
+}
+
+impl std::ops::Deref for ScratchBuffer {
+    type Target = Vec<u8>;
+
+    fn deref(&self) -> &Self::Target {
+        self.buf
+            .as_ref()
+            .expect("scratch buffer should exist while borrowed")
+    }
+}
+
+impl std::ops::DerefMut for ScratchBuffer {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.buf
+            .as_mut()
+            .expect("scratch buffer should exist while mutably borrowed")
+    }
+}
+
+impl Drop for ScratchBuffer {
+    fn drop(&mut self) {
+        if let Some(mut buf) = self.buf.take() {
+            buf.clear();
+            let _ = self.buf_tx.clone().try_send(buf);
+        }
+    }
+}
 
 /// JS-visible handle for an in-process link.
 ///
@@ -39,7 +79,7 @@ impl JsInProcessLink {
                 InProcessLinkTx {
                     on_message,
                     buf_tx,
-                    buf_rx: RefCell::new(buf_rx),
+                    buf_rx: Mutex::new(buf_rx),
                 },
                 InProcessLinkRx { rx: rust_rx },
             )),
@@ -93,25 +133,23 @@ impl Link for InProcessLink {
 pub struct InProcessLinkTx {
     on_message: js_sys::Function,
     buf_tx: mpsc::Sender<Vec<u8>>,
-    buf_rx: RefCell<mpsc::Receiver<Vec<u8>>>,
+    buf_rx: Mutex<mpsc::Receiver<Vec<u8>>>,
 }
 
 impl LinkTx for InProcessLinkTx {
     async fn send(&self, bytes: Vec<u8>) -> io::Result<()> {
-        let mut scratch = self
-            .buf_rx
-            .borrow_mut()
-            .next()
-            .await
-            .ok_or_else(|| io::Error::other("in-process send buffer channel closed"))?;
+        let scratch = {
+            let mut buf_rx = self.buf_rx.lock().await;
+            buf_rx.next().await
+        }
+        .ok_or_else(|| io::Error::other("in-process send buffer channel closed"))?;
+        let mut scratch = ScratchBuffer::new(self.buf_tx.clone(), scratch);
         scratch.clear();
         scratch.extend_from_slice(&bytes);
         let array = js_sys::Uint8Array::from(scratch.as_slice());
         self.on_message
             .call1(&JsValue::NULL, &array)
             .map_err(|e| io::Error::other(format!("in-process send failed: {e:?}")))?;
-        scratch.clear();
-        let _ = self.buf_tx.clone().try_send(scratch);
         Ok(())
     }
 

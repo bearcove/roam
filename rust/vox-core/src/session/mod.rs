@@ -944,6 +944,44 @@ impl std::fmt::Display for SessionError {
 impl std::error::Error for SessionError {}
 
 impl Session {
+    fn close_connection_for_protocol_error(
+        &mut self,
+        conn_id: ConnectionId,
+        detail: impl std::fmt::Display,
+    ) {
+        warn!(%conn_id, "closing connection after protocol error: {detail}");
+        self.remove_connection(&conn_id);
+        self.maybe_request_shutdown_after_root_closed();
+    }
+
+    fn record_received_schema_cbor(
+        &mut self,
+        conn_id: ConnectionId,
+        schema_recv_tracker: Arc<vox_types::SchemaRecvTracker>,
+        method_id: vox_types::MethodId,
+        direction: vox_types::BindingDirection,
+        schemas_cbor: &vox_types::CborPayload,
+        context: &str,
+    ) -> bool {
+        let payload = match vox_types::SchemaPayload::from_cbor(&schemas_cbor.0) {
+            Ok(payload) => payload,
+            Err(error) => {
+                self.close_connection_for_protocol_error(
+                    conn_id,
+                    format!("{context}: invalid schema CBOR: {error}"),
+                );
+                return false;
+            }
+        };
+
+        if let Err(error) = schema_recv_tracker.record_received(method_id, direction, payload) {
+            self.close_connection_for_protocol_error(conn_id, format!("{context}: {error}"));
+            return false;
+        }
+
+        true
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn pre_handshake<Tx, Rx>(
         tx: Tx,
@@ -1288,16 +1326,18 @@ impl Session {
                 return;
             }
             MessagePayload::SchemaMessage(schema_msg) => {
-                let state = match self.conns.get(&conn_id) {
-                    Some(ConnectionSlot::Active(state)) => state,
+                let schema_recv_tracker = match self.conns.get(&conn_id) {
+                    Some(ConnectionSlot::Active(state)) => Arc::clone(&state.schema_recv_tracker),
                     _ => return,
                 };
-                let payload = vox_types::SchemaPayload::from_cbor(&schema_msg.schemas.0)
-                    .expect("schema messages must be valid CBOR");
-                state
-                    .schema_recv_tracker
-                    .record_received(schema_msg.method_id, schema_msg.direction, payload)
-                    .expect("received schemas must not contain duplicate type IDs");
+                let _ = self.record_received_schema_cbor(
+                    conn_id,
+                    schema_recv_tracker,
+                    schema_msg.method_id,
+                    schema_msg.direction,
+                    &schema_msg.schemas,
+                    "standalone schema message",
+                );
                 return;
             }
             _ => {}
@@ -1361,32 +1401,46 @@ impl Session {
                         },
                         schemas_cbor.map(|s| s.0.len())
                     );
-                    let state = match self.conns.get(&conn_id) {
-                        Some(ConnectionSlot::Active(state)) => state,
+                    let schema_recv_tracker = match self.conns.get(&conn_id) {
+                        Some(ConnectionSlot::Active(state)) => {
+                            Arc::clone(&state.schema_recv_tracker)
+                        }
                         _ => return,
                     };
                     if let Some(schemas_cbor) = schemas_cbor
                         && !schemas_cbor.is_empty()
                     {
-                        let payload = vox_types::SchemaPayload::from_cbor(&schemas_cbor.0)
-                            .expect("inlined schemas must be valid CBOR");
                         let (method_id, direction) = match &r_ref.body {
                             RequestBody::Call(call) => {
                                 (call.method_id, vox_types::BindingDirection::Args)
                             }
                             RequestBody::Response(_) => {
-                                let method_id = self
-                                    .sess_core
-                                    .take_outgoing_call_method(conn_id, r_ref.id)
-                                    .expect("response schemas require an inflight method binding");
+                                let Some(method_id) =
+                                    self.sess_core.take_outgoing_call_method(conn_id, r_ref.id)
+                                else {
+                                    self.close_connection_for_protocol_error(
+                                        conn_id,
+                                        format!(
+                                            "response schemas for unknown inflight request {:?}",
+                                            r_ref.id
+                                        ),
+                                    );
+                                    return;
+                                };
                                 (method_id, vox_types::BindingDirection::Response)
                             }
                             RequestBody::Cancel(_) => unreachable!(),
                         };
-                        state
-                            .schema_recv_tracker
-                            .record_received(method_id, direction, payload)
-                            .expect("received schemas must not contain duplicate type IDs");
+                        if !self.record_received_schema_cbor(
+                            conn_id,
+                            schema_recv_tracker,
+                            method_id,
+                            direction,
+                            schemas_cbor,
+                            "inlined request schemas",
+                        ) {
+                            return;
+                        }
                     }
                 }
                 if matches!(&r_ref.body, RequestBody::Response(_)) && !response_had_schema_payload {
@@ -1917,15 +1971,11 @@ async fn run_outbound_worker(mut rx: tokio_mpsc::Receiver<OutboundBatch>) {
                     .conn_state
                     .lock()
                     .expect("send conn state mutex poisoned");
-                let schemas = conn_state.send_tracker.commit_prepared_plan(
+                conn_state.send_tracker.preview_prepared_plan(
                     schema_send.method_id,
                     schema_send.direction,
-                    schema_send.prepared,
-                );
-                conn_state
-                    .planned_bindings
-                    .remove(&(schema_send.direction, schema_send.method_id));
-                schemas
+                    &schema_send.prepared,
+                )
             };
             if schemas.is_empty() {
                 continue;
@@ -1950,6 +2000,18 @@ async fn run_outbound_worker(mut rx: tokio_mpsc::Receiver<OutboundBatch>) {
                 result = Err(error);
                 break;
             }
+            let mut conn_state = batch
+                .conn_state
+                .lock()
+                .expect("send conn state mutex poisoned");
+            conn_state.send_tracker.mark_prepared_plan_sent(
+                schema_send.method_id,
+                schema_send.direction,
+                &schema_send.prepared,
+            );
+            conn_state
+                .planned_bindings
+                .remove(&(schema_send.direction, schema_send.method_id));
         }
         if result.is_ok()
             && let Err(error) = batch.payload_send.await

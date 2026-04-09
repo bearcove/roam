@@ -191,6 +191,65 @@ impl SchemaSendTracker {
         }
     }
 
+    fn register_prepared_plan(&mut self, prepared: &PreparedSchemaPlan) {
+        for schema in &prepared.schemas {
+            self.registry
+                .entry(schema.id)
+                .or_insert_with(|| schema.clone());
+        }
+    }
+
+    fn unsent_schemas_for_prepared_plan(&self, prepared: &PreparedSchemaPlan) -> Vec<Schema> {
+        prepared
+            .schemas
+            .iter()
+            .filter(|schema| !self.sent_schemas.contains(&schema.id))
+            .cloned()
+            .collect()
+    }
+
+    /// Compute the schema payload that would be sent for a binding without
+    /// mutating connection-scoped send tracking.
+    pub fn preview_prepared_plan(
+        &mut self,
+        method_id: MethodId,
+        direction: BindingDirection,
+        prepared: &PreparedSchemaPlan,
+    ) -> CborPayload {
+        let key = (method_id, direction);
+        if self.sent_bindings.contains(&key) {
+            return CborPayload::default();
+        }
+
+        self.register_prepared_plan(prepared);
+
+        let schema_payload = SchemaPayload {
+            schemas: self.unsent_schemas_for_prepared_plan(prepared),
+            root: prepared.root.clone(),
+        };
+        schema_payload.to_cbor()
+    }
+
+    /// Mark a previously previewed schema payload as successfully sent.
+    pub fn mark_prepared_plan_sent(
+        &mut self,
+        method_id: MethodId,
+        direction: BindingDirection,
+        prepared: &PreparedSchemaPlan,
+    ) {
+        let key = (method_id, direction);
+        if self.sent_bindings.contains(&key) {
+            return;
+        }
+
+        self.register_prepared_plan(prepared);
+
+        for schema in &prepared.schemas {
+            self.sent_schemas.insert(schema.id);
+        }
+        self.sent_bindings.insert(key);
+    }
+
     /// Commit a previously prepared schema payload against the live
     /// per-connection tracking state, returning only the schemas that still
     /// need to be sent on the wire for this binding.
@@ -200,30 +259,9 @@ impl SchemaSendTracker {
         direction: BindingDirection,
         prepared: PreparedSchemaPlan,
     ) -> CborPayload {
-        let key = (method_id, direction);
-        if self.sent_bindings.contains(&key) {
-            return CborPayload::default();
-        }
-
-        for schema in &prepared.schemas {
-            self.registry
-                .entry(schema.id)
-                .or_insert_with(|| schema.clone());
-        }
-
-        let unsent: Vec<Schema> = prepared
-            .schemas
-            .into_iter()
-            .filter(|schema| !self.sent_schemas.contains(&schema.id))
-            .collect();
-
-        for schema in &unsent {
-            self.sent_schemas.insert(schema.id);
-        }
-
         let schema_payload = SchemaPayload {
-            schemas: unsent,
-            root: prepared.root,
+            schemas: self.unsent_schemas_for_prepared_plan(&prepared),
+            root: prepared.root.clone(),
         };
         dlog!(
             "[schema] commit binding: method={:?} direction={:?} root={:?} schema_count={}",
@@ -233,7 +271,7 @@ impl SchemaSendTracker {
             schema_payload.schemas.len()
         );
         let cbor = schema_payload.to_cbor();
-        self.sent_bindings.insert(key);
+        self.mark_prepared_plan_sent(method_id, direction, &prepared);
         cbor
     }
 

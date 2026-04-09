@@ -4,7 +4,7 @@ use std::cell::RefCell;
 use std::io;
 
 use futures_channel::mpsc;
-use futures_util::StreamExt;
+use futures_util::{StreamExt, lock::Mutex};
 use js_sys::ArrayBuffer;
 use vox_types::{Backing, Link, LinkRx, LinkTx};
 use wasm_bindgen::JsCast;
@@ -21,6 +21,47 @@ struct WsClosures {
     _onmessage: Closure<dyn FnMut(MessageEvent)>,
     _onclose: Closure<dyn FnMut(CloseEvent)>,
     _onerror: Closure<dyn FnMut(ErrorEvent)>,
+}
+
+struct ScratchBuffer {
+    buf_tx: mpsc::Sender<Vec<u8>>,
+    buf: Option<Vec<u8>>,
+}
+
+impl ScratchBuffer {
+    fn new(buf_tx: mpsc::Sender<Vec<u8>>, buf: Vec<u8>) -> Self {
+        Self {
+            buf_tx,
+            buf: Some(buf),
+        }
+    }
+}
+
+impl std::ops::Deref for ScratchBuffer {
+    type Target = Vec<u8>;
+
+    fn deref(&self) -> &Self::Target {
+        self.buf
+            .as_ref()
+            .expect("scratch buffer should exist while borrowed")
+    }
+}
+
+impl std::ops::DerefMut for ScratchBuffer {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.buf
+            .as_mut()
+            .expect("scratch buffer should exist while mutably borrowed")
+    }
+}
+
+impl Drop for ScratchBuffer {
+    fn drop(&mut self) {
+        if let Some(mut buf) = self.buf.take() {
+            buf.clear();
+            let _ = self.buf_tx.clone().try_send(buf);
+        }
+    }
 }
 
 /// A [`Link`] over a browser WebSocket.
@@ -64,7 +105,7 @@ impl WsLink {
             WsLinkTx {
                 ws,
                 buf_tx,
-                buf_rx: RefCell::new(buf_rx),
+                buf_rx: Mutex::new(buf_rx),
             },
             WsLinkRx {
                 rx,
@@ -139,17 +180,17 @@ impl Link for WsLink {
 pub struct WsLinkTx {
     ws: WebSocket,
     buf_tx: mpsc::Sender<Vec<u8>>,
-    buf_rx: RefCell<mpsc::Receiver<Vec<u8>>>,
+    buf_rx: Mutex<mpsc::Receiver<Vec<u8>>>,
 }
 
 impl LinkTx for WsLinkTx {
     async fn send(&self, bytes: Vec<u8>) -> io::Result<()> {
-        let mut scratch = self
-            .buf_rx
-            .borrow_mut()
-            .next()
-            .await
-            .ok_or_else(|| io::Error::other("ws send buffer channel closed"))?;
+        let scratch = {
+            let mut buf_rx = self.buf_rx.lock().await;
+            buf_rx.next().await
+        }
+        .ok_or_else(|| io::Error::other("ws send buffer channel closed"))?;
+        let mut scratch = ScratchBuffer::new(self.buf_tx.clone(), scratch);
         scratch.clear();
         scratch.extend_from_slice(&bytes);
 
@@ -158,8 +199,6 @@ impl LinkTx for WsLinkTx {
         self.ws
             .send_with_array_buffer(&payload.buffer())
             .map_err(|e| io::Error::other(format!("ws send failed: {e:?}")))?;
-        scratch.clear();
-        let _ = self.buf_tx.clone().try_send(scratch);
         Ok(())
     }
 
