@@ -1945,6 +1945,9 @@ struct SendConnState {
     /// Maps request_id → method_id for outbound calls awaiting a response, so
     /// inbound response schema payloads can bind their root TypeRef.
     inflight_outgoing: HashMap<RequestId, vox_types::MethodId>,
+
+    /// Structured response schema plans prepared before send ordering is known.
+    prepared_response_schemas: HashMap<RequestId, vox_types::PreparedSchemaPlan>,
 }
 
 impl SendConnState {
@@ -1954,6 +1957,7 @@ impl SendConnState {
             send_tracker: vox_types::SchemaSendTracker::new(),
             inflight_incoming: HashMap::new(),
             inflight_outgoing: HashMap::new(),
+            prepared_response_schemas: HashMap::new(),
         }
     }
 }
@@ -2104,17 +2108,18 @@ impl SessionCore {
             .or_insert_with(SendConnState::new);
         let key = (vox_types::BindingDirection::Response, method_id);
         if conn_state.method_tracker.contains(&key) {
+            conn_state.prepared_response_schemas.remove(&_request_id);
             response.schemas = Default::default();
             return;
         }
 
-        response.schemas = match &response.ret {
+        let prepared = match &response.ret {
             vox_types::Payload::Value { shape, .. } => {
                 match vox_types::SchemaSendTracker::plan_for_shape(shape) {
                     Ok(schemas) => {
                         vox_types::dlog!(
-                            "[schema] planned {} bytes of response schemas for method {:?} (req {:?})",
-                            schemas.0.len(),
+                            "[schema] planned {} response schemas for method {:?} (req {:?})",
+                            schemas.schemas.len(),
                             method_id,
                             _request_id
                         );
@@ -2122,7 +2127,7 @@ impl SessionCore {
                     }
                     Err(e) => {
                         tracing::error!("schema extraction failed: {e}");
-                        Default::default()
+                        return;
                     }
                 }
             }
@@ -2131,9 +2136,13 @@ impl SessionCore {
                     "schema attachment failed: missing forwarded response schemas for method {:?}",
                     method_id
                 );
-                Default::default()
+                return;
             }
         };
+        response.schemas = prepared.to_cbor();
+        conn_state
+            .prepared_response_schemas
+            .insert(_request_id, prepared);
     }
 
     /// Borrow the send tracker's schema registry for the given connection.
@@ -2164,11 +2173,15 @@ impl SessionCore {
             .or_insert_with(SendConnState::new);
         let key = (vox_types::BindingDirection::Response, method_id);
         if conn_state.method_tracker.contains(&key) {
+            conn_state.prepared_response_schemas.remove(&_request_id);
             response.schemas = Default::default();
             return;
         }
-        let cbor = vox_types::SchemaSendTracker::plan_from_source(root_type, source);
-        response.schemas = cbor;
+        let prepared = vox_types::SchemaSendTracker::plan_from_source(root_type, source);
+        response.schemas = prepared.to_cbor();
+        conn_state
+            .prepared_response_schemas
+            .insert(_request_id, prepared);
     }
 
     fn prepare_response_schemas(
@@ -2186,11 +2199,21 @@ impl SessionCore {
         let prepared = match &response.ret {
             vox_types::Payload::Value { shape, .. } => {
                 if !response.schemas.is_empty() {
-                    let schemas = conn_state.send_tracker.commit_prepared_send(
-                        method_id,
-                        vox_types::BindingDirection::Response,
-                        &response.schemas,
-                    );
+                    let schemas = if let Some(prepared) =
+                        conn_state.prepared_response_schemas.remove(&request_id)
+                    {
+                        conn_state.send_tracker.commit_prepared_plan(
+                            method_id,
+                            vox_types::BindingDirection::Response,
+                            prepared,
+                        )
+                    } else {
+                        conn_state.send_tracker.commit_prepared_send(
+                            method_id,
+                            vox_types::BindingDirection::Response,
+                            &response.schemas,
+                        )
+                    };
                     response.schemas = schemas.clone();
                     vox_types::dlog!(
                         "[schema] committed {} bytes of planned response schemas for method {:?} (req {:?})",
@@ -2202,10 +2225,10 @@ impl SessionCore {
                 } else {
                     match vox_types::SchemaSendTracker::plan_for_shape(shape) {
                         Ok(prepared) => {
-                            let schemas = conn_state.send_tracker.commit_prepared_send(
+                            let schemas = conn_state.send_tracker.commit_prepared_plan(
                                 method_id,
                                 vox_types::BindingDirection::Response,
-                                &prepared,
+                                prepared,
                             );
                             response.schemas = schemas.clone();
                             vox_types::dlog!(
@@ -2240,13 +2263,22 @@ impl SessionCore {
                 };
                 let prepared = if response.schemas.is_empty() {
                     vox_types::SchemaSendTracker::plan_from_source(&root, source)
+                } else if let Some(prepared) =
+                    conn_state.prepared_response_schemas.remove(&request_id)
+                {
+                    prepared
                 } else {
-                    response.schemas.clone()
+                    let prepared_payload = vox_types::SchemaPayload::from_cbor(&response.schemas.0)
+                        .expect("prepared schema payloads must be valid CBOR");
+                    vox_types::PreparedSchemaPlan {
+                        schemas: prepared_payload.schemas,
+                        root: prepared_payload.root,
+                    }
                 };
-                let schemas = conn_state.send_tracker.commit_prepared_send(
+                let schemas = conn_state.send_tracker.commit_prepared_plan(
                     method_id,
                     vox_types::BindingDirection::Response,
-                    &prepared,
+                    prepared,
                 );
                 response.schemas = schemas.clone();
                 vox_types::dlog!(
@@ -2281,10 +2313,10 @@ impl SessionCore {
             vox_types::Payload::Value { shape, .. } => {
                 match vox_types::SchemaSendTracker::plan_for_shape(shape) {
                     Ok(prepared) => {
-                        call.schemas = conn_state.send_tracker.commit_prepared_send(
+                        call.schemas = conn_state.send_tracker.commit_prepared_plan(
                             method_id,
                             vox_types::BindingDirection::Args,
-                            &prepared,
+                            prepared,
                         );
                         true
                     }
@@ -2310,10 +2342,10 @@ impl SessionCore {
                     return;
                 };
                 let prepared = vox_types::SchemaSendTracker::plan_from_source(&root, source);
-                call.schemas = conn_state.send_tracker.commit_prepared_send(
+                call.schemas = conn_state.send_tracker.commit_prepared_plan(
                     method_id,
                     vox_types::BindingDirection::Args,
-                    &prepared,
+                    prepared,
                 );
                 true
             }

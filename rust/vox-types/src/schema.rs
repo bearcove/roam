@@ -111,6 +111,23 @@ pub struct SchemaSendTracker {
     registry: SchemaRegistry,
 }
 
+/// Structured schema plan computed before send ordering is known.
+#[derive(Debug, Clone)]
+pub struct PreparedSchemaPlan {
+    pub schemas: Vec<Schema>,
+    pub root: TypeRef,
+}
+
+impl PreparedSchemaPlan {
+    pub fn to_cbor(&self) -> CborPayload {
+        SchemaPayload {
+            schemas: self.schemas.clone(),
+            root: self.root.clone(),
+        }
+        .to_cbor()
+    }
+}
+
 impl SchemaSendTracker {
     pub fn new() -> Self {
         SchemaSendTracker {
@@ -140,18 +157,17 @@ impl SchemaSendTracker {
 
     /// Compute the full schema payload for a shaped value without mutating
     /// any per-connection send tracking.
-    pub fn plan_for_shape(shape: &'static Shape) -> Result<CborPayload, SchemaExtractError> {
+    pub fn plan_for_shape(shape: &'static Shape) -> Result<PreparedSchemaPlan, SchemaExtractError> {
         let extracted = extract_schemas(shape)?;
-        Ok(SchemaPayload {
+        Ok(PreparedSchemaPlan {
             schemas: extracted.schemas.to_vec(),
             root: extracted.root.clone(),
-        }
-        .to_cbor())
+        })
     }
 
     /// Compute the full schema payload for a canonical root type and schema
     /// source without mutating any per-connection send tracking.
-    pub fn plan_from_source(root_type: &TypeRef, source: &dyn SchemaSource) -> CborPayload {
+    pub fn plan_from_source(root_type: &TypeRef, source: &dyn SchemaSource) -> PreparedSchemaPlan {
         let mut all_schemas = Vec::new();
         let mut visited = HashSet::new();
         let mut queue = Vec::new();
@@ -169,37 +185,33 @@ impl SchemaSendTracker {
             }
         }
 
-        SchemaPayload {
+        PreparedSchemaPlan {
             schemas: all_schemas,
             root: root_type.clone(),
         }
-        .to_cbor()
     }
 
     /// Commit a previously prepared schema payload against the live
     /// per-connection tracking state, returning only the schemas that still
     /// need to be sent on the wire for this binding.
-    pub fn commit_prepared_send(
+    pub fn commit_prepared_plan(
         &mut self,
         method_id: MethodId,
         direction: BindingDirection,
-        prepared: &CborPayload,
+        prepared: PreparedSchemaPlan,
     ) -> CborPayload {
         let key = (method_id, direction);
         if self.sent_bindings.contains(&key) {
             return CborPayload::default();
         }
 
-        let prepared_payload = SchemaPayload::from_cbor(&prepared.0)
-            .expect("prepared schema payloads must be valid CBOR");
-
-        for schema in &prepared_payload.schemas {
+        for schema in &prepared.schemas {
             self.registry
                 .entry(schema.id)
                 .or_insert_with(|| schema.clone());
         }
 
-        let unsent: Vec<Schema> = prepared_payload
+        let unsent: Vec<Schema> = prepared
             .schemas
             .into_iter()
             .filter(|schema| !self.sent_schemas.contains(&schema.id))
@@ -211,7 +223,7 @@ impl SchemaSendTracker {
 
         let schema_payload = SchemaPayload {
             schemas: unsent,
-            root: prepared_payload.root,
+            root: prepared.root,
         };
         dlog!(
             "[schema] commit binding: method={:?} direction={:?} root={:?} schema_count={}",
@@ -250,7 +262,7 @@ impl SchemaSendTracker {
         }
 
         let prepared = Self::plan_for_shape(shape)?;
-        let cbor = self.commit_prepared_send(method_id, schematic.direction(), &prepared);
+        let cbor = self.commit_prepared_plan(method_id, schematic.direction(), prepared);
         schematic.attach_schemas(cbor.clone());
         Ok(cbor)
     }
@@ -267,7 +279,25 @@ impl SchemaSendTracker {
         source: &dyn SchemaSource,
     ) -> CborPayload {
         let prepared = Self::plan_from_source(root_type, source);
-        self.commit_prepared_send(method_id, direction, &prepared)
+        self.commit_prepared_plan(method_id, direction, prepared)
+    }
+
+    pub fn commit_prepared_send(
+        &mut self,
+        method_id: MethodId,
+        direction: BindingDirection,
+        prepared: &CborPayload,
+    ) -> CborPayload {
+        let prepared_payload = SchemaPayload::from_cbor(&prepared.0)
+            .expect("prepared schema payloads must be valid CBOR");
+        self.commit_prepared_plan(
+            method_id,
+            direction,
+            PreparedSchemaPlan {
+                schemas: prepared_payload.schemas,
+                root: prepared_payload.root,
+            },
+        )
     }
 
     /// Compatibility shim: schema extraction is now independent from
