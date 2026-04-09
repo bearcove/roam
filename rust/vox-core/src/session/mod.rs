@@ -2093,7 +2093,7 @@ impl SessionCore {
     pub(crate) fn prepare_response_for_method(
         &self,
         conn_id: ConnectionId,
-        request_id: RequestId,
+        _request_id: RequestId,
         method_id: vox_types::MethodId,
         response: &mut RequestResponse<'_>,
     ) {
@@ -2102,8 +2102,31 @@ impl SessionCore {
             .conns
             .entry(conn_id)
             .or_insert_with(SendConnState::new);
-        conn_state.inflight_incoming.remove(&request_id);
-        Self::prepare_response_schemas(conn_state, request_id, method_id, response, None);
+        let key = (vox_types::BindingDirection::Response, method_id);
+        if conn_state.method_tracker.contains(&key) {
+            response.schemas = Default::default();
+            return;
+        }
+
+        let mut send_tracker = conn_state.send_tracker.clone();
+        response.schemas = match &response.ret {
+            vox_types::Payload::Value { shape, .. } => {
+                match send_tracker.attach_schemas_for_shape_if_needed(method_id, shape, response) {
+                    Ok(schemas) => schemas,
+                    Err(e) => {
+                        tracing::error!("schema extraction failed: {e}");
+                        Default::default()
+                    }
+                }
+            }
+            vox_types::Payload::PostcardBytes(_) => {
+                tracing::error!(
+                    "schema attachment failed: missing forwarded response schemas for method {:?}",
+                    method_id
+                );
+                Default::default()
+            }
+        };
     }
 
     /// Borrow the send tracker's schema registry for the given connection.
@@ -2121,7 +2144,7 @@ impl SessionCore {
     pub(crate) fn prepare_response_from_source(
         &self,
         conn_id: ConnectionId,
-        request_id: RequestId,
+        _request_id: RequestId,
         method_id: vox_types::MethodId,
         root_type: &vox_types::TypeRef,
         source: &dyn vox_types::SchemaSource,
@@ -2132,21 +2155,19 @@ impl SessionCore {
             .conns
             .entry(conn_id)
             .or_insert_with(SendConnState::new);
-        conn_state.inflight_incoming.remove(&request_id);
         let key = (vox_types::BindingDirection::Response, method_id);
         if conn_state.method_tracker.contains(&key) {
+            response.schemas = Default::default();
             return;
         }
-        let cbor = conn_state.send_tracker.prepare_send(
+        let mut send_tracker = conn_state.send_tracker.clone();
+        let cbor = send_tracker.prepare_send(
             method_id,
             vox_types::BindingDirection::Response,
             root_type,
             source,
         );
-        if !cbor.is_empty() {
-            response.schemas = cbor;
-        }
-        conn_state.method_tracker.insert(key);
+        response.schemas = cbor;
     }
 
     fn prepare_response_schemas(

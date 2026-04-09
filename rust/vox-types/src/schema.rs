@@ -99,6 +99,7 @@ impl std::error::Error for SchemaExtractError {}
 /// conduit tx. Reset on reconnection.
 // r[impl schema.tracking.sent]
 // r[impl schema.type-id.per-connection]
+#[derive(Clone)]
 pub struct SchemaSendTracker {
     /// Per-method, per-direction: the CborPayload that was sent. Keyed by
     /// (method_id, direction). If present, schemas were already sent.
