@@ -1,11 +1,12 @@
 use std::{
-    collections::{BTreeMap, HashMap, HashSet},
+    collections::{BTreeMap, HashMap},
     future::Future,
     pin::Pin,
     sync::Arc,
     time::Duration,
 };
 
+use facet_core::Shape;
 use moire::sync::mpsc;
 use tokio::sync::{mpsc as tokio_mpsc, oneshot as tokio_oneshot, watch};
 use tracing::{trace, warn};
@@ -1891,19 +1892,69 @@ impl<T> OutboundSendFuture for T where T: Future<Output = std::io::Result<()>> +
 
 type OutboundSend = Pin<Box<dyn OutboundSendFuture>>;
 
+#[derive(Clone)]
+struct PendingSchemaSend {
+    method_id: vox_types::MethodId,
+    direction: vox_types::BindingDirection,
+    prepared: vox_types::PreparedSchemaPlan,
+}
+
 struct OutboundBatch {
-    sends: Vec<OutboundSend>,
+    conn_id: ConnectionId,
+    conn_state: Arc<std::sync::Mutex<SendConnState>>,
+    tx: Arc<dyn DynConduitTx>,
+    schema_sends: Vec<PendingSchemaSend>,
+    payload_send: OutboundSend,
     result_tx: tokio_oneshot::Sender<std::io::Result<()>>,
 }
 
 async fn run_outbound_worker(mut rx: tokio_mpsc::Receiver<OutboundBatch>) {
     while let Some(batch) = rx.recv().await {
         let mut result = Ok(());
-        for send in batch.sends {
+        for schema_send in batch.schema_sends {
+            let schemas = {
+                let mut conn_state = batch
+                    .conn_state
+                    .lock()
+                    .expect("send conn state mutex poisoned");
+                let schemas = conn_state.send_tracker.commit_prepared_plan(
+                    schema_send.method_id,
+                    schema_send.direction,
+                    schema_send.prepared,
+                );
+                conn_state
+                    .planned_bindings
+                    .remove(&(schema_send.direction, schema_send.method_id));
+                schemas
+            };
+            if schemas.is_empty() {
+                continue;
+            }
+
+            let schema_msg = Message {
+                connection_id: batch.conn_id,
+                payload: MessagePayload::SchemaMessage(SchemaMessage {
+                    method_id: schema_send.method_id,
+                    direction: schema_send.direction,
+                    schemas,
+                }),
+            };
+            let send = match batch.tx.clone().prepare_msg(schema_msg, None) {
+                Ok(send) => send,
+                Err(error) => {
+                    result = Err(error);
+                    break;
+                }
+            };
             if let Err(error) = send.await {
                 result = Err(error);
                 break;
             }
+        }
+        if result.is_ok()
+            && let Err(error) = batch.payload_send.await
+        {
+            result = Err(error);
         }
         let _ = batch.result_tx.send(result);
     }
@@ -1931,10 +1982,6 @@ fn spawn_outbound_worker(rx: tokio_mpsc::Receiver<OutboundBatch>) {
 }
 
 struct SendConnState {
-    /// Tracks which methods we've already sent schemas for (per direction).
-    /// If set, we don't need to extract schemas and go through send tracker.
-    method_tracker: HashSet<(vox_types::BindingDirection, vox_types::MethodId)>,
-
     /// Tracks which schemas we have sent on this connection.
     send_tracker: vox_types::SchemaSendTracker,
 
@@ -1954,7 +2001,6 @@ struct SendConnState {
 impl SendConnState {
     fn new() -> Self {
         SendConnState {
-            method_tracker: HashSet::new(),
             send_tracker: vox_types::SchemaSendTracker::new(),
             inflight_incoming: HashMap::new(),
             inflight_outgoing: HashMap::new(),
@@ -1968,7 +2014,18 @@ struct SessionCoreInner {
     tx: Arc<dyn DynConduitTx>,
 
     /// Per-connection state re: sent schemas, etc.
-    conns: HashMap<ConnectionId, SendConnState>,
+    conns: HashMap<ConnectionId, Arc<std::sync::Mutex<SendConnState>>>,
+}
+
+fn get_or_create_send_conn_state(
+    inner: &mut SessionCoreInner,
+    conn_id: ConnectionId,
+) -> Arc<std::sync::Mutex<SendConnState>> {
+    inner
+        .conns
+        .entry(conn_id)
+        .or_insert_with(|| Arc::new(std::sync::Mutex::new(SendConnState::new())))
+        .clone()
 }
 
 impl SessionCore {
@@ -1979,10 +2036,12 @@ impl SessionCore {
         binder: Option<&'a dyn vox_types::ChannelBinder>,
         forwarded_schemas: Option<&vox_types::SchemaRecvTracker>,
     ) -> Result<(), ()> {
-        let (tx, schema_msgs) = {
+        let conn_id = msg.connection_id;
+        let (tx, conn_state, schema_sends) = {
             let mut inner = self.inner.lock().expect("session core mutex poisoned");
-            let conn_id = msg.connection_id;
-            let mut schema_msgs = Vec::new();
+            let tx = inner.tx.clone();
+            let conn_state = get_or_create_send_conn_state(&mut inner, conn_id);
+            drop(inner);
 
             if let MessagePayload::RequestMessage(req) = &mut msg.payload {
                 vox_types::dlog!(
@@ -1996,66 +2055,59 @@ impl SessionCore {
                     },
                     forwarded_schemas.is_some()
                 );
-                let conn_state = inner
-                    .conns
-                    .entry(conn_id)
-                    .or_insert_with(SendConnState::new);
-                match &mut req.body {
-                    RequestBody::Call(call) => {
-                        Self::prepare_call_schemas(
-                            conn_state,
-                            req.id,
-                            call.method_id,
-                            call,
-                            forwarded_schemas,
-                        );
-                        if !call.schemas.is_empty() {
-                            schema_msgs.push(Message {
-                                connection_id: conn_id,
-                                payload: MessagePayload::SchemaMessage(SchemaMessage {
-                                    method_id: call.method_id,
-                                    direction: vox_types::BindingDirection::Args,
-                                    schemas: std::mem::take(&mut call.schemas),
-                                }),
-                            });
-                        }
-                    }
-                    RequestBody::Response(resp) => {
-                        if let Some(method_id) = conn_state.inflight_incoming.remove(&req.id) {
-                            Self::prepare_response_schemas(
-                                conn_state,
+                let schema_sends = {
+                    let mut conn_state_guard =
+                        conn_state.lock().expect("send conn state mutex poisoned");
+                    let mut schema_sends = Vec::new();
+                    match &mut req.body {
+                        RequestBody::Call(call) => {
+                            if let Some(schema_send) = Self::plan_call_schema_send(
+                                &mut conn_state_guard,
                                 req.id,
-                                method_id,
-                                resp,
+                                call.method_id,
+                                call,
                                 forwarded_schemas,
-                            );
-                            if !resp.schemas.is_empty() {
-                                schema_msgs.push(Message {
-                                    connection_id: conn_id,
-                                    payload: MessagePayload::SchemaMessage(SchemaMessage {
-                                        method_id,
-                                        direction: vox_types::BindingDirection::Response,
-                                        schemas: std::mem::take(&mut resp.schemas),
-                                    }),
-                                });
+                            ) {
+                                schema_sends.push(schema_send);
                             }
+                            call.schemas = Default::default();
                         }
+                        RequestBody::Response(resp) => {
+                            if let Some(method_id) =
+                                conn_state_guard.inflight_incoming.remove(&req.id)
+                                && let Some(schema_send) = Self::plan_response_schema_send(
+                                    &mut conn_state_guard,
+                                    req.id,
+                                    method_id,
+                                    resp,
+                                    forwarded_schemas,
+                                )
+                            {
+                                schema_sends.push(schema_send);
+                            }
+                            resp.schemas = Default::default();
+                        }
+                        RequestBody::Cancel(_) => {}
                     }
-                    RequestBody::Cancel(_) => {}
-                }
+                    schema_sends
+                };
+                (tx, conn_state, schema_sends)
+            } else {
+                (tx, conn_state, Vec::new())
             }
-
-            (inner.tx.clone(), schema_msgs)
         };
-        let mut sends = Vec::with_capacity(schema_msgs.len() + 1);
-        for schema_msg in schema_msgs {
-            sends.push(tx.clone().prepare_msg(schema_msg, None).map_err(|_| ())?);
-        }
-        sends.push(tx.prepare_msg(msg, binder).map_err(|_| ())?);
+        let payload_send = tx.clone().prepare_msg(msg, binder).map_err(|_| ())?;
 
         let (result_tx, result_rx) = tokio_oneshot::channel();
         self.outbound_tx
-            .send(OutboundBatch { sends, result_tx })
+            .send(OutboundBatch {
+                conn_id,
+                conn_state,
+                tx,
+                schema_sends,
+                payload_send,
+                result_tx,
+            })
             .await
             .map_err(|_| ())?;
         result_rx.await.map_err(|_| ())?.map_err(|_| ())
@@ -2070,17 +2122,18 @@ impl SessionCore {
         method_id: vox_types::MethodId,
     ) {
         let mut inner = self.inner.lock().expect("session core mutex poisoned");
-        let conn_state = inner
-            .conns
-            .entry(conn_id)
-            .or_insert_with(SendConnState::new);
+        let conn_state = get_or_create_send_conn_state(&mut inner, conn_id);
         vox_types::dlog!(
             "[schema] record_incoming_call: conn={:?} req={:?} method={:?}",
             conn_id,
             request_id,
             method_id
         );
-        conn_state.inflight_incoming.insert(request_id, method_id);
+        conn_state
+            .lock()
+            .expect("send conn state mutex poisoned")
+            .inflight_incoming
+            .insert(request_id, method_id);
     }
 
     pub(crate) fn take_outgoing_call_method(
@@ -2088,62 +2141,55 @@ impl SessionCore {
         conn_id: ConnectionId,
         request_id: RequestId,
     ) -> Option<vox_types::MethodId> {
-        let mut inner = self.inner.lock().expect("session core mutex poisoned");
-        inner
-            .conns
-            .get_mut(&conn_id)
-            .and_then(|conn_state| conn_state.inflight_outgoing.remove(&request_id))
+        let inner = self.inner.lock().expect("session core mutex poisoned");
+        inner.conns.get(&conn_id).and_then(|conn_state| {
+            conn_state
+                .lock()
+                .expect("send conn state mutex poisoned")
+                .inflight_outgoing
+                .remove(&request_id)
+        })
     }
 
     pub(crate) fn prepare_response_for_method(
         &self,
         conn_id: ConnectionId,
-        _request_id: RequestId,
+        request_id: RequestId,
         method_id: vox_types::MethodId,
         response: &mut RequestResponse<'_>,
     ) {
         let mut inner = self.inner.lock().expect("session core mutex poisoned");
-        let conn_state = inner
-            .conns
-            .entry(conn_id)
-            .or_insert_with(SendConnState::new);
+        let conn_state = get_or_create_send_conn_state(&mut inner, conn_id);
+        let mut conn_state = conn_state.lock().expect("send conn state mutex poisoned");
         let key = (vox_types::BindingDirection::Response, method_id);
-        if conn_state.method_tracker.contains(&key) {
+        if conn_state
+            .send_tracker
+            .has_sent_binding(method_id, vox_types::BindingDirection::Response)
+        {
             response.schemas = Default::default();
             return;
         }
 
-        let prepared = if let Some(prepared) = conn_state.planned_bindings.get(&key) {
-            prepared.clone()
-        } else {
-            let prepared = match &response.ret {
-                vox_types::Payload::Value { shape, .. } => {
-                    match vox_types::SchemaSendTracker::plan_for_shape(shape) {
-                        Ok(schemas) => {
-                            vox_types::dlog!(
-                                "[schema] planned {} response schemas for method {:?} (req {:?})",
-                                schemas.schemas.len(),
-                                method_id,
-                                _request_id
-                            );
-                            schemas
-                        }
-                        Err(e) => {
-                            tracing::error!("schema extraction failed: {e}");
-                            return;
-                        }
-                    }
+        let prepared = match &response.ret {
+            vox_types::Payload::Value { shape, .. } => {
+                match Self::get_or_plan_binding_for_shape(
+                    &mut conn_state,
+                    key,
+                    request_id,
+                    "response",
+                    shape,
+                ) {
+                    Some(prepared) => prepared,
+                    None => return,
                 }
-                vox_types::Payload::PostcardBytes(_) => {
-                    tracing::error!(
-                        "schema attachment failed: missing forwarded response schemas for method {:?}",
-                        method_id
-                    );
-                    return;
-                }
-            };
-            conn_state.planned_bindings.insert(key, prepared.clone());
-            prepared
+            }
+            vox_types::Payload::PostcardBytes(_) => {
+                tracing::error!(
+                    "schema attachment failed: missing forwarded response schemas for method {:?}",
+                    method_id
+                );
+                return;
+            }
         };
         response.schemas = prepared.to_cbor();
     }
@@ -2155,7 +2201,13 @@ impl SessionCore {
         inner
             .conns
             .get(&conn_id)
-            .map(|cs| cs.send_tracker.registry().clone())
+            .map(|cs| {
+                cs.lock()
+                    .expect("send conn state mutex poisoned")
+                    .send_tracker
+                    .registry()
+                    .clone()
+            })
             .unwrap_or_default()
     }
 
@@ -2170,181 +2222,145 @@ impl SessionCore {
         response: &mut RequestResponse<'_>,
     ) {
         let mut inner = self.inner.lock().expect("session core mutex poisoned");
-        let conn_state = inner
-            .conns
-            .entry(conn_id)
-            .or_insert_with(SendConnState::new);
+        let conn_state = get_or_create_send_conn_state(&mut inner, conn_id);
+        let mut conn_state = conn_state.lock().expect("send conn state mutex poisoned");
         let key = (vox_types::BindingDirection::Response, method_id);
-        if conn_state.method_tracker.contains(&key) {
+        if conn_state
+            .send_tracker
+            .has_sent_binding(method_id, vox_types::BindingDirection::Response)
+        {
             response.schemas = Default::default();
             return;
         }
-        let prepared = if let Some(prepared) = conn_state.planned_bindings.get(&key) {
-            prepared.clone()
-        } else {
-            let prepared = vox_types::SchemaSendTracker::plan_from_source(root_type, source);
-            conn_state.planned_bindings.insert(key, prepared.clone());
-            prepared
-        };
+        let prepared =
+            Self::get_or_plan_binding_from_source(&mut conn_state, key, root_type, source);
         response.schemas = prepared.to_cbor();
     }
 
-    fn prepare_response_schemas(
+    fn get_or_plan_binding_for_shape(
+        conn_state: &mut SendConnState,
+        key: (vox_types::BindingDirection, vox_types::MethodId),
+        request_id: RequestId,
+        kind: &str,
+        shape: &'static Shape,
+    ) -> Option<vox_types::PreparedSchemaPlan> {
+        if let Some(prepared) = conn_state.planned_bindings.get(&key) {
+            return Some(prepared.clone());
+        }
+        match vox_types::SchemaSendTracker::plan_for_shape(shape) {
+            Ok(prepared) => {
+                vox_types::dlog!(
+                    "[schema] planned {} {} schemas for method {:?} (req {:?})",
+                    prepared.schemas.len(),
+                    kind,
+                    key.1,
+                    request_id
+                );
+                conn_state.planned_bindings.insert(key, prepared.clone());
+                Some(prepared)
+            }
+            Err(e) => {
+                tracing::error!("schema extraction failed: {e}");
+                None
+            }
+        }
+    }
+
+    fn get_or_plan_binding_from_source(
+        conn_state: &mut SendConnState,
+        key: (vox_types::BindingDirection, vox_types::MethodId),
+        root_type: &vox_types::TypeRef,
+        source: &dyn vox_types::SchemaSource,
+    ) -> vox_types::PreparedSchemaPlan {
+        if let Some(prepared) = conn_state.planned_bindings.get(&key) {
+            return prepared.clone();
+        }
+        let prepared = vox_types::SchemaSendTracker::plan_from_source(root_type, source);
+        conn_state.planned_bindings.insert(key, prepared.clone());
+        prepared
+    }
+
+    fn plan_response_schema_send(
         conn_state: &mut SendConnState,
         request_id: RequestId,
         method_id: vox_types::MethodId,
         response: &mut RequestResponse<'_>,
         forwarded_schemas: Option<&vox_types::SchemaRecvTracker>,
-    ) {
-        let key = (vox_types::BindingDirection::Response, method_id);
-        if conn_state.method_tracker.contains(&key) {
-            return;
+    ) -> Option<PendingSchemaSend> {
+        if conn_state
+            .send_tracker
+            .has_sent_binding(method_id, vox_types::BindingDirection::Response)
+        {
+            response.schemas = Default::default();
+            return None;
         }
 
-        let prepared = match &response.ret {
-            vox_types::Payload::Value { shape, .. } => {
-                if !response.schemas.is_empty() {
-                    let prepared = conn_state
-                        .planned_bindings
-                        .get(&key)
-                        .cloned()
-                        .unwrap_or_else(|| {
-                            let prepared_payload =
-                                vox_types::SchemaPayload::from_cbor(&response.schemas.0)
-                                    .expect("prepared schema payloads must be valid CBOR");
-                            vox_types::PreparedSchemaPlan {
-                                schemas: prepared_payload.schemas,
-                                root: prepared_payload.root,
-                            }
-                        });
-                    let schemas = conn_state.send_tracker.commit_prepared_plan(
-                        method_id,
-                        vox_types::BindingDirection::Response,
-                        prepared,
-                    );
-                    response.schemas = schemas.clone();
-                    vox_types::dlog!(
-                        "[schema] committed {} bytes of planned response schemas for method {:?} (req {:?})",
-                        schemas.0.len(),
-                        method_id,
-                        request_id
-                    );
-                    true
-                } else {
-                    let prepared = if let Some(prepared) = conn_state.planned_bindings.get(&key) {
-                        prepared.clone()
-                    } else {
-                        match vox_types::SchemaSendTracker::plan_for_shape(shape) {
-                            Ok(prepared) => {
-                                conn_state.planned_bindings.insert(key, prepared.clone());
-                                prepared
-                            }
-                            Err(e) => {
-                                tracing::error!("schema extraction failed: {e}");
-                                return;
-                            }
-                        }
-                    };
-                    let schemas = conn_state.send_tracker.commit_prepared_plan(
-                        method_id,
-                        vox_types::BindingDirection::Response,
-                        prepared,
-                    );
-                    response.schemas = schemas.clone();
-                    vox_types::dlog!(
-                        "[schema] prepared {} bytes of response schemas for method {:?} (req {:?})",
-                        schemas.0.len(),
-                        method_id,
-                        request_id
-                    );
-                    true
-                }
-            }
-            vox_types::Payload::PostcardBytes(_) => {
-                let Some(source) = forwarded_schemas else {
-                    tracing::error!(
-                        "schema attachment failed: missing forwarded response schemas for method {:?}",
-                        method_id
-                    );
-                    return;
-                };
-                let Some(root) = source.get_remote_response_root(method_id) else {
-                    tracing::error!(
-                        "schema attachment failed: missing forwarded response root for method {:?}",
-                        method_id
-                    );
-                    return;
-                };
-                let prepared = if let Some(prepared) = conn_state.planned_bindings.get(&key) {
-                    prepared.clone()
-                } else if response.schemas.is_empty() {
-                    let prepared = vox_types::SchemaSendTracker::plan_from_source(&root, source);
-                    conn_state.planned_bindings.insert(key, prepared.clone());
-                    prepared
-                } else {
+        let key = (vox_types::BindingDirection::Response, method_id);
+        let prepared = if !response.schemas.is_empty() {
+            conn_state
+                .planned_bindings
+                .get(&key)
+                .cloned()
+                .unwrap_or_else(|| {
                     let prepared_payload = vox_types::SchemaPayload::from_cbor(&response.schemas.0)
                         .expect("prepared schema payloads must be valid CBOR");
                     vox_types::PreparedSchemaPlan {
                         schemas: prepared_payload.schemas,
                         root: prepared_payload.root,
                     }
-                };
-                let schemas = conn_state.send_tracker.commit_prepared_plan(
-                    method_id,
-                    vox_types::BindingDirection::Response,
-                    prepared,
-                );
-                response.schemas = schemas.clone();
-                vox_types::dlog!(
-                    "[schema] prepared {} bytes of forwarded response schemas for method {:?} (req {:?})",
-                    schemas.0.len(),
-                    method_id,
-                    request_id
-                );
-                true
+                })
+        } else {
+            match &response.ret {
+                vox_types::Payload::Value { shape, .. } => Self::get_or_plan_binding_for_shape(
+                    conn_state, key, request_id, "response", shape,
+                )?,
+                vox_types::Payload::PostcardBytes(_) => {
+                    let Some(source) = forwarded_schemas else {
+                        tracing::error!(
+                            "schema attachment failed: missing forwarded response schemas for method {:?}",
+                            method_id
+                        );
+                        return None;
+                    };
+                    let Some(root) = source.get_remote_response_root(method_id) else {
+                        tracing::error!(
+                            "schema attachment failed: missing forwarded response root for method {:?}",
+                            method_id
+                        );
+                        return None;
+                    };
+                    Self::get_or_plan_binding_from_source(conn_state, key, &root, source)
+                }
             }
         };
 
-        if prepared {
-            conn_state.method_tracker.insert(key);
-        }
+        Some(PendingSchemaSend {
+            method_id,
+            direction: vox_types::BindingDirection::Response,
+            prepared,
+        })
     }
 
-    fn prepare_call_schemas(
+    fn plan_call_schema_send(
         conn_state: &mut SendConnState,
         request_id: RequestId,
         method_id: vox_types::MethodId,
         call: &mut vox_types::RequestCall<'_>,
         forwarded_schemas: Option<&vox_types::SchemaRecvTracker>,
-    ) {
+    ) -> Option<PendingSchemaSend> {
         conn_state.inflight_outgoing.insert(request_id, method_id);
-        let key = (vox_types::BindingDirection::Args, method_id);
-        if conn_state.method_tracker.contains(&key) {
-            return;
+        if conn_state
+            .send_tracker
+            .has_sent_binding(method_id, vox_types::BindingDirection::Args)
+        {
+            call.schemas = Default::default();
+            return None;
         }
 
+        let key = (vox_types::BindingDirection::Args, method_id);
         let prepared = match &call.args {
             vox_types::Payload::Value { shape, .. } => {
-                let prepared = if let Some(prepared) = conn_state.planned_bindings.get(&key) {
-                    prepared.clone()
-                } else {
-                    match vox_types::SchemaSendTracker::plan_for_shape(shape) {
-                        Ok(prepared) => {
-                            conn_state.planned_bindings.insert(key, prepared.clone());
-                            prepared
-                        }
-                        Err(e) => {
-                            tracing::error!("schema extraction failed: {e}");
-                            return;
-                        }
-                    }
-                };
-                call.schemas = conn_state.send_tracker.commit_prepared_plan(
-                    method_id,
-                    vox_types::BindingDirection::Args,
-                    prepared,
-                );
-                true
+                Self::get_or_plan_binding_for_shape(conn_state, key, request_id, "args", shape)?
             }
             vox_types::Payload::PostcardBytes(_) => {
                 let Some(source) = forwarded_schemas else {
@@ -2352,34 +2368,24 @@ impl SessionCore {
                         "schema attachment failed: missing forwarded args schemas for method {:?}",
                         method_id
                     );
-                    return;
+                    return None;
                 };
                 let Some(root) = source.get_remote_args_root(method_id) else {
                     tracing::error!(
                         "schema attachment failed: missing forwarded args root for method {:?}",
                         method_id
                     );
-                    return;
+                    return None;
                 };
-                let prepared = if let Some(prepared) = conn_state.planned_bindings.get(&key) {
-                    prepared.clone()
-                } else {
-                    let prepared = vox_types::SchemaSendTracker::plan_from_source(&root, source);
-                    conn_state.planned_bindings.insert(key, prepared.clone());
-                    prepared
-                };
-                call.schemas = conn_state.send_tracker.commit_prepared_plan(
-                    method_id,
-                    vox_types::BindingDirection::Args,
-                    prepared,
-                );
-                true
+                Self::get_or_plan_binding_from_source(conn_state, key, &root, source)
             }
         };
 
-        if prepared {
-            conn_state.method_tracker.insert(key);
-        }
+        Some(PendingSchemaSend {
+            method_id,
+            direction: vox_types::BindingDirection::Args,
+            prepared,
+        })
     }
 
     fn replace_tx_and_reset_schemas(&self, tx: Arc<dyn DynConduitTx>) {
