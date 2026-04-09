@@ -99,7 +99,6 @@ impl std::error::Error for SchemaExtractError {}
 /// conduit tx. Reset on reconnection.
 // r[impl schema.tracking.sent]
 // r[impl schema.type-id.per-connection]
-#[derive(Clone)]
 pub struct SchemaSendTracker {
     /// Per-method, per-direction: the CborPayload that was sent. Keyed by
     /// (method_id, direction). If present, schemas were already sent.
@@ -134,6 +133,98 @@ impl SchemaSendTracker {
         &self.registry
     }
 
+    /// Whether this method+direction binding has already been sent on the wire.
+    pub fn has_sent_binding(&self, method_id: MethodId, direction: BindingDirection) -> bool {
+        self.sent_bindings.contains(&(method_id, direction))
+    }
+
+    /// Compute the full schema payload for a shaped value without mutating
+    /// any per-connection send tracking.
+    pub fn plan_for_shape(shape: &'static Shape) -> Result<CborPayload, SchemaExtractError> {
+        let extracted = extract_schemas(shape)?;
+        Ok(SchemaPayload {
+            schemas: extracted.schemas.to_vec(),
+            root: extracted.root.clone(),
+        }
+        .to_cbor())
+    }
+
+    /// Compute the full schema payload for a canonical root type and schema
+    /// source without mutating any per-connection send tracking.
+    pub fn plan_from_source(root_type: &TypeRef, source: &dyn SchemaSource) -> CborPayload {
+        let mut all_schemas = Vec::new();
+        let mut visited = HashSet::new();
+        let mut queue = Vec::new();
+        root_type.collect_ids(&mut queue);
+
+        while let Some(id) = queue.pop() {
+            if !visited.insert(id) {
+                continue;
+            }
+            if let Some(schema) = source.get_schema(id) {
+                for child_id in schema_child_ids(&schema.kind) {
+                    queue.push(child_id);
+                }
+                all_schemas.push(schema);
+            }
+        }
+
+        SchemaPayload {
+            schemas: all_schemas,
+            root: root_type.clone(),
+        }
+        .to_cbor()
+    }
+
+    /// Commit a previously prepared schema payload against the live
+    /// per-connection tracking state, returning only the schemas that still
+    /// need to be sent on the wire for this binding.
+    pub fn commit_prepared_send(
+        &mut self,
+        method_id: MethodId,
+        direction: BindingDirection,
+        prepared: &CborPayload,
+    ) -> CborPayload {
+        let key = (method_id, direction);
+        if self.sent_bindings.contains(&key) {
+            return CborPayload::default();
+        }
+
+        let prepared_payload = SchemaPayload::from_cbor(&prepared.0)
+            .expect("prepared schema payloads must be valid CBOR");
+
+        for schema in &prepared_payload.schemas {
+            self.registry
+                .entry(schema.id)
+                .or_insert_with(|| schema.clone());
+        }
+
+        let unsent: Vec<Schema> = prepared_payload
+            .schemas
+            .into_iter()
+            .filter(|schema| !self.sent_schemas.contains(&schema.id))
+            .collect();
+
+        for schema in &unsent {
+            self.sent_schemas.insert(schema.id);
+        }
+
+        let schema_payload = SchemaPayload {
+            schemas: unsent,
+            root: prepared_payload.root,
+        };
+        dlog!(
+            "[schema] commit binding: method={:?} direction={:?} root={:?} schema_count={}",
+            method_id,
+            direction,
+            schema_payload.root,
+            schema_payload.schemas.len()
+        );
+        let cbor = schema_payload.to_cbor();
+        self.sent_bindings.insert(key);
+        cbor
+    }
+
     /// Prepare schemas for a method call/response, returning a CBOR payload
     /// to inline in the request/response. Returns empty payload if schemas
     /// were already sent for this shape.
@@ -158,43 +249,9 @@ impl SchemaSendTracker {
             return Ok(empty);
         }
 
-        // Slow path: extract, deduplicate, encode.
-        let extracted = extract_schemas(shape)?;
-
-        // Add all schemas to the persistent registry (for the operation store).
-        for schema in &extracted.schemas {
-            self.registry
-                .entry(schema.id)
-                .or_insert_with(|| schema.clone());
-        }
-
-        // Filter to only schemas not already sent on the wire.
-        let unsent: Vec<Schema> = extracted
-            .schemas
-            .iter()
-            .filter(|s| !self.sent_schemas.contains(&s.id))
-            .cloned()
-            .collect();
-
-        // Track sent schemas.
-        for s in &unsent {
-            self.sent_schemas.insert(s.id);
-        }
-
-        let schema_payload = SchemaPayload {
-            schemas: unsent,
-            root: extracted.root.clone(),
-        };
-        dlog!(
-            "[schema] send binding: method={:?} direction={:?} root={:?} schema_count={}",
-            method_id,
-            schematic.direction(),
-            schema_payload.root,
-            schema_payload.schemas.len()
-        );
-        let cbor = schema_payload.to_cbor();
+        let prepared = Self::plan_for_shape(shape)?;
+        let cbor = self.commit_prepared_send(method_id, schematic.direction(), &prepared);
         schematic.attach_schemas(cbor.clone());
-        self.sent_bindings.insert(key);
         Ok(cbor)
     }
 
@@ -209,57 +266,8 @@ impl SchemaSendTracker {
         root_type: &TypeRef,
         source: &dyn SchemaSource,
     ) -> CborPayload {
-        let key = (method_id, direction);
-        if self.sent_bindings.contains(&key) {
-            return CborPayload::default();
-        }
-
-        let mut all_schemas = Vec::new();
-        let mut visited = HashSet::new();
-        let mut queue = Vec::new();
-        root_type.collect_ids(&mut queue);
-
-        while let Some(id) = queue.pop() {
-            if !visited.insert(id) {
-                continue;
-            }
-            if let Some(schema) = source.get_schema(id) {
-                for child_id in schema_child_ids(&schema.kind) {
-                    queue.push(child_id);
-                }
-                all_schemas.push(schema);
-            }
-        }
-
-        for schema in &all_schemas {
-            self.registry
-                .entry(schema.id)
-                .or_insert_with(|| schema.clone());
-        }
-
-        let unsent: Vec<Schema> = all_schemas
-            .into_iter()
-            .filter(|schema| !self.sent_schemas.contains(&schema.id))
-            .collect();
-
-        for schema in &unsent {
-            self.sent_schemas.insert(schema.id);
-        }
-
-        let schema_payload = SchemaPayload {
-            schemas: unsent,
-            root: root_type.clone(),
-        };
-        dlog!(
-            "[schema] resend binding: method={:?} direction={:?} root={:?} schema_count={}",
-            method_id,
-            direction,
-            schema_payload.root,
-            schema_payload.schemas.len()
-        );
-        let cbor = schema_payload.to_cbor();
-        self.sent_bindings.insert(key);
-        cbor
+        let prepared = Self::plan_from_source(root_type, source);
+        self.commit_prepared_send(method_id, direction, &prepared)
     }
 
     /// Compatibility shim: schema extraction is now independent from

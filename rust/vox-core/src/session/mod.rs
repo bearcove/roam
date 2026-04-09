@@ -2108,11 +2108,18 @@ impl SessionCore {
             return;
         }
 
-        let mut send_tracker = conn_state.send_tracker.clone();
         response.schemas = match &response.ret {
             vox_types::Payload::Value { shape, .. } => {
-                match send_tracker.attach_schemas_for_shape_if_needed(method_id, shape, response) {
-                    Ok(schemas) => schemas,
+                match vox_types::SchemaSendTracker::plan_for_shape(shape) {
+                    Ok(schemas) => {
+                        vox_types::dlog!(
+                            "[schema] planned {} bytes of response schemas for method {:?} (req {:?})",
+                            schemas.0.len(),
+                            method_id,
+                            _request_id
+                        );
+                        schemas
+                    }
                     Err(e) => {
                         tracing::error!("schema extraction failed: {e}");
                         Default::default()
@@ -2160,13 +2167,7 @@ impl SessionCore {
             response.schemas = Default::default();
             return;
         }
-        let mut send_tracker = conn_state.send_tracker.clone();
-        let cbor = send_tracker.prepare_send(
-            method_id,
-            vox_types::BindingDirection::Response,
-            root_type,
-            source,
-        );
+        let cbor = vox_types::SchemaSendTracker::plan_from_source(root_type, source);
         response.schemas = cbor;
     }
 
@@ -2184,22 +2185,41 @@ impl SessionCore {
 
         let prepared = match &response.ret {
             vox_types::Payload::Value { shape, .. } => {
-                match conn_state
-                    .send_tracker
-                    .attach_schemas_for_shape_if_needed(method_id, shape, response)
-                {
-                    Ok(schemas) => {
-                        vox_types::dlog!(
-                            "[schema] prepared {} bytes of response schemas for method {:?} (req {:?})",
-                            schemas.0.len(),
-                            method_id,
-                            request_id
-                        );
-                        true
-                    }
-                    Err(e) => {
-                        tracing::error!("schema extraction failed: {e}");
-                        false
+                if !response.schemas.is_empty() {
+                    let schemas = conn_state.send_tracker.commit_prepared_send(
+                        method_id,
+                        vox_types::BindingDirection::Response,
+                        &response.schemas,
+                    );
+                    response.schemas = schemas.clone();
+                    vox_types::dlog!(
+                        "[schema] committed {} bytes of planned response schemas for method {:?} (req {:?})",
+                        schemas.0.len(),
+                        method_id,
+                        request_id
+                    );
+                    true
+                } else {
+                    match vox_types::SchemaSendTracker::plan_for_shape(shape) {
+                        Ok(prepared) => {
+                            let schemas = conn_state.send_tracker.commit_prepared_send(
+                                method_id,
+                                vox_types::BindingDirection::Response,
+                                &prepared,
+                            );
+                            response.schemas = schemas.clone();
+                            vox_types::dlog!(
+                                "[schema] prepared {} bytes of response schemas for method {:?} (req {:?})",
+                                schemas.0.len(),
+                                method_id,
+                                request_id
+                            );
+                            true
+                        }
+                        Err(e) => {
+                            tracing::error!("schema extraction failed: {e}");
+                            false
+                        }
                     }
                 }
             }
@@ -2218,11 +2238,15 @@ impl SessionCore {
                     );
                     return;
                 };
-                let schemas = conn_state.send_tracker.prepare_send(
+                let prepared = if response.schemas.is_empty() {
+                    vox_types::SchemaSendTracker::plan_from_source(&root, source)
+                } else {
+                    response.schemas.clone()
+                };
+                let schemas = conn_state.send_tracker.commit_prepared_send(
                     method_id,
                     vox_types::BindingDirection::Response,
-                    &root,
-                    source,
+                    &prepared,
                 );
                 response.schemas = schemas.clone();
                 vox_types::dlog!(
@@ -2255,11 +2279,15 @@ impl SessionCore {
 
         let prepared = match &call.args {
             vox_types::Payload::Value { shape, .. } => {
-                match conn_state
-                    .send_tracker
-                    .attach_schemas_for_shape_if_needed(method_id, shape, call)
-                {
-                    Ok(_) => true,
+                match vox_types::SchemaSendTracker::plan_for_shape(shape) {
+                    Ok(prepared) => {
+                        call.schemas = conn_state.send_tracker.commit_prepared_send(
+                            method_id,
+                            vox_types::BindingDirection::Args,
+                            &prepared,
+                        );
+                        true
+                    }
                     Err(e) => {
                         tracing::error!("schema extraction failed: {e}");
                         false
@@ -2281,11 +2309,11 @@ impl SessionCore {
                     );
                     return;
                 };
-                call.schemas = conn_state.send_tracker.prepare_send(
+                let prepared = vox_types::SchemaSendTracker::plan_from_source(&root, source);
+                call.schemas = conn_state.send_tracker.commit_prepared_send(
                     method_id,
                     vox_types::BindingDirection::Args,
-                    &root,
-                    source,
+                    &prepared,
                 );
                 true
             }
