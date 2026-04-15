@@ -86,7 +86,7 @@ xshell = "0.2"
 passfd = "0.1"
 
 # facet ecosystem
-facet = { version = "0.45", features = ["camino", "reflect"] }
+facet = { version = "0.46", features = ["camino", "reflect"] }
 facet-core = { version = "0.45" }
 facet-postcard = { version = "0.44.7", features = ["camino"] }
 facet-path = { version = "0.44.5" }
