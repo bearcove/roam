@@ -783,9 +783,9 @@ dependencies = [
 
 [[package]]
 name = "facet-cargo-toml"
-version = "0.46.0"
+version = "0.46.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e45a2e9f667fbeda3f58ebeeb51df36c5905d2795b92092d187dcf79d002cc28"
+checksum = "75c548f3af86ce3275646215d2a161017d419da8c14a5e0111d5b5adce9fa66f"
 dependencies = [
  "camino",
  "facet",
