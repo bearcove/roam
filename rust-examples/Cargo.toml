@@ -12,7 +12,7 @@ publish = false
 eyre.workspace = true
 facet.workspace = true
 htrace = { package = "hdrhistogram", version = "7" }
-indicatif = "0.17"
+indicatif = "0.18"
 spec-proto.workspace = true
 vox = { workspace = true, features = ["transport-tcp", "transport-local", "transport-websocket"] }
 vox-ffi.workspace = true
