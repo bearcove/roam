@@ -21,7 +21,7 @@ jobs:
   build:
     runs-on: depot-ubuntu-24.04-16
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
       - name: Install dodeca
         run: |
