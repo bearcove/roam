@@ -7,6 +7,8 @@ use std::{
     },
 };
 
+use futures_util::future::{AbortHandle, Abortable};
+use futures_util::stream::{FuturesUnordered, StreamExt as _};
 use moire::sync::{Semaphore, SyncMutex};
 use tokio::sync::watch;
 
@@ -25,7 +27,7 @@ use crate::session::{
 };
 use crate::{InMemoryOperationStore, OperationStore};
 use moire::sync::mpsc;
-use vox_types::{OperationId, PostcardPayload, SchemaHash, TypeRef};
+use vox_types::{OperationId, PostcardPayload};
 
 /// A pending response for one outbound request attempt.
 ///
@@ -40,12 +42,29 @@ struct PendingResponse {
 type ResponseSlot = moire::sync::oneshot::Sender<PendingResponse>;
 
 struct InFlightHandler {
-    handle: moire::task::JoinHandle<()>,
+    /// Aborts the handler future hosted on `Driver::handler_futs`. Triggered
+    /// by `Cancel`-style flows; the FuturesUnordered will yield an `Aborted`
+    /// item on its next poll, and the request will be removed from
+    /// `in_flight_handlers` (if not already gone).
+    abort: AbortHandle,
     method_id: vox_types::MethodId,
     retry: vox_types::RetryPolicy,
-    has_channels: bool,
     operation_id: Option<OperationId>,
 }
+
+/// Boxed handler future hosted on `Driver::handler_futs`. The future yields
+/// the `RequestId` it was attached to so the driver can clean up the
+/// `in_flight_handlers` entry when it completes.
+///
+/// We `Box::pin` because the handler returns an unnameable `async move {}`
+/// and we want `FuturesUnordered` to hold a single concrete element type.
+/// Total alloc footprint per request is one `Box<dyn Future>` plus one
+/// `Arc<Task>` (allocated by `FuturesUnordered::push`). Compared to
+/// `tokio::spawn` (which allocates a `Cell<T, S>` containing
+/// `Stage<Future, Output>` plus does scheduler registration), this drops
+/// the `Stage` overhead and the `set_stage` memcpy that fires on
+/// `Running → Finished` transitions.
+type HandlerFut = Abortable<Pin<Box<dyn Future<Output = RequestId> + Send + 'static>>>;
 
 // ============================================================================
 // Live operation tracking (driver-local, not persisted)
@@ -373,6 +392,10 @@ pub struct DriverReplySink {
     operations: Option<Arc<dyn OperationStore>>,
     live_operations: Option<Arc<SyncMutex<LiveOperationTracker>>>,
     binder: DriverChannelBinder,
+    /// Static `&'static Shape` of the method's response type. Used on
+    /// replay to derive the schemas to attach to the wire response —
+    /// the same source of truth that fresh responses use.
+    handler_response_shape: Option<&'static facet_core::Shape>,
 }
 
 /// Replay a sealed response from the operation store.
@@ -385,23 +408,16 @@ async fn replay_sealed_response(
     request_id: RequestId,
     method_id: vox_types::MethodId,
     encoded_response: &[u8],
-    root_type: TypeRef,
-    operations: &dyn OperationStore,
+    response_shape: Option<&'static facet_core::Shape>,
 ) -> Result<(), ()> {
     let mut response: RequestResponse<'_> =
         vox_postcard::from_slice_borrowed(encoded_response).map_err(|_| ())?;
-    sender.prepare_replay_schemas(request_id, method_id, &root_type, operations, &mut response);
-    sender.send_response(request_id, response).await
-}
-
-/// Extract the root TypeRef from a response's schema CBOR payload.
-fn extract_root_type_ref(schemas_cbor: &vox_types::CborPayload) -> TypeRef {
-    if schemas_cbor.is_empty() {
-        return TypeRef::concrete(SchemaHash(0));
+    if let Some(shape) = response_shape {
+        sender.prepare_replay_schemas(request_id, method_id, shape, &mut response);
+    } else {
+        response.schemas = Default::default();
     }
-    let payload =
-        vox_types::SchemaPayload::from_cbor(&schemas_cbor.0).expect("schema CBOR must be valid");
-    payload.root
+    sender.send_response(request_id, response).await
 }
 
 fn incoming_args_bytes<'a>(call: &'a RequestCall<'a>) -> &'a [u8] {
@@ -447,14 +463,10 @@ impl ReplySink for DriverReplySink {
             let mut response = response;
             sender.prepare_response_for_method(self.request_id, self.method_id, &mut response);
 
-            // Extract the root type ref before we strip schemas for storage.
-            let root_type = extract_root_type_ref(&response.schemas);
-
-            // Serialize the response WITHOUT schemas for the operation store.
             let schemas_for_wire = std::mem::take(&mut response.schemas);
-            let encoded_for_store = PostcardPayload(
-                vox_postcard::to_vec(&response).expect("serialize operation response for store"),
-            );
+            let encoded_bytes: Vec<u8> =
+                vox_jit::encode!(&response).expect("JIT encode failed for response store");
+            let encoded_for_store: PostcardPayload = encoded_bytes.into();
             response.schemas = schemas_for_wire;
 
             // Send the full response (with schemas) on the wire.
@@ -469,9 +481,9 @@ impl ReplySink for DriverReplySink {
                 sender.mark_failure(self.request_id, FailureDisposition::Cancelled);
             }
 
-            // Seal in the persistent store (payload without schemas).
-            let registry = sender.schema_registry();
-            operations.seal(operation_id, &encoded_for_store, &root_type, &registry);
+            // Seal: just the (op_id, method_id, bytes) tuple. No schemas
+            // — they come from the running code at replay time.
+            operations.seal(operation_id, self.method_id, &encoded_for_store);
 
             // Get waiters from the live tracker and replay to them.
             let waiters = self
@@ -479,6 +491,7 @@ impl ReplySink for DriverReplySink {
                 .as_ref()
                 .map(|lo| lo.lock().seal(operation_id))
                 .unwrap_or_default();
+            let response_shape = self.handler_response_shape;
             for waiter in waiters {
                 if waiter == self.request_id {
                     continue;
@@ -488,8 +501,7 @@ impl ReplySink for DriverReplySink {
                     waiter,
                     self.method_id,
                     encoded_for_store.as_bytes(),
-                    root_type.clone(),
-                    operations.as_ref(),
+                    response_shape,
                 )
                 .await
                 .is_err()
@@ -1219,9 +1231,16 @@ pub struct Driver<H: Handler<DriverReplySink>> {
     local_control_rx: mpsc::UnboundedReceiver<DriverLocalControl>,
     handler: Arc<H>,
     shared: Arc<DriverShared>,
-    /// In-flight server-side handler tasks, keyed by request ID.
-    /// Used to abort handlers on cancel.
+    /// In-flight server-side handlers, keyed by request ID. Holds the
+    /// `AbortHandle` for the corresponding entry in `handler_futs`. Used to
+    /// abort handlers on cancel.
     in_flight_handlers: BTreeMap<RequestId, InFlightHandler>,
+    /// Handler futures driven directly by the driver's `run` loop instead
+    /// of being `tokio::spawn`'d. One alloc per request (the `Box<dyn
+    /// Future>` plus the `Arc<Task>` inside `FuturesUnordered::push`),
+    /// versus the `tokio::spawn` path which allocates a `Cell<T, S>` and
+    /// memcpy's `Stage<Future, Output>` on every state transition.
+    handler_futs: FuturesUnordered<HandlerFut>,
     /// Tracks live operations for dedup/attach/conflict within this session.
     /// Shared with DriverReplySink so seal can return waiters.
     live_operations: Arc<SyncMutex<LiveOperationTracker>>,
@@ -1238,9 +1257,6 @@ enum DriverLocalControl {
     GrantCredit {
         channel_id: ChannelId,
         additional: u32,
-    },
-    HandlerCompleted {
-        request_id: RequestId,
     },
 }
 
@@ -1308,12 +1324,12 @@ impl<H: Handler<DriverReplySink>> Driver<H> {
 
     fn abort_channel_handlers(&mut self) {
         for in_flight in self.in_flight_handlers.values() {
-            if in_flight.has_channels {
+            if self.handler.args_have_channels(in_flight.method_id) {
                 if let Some(operation_id) = in_flight.operation_id {
                     self.shared.operations.remove(operation_id);
                     self.live_operations.lock().release(operation_id);
                 }
-                in_flight.handle.abort();
+                in_flight.abort.abort();
             }
         }
     }
@@ -1366,6 +1382,7 @@ impl<H: Handler<DriverReplySink>> Driver<H> {
                 ),
             }),
             in_flight_handlers: BTreeMap::new(),
+            handler_futs: FuturesUnordered::new(),
             live_operations: Arc::new(SyncMutex::new(
                 "driver.live_operations",
                 LiveOperationTracker::new(),
@@ -1472,9 +1489,11 @@ impl<H: Handler<DriverReplySink>> Driver<H> {
                         .in_flight_handlers
                         .get(&req_id)
                         .map(|in_flight| {
-                            if in_flight.has_channels && !in_flight.retry.idem {
+                            let has_channels =
+                                self.handler.args_have_channels(in_flight.method_id);
+                            if has_channels && !in_flight.retry.idem {
                                 Some(FailureDisposition::Indeterminate)
-                            } else if in_flight.has_channels && in_flight.retry.idem {
+                            } else if has_channels && in_flight.retry.idem {
                                 None
                             } else {
                                 Some(disposition)
@@ -1534,12 +1553,34 @@ impl<H: Handler<DriverReplySink>> Driver<H> {
                 Some(ctrl) = self.local_control_rx.recv() => {
                     self.handle_local_control(ctrl).await;
                 }
+                // The handler-future arm only fires when at least one
+                // handler is in flight. The guard is essential:
+                // `FuturesUnordered::next` on an empty stream returns
+                // `Poll::Ready(None)` immediately, which would spin the
+                // select loop.
+                Some(item) = self.handler_futs.next(), if !self.handler_futs.is_empty() => {
+                    match item {
+                        Ok(req_id) => {
+                            let removed = self.in_flight_handlers.remove(&req_id).is_some();
+                            tracing::trace!(
+                                %req_id,
+                                removed,
+                                in_flight = self.in_flight_handlers.len(),
+                                "handler completion processed",
+                            );
+                        }
+                        Err(_aborted) => {
+                            // Cancel/abort paths already removed the entry
+                            // before flipping the AbortHandle. Nothing to do.
+                        }
+                    }
+                }
             }
         }
 
         for (_, in_flight) in std::mem::take(&mut self.in_flight_handlers) {
             if !in_flight.retry.persist {
-                in_flight.handle.abort();
+                in_flight.abort.abort();
             }
         }
         self.shared.pending_responses.lock().clear();
@@ -1584,15 +1625,6 @@ impl<H: Handler<DriverReplySink>> Driver<H> {
                         }),
                     }))
                     .await;
-            }
-            DriverLocalControl::HandlerCompleted { request_id } => {
-                let removed = self.in_flight_handlers.remove(&request_id).is_some();
-                tracing::trace!(
-                    %request_id,
-                    removed,
-                    in_flight = self.in_flight_handlers.len(),
-                    "handler completion processed"
-                );
             }
         }
     }
@@ -1727,7 +1759,7 @@ impl<H: Handler<DriverReplySink>> Driver<H> {
                         if let Some(sealed) = self.shared.operations.get_sealed(operation_id) {
                             let sender = self.sender.clone();
                             let method_id = call_ref.method_id;
-                            let operations = Arc::clone(&self.shared.operations);
+                            let response_shape = self.handler.response_wire_shape(method_id);
                             // Remove from live tracker — we're replaying, not running a handler.
                             self.live_operations.lock().seal(operation_id);
                             moire::task::spawn(
@@ -1737,8 +1769,7 @@ impl<H: Handler<DriverReplySink>> Driver<H> {
                                         req_id,
                                         method_id,
                                         sealed.response.as_bytes(),
-                                        sealed.root_type,
-                                        operations.as_ref(),
+                                        response_shape,
                                     )
                                     .await
                                     .is_err()
@@ -1792,11 +1823,11 @@ impl<H: Handler<DriverReplySink>> Driver<H> {
                 operations: operation_id.map(|_| Arc::clone(&self.shared.operations)),
                 live_operations: operation_id.map(|_| Arc::clone(&self.live_operations)),
                 binder: self.internal_binder(),
+                handler_response_shape: handler.response_wire_shape(call_ref.method_id),
             };
-            let has_channels = handler.args_have_channels(call_ref.method_id);
-            let local_control_tx = self.local_control_tx.clone();
-            let join_handle = moire::task::spawn(
-                async move {
+            let (abort, abort_reg) = AbortHandle::new_pair();
+            let handler_fut: Pin<Box<dyn Future<Output = RequestId> + Send + 'static>> =
+                Box::pin(async move {
                     vox_types::dlog!(
                         "[driver] handler start: req={:?} method={:?}",
                         req_id,
@@ -1808,18 +1839,15 @@ impl<H: Handler<DriverReplySink>> Driver<H> {
                         req_id,
                         method_id
                     );
-                    let _ = local_control_tx
-                        .send(DriverLocalControl::HandlerCompleted { request_id: req_id });
-                }
-                .named("handler"),
-            );
+                    req_id
+                });
+            self.handler_futs.push(Abortable::new(handler_fut, abort_reg));
             self.in_flight_handlers.insert(
                 req_id,
                 InFlightHandler {
-                    handle: join_handle,
+                    abort,
                     method_id,
                     retry,
-                    has_channels,
                     operation_id,
                 },
             );
@@ -1860,7 +1888,7 @@ impl<H: Handler<DriverReplySink>> Driver<H> {
                     if should_abort && let Some(in_flight) = self.in_flight_handlers.remove(&req_id)
                     {
                         tracing::trace!(%req_id, "aborting handler");
-                        in_flight.handle.abort();
+                        in_flight.abort.abort();
                         tracing::trace!(%req_id, in_flight = self.in_flight_handlers.len(), "handler removed on cancel");
                     }
                 }
@@ -1873,7 +1901,7 @@ impl<H: Handler<DriverReplySink>> Driver<H> {
                         if let Some(op_id) = in_flight.operation_id {
                             self.shared.operations.remove(op_id);
                         }
-                        in_flight.handle.abort();
+                        in_flight.abort.abort();
                         tracing::trace!(%owner_request_id, in_flight = self.in_flight_handlers.len(), "owner handler removed on abort");
                     }
                     for waiter in waiters {

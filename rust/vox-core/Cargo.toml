@@ -35,9 +35,13 @@ smallvec.workspace = true
 getrandom.workspace = true
 zerocopy.workspace = true
 facet-error.workspace = true
+futures-util.workspace = true
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen-futures.workspace = true
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+vox-jit.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
